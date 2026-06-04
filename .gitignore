@@ -1,0 +1,16 @@
+node_modules
+dist
+.env
+.env.local
+.env.*.local
+.DS_Store
+*.log
+.vite
+.tsc-node
+*.tsbuildinfo
+coverage
+secret/
+test-results/
+playwright-report/
+# Claude Code 세션 연속 로그
+*-this-session-is-being-continued-from-a-previous-c.txt
