@@ -557,7 +557,12 @@ function ColumnChip({
         letterSpacing: -0.1,
         minHeight: 44,
         minWidth: 0,
-        overflow: 'hidden',
+        // Active chip anchors the floating value badge and must draw over its
+        // neighbours, so it unclips and lifts above sibling chips. Inactive
+        // chips keep overflow:hidden for value/label ellipsis.
+        position: 'relative',
+        zIndex: isActive ? 20 : undefined,
+        overflow: isActive ? 'visible' : 'hidden',
         transition: 'background 150ms, border 150ms',
         animation: isActive ? 'chip-pulse 1.2s ease-in-out infinite' : 'none',
       }}
@@ -626,12 +631,55 @@ function ColumnChip({
               maxWidth: '100%',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
-              animation: isActive && value ? 'chip-pop 360ms ease-out' : 'none',
+              // The floating value badge below is now the recognition effect;
+              // the in-chip value stays as the persistent display.
+              animation: 'none',
             }}
           >
             {value || '—'}
           </span>
         </span>
+      )}
+
+      {/* Floating value badge — pops over the active chip on each new recognition,
+          overlapping neighbours, then auto-fades. Decorative (value is in the chip). */}
+      {isActive && value && !isEditing && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            pointerEvents: 'none',
+            zIndex: 30,
+          }}
+        >
+          <div
+            key={popKey}
+            style={{
+              animation: 'value-burst 850ms ease-out forwards',
+              maxWidth: 'min(72vw, 260px)',
+              padding: '10px 18px',
+              borderRadius: 16,
+              background: 'rgba(10,28,18,0.92)',
+              border: `2px solid ${T.green}`,
+              boxShadow: `0 0 24px rgba(0,200,83,0.55), 0 8px 24px rgba(0,0,0,0.45)`,
+              color: T.text,
+              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+              fontSize: 'clamp(28px, 9vw, 40px)',
+              fontWeight: 900,
+              lineHeight: 1.1,
+              letterSpacing: -0.5,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              textAlign: 'center',
+            }}
+          >
+            {value}
+          </div>
+        </div>
       )}
     </div>
   );
