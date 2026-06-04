@@ -6,8 +6,17 @@
  * UI 렌더링 + 상태 변화 + 비음성 인터랙션을 검증합니다.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 const BASE = 'http://localhost:5175';
+
+// 앱이 표시하는 버전은 vite define(__APP_VERSION__ = pkg.version)에서 옴.
+// 하드코딩 대신 package.json의 version을 읽어 비교 → 버전 bump에 견딤.
+const APP_VERSION = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf-8'),
+).version as string;
 
 // ─── helpers ─────────────────────────────────────────────────────
 async function goToSettings(page: Page) {
@@ -316,20 +325,20 @@ test('[입력] 테이블 생성 후 시작 버튼 활성화', async ({ page }) =
 });
 
 // ─── 11. 설정 탭: 버전 표시 ──────────────────────────────────────────
-test('[설정] 버전 0.12.0 표시', async ({ page }) => {
+test(`[설정] 버전 ${APP_VERSION} 표시`, async ({ page }) => {
   await goToSettings(page);
   // 스크롤 맨 아래
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(200);
 
-  const versionText = await page.locator('text=0.12.0').first().isVisible().catch(() => false);
+  const versionText = await page.locator(`text=${APP_VERSION}`).first().isVisible().catch(() => false);
   if (versionText) {
-    console.log('✓ 버전 0.12.0 표시 확인');
+    console.log(`✓ 버전 ${APP_VERSION} 표시 확인`);
   } else {
     // might be in a nested div, check with evaluate
     const bodyText = await page.evaluate(() => document.body.innerText);
-    expect(bodyText).toContain('0.12.0');
-    console.log('✓ 버전 0.12.0 페이지 내 텍스트 확인');
+    expect(bodyText).toContain(APP_VERSION);
+    console.log(`✓ 버전 ${APP_VERSION} 페이지 내 텍스트 확인`);
   }
 });
 

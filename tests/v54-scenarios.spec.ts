@@ -12,8 +12,17 @@
  *  - [공통] 컬럼 CRUD, 탭 상태 보존, 세션명 필드, 소음 모드
  */
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 const BASE = 'http://localhost:5175';
+
+// 앱이 표시하는 버전은 vite define(__APP_VERSION__ = pkg.version)에서 옴.
+// 하드코딩 대신 package.json의 version을 읽어 비교 → 버전 bump에 견딤.
+const APP_VERSION = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf-8'),
+).version as string;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -139,14 +148,14 @@ test('앱 로드 — 3개 탭 모두 표시', async ({ page }) => {
 // ═════════════════════════════════════════════════════════════════════════════
 // 2. 버전 확인
 // ═════════════════════════════════════════════════════════════════════════════
-test('[설정] v0.12.0 버전 표시', async ({ page }) => {
+test(`[설정] v${APP_VERSION} 버전 표시`, async ({ page }) => {
   await goToSettings(page);
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(200);
 
   const bodyText = await page.evaluate(() => document.body.innerText);
-  expect(bodyText).toContain('0.12.0');
-  console.log('✓ 버전 0.12.0 확인');
+  expect(bodyText).toContain(APP_VERSION);
+  console.log(`✓ 버전 ${APP_VERSION} 확인`);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

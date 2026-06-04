@@ -34,6 +34,14 @@ export interface LogEntry {
    *  Pairs with `parsed` (final value) to tell STT misrecognition (prefix-drop) apart from
    *  deliberate user re-entry. Only present when the value was reached via modify. */
   previousValue?: string;
+  /** clip-preservation telemetry (additive; set on `clip` events only).
+   *  `attempt` is the 1-based try index for a cell — every correction archives the prior clip
+   *  under a fresh attempt key, so all tries for one cell survive in IDB. `kind` distinguishes a
+   *  measurement-value clip from the '수정'/'정정' command utterance that declared the correction.
+   *  `clipKey` is the IDB key the clip was preserved under, so analysis can re-join attempts. */
+  attempt?: number;
+  kind?: 'value' | 'command';
+  clipKey?: string;
 }
 
 /** Snapshot of session-level context, emitted on the `session` start/stop events. */

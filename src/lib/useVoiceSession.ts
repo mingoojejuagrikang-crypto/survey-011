@@ -6,7 +6,7 @@ import { parseKoreanNumber, detectCommand, extractModifyValue, extractRedoValue,
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
-import { saveSession, saveAudioClip, deleteAudioClip } from './db';
+import { saveSession, saveAudioClip, loadAudioClip } from './db';
 import { AudioRecorder } from './audioRecorder';
 import { logger } from './logger';
 
@@ -41,6 +41,13 @@ export function useVoiceSession() {
   const activeClipRef = useRef<{ row: number; colId: string } | null>(null);
   // rowIndex → colId → IDB key; accumulated in-memory until persistSession writes to dataStore
   const pendingClipsRef = useRef<Record<number, Record<string, string>>>({});
+  // Clip-preservation: monotonic per-cell attempt counter (`row:colId` → next attempt index) used
+  // to mint distinct archive keys (`sessionId:row:colId:a<n>`) so every correction's prior clip
+  // survives in IDB instead of being deleted. Reset in start() alongside pendingClipsRef.
+  const clipAttemptRef = useRef<Record<string, number>>({});
+  // Monotonic command-clip counter (`row:colId` → next index) for the '수정'/'정정' utterance
+  // clips, keyed `sessionId:row:colId:cmd<n>` with kind:'command' in the event log.
+  const cmdClipRef = useRef<Record<string, number>>({});
   // Codex 재검증 MEDIUM: in-flight clip save promises; stop()/pause()가 끝나기 전 flush
   const pendingClipSavesRef = useRef<Set<Promise<unknown>>>(new Set());
   // Snapshot of a persisted row being cascade-corrected; included in persistSession if stop()
@@ -75,6 +82,78 @@ export function useVoiceSession() {
 
   const voiceColsList = (): Column[] =>
     useSettingsStore.getState().columns.filter((c) => c.input === 'voice');
+
+  // ── clip preservation ──────────────────────────────────────
+  /** Archive the clip currently stored at the bare cell key (`sessionId:row:colId`) under a fresh
+   *  attempt key (`sessionId:row:colId:a<n>`) BEFORE a correction overwrites/clears it, so the
+   *  misrecognised original audio survives in IDB. Background (not awaited) — never blocks the
+   *  voice flow. Emits a `clip_preserved` event carrying the attempt index + archive key so the
+   *  next analyst can re-join attempts in order. Returns the archive key (or null if nothing to
+   *  archive). The bare key is left intact for the next attempt's save to overwrite. */
+  const archiveCellClip = useCallback((row: number, colId: string): string | null => {
+    const bareKey = `${sessionIdRef.current}:${row}:${colId}`;
+    const cellKey = `${row}:${colId}`;
+    const attempt = (clipAttemptRef.current[cellKey] ?? 0) + 1;
+    clipAttemptRef.current[cellKey] = attempt;
+    const archiveKey = `${bareKey}:a${attempt}`;
+    void (async () => {
+      try {
+        // The prior attempt's clip save may still be in-flight (savePromise resolves after the
+        // echo TTS, but a fast correction can race it). Flush pending saves before reading the
+        // bare key so we archive the real blob rather than null. Background — no UX impact.
+        if (pendingClipSavesRef.current.size > 0) {
+          await Promise.race([
+            Promise.allSettled(Array.from(pendingClipSavesRef.current)),
+            new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+          ]);
+        }
+        const blob = await loadAudioClip(bareKey);
+        if (!blob) return; // nothing recorded yet (e.g. direct-modify before any clip) — skip
+        await saveAudioClip(archiveKey, blob);
+        logger.log({
+          type: 'clip', extra: 'clip_preserved', kind: 'value', attempt, clipKey: archiveKey,
+          sessionId: sessionIdRef.current, row, colId,
+        });
+      } catch (e) {
+        logger.log({ type: 'error', extra: `clip_preserve_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row, colId });
+      }
+    })();
+    return archiveKey;
+  }, []);
+
+  /** Preserve the '수정'/'정정' command utterance itself as an audio clip. The command is spoken
+   *  into the clip the last announceField started for `awaiting`, but that clip was previously
+   *  dropped (enterModifyMode starts a new clip without stopping/saving the old one). We stop it
+   *  here and persist it under `sessionId:row:colId:cmd<n>` (kind:'command') so analysis can hear
+   *  the exact utterance that declared the correction alongside the surrounding value attempts.
+   *  Fully background — the save promise is tracked but NEVER awaited before announcing, so the
+   *  voice flow is not delayed (top-priority constraint). */
+  const preserveCommandClip = useCallback((row: number, colId: string): void => {
+    const rec = recorderRef.current;
+    if (!rec) return;
+    // Detach the active clip's stop now, before enterModifyMode's announceField starts a new one.
+    const stopPromise = rec.stopClip();
+    activeClipRef.current = null;
+    const cellKey = `${row}:${colId}`;
+    const idx = (cmdClipRef.current[cellKey] ?? 0) + 1;
+    cmdClipRef.current[cellKey] = idx;
+    const cmdKey = `${sessionIdRef.current}:${row}:${colId}:cmd${idx}`;
+    const savePromise = (async () => {
+      try {
+        const blob = await stopPromise;
+        if (!blob || blob.size <= 200) {
+          logger.log({ type: 'clip', extra: `clip_cmd_empty:${blob ? blob.size : 'null'}`, kind: 'command', sessionId: sessionIdRef.current, row, colId });
+          return;
+        }
+        await saveAudioClip(cmdKey, blob);
+        logger.log({ type: 'clip', extra: 'clip_preserved', kind: 'command', attempt: idx, clipKey: cmdKey, sessionId: sessionIdRef.current, row, colId });
+      } catch (e) {
+        logger.log({ type: 'error', extra: `clip_cmd_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row, colId });
+      }
+    })();
+    pendingClipSavesRef.current.add(savePromise);
+    void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
+  }, []);
 
   const isRowVoiceComplete = (row: number, vCols: Column[]): boolean => {
     if (useSessionStore.getState().isRowComplete(row)) return true;
@@ -332,23 +411,21 @@ export function useVoiceSession() {
         // #3 error-vs-intent: capture pre-modify value before overwrite (direct "수정 <값>" path).
         const prevDirectValue = sess.getRowValues(targetRow)[target.id];
         sess.setRowValue(targetRow, target.id, parsed);
-        // Codex 5차 MEDIUM: Direct modify는 새 클립을 녹음하지 않으므로,
-        // 이전 (잘못 인식된) 클립을 제거하여 corrected value에 stale audio가 매칭되지 않도록 함.
-        // (1) pendingClipsRef에서 제거
+        // Clip preservation (was: delete). Direct modify는 새 값 클립을 녹음하지 않으므로(수정 명령
+        // 발화가 새 값을 담음), 이전 (잘못 인식된) 값 클립을 삭제하지 않고 attempt 키로 보존한다.
+        // 단, corrected value에 stale audio가 in-app 재생으로 매칭되지 않도록 셀의 클립 포인터는
+        // 비운다(보존된 attempt 클립은 ZIP/분석에 그대로 남음).
+        // (1) pendingClipsRef: archive then unlink
         const pendingMap = pendingClipsRef.current[targetRow];
         if (pendingMap && pendingMap[target.id]) {
-          const stalePendingKey = pendingMap[target.id];
+          archiveCellClip(targetRow, target.id);
           delete pendingMap[target.id];
-          void deleteAudioClip(stalePendingKey).catch(() => {});
-          logger.log({ type: 'clip', extra: 'clip_delete_req:modify_pending', sessionId: sessionIdRef.current, row: targetRow, colId: target.id });
         }
-        // (2) 이미 persistSession으로 dataStore에 들어간 경우 — 해당 row의 audioClips 정리
+        // (2) 이미 persistSession으로 dataStore에 들어간 경우 — archive then unlink the pointer
         const existing = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
         const existingRow = existing?.rows.find((r) => r.index === targetRow);
         if (existing && existingRow?.audioClips?.[target.id]) {
-          const staleExistingKey = existingRow.audioClips[target.id];
-          void deleteAudioClip(staleExistingKey).catch(() => {});
-          logger.log({ type: 'clip', extra: 'clip_delete_req:modify_persisted', sessionId: sessionIdRef.current, row: targetRow, colId: target.id });
+          archiveCellClip(targetRow, target.id);
           const { [target.id]: _removed, ...restClips } = existingRow.audioClips;
           const updatedRow = {
             ...existingRow,
@@ -420,14 +497,15 @@ export function useVoiceSession() {
     // persistSession() overwrites it — this ensures old measurements survive a crash/reload during correction.
     for (let i = targetIdx; i < vc.length; i++) {
       sess.setRowValue(targetRow, vc[i].id, '');
-      // Only delete clips that are still pending (not yet saved to IDB).
-      // Already-persisted clips stay until persistSession() replaces them on re-completion.
+      // Clip preservation (was: delete pending clips). Archive the prior attempt under an attempt
+      // key so the misrecognised original audio survives, then unlink the pending pointer so the
+      // re-record writes a fresh bare key. Already-persisted clips are left under their bare key —
+      // persistSession() overwrites the cell value on re-completion, but the archived attempt(s)
+      // keep the older audio for analysis.
       const pendingMap = pendingClipsRef.current[targetRow];
       if (pendingMap?.[vc[i].id]) {
-        const staleKey = pendingMap[vc[i].id];
+        archiveCellClip(targetRow, vc[i].id);
         delete pendingMap[vc[i].id];
-        void deleteAudioClip(staleKey).catch(() => {});
-        logger.log({ type: 'clip', extra: 'clip_delete_req:modify_cascade', sessionId: sessionIdRef.current, row: targetRow, colId: vc[i].id });
       }
     }
     sess.markRowIncomplete(targetRow);
@@ -482,13 +560,13 @@ export function useVoiceSession() {
     // Clear this and subsequent voice values in the current row
     for (let i = idx; i < vc.length; i++) {
       sess.setRowValue(row, vc[i].id, '');
-      // v0.11.0 Codex HIGH: pendingClipsRef도 정리 — 옛 savePromise가 새 입력의 클립을 덮어쓰지 않도록
+      // Clip preservation (was: delete on touch-restart). A chip-tap restart is also a correction
+      // of a (possibly misrecognised) committed value — archive the prior attempt instead of
+      // deleting, then unlink the pending pointer so the re-record writes a fresh bare key.
       const pendingMap = pendingClipsRef.current[row];
       if (pendingMap?.[vc[i].id]) {
-        const staleKey = pendingMap[vc[i].id];
+        archiveCellClip(row, vc[i].id);
         delete pendingMap[vc[i].id];
-        void deleteAudioClip(staleKey).catch(() => {});
-        logger.log({ type: 'clip', extra: 'clip_delete_req:restart', sessionId: sessionIdRef.current, row, colId: vc[i].id });
       }
     }
     sess.markRowIncomplete(row);
@@ -610,6 +688,11 @@ export function useVoiceSession() {
     }
     if (cmd === 'modify') {
       cancelTts();
+      // Preserve the '수정'/'정정' utterance itself (spoken into the awaiting cell's active clip)
+      // before enterModifyMode starts a fresh clip. Background save — does not block the flow.
+      // NOTE for analysis: this command clip is logged against the AWAITING cell; the cell it
+      // CORRECTS is the previous voice column (resolved inside enterModifyMode).
+      preserveCommandClip(awaiting.row, awaiting.colId);
       if (awaiting.isModify) {
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
@@ -881,6 +964,8 @@ export function useVoiceSession() {
     warmupTts();
     epochRef.current = 0;
     pendingClipsRef.current = {};
+    clipAttemptRef.current = {};
+    cmdClipRef.current = {};
     correctionBackupRef.current = null;
     logger.setSessionId(sessionIdRef.current);
     // #1 reach telemetry: attach session-meta alongside the existing `extra:'start'` tag.
