@@ -223,13 +223,37 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       const k = parseKoreanSpokenAll(tok);
       if (k !== null && Math.abs(k) <= OVERFLOW_THRESHOLD) {
         lastValid = k;
+        continue;
       }
+      // T-1 (silent wrong-value commit): this token parsed as NEITHER a clean
+      // arabic value NOR a spoken-Korean number, yet it carries a digit
+      // (e.g. "105시" in STT output "105시 5.5"). last-wins would silently drop
+      // it and commit the trailing "5.5" — a wrong measurement with no signal.
+      // Treat the whole utterance as AMBIGUOUS → return null so the caller
+      // (useVoiceSession handleFinal) logs stt_parse_failed and re-asks,
+      // exactly like the Codex HIGH-2 / MEDIUM-3 multi-token guards above.
+      if (/\d/.test(tok)) return null;
     }
     if (lastValid !== null) return formatNum(lastValid, maxDecimals);
   }
 
+  // T-1 sibling (no-space single token, e.g. "105시5.5"): the per-token loop is
+  // skipped (tokens.length === 1) but the arabicMatches fallback below would
+  // re-run the same last-wins extraction. If a digit-bearing chunk failed to
+  // parse cleanly AND there are multiple arabic chunks, that's the same silent
+  // wrong commit — bail to ambiguous. We detect it by: more than one arabic
+  // chunk present while the string is not itself a clean number (we already
+  // know it isn't — tryArabic returned null at the top).
+  const allArabicChunks = Array.from(s.matchAll(/\d+(?:\.\d+)?/g)).map((m) => m[0]);
+  if (allArabicChunks.length > 1) {
+    // Multiple disjoint numeric chunks in an unclean utterance → cannot reduce
+    // to a single unambiguous value. Re-ask instead of last-wins. (Pure
+    // decimals like "33.5" never reach here — handled by the top fast path.)
+    return null;
+  }
+
   // Look for arabic chunks inside text (e.g. STT mixed "값33.5").
-  const arabicMatches = Array.from(s.matchAll(/\d+(?:\.\d+)?/g)).map((m) => m[0]);
+  const arabicMatches = allArabicChunks;
   if (arabicMatches.length) {
     const candidates = arabicMatches.filter((x) => {
       const intPart = x.split('.')[0];
@@ -293,6 +317,21 @@ export function extractModifyValue(raw: string): string | null {
   const suffix = raw.match(/^(.+?)[\s,.]*(?:수정|정정)$/);
   if (suffix && /^[0-9]/.test(suffix[1].trim())) return suffix[1].trim();
   return null;
+}
+
+/**
+ * T-3 (single-syllable homophone): true when `raw` is a single bare Sino-Korean
+ * syllable that is also a common non-number word/particle (이=2/조사, 사=4/死,
+ * 오=5/감탄사, 일=1/일감, 구=9, 영=0, 공=0 …). On a measurement column STT can
+ * return one of these with HIGH confidence yet the user almost never speaks a
+ * lone single digit for a mm/Brix measurement, so it must be re-confirmed rather
+ * than silently committed. Multi-syllable numerals ("이백삼십삼"), arabic ("2"),
+ * and native words ("세","두") are NOT flagged — only a lone SINO syllable.
+ */
+export function isAmbiguousSingleSyllable(raw: string): boolean {
+  const s = raw.replace(/[\s.,]+/g, '');
+  if (s.length !== 1) return false;
+  return SINO[s] !== undefined;
 }
 
 /** "다시 8.4" → "8.4",  "재입력 20.5" → "20.5" — extract inline value after a redo keyword. */

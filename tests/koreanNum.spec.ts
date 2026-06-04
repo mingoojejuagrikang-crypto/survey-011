@@ -13,7 +13,13 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { parseKoreanNumber, extractRedoValue, extractModifyValue } from '../src/lib/koreanNum';
+import {
+  parseKoreanNumber,
+  extractRedoValue,
+  extractModifyValue,
+  detectCommand,
+  isAmbiguousSingleSyllable,
+} from '../src/lib/koreanNum';
 
 test.describe('parseKoreanNumber — decimal preservation (H1)', () => {
   const ok: Array<[string, string]> = [
@@ -86,6 +92,32 @@ test.describe('parseKoreanNumber — arabic decimal whole + spoken fraction (Cod
   });
 });
 
+test.describe('parseKoreanNumber — T-1 silent wrong-value commit (digit-bearing discarded token)', () => {
+  // Reported bug: STT returned "105시 5.5" (conf 0.96). The per-token last-wins
+  // heuristic dropped the unclean leading token "105시" (a digit-bearing token
+  // that parses as NEITHER clean arabic NOR spoken-Korean) and silently
+  // committed the trailing "5.5" — a wrong measurement with no detection signal.
+  // It must now return null so the caller (useVoiceSession handleFinal) logs
+  // stt_parse_failed and re-asks.
+  test('"105시 5.5" → null (was silently 5.5)', () => {
+    expect(parseKoreanNumber('105시 5.5')).toBeNull();
+  });
+  // No-space sibling: same garbage, no whitespace. The per-token loop is skipped
+  // (single token) but the arabicMatches fallback used to do the same last-wins.
+  test('"105시5.5" → null (no-space sibling)', () => {
+    expect(parseKoreanNumber('105시5.5')).toBeNull();
+  });
+  // Leading digit-garbage token before a clean spoken value.
+  test('"5시 5.5" → null (digit-bearing discarded token + clean tail)', () => {
+    expect(parseKoreanNumber('5시 5.5')).toBeNull();
+  });
+  // Regression: a NON-digit garbage token (no digits) before a clean value must
+  // still commit — this is the "당도 점수 8" class and must NOT become null.
+  test('"당도 8" → "8" (non-digit garbage token still commits)', () => {
+    expect(parseKoreanNumber('당도 8')).toBe('8');
+  });
+});
+
 test.describe('parseKoreanNumber — integer regression guards', () => {
   const cases: Array<[string, string]> = [
     ['칠십사', '74'],
@@ -134,5 +166,67 @@ test.describe('extractModifyValue — unaffected by M1 change', () => {
   });
   test('"178.1 정정" → "178.1"', () => {
     expect(extractModifyValue('178.1 정정')).toBe('178.1');
+  });
+});
+
+test.describe('T-2 — command confidence gate (detection contract the gate relies on)', () => {
+  // The gate in useVoiceSession.handleFinal rejects a detected command when
+  // `confidence > 0 && confidence < 0.7` (COMMAND_MIN_CONFIDENCE). It only fires
+  // when detectCommand() actually returns a command, so the gate's correctness
+  // depends on detectCommand recognizing the reported misfires ("수정"/"정정").
+  // These assert that contract; the threshold itself is exercised in the hook.
+  test('"수정" → modify (the low-conf 0.16 misfire from row 14)', () => {
+    expect(detectCommand('수정')).toBe('modify');
+  });
+  test('"정정" → modify', () => {
+    expect(detectCommand('정정')).toBe('modify');
+  });
+  // A plain measurement value is NOT a command → the command gate never applies to it,
+  // so legitimate low-confidence VALUES still go through the (separate) value gate.
+  test('"33.3" → null (not a command, untouched by the command gate)', () => {
+    expect(detectCommand('33.3')).toBeNull();
+  });
+  test('"이백삼십삼" → null (spoken numeral is not a command)', () => {
+    expect(detectCommand('이백삼십삼')).toBeNull();
+  });
+});
+
+test.describe('T-3 — ambiguous single-syllable homophone re-confirm', () => {
+  // On a measurement column, a lone Sino-Korean syllable that doubles as a common
+  // non-number word ("이"=2/조사, "사"=4/死, "오"=5/감탄사, "일"=1) must be re-confirmed
+  // regardless of noisyMode (handleFinal gates on isAmbiguousSingleSyllable + single alt).
+  const ambiguous = ['이', '일', '사', '오', '구', '영', '공', '삼', '육', '칠', '팔'];
+  for (const s of ambiguous) {
+    test(`"${s}" → flagged ambiguous`, () => {
+      expect(isAmbiguousSingleSyllable(s)).toBe(true);
+    });
+  }
+  // Whitespace/punctuation noise around a lone syllable still flags.
+  test('" 이 ." → flagged (noise-stripped single syllable)', () => {
+    expect(isAmbiguousSingleSyllable(' 이 .')).toBe(true);
+  });
+  // MUST NOT flag genuine numerals / non-SINO single tokens — these still commit.
+  const safe: Array<[string, string]> = [
+    ['이백삼십삼', 'multi-syllable numeral'],
+    ['233', 'arabic'],
+    ['2', 'arabic single digit'],
+    ['세', 'native single digit (not SINO)'],
+    ['두', 'native single digit (not SINO)'],
+    ['열', 'native ten (not in SINO map)'],
+    ['이십', 'two-syllable sino numeral'],
+  ];
+  for (const [input, why] of safe) {
+    test(`"${input}" → NOT flagged (${why})`, () => {
+      expect(isAmbiguousSingleSyllable(input)).toBe(false);
+    });
+  }
+  // Regression: the genuine numeral the report warns against breaking must still PARSE.
+  test('"이백삼십삼" → "233" (real numeral still parses, not collapsed)', () => {
+    expect(parseKoreanNumber('이백삼십삼')).toBe('233');
+  });
+  // And a lone "이" still PARSES to 2 at the parser level — the re-confirm is a
+  // CALLER-side (handleFinal) decision, the parser stays pure/unchanged.
+  test('"이" → "2" (parser unchanged; re-confirm is caller-side)', () => {
+    expect(parseKoreanNumber('이')).toBe('2');
   });
 });

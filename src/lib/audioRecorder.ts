@@ -16,15 +16,32 @@ interface ClipSlot {
   resolveStop: ((b: Blob | null) => void) | null;
   finalized: boolean;
   stopTimer: ReturnType<typeof setTimeout> | null;
+  /** #2: wall-clock start (performance.now ms) so we can emit a measured clip duration —
+   *  webm output from MediaRecorder has no duration cue (analysis sees N/A). This is a cheap
+   *  measured fallback that fills the gap without remuxing the header. */
+  startedAt: number;
 }
 
 /** onstop이 끝내 발화하지 않는 환경(iOS Safari 마이크 점유 등)에서 hang을 막는 안전장치. */
 const STOP_TIMEOUT_MS = 2000;
 
+export interface ActiveInputInfo {
+  deviceId: string;
+  label: string;
+}
+
 export class AudioRecorder {
   private stream: MediaStream | null = null;
   /** Active (recording) slot — only this one can be stopped via stopClip(). */
   private active: ClipSlot | null = null;
+  /** Settings of the audio track actually granted by getUserMedia, captured at init().
+   *  Lets the session log attribute STT accuracy to the real input device (built-in vs Shokz). */
+  private activeInput: ActiveInputInfo | null = null;
+
+  /** The microphone actually in use for this recorder (null until init() succeeds). */
+  getActiveInput(): ActiveInputInfo | null {
+    return this.activeInput;
+  }
 
   async init(): Promise<boolean> {
     if (this.stream) return true;
@@ -40,6 +57,19 @@ export class AudioRecorder {
         },
         video: false,
       });
+      // Capture which input device was actually granted (built-in vs external mic like Shokz).
+      // Numeric/string metadata only — device.json already enumerates the same deviceId+label set,
+      // so this introduces no new PII category, it just records which of the known devices was used.
+      try {
+        const track = this.stream.getAudioTracks()[0];
+        if (track) {
+          const settings = track.getSettings();
+          this.activeInput = {
+            deviceId: settings.deviceId ?? '',
+            label: track.label ?? '',
+          };
+        }
+      } catch { /* getSettings unsupported — leave activeInput null */ }
       return true;
     } catch {
       return false;
@@ -89,6 +119,7 @@ export class AudioRecorder {
         resolveStop: null,
         finalized: false,
         stopTimer: null,
+        startedAt: performance.now(),
       };
 
       // Callbacks close over `slot` exclusively — no `this.*` access, so a stale recorder
@@ -104,6 +135,8 @@ export class AudioRecorder {
         const blob = slot.chunks.length > 0
           ? new Blob(slot.chunks, { type: slot.mimeType || 'audio/webm' })
           : null;
+        // #2: measured clip duration (webm header has no duration cue → ffprobe sees N/A).
+        logger.log({ type: 'clip', extra: 'clip_duration', durationMs: Math.round(performance.now() - slot.startedAt) });
         slot.resolveStop?.(blob);
         slot.resolveStop = null;
       };

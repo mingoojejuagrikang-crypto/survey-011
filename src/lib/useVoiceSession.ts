@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
-import { parseKoreanNumber, detectCommand, extractModifyValue, extractRedoValue } from './koreanNum';
+import { parseKoreanNumber, detectCommand, extractModifyValue, extractRedoValue, isAmbiguousSingleSyllable } from './koreanNum';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
@@ -17,6 +17,10 @@ interface AwaitingField {
   name: string;
   /** When true the next final result is treated as the modify value */
   isModify?: boolean;
+  /** #3 error-vs-intent: the value committed for this cell BEFORE this correction started.
+   *  Captured at modify-entry (pre-clear) and logged with the final value so analysis can tell
+   *  STT prefix-drop (e.g. 133.3→33.3) apart from deliberate user re-entry. */
+  previousValue?: string;
 }
 
 export function useVoiceSession() {
@@ -192,13 +196,14 @@ export function useVoiceSession() {
   );
 
   const announceField = useCallback(
-    async (col: Column, opts?: { isModify?: boolean }) => {
+    async (col: Column, opts?: { isModify?: boolean; previousValue?: string }) => {
       const row = useSessionStore.getState().activeRow;
       awaitingFieldRef.current = {
         row,
         colId: col.id,
         name: col.name,
         isModify: opts?.isModify,
+        previousValue: opts?.previousValue,
       };
       // Codex MEDIUM-4: no clip is active until startClip() runs below. Clear here so that during
       // the upcoming `say()` (including modify/jump re-announce, which don't pass through commit)
@@ -324,6 +329,8 @@ export function useVoiceSession() {
     if (preExtractedValue) {
       const parsed = parseValueForCol(target, preExtractedValue);
       if (parsed !== null) {
+        // #3 error-vs-intent: capture pre-modify value before overwrite (direct "수정 <값>" path).
+        const prevDirectValue = sess.getRowValues(targetRow)[target.id];
         sess.setRowValue(targetRow, target.id, parsed);
         // Codex 5차 MEDIUM: Direct modify는 새 클립을 녹음하지 않으므로,
         // 이전 (잘못 인식된) 클립을 제거하여 corrected value에 stale audio가 매칭되지 않도록 함.
@@ -358,6 +365,20 @@ export function useVoiceSession() {
           // If we modified an earlier row, make sure it's still complete
           void persistSession();
         }
+        // #3 error-vs-intent: log the direct-modify commit with previousValue → parsed.
+        // extra:'direct_modify' marks the inline-value path (no re-record), distinct from the
+        // cascade path's value event which carries previousValue via awaiting.previousValue.
+        logger.log({
+          type: 'value',
+          sessionId: sessionIdRef.current,
+          row: targetRow,
+          colId: target.id,
+          colName: target.name,
+          text: preExtractedValue,
+          parsed,
+          extra: 'direct_modify',
+          ...(prevDirectValue != null ? { previousValue: prevDirectValue } : {}),
+        });
         sess.setRecognized(parsed);
         await say(`정정 ${target.name} ${formatForTts(parsed)}`);
         // Return immediately to where we were
@@ -390,6 +411,10 @@ export function useVoiceSession() {
       }
     }
 
+    // #3 error-vs-intent: snapshot the target cell's current value BEFORE the cascade clear,
+    // so the eventual re-commit can log previousValue → finalValue for misrecognition analysis.
+    const prevTargetValue = sess.getRowValues(targetRow)[target.id];
+
     // Cascade clear in-memory only: target col through end of row (so user re-records all remaining cols).
     // Persisted IDB/dataStore state is left intact until the row is successfully re-completed and
     // persistSession() overwrites it — this ensures old measurements survive a crash/reload during correction.
@@ -410,7 +435,7 @@ export function useVoiceSession() {
     sess.setActiveRow(targetRow);
     sess.setActiveCol(targetIdx);
     sess.setRecognized('');
-    await announceField(target, { isModify: true });
+    await announceField(target, { isModify: true, previousValue: prevTargetValue });
   }, [announceField, persistSession, say]);
 
   // ── skip ───────────────────────────────────────────────────
@@ -517,6 +542,35 @@ export function useVoiceSession() {
         cancelTts();
         await resumeRef.current();
       }
+      return;
+    }
+
+    // T-2 (low-confidence command bypassing the gate): voice COMMANDS used to dispatch with no
+    // confidence check at all (the value gate at minConfidence ran only AFTER the command branch).
+    // A misrecognised "수정" at conf 0.16 on an empty cell replayed the whole prompt (~10s lost).
+    // Apply a command-specific threshold that is STRICTER than the value threshold: a command
+    // rewinds/destroys state, so it must clear a higher bar than a plain measurement value.
+    // confidence === 0 is the "unknown confidence" sentinel (some STT results carry no score) —
+    // we pass those through, exactly like the value gate's `confidence > 0` guard, to avoid
+    // dead-locking commands on engines that never report confidence.
+    // resume-from-paused is handled above this point and is intentionally NOT gated (it is the
+    // user's only way out of pause).
+    const COMMAND_MIN_CONFIDENCE = 0.7;
+    if (cmd && confidence > 0 && confidence < COMMAND_MIN_CONFIDENCE) {
+      logger.log({
+        type: 'command',
+        text,
+        parsed: cmd,
+        confidence,
+        sessionId: sessionIdRef.current,
+        row: awaiting.row,
+        colId: awaiting.colId,
+        extra: 'rejected_low_confidence',
+      });
+      useSessionStore.getState().setRecognized('');
+      // Do NOT replay the full field prompt (that is the ~10s cost T-2 reported). Stay on the
+      // current field with a short re-ask so the user can simply repeat the command/value.
+      await say(`${awaiting.name} 다시 말씀해 주세요.`);
       return;
     }
 
@@ -657,6 +711,24 @@ export function useVoiceSession() {
       return;
     }
 
+    // T-3 (single-syllable homophone, "이"→2): on a MEASUREMENT column (int/float) a lone
+    // Sino-Korean syllable that doubles as a common non-number word ("이","사","오","일"…) was
+    // committed at HIGH confidence with no challenge — but a bare single digit is essentially
+    // never a real mm/Brix reading, so it is far more likely a particle/filler misheard as a
+    // number. The existing single-char reject above only fires in noisyMode; this re-confirms
+    // the lone-syllable homophone case REGARDLESS of noisyMode. Scope is deliberately narrow —
+    // single alt, exactly one SINO syllable — so genuine numerals ("이백삼십삼") and arabic
+    // single digits ("2") are untouched. Reuses the null→re-ask contract (no commit).
+    if (currentCol && (currentCol.type === 'int' || currentCol.type === 'float')) {
+      if (alts.length <= 1 && isAmbiguousSingleSyllable(text)) {
+        logger.log({ type: 'stt_rejected_ambiguous_syllable', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        recorderRef.current?.startClip();
+        useSessionStore.getState().setRecognized('');
+        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+        return;
+      }
+    }
+
     // Low confidence — re-ask
     if (confidence > 0 && confidence < minConfidence) {
       recorderRef.current?.startClip(); // restart clip
@@ -771,6 +843,11 @@ export function useVoiceSession() {
       text,
       parsed,
       confidence,
+      // #3 error-vs-intent: present only when this value re-commits a corrected cell.
+      // previousValue (pre-modify) vs parsed (final) discriminates STT prefix-drop from re-entry.
+      ...(awaiting.isModify && awaiting.previousValue != null
+        ? { previousValue: awaiting.previousValue }
+        : {}),
     });
 
     // Guard against race: another handleFinal ran while we were awaiting
@@ -806,12 +883,47 @@ export function useVoiceSession() {
     pendingClipsRef.current = {};
     correctionBackupRef.current = null;
     logger.setSessionId(sessionIdRef.current);
-    logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'start' });
+    // #1 reach telemetry: attach session-meta alongside the existing `extra:'start'` tag.
+    // `extra` is preserved so any analysis keying on it keeps working; new fields are additive.
+    logger.log({
+      type: 'session',
+      sessionId: sessionIdRef.current,
+      extra: 'start',
+      meta: {
+        appVersion: logger.device().appVersion,
+        startedAt: Date.now(),
+        totalRows: total,
+        completedRows: 0,
+        // NOTE: session label intentionally NOT logged — buildAutoLabel derives it from the first
+        // fixed auto column (농가명 = grower name), a PII vector. Reach is fully computable from
+        // sessionId + appVersion + totalRows + completedRows. The label still lives on the Session
+        // object (unchanged); it just stays out of telemetry events.
+        noisyMode: s.noisyMode,
+        sessionMode: 'field',
+      },
+    });
 
     // Init audio recorder fire-and-forget — mic permission is independent of STT startup.
     // Awaiting getUserMedia can block indefinitely in headless/denied-permission environments.
     if (!recorderRef.current) recorderRef.current = new AudioRecorder();
-    void recorderRef.current.init().catch(() => {});
+    // #4 active mic: once init() resolves, emit a follow-up session event carrying the granted
+    // input device. Done async (not awaited) so STT startup is never blocked; emitted as its own
+    // event so analysis can attribute STT accuracy to the real device per session.
+    void recorderRef.current.init().then((ok) => {
+      if (!ok) return;
+      const input = recorderRef.current?.getActiveInput();
+      if (!input) return;
+      logger.log({
+        type: 'session',
+        sessionId: sessionIdRef.current,
+        extra: 'input_device',
+        meta: {
+          appVersion: logger.device().appVersion,
+          inputDeviceId: input.deviceId,
+          inputDeviceLabel: input.label,
+        },
+      });
+    }).catch(() => {});
 
     await say('음성 입력을 시작합니다.');
     await announceRowDiff(null, 1);
@@ -833,7 +945,30 @@ export function useVoiceSession() {
     ctrlRef.current = null;
     cancelTts();
     awaitingFieldRef.current = null;
-    logger.log({ type: 'session', sessionId: sessionIdRef.current, extra: 'stop' });
+    // #1 reach telemetry: session-meta on stop. `extra:'stop'` preserved; new fields additive.
+    // completedRows here is the denominator-complement for reach/completion-rate aggregation.
+    {
+      const sessNow = useSessionStore.getState();
+      const settingsNow = useSettingsStore.getState();
+      const input = recorderRef.current?.getActiveInput();
+      logger.log({
+        type: 'session',
+        sessionId: sessionIdRef.current,
+        extra: 'stop',
+        meta: {
+          appVersion: logger.device().appVersion,
+          startedAt: parseInt(sessionIdRef.current.replace('sess_', ''), 10) || undefined,
+          finishedAt: Date.now(),
+          totalRows: computeTotalRows(settingsNow.columns),
+          completedRows: sessNow.completedRows.length,
+          // label intentionally omitted (PII — grower name); see start-event note.
+          inputDeviceId: input?.deviceId,
+          inputDeviceLabel: input?.label,
+          noisyMode: settingsNow.noisyMode,
+          sessionMode: 'field',
+        },
+      });
+    }
     if (announce) await say('입력을 종료합니다.');
     useSessionStore.getState().setPhase('ready');
     // Codex 3차 HIGH: 클립 저장을 dispose보다 먼저 flush.

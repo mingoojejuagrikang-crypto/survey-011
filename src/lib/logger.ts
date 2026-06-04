@@ -7,7 +7,8 @@ import { appendLogEvent } from './db';
 export interface LogEntry {
   ts: number;
   type: 'stt' | 'tts' | 'command' | 'session' | 'value' | 'error' | 'clip'
-    | 'stt_blocked_tts_muted' | 'stt_rejected_col_name' | 'stt_alt_used' | 'stt_parse_failed';
+    | 'stt_blocked_tts_muted' | 'stt_rejected_col_name' | 'stt_alt_used' | 'stt_parse_failed'
+    | 'stt_rejected_ambiguous_syllable';
   sessionId?: string;
   row?: number;
   colId?: string;
@@ -25,6 +26,39 @@ export interface LogEntry {
   altIdx?: number;
   originalText?: string;
   altsCount?: number;
+  // ── reach telemetry (additive; all optional, only set on specific events) ──
+  /** Session-meta, attached to the `session` start/stop events. Lets multiple sessions be
+   *  aggregated for real-field reach without changing existing `extra:'start'|'stop'` tags. */
+  meta?: SessionMeta;
+  /** value event during a correction: the value that was committed BEFORE this modify.
+   *  Pairs with `parsed` (final value) to tell STT misrecognition (prefix-drop) apart from
+   *  deliberate user re-entry. Only present when the value was reached via modify. */
+  previousValue?: string;
+}
+
+/** Snapshot of session-level context, emitted on the `session` start/stop events. */
+export interface SessionMeta {
+  appVersion: string;
+  /** epoch ms; mirrors the sessionId timestamp for convenience */
+  startedAt?: number;
+  finishedAt?: number;
+  /** total rows in the generated table (denominator for completion rate) */
+  totalRows?: number;
+  /** rows fully completed at the time of the event */
+  completedRows?: number;
+  /** session label (e.g. auto-built field/plot label). RESERVED — intentionally NOT populated
+   *  by the session events: the auto-label derives from a grower-name column (PII). Kept in the
+   *  type only so a future de-identified label can slot in without a schema change. */
+  label?: string;
+  /** active input device actually used for this session (built-in vs external mic) */
+  inputDeviceId?: string;
+  inputDeviceLabel?: string;
+  /** noisy-environment mode flag — context for STT accuracy attribution */
+  noisyMode?: boolean;
+  /** Reserved slot for self-test vs real-field split. Defaults to 'field'; an explicit UI
+   *  toggle is a Vance follow-up. userEmail (device.json) + value-pattern already allow
+   *  crude post-hoc splitting today. */
+  sessionMode?: 'field' | 'test';
 }
 
 export interface DeviceInfo {
