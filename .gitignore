@@ -14,3 +14,12 @@ test-results/
 playwright-report/
 # Claude Code 세션 연속 로그
 *-this-session-is-being-continued-from-a-previous-c.txt
+
+# 에이전트 운영 지침/스캐폴딩 — 로컬 전용(GitHub 앱 레포에 올리지 않음)
+# 앱과 직접 무관한 AI 팀 운영 파일. 로컬에는 남고 원격에는 안 올라감.
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.claude/
+.gemini/
+.cursor/
