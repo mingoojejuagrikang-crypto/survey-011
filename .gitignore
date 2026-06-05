@@ -23,3 +23,6 @@ GEMINI.md
 .claude/
 .gemini/
 .cursor/
+
+# AI 로그 수확 헬퍼(서비스계정 사용, 팀 운영 도구) — 로컬 전용
+scripts/fetch-latest-growth-log.sh
