@@ -333,6 +333,15 @@
 
 ---
 
+### [AUTH-6] 구글 첫 로그인 시 `popup_failed_to_open` → 2번 눌러야 로그인
+- **증상:** 설정탭에서 구글 로그인을 처음 누르면 `popup_failed_to_open` 알림이 뜨고, 한 번 더 눌러야 로그인 창이 열림.
+- **원인:** `signIn()`이 팝업을 열기 **전에** `await loadGisScript()`(네트워크 스크립트 로드)를 기다려, 팝업이 user-gesture task를 벗어남 → 브라우저가 팝업 차단. 둘째 클릭은 스크립트가 캐시돼 있어 동작.
+- **해결·회피:** GIS 스크립트 + 토큰 클라이언트를 **사전 로드**(`warmupGoogleAuth()`를 SettingsScreen 마운트에서 호출). `signIn()`은 토큰 클라이언트를 한 번만 생성하고 **클릭 제스처 내에서 동기적으로** `requestAccessToken()` 호출. cold 케이스(워밍업 미완료)만 기존처럼 로드 후 호출(2번째 클릭에서 fast-path). `error_callback`의 `popup_failed_to_open`/`popup_closed`는 사용자 친화 메시지로 매핑.
+- **출처:** `2026-06-05 세션`(피드백) → **survey-011 v0.4.1** 수정
+- **현재 상태:** ✅수정됨 (`src/lib/googleAuth.ts` `warmupGoogleAuth`/동기 `requestAccessToken`, `src/screens/SettingsScreen.tsx` 마운트 워밍업) — 실기기 OAuth 팝업은 device 확인 필요.
+
+---
+
 ## ⑦ 리뷰 프로세스 교훈
 
 ### [REVIEW-1] 빈 catch가 근본 버그를 수개월 가렸다

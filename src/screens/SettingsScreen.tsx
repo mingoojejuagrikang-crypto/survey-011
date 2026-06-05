@@ -11,6 +11,7 @@ import {
   isConfigured as isGoogleConfigured,
   signIn as googleSignIn,
   signOut as googleSignOut,
+  warmupGoogleAuth,
 } from '../lib/googleAuth';
 import {
   fetchHeaderAndSample,
@@ -416,6 +417,9 @@ function ColumnCard({
             letterSpacing: -0.2, padding: '2px 2px', minWidth: 0,
           }}
         />
+        <span style={{ fontSize: 12, fontWeight: 700, color: T.textMute, letterSpacing: 0.2 }}>
+          타입
+        </span>
         <button
           style={{
             height: 32, borderRadius: 999, padding: '0 12px',
@@ -423,6 +427,7 @@ function ColumnCard({
             fontSize: 14, fontWeight: 700, letterSpacing: 0.1,
             display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
           }}
+          title="탭하여 데이터형 변경"
           onClick={() => {
             const next = TYPE_ORDER[(TYPE_ORDER.indexOf(col.type) + 1) % TYPE_ORDER.length];
             // When switching to options, init shape
@@ -546,12 +551,104 @@ function TtsVoiceSelector() {
   );
 }
 
+/** S-2: result popup for "타입 검토" — lists columns whose saved type ≠ sheet's data type. */
+function TypeReviewModal({
+  checked, mismatches, onApplyAll, onClose,
+}: {
+  checked: number;
+  mismatches: { id: string; name: string; saved: DataType; sheet: DataType }[];
+  onApplyAll: () => void;
+  onClose: () => void;
+}) {
+  const ok = mismatches.length === 0;
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%', maxWidth: 360, maxHeight: '80%', overflowY: 'auto',
+          background: T.card, borderRadius: 20, border: `1px solid ${T.lineStrong}`, padding: '20px 18px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: T.text }}>타입 검토</div>
+          <button
+            onClick={onClose}
+            style={{
+              width: 30, height: 30, borderRadius: '50%', border: `1px solid ${T.lineStrong}`,
+              background: 'transparent', color: T.textDim, fontSize: 16, cursor: 'pointer',
+            }}
+            title="닫기"
+          >
+            ✕
+          </button>
+        </div>
+
+        {ok ? (
+          <div style={{ fontSize: 14, color: T.textDim, lineHeight: 1.6 }}>
+            저장된 데이터형이 시트와 <b style={{ color: T.green }}>일치</b>합니다.
+            <div style={{ fontSize: 12, color: T.textMute, marginTop: 6 }}>검토한 컬럼 {checked}개</div>
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 13, color: T.textDim, marginBottom: 12, lineHeight: 1.5 }}>
+              저장된 타입과 시트의 실제 데이터형이 다른 컬럼이 <b style={{ color: T.amber }}>{mismatches.length}개</b> 있습니다
+              <span style={{ color: T.textMute }}> (검토 {checked}개)</span>.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {mismatches.map((m) => (
+                <div
+                  key={m.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '8px 10px', borderRadius: 10, background: T.inputBg,
+                  }}
+                >
+                  <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{m.name}</span>
+                  <span style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ color: T.textMute }}>{TYPE_LABELS[m.saved]}</span>
+                    <span style={{ color: T.textMute }}>→</span>
+                    <span style={{ color: T.amber, fontWeight: 800 }}>{TYPE_LABELS[m.sheet]}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={onApplyAll}
+              style={{
+                marginTop: 16, width: '100%', height: 44, borderRadius: 12, cursor: 'pointer',
+                border: 'none', background: T.blue, color: '#fff', fontSize: 15, fontWeight: 800,
+              }}
+            >
+              시트 데이터형으로 모두 변경
+            </button>
+            <div style={{ fontSize: 11, color: T.textMute, textAlign: 'center', marginTop: 8 }}>
+              ('리스트' 타입은 검토에서 제외됩니다)
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── screen root ───────────────────────────────────────────────
+/** S-2: a column whose saved type differs from the sheet's inferred data type. */
+interface TypeMismatch { id: string; name: string; saved: DataType; sheet: DataType; }
+
 export function SettingsScreen() {
   const s = useSettingsStore();
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmedUrl, setConfirmedUrl] = useState<string>(s.sheetUrl);
+  // S-2: result of "타입 검토" (null = not run; checked = columns compared).
+  const [typeReview, setTypeReview] = useState<{ mismatches: TypeMismatch[]; checked: number } | null>(null);
   const [tablePreviewOpen, setTablePreviewOpen] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   const googleConfigured = isGoogleConfigured();
@@ -563,6 +660,9 @@ export function SettingsScreen() {
     if (t && !s.googleConnected) {
       s.set({ googleConnected: true, userEmail: getCurrentEmail() });
     }
+    // S-1: preload GIS + token client so the first 로그인 click opens the popup in one shot
+    // (avoids the "popup_failed_to_open" that required a second click).
+    void warmupGoogleAuth();
   }, []);
 
   const onGoogleClick = async () => {
@@ -629,6 +729,40 @@ export function SettingsScreen() {
         }),
       );
       if (enriched.length) s.set({ columns: enriched, tableGenerated: false });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  // S-2: re-sample the connected sheet and compare each saved column type against the sheet's
+  // inferred data type. 'options' is an app construct (not a sheet data type) so it's skipped on
+  // either side — only date/int/float/text mismatches are surfaced. Reuses inferColumns (loadHeaders).
+  const reviewTypes = async () => {
+    setError(null);
+    const id = parseSpreadsheetId(s.sheetUrl);
+    if (!id || !s.sheetTab) {
+      setError('먼저 스프레드시트와 탭을 연결한 뒤 검토할 수 있어요.');
+      return;
+    }
+    try {
+      setLoading('시트 데이터형 검토 중...');
+      const { headers, sample } = await fetchHeaderAndSample(id, s.sheetTab);
+      const inferred = inferColumns(headers, sample);
+      const sheetTypeByName = new Map(inferred.map((c) => [c.name.trim(), c.type]));
+      let checked = 0;
+      const mismatches: TypeMismatch[] = [];
+      for (const col of s.columns) {
+        const sheetType = sheetTypeByName.get(col.name.trim());
+        if (!sheetType) continue;                 // no matching header (auto/derived column)
+        if (sheetType === 'options' || col.type === 'options') continue; // skip app-only 'options'
+        checked++;
+        if (sheetType !== col.type) {
+          mismatches.push({ id: col.id, name: col.name, saved: col.type, sheet: sheetType });
+        }
+      }
+      setTypeReview({ mismatches, checked });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -953,10 +1087,34 @@ export function SettingsScreen() {
             <span style={{ fontSize: 13, fontWeight: 700, color: T.textDim, letterSpacing: 0.6 }}>
               컬럼 · {s.columns.length}개
             </span>
-            <span style={{ fontSize: 12, color: T.textMute, whiteSpace: 'nowrap' }}>
-              화살표로 순서 변경
-            </span>
+            {/* S-2: 시트 데이터유형과 저장된 타입 일치 검토 */}
+            <button
+              onClick={reviewTypes}
+              style={{
+                fontSize: 12, fontWeight: 700, color: T.textDim, whiteSpace: 'nowrap',
+                padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
+                border: `1px solid ${T.lineStrong}`, background: 'transparent',
+              }}
+              title="시트의 실제 데이터형과 일치하는지 검토"
+            >
+              타입 검토
+            </button>
           </div>
+
+          {typeReview && (
+            <TypeReviewModal
+              checked={typeReview.checked}
+              mismatches={typeReview.mismatches}
+              onApplyAll={() => {
+                for (const m of typeReview.mismatches) {
+                  const col = s.columns.find((c) => c.id === m.id);
+                  if (col) s.updateColumn(m.id, { ...col, type: m.sheet });
+                }
+                setTypeReview(null);
+              }}
+              onClose={() => setTypeReview(null)}
+            />
+          )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {s.columns.map((c, idx) => (

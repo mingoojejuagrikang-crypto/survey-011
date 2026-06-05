@@ -109,41 +109,113 @@ export function getCurrentEmail(): string | null {
   return getStoredToken()?.email || null;
 }
 
-/** Initiate sign-in via popup. Resolves with email on success. */
-export async function signIn(): Promise<{ email: string; token: string }> {
+// ── one-click sign-in (S-1) ──────────────────────────────────────────────────
+// "popup_failed_to_open" on the FIRST click happened because signIn() awaited the GIS
+// script (a network load) BEFORE opening the popup, so the popup left the user-gesture
+// task and the browser blocked it; the second click worked only because the script was
+// cached by then. Fix: warm the script + token client up front (warmupGoogleAuth on
+// Settings mount), and open the popup SYNCHRONOUSLY inside the click. The token client is
+// created once, so a single set of pending resolvers bridges its callback to signIn().
+
+let tokenClient: { requestAccessToken: (opts?: { prompt?: string }) => void } | null = null;
+let pending: {
+  resolve: (v: { email: string; token: string }) => void;
+  reject: (e: Error) => void;
+} | null = null;
+
+/** Create the GIS token client once (idempotent). Returns false if GIS isn't ready yet. */
+function ensureTokenClient(): boolean {
+  if (tokenClient) return true;
+  const clientId = getClientId();
+  const g = window.google;
+  if (!clientId || !g?.accounts?.oauth2) return false;
+  tokenClient = g.accounts.oauth2.initTokenClient({
+    client_id: clientId,
+    scope: SCOPE,
+    callback: async (resp) => {
+      const p = pending;
+      pending = null;
+      if (!p) return;
+      if (!resp.access_token) {
+        p.reject(new Error('No access token received'));
+        return;
+      }
+      const expires_at = Date.now() + (resp.expires_in || 3600) * 1000;
+      try {
+        const email = await fetchEmail(resp.access_token);
+        storeToken({ access_token: resp.access_token, expires_at, email });
+        p.resolve({ email, token: resp.access_token });
+      } catch {
+        // Even if email lookup fails, we still have a usable token.
+        storeToken({ access_token: resp.access_token, expires_at });
+        p.resolve({ email: '연결됨', token: resp.access_token });
+      }
+    },
+    error_callback: (err) => {
+      const p = pending;
+      pending = null;
+      if (!p) return;
+      // popup_failed_to_open: browser blocked the popup (lost gesture / blocker). With warm-up
+      // this should not occur; surface a clear, actionable message if it ever does.
+      const msg = err.type === 'popup_failed_to_open'
+        ? '로그인 창이 열리지 않았습니다. 팝업 차단을 해제하고 다시 시도해 주세요.'
+        : err.type === 'popup_closed'
+        ? '로그인 창이 닫혔습니다. 다시 시도해 주세요.'
+        : (err.type || 'OAuth error');
+      p.reject(new Error(msg));
+    },
+  });
+  return true;
+}
+
+/**
+ * Preload GIS + token client so the first sign-in click opens the popup in one shot.
+ * Safe to call repeatedly; call it on Settings mount. Fire-and-forget.
+ */
+export async function warmupGoogleAuth(): Promise<void> {
+  if (!getClientId()) return;
+  try {
+    await loadGisScript();
+    ensureTokenClient();
+  } catch {
+    /* network failure — signIn() will retry the load and surface the error */
+  }
+}
+
+/** Initiate sign-in via popup. MUST be called directly from a click handler. Resolves with email. */
+export function signIn(): Promise<{ email: string; token: string }> {
   const clientId = getClientId();
   if (!clientId) {
-    throw new Error('Google OAuth Client ID가 설정되지 않았습니다. .env.local의 VITE_GOOGLE_CLIENT_ID를 확인하세요.');
+    return Promise.reject(
+      new Error('Google OAuth Client ID가 설정되지 않았습니다. .env.local의 VITE_GOOGLE_CLIENT_ID를 확인하세요.'),
+    );
   }
-  await loadGisScript();
-  const g = window.google;
-  if (!g?.accounts?.oauth2) throw new Error('Google Identity Services unavailable');
-
   return new Promise((resolve, reject) => {
-    const client = g.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: SCOPE,
-      callback: async (resp) => {
-        if (!resp.access_token) {
-          reject(new Error('No access token received'));
-          return;
+    if (pending) {
+      reject(new Error('이미 로그인 진행 중입니다.'));
+      return;
+    }
+    pending = { resolve, reject };
+    // Fast path: client already warmed up → open the popup synchronously within the gesture.
+    if (ensureTokenClient()) {
+      tokenClient!.requestAccessToken({ prompt: '' });
+      return;
+    }
+    // Cold fallback (warm-up not finished): load then request. The popup may be gesture-blocked
+    // on this first attempt; a second click hits the fast path above.
+    loadGisScript()
+      .then(() => {
+        if (ensureTokenClient()) {
+          tokenClient!.requestAccessToken({ prompt: '' });
+        } else {
+          pending = null;
+          reject(new Error('Google Identity Services unavailable'));
         }
-        const expires_at = Date.now() + (resp.expires_in || 3600) * 1000;
-        try {
-          const email = await fetchEmail(resp.access_token);
-          const stored: StoredToken = { access_token: resp.access_token, expires_at, email };
-          storeToken(stored);
-          resolve({ email, token: resp.access_token });
-        } catch (err) {
-          // Even if email lookup fails, we still have a usable token
-          const stored: StoredToken = { access_token: resp.access_token, expires_at };
-          storeToken(stored);
-          resolve({ email: '연결됨', token: resp.access_token });
-        }
-      },
-      error_callback: (err) => reject(new Error(err.type || 'OAuth error')),
-    });
-    client.requestAccessToken({ prompt: '' });
+      })
+      .catch((e) => {
+        pending = null;
+        reject(e instanceof Error ? e : new Error(String(e)));
+      });
   });
 }
 
