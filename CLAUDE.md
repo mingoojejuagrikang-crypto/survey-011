@@ -30,7 +30,9 @@ This is a **code project folder** that lives outside the myPKA markdown vault (p
 - **survey-011** — 음성 입력 기반 현장 측정 기록 PWA (React + Vite + TypeScript).
   `growth-survey-010`을 독립 복제한 후속 라인. 원본(`/Users/kangmingoo/workspace_ai_claude/projects/growth-survey-010`)은 건드리지 않는다.
 - 개발: `npm install` → `npm run dev` (localhost:5173) / `npm run build` / `npm run deploy`
-- 테스트: `npx tsx scripts/test-koreanNum.mjs` · `npx tsx scripts/test-autoValue.mjs` · `npx playwright test`
+- 단위 테스트: `npx tsx scripts/test-koreanNum.mjs` · `npx tsx scripts/test-autoValue.mjs`; 파서 회귀는 `npx playwright test tests/koreanNum.spec.ts`(62케이스, 서버 불필요).
+- e2e 테스트: playwright `baseURL`은 **5175**인데 `npm run dev`는 5173이고 config에 **webServer가 없다** → 먼저 `npm run dev -- --port 5175 --strictPort`로 서버를 띄운 뒤 `npx playwright test`.
+- **작업 전 `KNOWN-ISSUES.md`(레포 루트)를 읽고, 새 오류·함정을 만나면 거기 append한다.** (PKA 루트 `AGENTS.md` Hard rule #12 / `Team Knowledge/Guidelines/GL-004-pitfalls-and-lessons.md`)
 - 민감정보: `secret/`, `.env.local` (gitignore됨, 커밋 금지).
 - storage 네임스페이스는 `survey-011` (IndexedDB/localStorage) — 010과 같은 origin 충돌 방지.
 
