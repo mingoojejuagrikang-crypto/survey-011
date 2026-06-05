@@ -5,6 +5,9 @@ interface DataState {
   sessions: Session[];
   expandedSessionId: string | null;
   hydrated: boolean;
+  /** Non-null when the last IndexedDB hydration FAILED (carries the error message).
+   *  Lets DataScreen distinguish a genuine empty list from a load failure (D-1). */
+  hydrationError: string | null;
 
   setSessions: (s: Session[]) => void;
   upsertSession: (s: Session) => void;
@@ -12,6 +15,7 @@ interface DataState {
   toggleExpand: (id: string) => void;
   markSynced: (id: string, count: number) => void;
   setHydrated: (b: boolean) => void;
+  setHydrationError: (msg: string | null) => void;
   /**
    * Edit a single cell. If the edited row index is <= syncedRows,
    * we drop syncedRows back so the row will be re-pushed.
@@ -23,6 +27,7 @@ export const useDataStore = create<DataState>((set) => ({
   sessions: [],
   expandedSessionId: null,
   hydrated: false,
+  hydrationError: null,
 
   setSessions: (sessions) => set({ sessions }),
   upsertSession: (s) =>
@@ -42,6 +47,7 @@ export const useDataStore = create<DataState>((set) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, syncedRows: count } : s)),
     })),
   setHydrated: (hydrated) => set({ hydrated }),
+  setHydrationError: (hydrationError) => set({ hydrationError }),
   updateRowValue: (sessionId, rowIndex, colId, value) =>
     set((state) => {
       const sessions = state.sessions.map((s) => {

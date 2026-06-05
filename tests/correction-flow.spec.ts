@@ -387,14 +387,14 @@ test('수정 중 파싱 실패 → 재시도 → 정상 진행', async ({ page }
   await waitForRow(page, 2);
 });
 
-test('"정정"과 "수정" 교차 사용 — 두 명령어 동일 동작', async ({ page }) => {
+test('수정 명령 — 행 1·2 연속 적용 (I-1: 단일 단어 "수정")', async ({ page }) => {
   await setupAndStart(page);
 
-  // Row 1: "정정" 사용
+  // Row 1: "수정" 사용
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '35.1', 300);
   await waitForActiveChip(page, '종경');
-  await fireStt(page, '정정', 500);
+  await fireStt(page, '수정', 500);
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '36.0', 300);
   await waitForActiveChip(page, '종경');
@@ -444,9 +444,9 @@ test('실제 5/27 로그 리플레이 — 10행 전체 + 4번 연속 수정', as
   await fireStt(page, '8.8', 500);
   await waitForRow(page, 5);
 
-  // 수정 2 ("정정")
+  // 수정 2
   await waitForActiveChip(page, '횡경');
-  await fireStt(page, '정정', 500);
+  await fireStt(page, '수정', 500);
   expect(await getActiveRow(page)).toBe(4);
   await waitForActiveChip(page, '종경');
   await fireStt(page, '8.8', 500);
@@ -574,4 +574,103 @@ test('마지막 행 수정 후 세션 정상 완료 + IDB 전체 검증', async 
     expect(r.values.c8).toBe(h);
     expect(r.values.c9).toBe(j);
   }
+});
+
+// ─── D-2 (RACE-7): sessionId가 in-app 언마운트(탭 전환)에서도 유실되지 않는다 ──────
+
+async function switchTab(page: Page, id: string) {
+  await page.locator(`[data-testid="tab-${id}"]`).click();
+  await page.waitForTimeout(200);
+}
+
+test('D-2 RACE-7 — pause 중 탭 전환(언마운트)→재개→종료 후에도 빈 sessionId/NaN startedAt 없음', async ({ page }) => {
+  await setupAndStart(page);
+
+  // 행 1 완료 → persistSession이 정상 id로 1회 저장
+  await inputRow(page, '11.1', '22.2', 2);
+
+  // 일시정지 (마이크 버튼)
+  await page.locator('button[title="일시정지"]').click();
+  await expect(page.locator('button[title="재개"]')).toBeVisible();
+
+  // 데이터 탭으로 이동 → VoiceScreen(=useVoiceSession) 언마운트 → 다시 음성 탭(리마운트)
+  await switchTab(page, 'data');
+  await switchTab(page, 'voice');
+
+  // 재개: 리마운트 후 store에서 복원된 sessionId로 이어가야 한다
+  await expect(page.locator('button[title="재개"]')).toBeVisible();
+  await page.locator('button[title="재개"]').click();
+  await page.waitForTimeout(400);
+
+  // 종료 → 최종 persist
+  await page.locator('button[title="입력 종료"]').click();
+  await page.waitForTimeout(1500);
+
+  // IDB의 모든 세션은 유효한 id와 유한한 startedAt을 가져야 한다.
+  // 버그 시: 언마운트로 ref 유실 → stop이 id:'' / startedAt:NaN 세션을 추가로 저장한다.
+  // (이 테스트는 restore effect 누락과 setSessionMeta가 resetAll 앞에 호출되는 순서 버그를 모두 잡는다.)
+  const sessions = await getIdbSessions(page);
+  expect(sessions.length).toBeGreaterThan(0);
+  for (const s of sessions) {
+    expect(s.id, `세션 id가 비어있음: ${JSON.stringify(s.id)}`).toMatch(/^sess_\d+$/);
+    expect(
+      Number.isFinite(s.startedAt),
+      `startedAt이 유한하지 않음 (id=${s.id}, startedAt=${s.startedAt})`,
+    ).toBe(true);
+    expect(s.startedAt).toBeGreaterThan(0);
+  }
+});
+
+test('D-2 — fresh start→종료→reload 후 세션이 유효 id/startedAt으로 hydrate된다', async ({ page }) => {
+  await setupAndStart(page);
+
+  await inputRow(page, '11.1', '22.2', 2);
+
+  // 종료 → persist
+  await page.locator('button[title="입력 종료"]').click();
+  await page.waitForTimeout(1500);
+
+  // 리로드 → App이 IDB에서 hydrate (D-1 경로)
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(800);
+
+  const sessions = await getIdbSessions(page);
+  expect(sessions.length).toBeGreaterThan(0);
+  const s = sessions[sessions.length - 1];
+  expect(s.id).toMatch(/^sess_\d+$/);
+  expect(Number.isFinite(s.startedAt)).toBe(true);
+  expect(s.startedAt).toBeGreaterThan(0);
+
+  // D-1: hydrate가 세션을 로드해 데이터 탭이 빈 상태("아직 기록된 데이터가 없습니다")가 아니어야 한다.
+  await switchTab(page, 'data');
+  await expect(page.locator('text=아직 기록된 데이터가 없습니다')).toHaveCount(0);
+});
+
+// ─── I-2: 행 이동(이전행/다음행) — 음성 + 버튼, 검토/수정용 ───────────────────────
+
+test('I-2 행 이동 — "이전행"/"다음행" 음성·버튼으로 이동, 경계는 reprompt', async ({ page }) => {
+  await setupAndStart(page);
+
+  // 행 1 완료 → 행 2
+  await inputRow(page, '11.1', '22.2', 2);
+  expect(await getActiveRow(page)).toBe(2);
+
+  // 음성 "이전행" → 행 1
+  await fireStt(page, '이전행', 500);
+  await waitForRow(page, 1);
+  expect(await getActiveRow(page)).toBe(1);
+
+  // 음성 "다음행" → 행 2
+  await fireStt(page, '다음행', 500);
+  await waitForRow(page, 2);
+  expect(await getActiveRow(page)).toBe(2);
+
+  // 버튼 "이전행" → 행 1 (음성과 동일 동작)
+  await page.locator('button[title="이전 행으로 이동"]').click();
+  await waitForRow(page, 1);
+  expect(await getActiveRow(page)).toBe(1);
+
+  // 경계: 행 1에서 "이전행" → 무음 정지 없이 행 1 유지 (REVIEW-4 reprompt)
+  await fireStt(page, '이전행', 500);
+  expect(await getActiveRow(page)).toBe(1);
 });

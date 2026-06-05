@@ -8,6 +8,7 @@ import { computeTotalRows, nestedAutoValue, computeRowFromAutoChange } from '../
 import { useWakeLock, lockPortrait } from '../lib/wakeLock';
 import { useVoiceSession } from '../lib/useVoiceSession';
 import { isSpeechSupported, speak } from '../lib/speech';
+import { VOICE_COMMANDS, PRIMARY_COMMANDS } from '../lib/voiceCommands';
 import type { Column } from '../types';
 
 export function VoiceScreen() {
@@ -64,6 +65,8 @@ export function VoiceScreen() {
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}
+        onPrevRow={() => voiceSession.gotoAdjacentRow(-1)}
+        onNextRow={() => voiceSession.gotoAdjacentRow(1)}
         onTouchCommit={(r, colId, v) => voiceSession.commitTouchValue(r, colId, v)}
         onTogglePause={() => {
           if (sess.phase === 'paused') voiceSession.resume();
@@ -192,7 +195,7 @@ function SummaryRow({ label, value, unit, accent }: { label: string; value: numb
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
   totalRows, columns, voiceCols, currentColId, completing, paused, confidence,
-  onEnd, onRestartFromCol, onJumpToRow, onTogglePause, onTouchCommit,
+  onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
 }: {
   totalRows: number;
   columns: Column[];
@@ -204,6 +207,8 @@ function ActiveState({
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
   onJumpToRow: (row: number) => void;
+  onPrevRow: () => void;
+  onNextRow: () => void;
   onTogglePause: () => void;
   onTouchCommit: (row: number, colId: string, value: string) => void;
 }) {
@@ -212,6 +217,7 @@ function ActiveState({
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
   const [editingColId, setEditingColId] = useState<string | null>(null);
+  const [cmdHelpOpen, setCmdHelpOpen] = useState(false);
 
   return (
     <>
@@ -340,15 +346,46 @@ function ActiveState({
         })}
       </div>
 
-      {/* Center: mic pause toggle + end button (recognized value now shown in the active chip) */}
+      {/* Center: row-nav + mic pause toggle + end button (recognized value shown in the active chip) */}
       <div
         style={{
           flex: 1, position: 'relative',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          padding: '0 24px', minHeight: 0,
+          padding: '0 24px', minHeight: 0, gap: 14,
         }}
       >
+        {/* I-2: 행 이동 (버튼 — 음성 "이전행"/"다음행"과 동일 동작) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            onClick={onPrevRow}
+            disabled={paused}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '7px 14px', borderRadius: 999,
+              border: `1px solid ${T.lineStrong}`, background: T.card,
+              color: paused ? T.textMute : T.textDim, fontSize: 13, fontWeight: 700,
+              cursor: paused ? 'default' : 'pointer', opacity: paused ? 0.5 : 1,
+            }}
+            title="이전 행으로 이동"
+          >
+            ◀ 이전행
+          </button>
+          <button
+            onClick={onNextRow}
+            disabled={paused}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '7px 14px', borderRadius: 999,
+              border: `1px solid ${T.lineStrong}`, background: T.card,
+              color: paused ? T.textMute : T.textDim, fontSize: 13, fontWeight: 700,
+              cursor: paused ? 'default' : 'pointer', opacity: paused ? 0.5 : 1,
+            }}
+            title="다음 행으로 이동"
+          >
+            다음행 ▶
+          </button>
+        </div>
         <div
           style={{
             display: 'flex', alignItems: 'center', gap: 16,
@@ -422,27 +459,145 @@ function ActiveState({
         </div>
         <div
           style={{
-            display: 'flex', flexWrap: 'wrap', gap: 6,
+            display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
             fontSize: 11, color: T.textMute,
           }}
         >
           <span style={{ fontWeight: 700 }}>명령:</span>
-          {['수정', '스킵', '일시정지', '재시작', '종료'].map((cmd) => (
+          {PRIMARY_COMMANDS.map((cmd) => (
             <span
-              key={cmd}
+              key={cmd.id}
               style={{
                 padding: '2px 8px', borderRadius: 999,
                 background: 'rgba(255,255,255,0.05)',
                 color: T.textDim,
               }}
             >
-              {cmd}
+              {cmd.display}
             </span>
           ))}
+          {/* I-1: 전체 음성 명령어 도움말 팝업 */}
+          <button
+            onClick={() => setCmdHelpOpen(true)}
+            style={{
+              padding: '2px 9px', borderRadius: 999, cursor: 'pointer',
+              border: `1px solid ${T.lineStrong}`, background: 'transparent',
+              color: T.textDim, fontSize: 11, fontWeight: 700,
+            }}
+            title="음성 명령어 전체 보기"
+          >
+            ？ 명령어
+          </button>
         </div>
       </div>
       <ActiveTtsSlider />
+      {cmdHelpOpen && <CommandHelpPopup onClose={() => setCmdHelpOpen(false)} />}
+      {sess.valueBurst && (
+        <CenterValueBurst
+          key={sess.valueBurst.seq}
+          name={sess.valueBurst.name}
+          value={sess.valueBurst.value}
+        />
+      )}
     </>
+  );
+}
+
+/** I-3: screen-centered recognition burst — "항목 : 값", large, replays per recognition (keyed by
+ *  seq), then auto-fades via the value-burst keyframes. Decorative (the value also lives in the chip). */
+function CenterValueBurst({ name, value }: { name: string; value: string }) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: 'fixed', inset: 0, zIndex: 40, pointerEvents: 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+      }}
+    >
+      <div
+        style={{
+          animation: 'value-burst 950ms ease-out forwards',
+          maxWidth: '88vw',
+          padding: '18px 26px', borderRadius: 20,
+          background: 'rgba(10,28,18,0.94)',
+          border: `2px solid ${T.green}`,
+          boxShadow: `0 0 36px rgba(0,200,83,0.55), 0 12px 40px rgba(0,0,0,0.5)`,
+          display: 'flex', alignItems: 'baseline', gap: 12, justifyContent: 'center',
+        }}
+      >
+        <span style={{ fontSize: 'clamp(16px, 5vw, 22px)', fontWeight: 800, color: T.textDim, whiteSpace: 'nowrap' }}>
+          {name}
+        </span>
+        <span style={{ fontSize: 'clamp(18px, 6vw, 26px)', fontWeight: 700, color: T.textMute }}>:</span>
+        <span
+          style={{
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            fontSize: 'clamp(34px, 11vw, 52px)', fontWeight: 900,
+            color: T.text, letterSpacing: -0.5, lineHeight: 1.05,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}
+        >
+          {value}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** I-1: 음성 명령어 전체 목록 팝업. voiceCommands.ts(SSOT)에서 동적 생성 — 기능당 단어 1개. */
+function CommandHelpPopup({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 50,
+        background: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%', maxWidth: 340, maxHeight: '80%', overflowY: 'auto',
+          background: T.card, borderRadius: 20, border: `1px solid ${T.lineStrong}`,
+          padding: '20px 18px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: T.text }}>음성 명령어</div>
+          <button
+            onClick={onClose}
+            style={{
+              width: 30, height: 30, borderRadius: '50%', border: `1px solid ${T.lineStrong}`,
+              background: 'transparent', color: T.textDim, fontSize: 16, cursor: 'pointer',
+            }}
+            title="닫기"
+          >
+            ✕
+          </button>
+        </div>
+        <div style={{ fontSize: 12, color: T.textMute, marginBottom: 14, lineHeight: 1.5 }}>
+          각 기능은 아래 <b>한 단어</b>로만 동작합니다. 그대로 말씀하세요.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {VOICE_COMMANDS.map((cmd) => (
+            <div key={cmd.id} style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+              <span
+                style={{
+                  flexShrink: 0, minWidth: 64, textAlign: 'center',
+                  padding: '4px 10px', borderRadius: 999,
+                  background: T.blueGlow, color: '#fff', fontSize: 14, fontWeight: 800,
+                }}
+              >
+                {cmd.display}
+              </span>
+              <span style={{ fontSize: 13, color: T.textDim, lineHeight: 1.4 }}>{cmd.desc}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -641,46 +796,8 @@ function ColumnChip({
         </span>
       )}
 
-      {/* Floating value badge — pops over the active chip on each new recognition,
-          overlapping neighbours, then auto-fades. Decorative (value is in the chip). */}
-      {isActive && value && !isEditing && (
-        <div
-          aria-hidden
-          style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            pointerEvents: 'none',
-            zIndex: 30,
-          }}
-        >
-          <div
-            key={popKey}
-            style={{
-              animation: 'value-burst 850ms ease-out forwards',
-              maxWidth: 'min(72vw, 260px)',
-              padding: '10px 18px',
-              borderRadius: 16,
-              background: 'rgba(10,28,18,0.92)',
-              border: `2px solid ${T.green}`,
-              boxShadow: `0 0 24px rgba(0,200,83,0.55), 0 8px 24px rgba(0,0,0,0.45)`,
-              color: T.text,
-              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-              fontSize: 'clamp(28px, 9vw, 40px)',
-              fontWeight: 900,
-              lineHeight: 1.1,
-              letterSpacing: -0.5,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              textAlign: 'center',
-            }}
-          >
-            {value}
-          </div>
-        </div>
-      )}
+      {/* I-3: the recognition burst now renders as a screen-centered overlay (CenterValueBurst in
+          ActiveState) showing "항목 : 값" — larger and not clipped by the chip's transform. */}
     </div>
   );
 }

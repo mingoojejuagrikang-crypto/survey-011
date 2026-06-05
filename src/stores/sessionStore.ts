@@ -4,6 +4,14 @@ export type VoicePhase = 'ready' | 'active' | 'paused' | 'complete' | 'done';
 
 interface SessionState {
   phase: VoicePhase;
+  /** Active session id (`sess_<ms>`). Lives in the store — NOT only in a hook ref — so an
+   *  in-app unmount/tab-switch during pause cannot lose it (RACE-7 / D-2). Empty when idle. */
+  sessionId: string;
+  /** Epoch ms the session started. Stored explicitly so persistSession never derives a NaN
+   *  from an empty sessionId after the hook ref is lost. 0 when idle. */
+  startedAt: number;
+  /** Optional session label, mirrored here so it survives remount alongside sessionId. */
+  sessionLabel?: string;
   /** 1-indexed current row */
   activeRow: number;
   /** 0-indexed current voice column */
@@ -12,6 +20,9 @@ interface SessionState {
   recognizedValue: string;
   /** last TTS message echoed to screen */
   lastTts: string;
+  /** I-3: most recent recognized value, shown as a screen-centered "항목 : 값" burst.
+   *  `seq` increments per recognition so the UI can re-key and replay the animation. */
+  valueBurst: { name: string; value: string; seq: number } | null;
   /** All row values, keyed by row index → col id → value */
   allRowValues: Record<number, Record<string, string>>;
   /** Row indices that have been fully completed */
@@ -21,8 +32,10 @@ interface SessionState {
   returnColIdx: number | null;
 
   setPhase: (p: VoicePhase) => void;
+  setSessionMeta: (meta: { sessionId: string; startedAt: number; label?: string }) => void;
   setRecognized: (v: string) => void;
   setLastTts: (v: string) => void;
+  pushValueBurst: (name: string, value: string) => void;
   setActiveCol: (i: number) => void;
   setActiveRow: (r: number) => void;
   setRowValue: (row: number, colId: string, v: string) => void;
@@ -36,18 +49,26 @@ interface SessionState {
 
 export const useSessionStore = create<SessionState>((set, get) => ({
   phase: 'ready',
+  sessionId: '',
+  startedAt: 0,
+  sessionLabel: undefined,
   activeRow: 1,
   activeColIdx: 0,
   recognizedValue: '',
   lastTts: '',
+  valueBurst: null,
   allRowValues: {},
   completedRows: [],
   returnRow: null,
   returnColIdx: null,
 
   setPhase: (phase) => set({ phase }),
+  setSessionMeta: ({ sessionId, startedAt, label }) =>
+    set({ sessionId, startedAt, sessionLabel: label }),
   setRecognized: (recognizedValue) => set({ recognizedValue }),
   setLastTts: (lastTts) => set({ lastTts }),
+  pushValueBurst: (name, value) =>
+    set((s) => ({ valueBurst: { name, value, seq: (s.valueBurst?.seq ?? 0) + 1 } })),
   setActiveCol: (activeColIdx) => set({ activeColIdx }),
   setActiveRow: (activeRow) => set({ activeRow }),
 
@@ -77,10 +98,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   resetAll: () =>
     set({
       phase: 'ready',
+      sessionId: '',
+      startedAt: 0,
+      sessionLabel: undefined,
       activeRow: 1,
       activeColIdx: 0,
       recognizedValue: '',
       lastTts: '',
+      valueBurst: null,
       allRowValues: {},
       completedRows: [],
       returnRow: null,

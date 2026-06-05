@@ -293,28 +293,30 @@ function formatNum(n: number, maxDecimals?: number): string {
 }
 
 // ─── Voice commands ────────────────────────────────────────────
-export type VoiceCommand = 'modify' | 'cancel' | 'redo' | 'end' | 'skip' | 'pause' | 'resume' | null;
+// The command set + canonical words live in voiceCommands.ts (single source of truth, I-1).
+import { VOICE_COMMANDS, type VoiceCommand } from './voiceCommands';
+export type { VoiceCommand } from './voiceCommands';
 
 export function detectCommand(raw: string): VoiceCommand {
   const s = raw.replace(/[\s.,]+/g, '');
-  if (/^(수정|정정)/.test(s)) return 'modify';                        // 전치: "수정 178.1"
-  if (/(수정|정정)$/.test(s) && /^[0-9]/.test(s)) return 'modify';  // 후치: "178.1 정정" (숫자 시작만)
-  if (/^(취소|지우기|지워)/.test(s)) return 'cancel';
-  if (/^(일시정지|일시중지|멈춤|정지)/.test(s)) return 'pause';
-  if (/^(재시작|다시시작|계속)/.test(s)) return 'resume';
-  if (/^(다시|재입력)/.test(s)) return 'redo';
-  if (/^(스킵|건너|패스|다음)/.test(s)) return 'skip';
-  if (/^(종료|끝|마침|스톱|stop)/i.test(s)) return 'end';
+  if (!s) return null;
+  // 후치 정정: "178.1 수정" → modify (값-우선 형태, 숫자 시작만). 별칭 '정정'은 단일화로 제거됨.
+  if (/수정$/.test(s) && /^[0-9]/.test(s)) return 'modify';
+  // 전치 매칭: 각 명령의 단일 표준 단어로 시작하면 그 명령. 표준 단어는 서로 prefix 관계가 아니므로
+  // (voiceCommands.ts 불변식) 순회 순서와 무관하게 모호성이 없다. 활용형 꼬리("수정해줘")는 허용.
+  for (const c of VOICE_COMMANDS) {
+    if (s.startsWith(c.word)) return c.id;
+  }
   return null;
 }
 
-/** "수정 18.4" → "18.4",  "178.1 정정" → "178.1" */
+/** "수정 18.4" → "18.4",  "178.1 수정" → "178.1" — 단일 단어 '수정'만 인식(별칭 '정정' 제거). */
 export function extractModifyValue(raw: string): string | null {
   // 전치: "수정 178.1" → "178.1"
-  const prefix = raw.match(/(?:수정|정정)[\s,.]*(.+)/);
+  const prefix = raw.match(/(?:수정)[\s,.]*(.+)/);
   if (prefix) return prefix[1].trim();
   // 후치: "178.1 수정" → "178.1"
-  const suffix = raw.match(/^(.+?)[\s,.]*(?:수정|정정)$/);
+  const suffix = raw.match(/^(.+?)[\s,.]*(?:수정)$/);
   if (suffix && /^[0-9]/.test(suffix[1].trim())) return suffix[1].trim();
   return null;
 }
@@ -334,9 +336,9 @@ export function isAmbiguousSingleSyllable(raw: string): boolean {
   return SINO[s] !== undefined;
 }
 
-/** "다시 8.4" → "8.4",  "재입력 20.5" → "20.5" — extract inline value after a redo keyword. */
+/** "다시 8.4" → "8.4" — extract inline value after the redo keyword (단일 단어 '다시', 별칭 '재입력' 제거). */
 export function extractRedoValue(raw: string): string | null {
-  const prefix = raw.match(/^(?:다시|재입력)[\s,.]*(.+)/);
+  const prefix = raw.match(/^(?:다시)[\s,.]*(.+)/);
   if (prefix) {
     const v = prefix[1].trim();
     return v ? v : null;

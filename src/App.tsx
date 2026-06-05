@@ -4,8 +4,7 @@ import { SettingsScreen } from './screens/SettingsScreen';
 import { VoiceScreen } from './screens/VoiceScreen';
 import { DataScreen } from './screens/DataScreen';
 import { T, DEVICE } from './tokens';
-import { useDataStore } from './stores/dataStore';
-import { loadAllSessions } from './lib/db';
+import { hydrateSessions } from './lib/hydrate';
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('settings');
@@ -17,24 +16,11 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Hydrate data store from IndexedDB once on mount.
+  // Hydrate data store from IndexedDB once on mount. Errors are logged + recorded as
+  // `hydrationError` (D-1) so DataScreen can offer a retry instead of a misleading empty state.
   // Auto-sync intentionally disabled — user explicitly picks sessions in DataScreen.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const sessions = await loadAllSessions();
-        if (cancelled) return;
-        useDataStore.getState().setSessions(sessions);
-      } catch {
-        /* IndexedDB may be unavailable (private mode) — ignore */
-      } finally {
-        if (!cancelled) useDataStore.getState().setHydrated(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    void hydrateSessions();
   }, []);
 
   const phoneStyle: React.CSSProperties = isMobile

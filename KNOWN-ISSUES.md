@@ -28,7 +28,7 @@
 - **원인:** `detectCommand`가 prefix 패턴만 매칭.
 - **해결·회피:** `detectCommand`에 suffix 매칭 추가하되 **숫자로 시작하는 경우만** 적용(오탐 방지), `extractModifyValue`가 prefix/suffix 모두 지원. 단위 43케이스 추가.
 - **출처:** `growth-survey-010@a954e05`
-- **현재 상태:** ⚠️주시 (survey-011 `src/lib/koreanNum.ts`에 정정 로직 존재 — 회귀로 보장 권장)
+- **현재 상태:** ⚠️주시 — **의식적 변경(v0.4.0):** 명령어 단일화로 별칭 `정정` 제거. 후치 정정은 이제 `"178.1 수정"`만 인식(`detectCommand`/`extractModifyValue`). 후치 매칭 자체는 유지되므로 [STT-2] 본 동작은 보존, 단 트리거 단어가 `수정`으로 한정됨. (회귀 `tests/koreanNum.spec.ts`)
 
 ### [STT-3] 한국어 노이즈 단어 오인식 (변경/성경/광경 등)
 - **증상:** 빗소리·환경음이 `변경`, `성경`, `광경`, `구정`, `혜정`, `당장`, `경정` 같은 단어로 오인식되어 값/명령으로 처리됨.
@@ -61,9 +61,9 @@
 ### [STT-7] 수정 명령 `"수정"`이 `"수변"` / `"수 벽"`으로 오인식되어 무시되거나 파싱 실패
 - **증상:** 수정하고 싶을 때 `"수정"`이라고 말했으나 STT가 `"수변"`으로 오인식하여 TTS가 켜져 있어 차단(`stt_blocked_tts_muted`)되거나, `"수 벽"`으로 오인식하여 파싱 실패(`stt_parse_failed`)되어 정정 진입이 안 됨.
 - **원인:** `detectCommand`가 `"수정"`, `"정정"`만 완벽히 매칭하기 때문.
-- **해결·회피:** `detectCommand`에 `"수변"`, `"수벽"`, `"수정할게"` 등 동음이의 및 띄어쓰기 가드 패턴 추가 필요.
-- **출처:** `2026-06-05 세션` (실기기 로그 분석)
-- **현재 상태:** ⚠️주시
+- **해결·회피:** **방향 전환(민구 결정 v0.4.0):** 동음이의 별칭(`수변`/`수벽`)을 하드코딩하면 false-positive(`수변`=水邊) whack-a-mole이 된다. 대신 **명령어를 기능당 단일 단어로 통일**(`src/lib/voiceCommands.ts` SSOT)하고, 도움말 팝업·TTS가 그 단어(`수정`)를 학습시킨다. 오인식은 별칭을 늘리는 대신 텔레메트리로 관측해 사후 보정한다. (활용형 꼬리 `수정해줘`는 startsWith로 허용.)
+- **출처:** `2026-06-05 세션` (실기기 로그 분석) → **survey-011 v0.4.0** 정책 전환
+- **현재 상태:** ⚠️주시 (단일화로 마찰 완화 — STT 엔진 오인식 자체는 잔존, 필드 텔레메트리로 추적)
 
 ### [STT-8] "구십"(90)과 "오십"(50)의 한국어 발음 혼동
 - **증상:** `99.9`를 입력하려고 발화했으나 STT가 `"59.9"`로 연속 인식하여 정정 왕복 발생.
@@ -132,6 +132,16 @@
 - **해결·회피:** 스키마 bump는 **단방향**임을 인지하고 배포. 롤백이 필요하면 마이그레이션 전략 별도 수립. (이 항목은 해결책이 아니라 **주의**다.)
 - **출처:** `growth-survey-010@9a9c004` (v5.2 5차, 커밋 본문 경고)
 - **현재 상태:** ⚠️주시 (survey-011 DB도 버전드. 스키마 변경 시 동일 위험)
+
+---
+
+### [LOAD-1] 앱 업데이트 후 "세션이 사라짐" — 실제론 App.tsx 빈 catch가 hydrate 실패를 삼킴
+- **증상:** 사용자: "앱 업데이트나 알 수 없는 원인으로 데이터탭의 세션이 사라진다." 데이터는 IDB에 남아있는데 화면엔 빈 목록("아직 기록된 데이터가 없습니다")만 표시.
+- **원인:** `App.tsx`의 hydrate effect가 `loadAllSessions()` 예외를 **빈 `catch {}`로 삼킴** → `sessions:[]` 유지 + `setHydrated(true)`. DataScreen은 "로드 실패"와 "정말 빈 목록"을 구분 못 해 EmptyState 렌더. 트리거는 **앱 업데이트**(PWA `autoUpdate` + IDB 버전/멀티탭 `VersionError`)가 로드를 실패시키는 순간. [REVIEW-1] "빈 catch 금지"의 재발.
+- **해결·회피:** 로드 로직을 `src/lib/hydrate.ts` `hydrateSessions()`로 단일화 — 실패 시 **로깅**(`extra:'hydration_failed'`) + `dataStore.hydrationError`(에러 메시지) 기록. DataScreen은 에러 상태면 EmptyState 대신 **"데이터를 불러오지 못했습니다 + 다시 시도"** UI(`VersionError`면 새로고침 안내)를 렌더. 데이터는 삭제되지 않으므로 재시도/새로고침으로 복구.
+- **출처:** `2026-06-05 세션`(피드백) → **survey-011 v0.4.0** 수정
+- **현재 상태:** ✅수정됨 (`src/App.tsx`, `src/lib/hydrate.ts`, `src/stores/dataStore.ts` `hydrationError`, `src/screens/DataScreen.tsx` `LoadErrorState`; 회귀 `tests/correction-flow.spec.ts` "D-2 — fresh start→종료→reload …")
+- **교훈:** 또 빈 catch였다. **모든 로드/영속화 실패는 로깅하고, "빈 목록"과 "로드 실패"를 UI에서 반드시 구분**하라. "데이터 없음"이 진짜 없음을 의미하지 않는다 — 삼켜진 것일 수 있다.
 
 ---
 
@@ -220,9 +230,9 @@
 ### [RACE-7] 일시정지(Pause) 상태에서 화면 전환 시 sessionIdRef가 초기화되어 빈 ID 및 startedAt: NaN이 DB에 영속화됨
 - **증상:** 사용자가 세션을 `pause`한 뒤 화면을 전환(언마운트)하고 다시 돌아와 `resume`하면, 이후의 모든 이벤트와 최종 완료된 세션의 `sessionId`가 빈 문자열(`""`)로 저장되고, `startedAt`은 `NaN`으로 DB에 기록됨.
 - **원인:** `useVoiceSession` 훅의 `sessionIdRef`는 로컬 `useRef` 상태이므로 언마운트 시 유실되지만, Zustand 스토어의 phase는 유지되어 resume은 정상 작동하므로 갭 발생.
-- **해결·회피:** `sessionId`를 로컬 Ref 대신 Zustand `useSessionStore`에 저장하여 언마운트 후에도 복원되도록 수정 필요.
-- **출처:** `2026-06-05 세션` (실기기 로그 분석)
-- **현재 상태:** ⚠️주시
+- **해결·회피:** `sessionId/startedAt/label`을 `useSessionStore`(Zustand)에 함께 저장(`setSessionMeta`, **`resetAll()` 뒤** 호출). 훅 (re)mount 시 ref가 비고 store에 id가 있으면 복원하는 effect 추가. `persistSession`은 ref가 비면 store 값으로 폴백해 빈 id/`NaN` startedAt을 원천 차단.
+- **출처:** `2026-06-05 세션` (실기기 로그 분석) → **survey-011 v0.4.0** 수정
+- **현재 상태:** ✅수정됨 (`src/stores/sessionStore.ts` `setSessionMeta`, `src/lib/useVoiceSession.ts` 복원 effect + persist 폴백; 회귀 `tests/correction-flow.spec.ts` "D-2 RACE-7…", 무력화 시 `id:""`로 실패함을 확인)
 
 ---
 

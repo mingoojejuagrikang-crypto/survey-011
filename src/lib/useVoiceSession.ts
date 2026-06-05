@@ -218,15 +218,21 @@ export function useVoiceSession() {
       rows.push({ ...backup });
       rows.sort((a, b) => a.index - b.index);
     }
+    // D-2 (RACE-7): prefer the ref, but fall back to the store-persisted id/startedAt so a session
+    // that lost its hook ref (unmount during pause) still persists with a valid id and a finite
+    // startedAt instead of `id:''` + `startedAt:NaN`.
+    const resolvedId = sessionIdRef.current || sess.sessionId;
+    const resolvedStartedAt =
+      sess.startedAt || parseInt(resolvedId.replace('sess_', ''), 10) || Date.now();
     const session: Session = {
-      id: sessionIdRef.current,
+      id: resolvedId,
       date: new Date().toISOString().slice(0, 10),
-      label: sessionLabelRef.current,
+      label: sessionLabelRef.current || sess.sessionLabel,
       columns: settings.columns,
       rows,
       completedRows: rows.length,
       syncedRows: 0,
-      startedAt: parseInt(sessionIdRef.current.replace('sess_', ''), 10),
+      startedAt: resolvedStartedAt,
       finishedAt: Date.now(),
     };
     try { await saveSession(session); } catch { /* ignore */ }
@@ -290,10 +296,10 @@ export function useVoiceSession() {
       // awaiting field. This rejects redo-inline values arriving before the clip starts.
       activeClipRef.current = null;
       const hint = opts?.isModify
-        ? `정정. ${col.name} 다시 말씀해 주세요.`
+        ? `수정. ${col.name} 다시 말씀해 주세요.`
         : `${col.name} 말씀해 주세요.`;
       useSessionStore.getState().setLastTts(hint);
-      await say(opts?.isModify ? `정정. ${col.name}.` : `${col.name}.`, false);
+      await say(opts?.isModify ? `수정. ${col.name}.` : `${col.name}.`, false);
       // Start recording clip after TTS ends
       clipStartRowRef.current = row;
       clipStartColIdRef.current = col.id;
@@ -457,7 +463,8 @@ export function useVoiceSession() {
           ...(prevDirectValue != null ? { previousValue: prevDirectValue } : {}),
         });
         sess.setRecognized(parsed);
-        await say(`정정 ${target.name} ${formatForTts(parsed)}`);
+        sess.pushValueBurst(target.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
+        await say(`수정 ${target.name} ${formatForTts(parsed)}`);
         // Return immediately to where we were
         sess.setActiveRow(curRow);
         sess.setActiveCol(curIdx);
@@ -604,6 +611,31 @@ export function useVoiceSession() {
     [announceField, announceRowDiff],
   );
 
+  // ── public: move to the previous/next row (I-2: 이전행/다음행, 버튼·음성 공용) ──
+  // Review/edit semantics: jumpToRow(setReturn:true) so finishing the visited row returns the
+  // flow to where the user was. On a boundary we REPROMPT instead of silently stalling (REVIEW-4).
+  const gotoAdjacentRow = useCallback(
+    async (delta: -1 | 1) => {
+      const sess = useSessionStore.getState();
+      const settings = useSettingsStore.getState();
+      const total = computeTotalRows(settings.columns);
+      const target = sess.activeRow + delta;
+      cancelTts();
+      if (target < 1 || target > total) {
+        epochRef.current++;
+        const msg = delta < 0 ? '첫 행입니다.' : '마지막 행입니다.';
+        useSessionStore.getState().setLastTts(msg);
+        const vc = voiceColsList();
+        const cur = vc[sess.activeColIdx];
+        await say(msg);
+        if (cur) await announceField(cur);
+        return;
+      }
+      await jumpToRow(target, { setReturn: true });
+    },
+    [announceField, jumpToRow, say],
+  );
+
   // ── final result handler ───────────────────────────────────
   const handleFinal = useCallback(async (textArg: string, alts: string[], confidence: number) => {
     // `text` is mutable so the redo-with-inline-value path (e.g. "다시 8.4") can rewrite the
@@ -684,6 +716,14 @@ export function useVoiceSession() {
     if (cmd === 'skip') {
       cancelTts();
       await skipRow();
+      return;
+    }
+    if (cmd === 'prevRow') {
+      await gotoAdjacentRow(-1);
+      return;
+    }
+    if (cmd === 'nextRow') {
+      await gotoAdjacentRow(1);
       return;
     }
     if (cmd === 'modify') {
@@ -846,6 +886,7 @@ export function useVoiceSession() {
     const sess = useSessionStore.getState();
     sess.setRowValue(awaiting.row, awaiting.colId, parsed);
     sess.setRecognized(parsed);
+    sess.pushValueBurst(awaiting.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
     awaitingFieldRef.current = null;
 
     // v0.10 클립 누락 수정: stopClip을 echo TTS 이전에 시작 (병렬 실행)
@@ -898,7 +939,7 @@ export function useVoiceSession() {
     void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
 
     const echoText = awaiting.isModify
-      ? `정정 ${awaiting.name} ${formatForTts(parsed)}`
+      ? `수정 ${awaiting.name} ${formatForTts(parsed)}`
       : formatForTts(parsed);
     const echoEnqueuedAt = Date.now();
     await speak(echoText, {
@@ -936,7 +977,7 @@ export function useVoiceSession() {
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
     await advance();
-  }, [advance, enterModifyMode, say, skipRow]);
+  }, [advance, enterModifyMode, say, skipRow, gotoAdjacentRow]);
 
   // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async (label?: string) => {
@@ -949,9 +990,13 @@ export function useVoiceSession() {
     const total = computeTotalRows(s.columns);
     if (total === 0) return false;
 
-    sessionIdRef.current = `sess_${Date.now()}`;
+    const startTs = Date.now();
+    sessionIdRef.current = `sess_${startTs}`;
     sessionLabelRef.current = label?.trim() || undefined;
     sess.resetAll();
+    // D-2 (RACE-7): persist session id/startedAt in the store so an in-app unmount during pause
+    // can't lose them. MUST run AFTER resetAll() — resetAll clears sessionId/startedAt too.
+    sess.setSessionMeta({ sessionId: sessionIdRef.current, startedAt: startTs, label: sessionLabelRef.current });
     sess.setPhase('active');
     sess.setActiveRow(1);
     sess.setActiveCol(0);
@@ -1125,6 +1170,19 @@ export function useVoiceSession() {
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
   useEffect(() => { resumeRef.current = resume; }, [resume]);
 
+  // D-2 (RACE-7): restore session id/label from the store on (re)mount. If the hook unmounted
+  // mid-session (e.g. tab switch while paused) the local refs were lost, but the store kept the
+  // id — recover it so resumed events and the final persist carry the correct sessionId.
+  useEffect(() => {
+    if (sessionIdRef.current) return;
+    const s = useSessionStore.getState();
+    if (s.sessionId && s.phase !== 'ready' && s.phase !== 'done') {
+      sessionIdRef.current = s.sessionId;
+      sessionLabelRef.current = s.sessionLabel;
+      logger.setSessionId(s.sessionId);
+    }
+  }, []);
+
   // unmount cleanup
   useEffect(() => () => {
     setActiveController(null);
@@ -1155,7 +1213,7 @@ export function useVoiceSession() {
     // 다음 행 진행 시 persistSession에서 자연스럽게 반영됨.
   }, []);
 
-  return { start, stop, restartFromCol, jumpToRow, pause, resume, commitTouchValue, lastConfidenceRef };
+  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, pause, resume, commitTouchValue, lastConfidenceRef };
 }
 
 // ─── helpers ─────────────────────────────────────────────────
