@@ -77,21 +77,22 @@ export function VoiceScreen() {
   );
 }
 
-/** Compose a default session label like "이원창 5월 15일". */
+/** Compose a default session label like "2026-06-08 이원창" (날짜 + 이름).
+ *  설정탭(SettingsScreen)의 sessionAutoLabel 형식과 일치시킨다. '이름' 데이터형 컬럼을 최우선 픽업. */
 function buildAutoLabel(columns: Column[]): string {
-  const today = new Date();
-  const dateStr = `${today.getMonth() + 1}월 ${today.getDate()}일`;
-  // first fixed-value auto column with a name like 농가, 라벨, 처리...
+  const isoDate = new Date().toISOString().slice(0, 10);
+  const nameCol = columns.find((c) => c.type === 'name' && c.auto.kind === 'fixed' && !!c.auto.value);
+  if (nameCol && nameCol.auto.kind === 'fixed') return `${isoDate} ${nameCol.auto.value}`;
   for (const c of columns) {
     if (c.input !== 'auto') continue;
     if (c.auto.kind === 'fixed' && c.auto.value && c.auto.value !== '오늘') {
-      return `${c.auto.value} ${dateStr}`;
+      return `${isoDate} ${c.auto.value}`;
     }
     if (c.auto.kind === 'options' && c.auto.selected.length === 1) {
-      return `${c.auto.selected[0]} ${dateStr}`;
+      return `${isoDate} ${c.auto.selected[0]}`;
     }
   }
-  return dateStr;
+  return isoDate;
 }
 
 // ─── READY ────────────────────────────────────────────────────
@@ -346,15 +347,51 @@ function ActiveState({
         })}
       </div>
 
-      {/* Center: row-nav + mic pause toggle + end button (recognized value shown in the active chip) */}
+      {/* Center: 값 중심(Hero) + row-nav + mic pause toggle + end button */}
       <div
         style={{
           flex: 1, position: 'relative',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          padding: '0 24px', minHeight: 0, gap: 14,
+          padding: '0 20px', minHeight: 0, gap: 18,
         }}
       >
+        {/* I2: 값 중심(Hero) — 현재 항목명 + 값/마지막 인식값을 상시 크게 표시.
+            팝업(CenterValueBurst)이 사라진 뒤에도 남아 화면 중앙 빈 공간을 채운다. */}
+        {(() => {
+          const curCol = columns.find((c) => c.id === currentColId);
+          const heroName = curCol?.name ?? '';
+          const heroVal =
+            (currentColId ? rowValues[currentColId] : '') || sess.recognizedValue || '';
+          return (
+            <div
+              style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                gap: 2, textAlign: 'center', maxWidth: '92vw', minHeight: 0,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 'clamp(18px, 5.5vw, 28px)', fontWeight: 700,
+                  color: T.textDim, whiteSpace: 'nowrap', letterSpacing: -0.3,
+                }}
+              >
+                {heroName}
+              </span>
+              <span
+                style={{
+                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                  fontSize: 'clamp(46px, 16vw, 82px)', fontWeight: 900,
+                  color: heroVal ? T.text : T.textMute, letterSpacing: -1.5, lineHeight: 1,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '92vw',
+                }}
+              >
+                {heroVal || '—'}
+              </span>
+            </div>
+          );
+        })()}
+
         {/* I-2: 행 이동 (버튼 — 음성 "이전행"/"다음행"과 동일 동작) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button
@@ -364,7 +401,7 @@ function ActiveState({
               display: 'flex', alignItems: 'center', gap: 4,
               padding: '7px 14px', borderRadius: 999,
               border: `1px solid ${T.lineStrong}`, background: T.card,
-              color: paused ? T.textMute : T.textDim, fontSize: 13, fontWeight: 700,
+              color: paused ? T.textMute : T.textDim, fontSize: 14, fontWeight: 700,
               cursor: paused ? 'default' : 'pointer', opacity: paused ? 0.5 : 1,
             }}
             title="이전 행으로 이동"
@@ -378,7 +415,7 @@ function ActiveState({
               display: 'flex', alignItems: 'center', gap: 4,
               padding: '7px 14px', borderRadius: 999,
               border: `1px solid ${T.lineStrong}`, background: T.card,
-              color: paused ? T.textMute : T.textDim, fontSize: 13, fontWeight: 700,
+              color: paused ? T.textMute : T.textDim, fontSize: 14, fontWeight: 700,
               cursor: paused ? 'default' : 'pointer', opacity: paused ? 0.5 : 1,
             }}
             title="다음 행으로 이동"
@@ -451,8 +488,8 @@ function ActiveState({
       >
         <div
           style={{
-            fontSize: 13, color: T.textDim, fontWeight: 500,
-            fontStyle: 'italic', letterSpacing: -0.1, minHeight: 18,
+            fontSize: 15, color: T.textDim, fontWeight: 500,
+            fontStyle: 'italic', letterSpacing: -0.1, minHeight: 20,
           }}
         >
           {sess.lastTts}
@@ -460,7 +497,7 @@ function ActiveState({
         <div
           style={{
             display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
-            fontSize: 11, color: T.textMute,
+            fontSize: 12, color: T.textMute,
           }}
         >
           <span style={{ fontWeight: 700 }}>명령:</span>
@@ -525,14 +562,15 @@ function CenterValueBurst({ name, value }: { name: string; value: string }) {
           display: 'flex', alignItems: 'baseline', gap: 12, justifyContent: 'center',
         }}
       >
-        <span style={{ fontSize: 'clamp(16px, 5vw, 22px)', fontWeight: 800, color: T.textDim, whiteSpace: 'nowrap' }}>
+        {/* I1: 항목명과 값을 같은 폰트 사이즈로 통일하고 화면 내 최대 확대(88vw 가드). */}
+        <span style={{ fontSize: 'clamp(30px, 9vw, 50px)', fontWeight: 800, color: T.textDim, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '34vw' }}>
           {name}
         </span>
-        <span style={{ fontSize: 'clamp(18px, 6vw, 26px)', fontWeight: 700, color: T.textMute }}>:</span>
+        <span style={{ fontSize: 'clamp(30px, 9vw, 50px)', fontWeight: 700, color: T.textMute }}>:</span>
         <span
           style={{
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            fontSize: 'clamp(34px, 11vw, 52px)', fontWeight: 900,
+            fontSize: 'clamp(30px, 9vw, 50px)', fontWeight: 900,
             color: T.text, letterSpacing: -0.5, lineHeight: 1.05,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}

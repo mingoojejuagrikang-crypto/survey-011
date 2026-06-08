@@ -41,7 +41,7 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
       }
       const blob = await loadAudioClip(key);
       if (blob) {
-        const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+        const ext = blob.type.includes('wav') ? 'wav' : blob.type.includes('mp4') ? 'mp4' : 'webm';
         zip.file(`clips/${key}.${ext}`, blob);
       }
     }

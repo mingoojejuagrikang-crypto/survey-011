@@ -232,7 +232,21 @@
 - **원인:** `useVoiceSession` 훅의 `sessionIdRef`는 로컬 `useRef` 상태이므로 언마운트 시 유실되지만, Zustand 스토어의 phase는 유지되어 resume은 정상 작동하므로 갭 발생.
 - **해결·회피:** `sessionId/startedAt/label`을 `useSessionStore`(Zustand)에 함께 저장(`setSessionMeta`, **`resetAll()` 뒤** 호출). 훅 (re)mount 시 ref가 비고 store에 id가 있으면 복원하는 effect 추가. `persistSession`은 ref가 비면 store 값으로 폴백해 빈 id/`NaN` startedAt을 원천 차단.
 - **출처:** `2026-06-05 세션` (실기기 로그 분석) → **survey-011 v0.4.0** 수정
-- **현재 상태:** ✅수정됨 (`src/stores/sessionStore.ts` `setSessionMeta`, `src/lib/useVoiceSession.ts` 복원 effect + persist 폴백; 회귀 `tests/correction-flow.spec.ts` "D-2 RACE-7…", 무력화 시 `id:""`로 실패함을 확인)
+- **현재 상태:** ✅수정됨 (`src/stores/sessionStore.ts` `setSessionMeta`, `src/lib/useVoiceSession.ts` 복원 effect + persist 폴백; 회귀 `tests/correction-flow.spec.ts` "D-2 RACE-7…", 무력화 시 `id:""`로 실패함을 확인). 2026-06-08 로그(v0.4.1)에서 빈 sessionId 0건으로 재발 없음 재확인.
+
+### [CLIP-1] direct modify("수정 <값>") 시 수정한 셀의 음성 클립/재생버튼이 사라짐
+- **증상:** 데이터탭에서 세션을 확장해 보면 "수정 82.7"처럼 값과 함께 정정한 셀에만 음성 클립 재생버튼이 없음(값은 정상).
+- **원인:** `enterModifyMode`의 direct-modify 경로가 "stale 클립 매칭 방지" 목적으로 셀의 `audioClips` 포인터를 **삭제**했는데, direct modify는 새 값 클립을 재녹음하지 않으므로 셀에 연결된 클립이 사라짐. (cascade/restart는 재녹음 전제라 무관.)
+- **해결·회피:** 직전 `preserveCommandClip`이 저장한 수정 발화(`:cmd<n>`) 클립을 셀 포인터로 **재연결**. 재생버튼 유지 + 재생 내용이 새 값과 일치. 이전 값은 `:a<n>` archive로 ZIP에 보존.
+- **출처:** `2026-06-08 세션` (민구 제보 + 로그 row3·6·18·19·23·29) → **survey-011 v0.4.2** 수정
+- **현재 상태:** ✅수정됨 (`src/lib/useVoiceSession.ts` `enterModifyMode` cmdKey 재연결)
+
+### [CLIP-2] 음성 클립에 발화 전후 무음이 과다하게 포함됨
+- **증상:** 저장된 클립 재생 시 앞뒤 공백이 김. 06-08 로그 녹음 길이 평균 5.7초·최대 20.9초인데 실제 발화는 1–3초.
+- **원인:** TTS 종료 후 녹음 시작 + STT final 후 종료라 발화 전후 무음이 통째로 저장됨. VAD/트리밍 없음.
+- **해결·회피:** 저장 직전 진폭(RMS) 기반으로 발화 구간만 남기고 앞뒤 무음을 트림해 16kHz mono WAV로 재인코딩(`audioTrim.ts`). decode 불가/음성 미검출 시 원본 반환(iOS 안전 — 녹음 게이팅은 첫 음절 손실 위험이라 회피). 트림 발생은 `clip_trimmed` 이벤트로 추적.
+- **출처:** `2026-06-08 세션` (민구 제보 + 로그) → **survey-011 v0.4.2** 추가
+- **현재 상태:** ✅수정됨 (`src/lib/audioTrim.ts`, `src/lib/audioRecorder.ts` `stopClip` 통합; Chromium 실클립 검증 6998ms→1440ms, 128KB→46KB). ⚠️주시 — iOS Safari `decodeAudioData(webm/opus)` 작동은 다음 실기기 로그의 `clip_trimmed`로 사후 확인.
 
 ---
 

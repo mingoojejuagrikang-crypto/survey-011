@@ -1,4 +1,4 @@
-export type DataType = 'date' | 'text' | 'int' | 'float' | 'options';
+export type DataType = 'date' | 'text' | 'int' | 'float' | 'options' | 'name';
 
 /** Legacy mode kept for migration only. New code uses input + ttsAnnounce. */
 export type LegacyInputMode = 'auto' | 'voice' | 'silent';

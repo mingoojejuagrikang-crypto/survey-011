@@ -417,26 +417,35 @@ export function useVoiceSession() {
         // #3 error-vs-intent: capture pre-modify value before overwrite (direct "수정 <값>" path).
         const prevDirectValue = sess.getRowValues(targetRow)[target.id];
         sess.setRowValue(targetRow, target.id, parsed);
-        // Clip preservation (was: delete). Direct modify는 새 값 클립을 녹음하지 않으므로(수정 명령
-        // 발화가 새 값을 담음), 이전 (잘못 인식된) 값 클립을 삭제하지 않고 attempt 키로 보존한다.
-        // 단, corrected value에 stale audio가 in-app 재생으로 매칭되지 않도록 셀의 클립 포인터는
-        // 비운다(보존된 attempt 클립은 ZIP/분석에 그대로 남음).
-        // (1) pendingClipsRef: archive then unlink
+        // D1(2026-06-08): 수정한 셀의 음성 클립/재생버튼이 사라지는 문제 수정.
+        // Direct modify는 새 값 클립을 재녹음하지 않지만, 직전 호출된 preserveCommandClip이 수정
+        // 발화("수정 82.7" — 곧 새 값을 담은 음성)를 awaiting 셀의 :cmd 키로 저장해 둔다. 이전처럼
+        // 셀 포인터를 비우면(재생버튼 소멸) 대신, 그 수정 발화 클립을 셀에 재연결한다 → 재생버튼
+        // 유지 + 재생 내용이 새 값과 일치. 이전(잘못 인식된) 값은 archive(:a) 키로 ZIP에 그대로 보존.
+        const awaitingColId = vc[curIdx]?.id;
+        const cmdIdx = awaitingColId ? cmdClipRef.current[`${curRow}:${awaitingColId}`] : undefined;
+        const cmdKey =
+          cmdIdx && awaitingColId
+            ? `${sessionIdRef.current}:${curRow}:${awaitingColId}:cmd${cmdIdx}`
+            : null;
+        // (1) pendingClipsRef: archive 이전 시도 → 수정 발화 클립으로 포인터 재연결(없으면 unlink)
         const pendingMap = pendingClipsRef.current[targetRow];
         if (pendingMap && pendingMap[target.id]) {
           archiveCellClip(targetRow, target.id);
-          delete pendingMap[target.id];
+          if (cmdKey) pendingMap[target.id] = cmdKey;
+          else delete pendingMap[target.id];
         }
-        // (2) 이미 persistSession으로 dataStore에 들어간 경우 — archive then unlink the pointer
+        // (2) 이미 persistSession으로 dataStore에 들어간 경우 — archive 후 동일하게 재연결
         const existing = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
         const existingRow = existing?.rows.find((r) => r.index === targetRow);
         if (existing && existingRow?.audioClips?.[target.id]) {
           archiveCellClip(targetRow, target.id);
           const { [target.id]: _removed, ...restClips } = existingRow.audioClips;
+          const nextClips = cmdKey ? { ...restClips, [target.id]: cmdKey } : restClips;
           const updatedRow = {
             ...existingRow,
             values: { ...existingRow.values, [target.id]: parsed },
-            audioClips: Object.keys(restClips).length > 0 ? restClips : undefined,
+            audioClips: Object.keys(nextClips).length > 0 ? nextClips : undefined,
           };
           const updatedSession = {
             ...existing,
@@ -1230,7 +1239,7 @@ function parseValueForCol(col: Column, raw: string): string | null {
   if (col.type === 'options' && col.auto.kind === 'options') {
     return matchOption(raw, col.auto.selected.length ? col.auto.selected : col.auto.available);
   }
-  if (col.type === 'text') {
+  if (col.type === 'text' || col.type === 'name') {
     const t = raw.trim();
     return t || null;
   }

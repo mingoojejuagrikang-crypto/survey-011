@@ -117,7 +117,7 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
     const samples = sample.map((row) => row[ci]).filter(Boolean);
     let type: DataType = 'text';
     if (samples.length) {
-      const counts: Record<DataType, number> = { date: 0, text: 0, int: 0, float: 0, options: 0 };
+      const counts: Record<DataType, number> = { date: 0, text: 0, int: 0, float: 0, options: 0, name: 0 };
       samples.forEach((v) => {
         counts[guessType(v)]++;
       });
@@ -125,7 +125,7 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
     }
 
     let auto: Column['auto'] = { kind: 'fixed', value: '' };
-    let input: 'auto' | 'voice' = 'auto';
+    let input: 'auto' | 'voice' | 'touch' = 'auto';
     let ttsAnnounce = false;
     let decimals: number | undefined;
 
@@ -180,6 +180,13 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
       input = 'auto';
       ttsAnnounce = false;
     }
+
+    // 항목명 기반 의미 기본값(파일/시트 불문):
+    //  - "비고" → 터치 입력(메모). 사용자가 자유롭게 메모.
+    //  - "농가명"/"이름" → '이름' 데이터형.
+    const trimmed = (name || '').trim();
+    if (trimmed === '비고') input = 'touch';
+    if (trimmed === '농가명' || trimmed === '이름') type = 'name';
 
     return {
       id: `c${ci}_${Date.now()}`,

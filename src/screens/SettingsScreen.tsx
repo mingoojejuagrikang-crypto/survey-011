@@ -25,7 +25,32 @@ import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
 import { getKoreanVoices, setPreferredVoiceName, speak } from '../lib/speech';
 
-const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
+const TYPE_ORDER: DataType[] = ['date', 'text', 'name', 'int', 'float', 'options'];
+
+/**
+ * 세션명 접미사로 쓸 컬럼 값을 고른다.
+ * 우선순위: 명시 선택(pickedCol) > '이름' 데이터형 컬럼 > 첫 auto 고정값 컬럼.
+ * (세션명 기본값을 "날짜 + 이름"으로 구성하기 위해 '이름' 타입을 최우선.)
+ */
+function pickSessionLabelValue(columns: Column[], pickedCol: Column | null | undefined): string {
+  const effectiveCol =
+    pickedCol ??
+    columns.find((c) => c.type === 'name' && c.auto.kind === 'fixed' && !!c.auto.value) ??
+    columns.find(
+      (c) =>
+        c.input === 'auto' &&
+        c.type !== 'date' &&
+        c.auto.kind === 'fixed' &&
+        !!c.auto.value &&
+        c.auto.value !== '오늘',
+    );
+  if (!effectiveCol) return '';
+  if (effectiveCol.auto.kind === 'fixed') return effectiveCol.auto.value;
+  if (effectiveCol.auto.kind === 'options' && effectiveCol.auto.selected.length === 1) {
+    return effectiveCol.auto.selected[0];
+  }
+  return '';
+}
 
 // ─── small UI atoms ────────────────────────────────────────────
 function MiniInput({
@@ -191,8 +216,8 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
     );
   }
 
-  // text : fixed value only
-  if (col.type === 'text') {
+  // text / name : fixed value only ('이름'은 동작상 텍스트와 동일, 라벨·세션명 픽업에만 차이)
+  if (col.type === 'text' || col.type === 'name') {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
         <span style={{ fontSize: 13, color: T.textMute }}>고정값</span>
@@ -757,6 +782,7 @@ export function SettingsScreen() {
         const sheetType = sheetTypeByName.get(col.name.trim());
         if (!sheetType) continue;                 // no matching header (auto/derived column)
         if (sheetType === 'options' || col.type === 'options') continue; // skip app-only 'options'
+        if (sheetType === 'name' || col.type === 'name') continue;       // skip app-only 'name'
         checked++;
         if (sheetType !== col.type) {
           mismatches.push({ id: col.id, name: col.name, saved: col.type, sheet: sheetType });
@@ -819,26 +845,10 @@ export function SettingsScreen() {
     const total = computeTotalRows(s.columns);
     // Compute session label: ISO 날짜 + 선택된 컬럼 값 (date 타입 컬럼은 중복이므로 제외)
     const isoDate = new Date().toISOString().slice(0, 10);
-    let colVal = '';
     const pickedCol = s.sessionLabelColId
       ? s.columns.find((c) => c.id === s.sessionLabelColId)
       : null;
-    const effectiveCol =
-      pickedCol ??
-      s.columns.find(
-        (c) =>
-          c.input === 'auto' &&
-          c.type !== 'date' &&
-          c.auto.kind === 'fixed' &&
-          c.auto.value &&
-          c.auto.value !== '오늘',
-      );
-    if (effectiveCol) {
-      if (effectiveCol.auto.kind === 'fixed') colVal = effectiveCol.auto.value;
-      else if (effectiveCol.auto.kind === 'options' && effectiveCol.auto.selected.length === 1) {
-        colVal = effectiveCol.auto.selected[0];
-      }
-    }
+    const colVal = pickSessionLabelValue(s.columns, pickedCol);
     const sessionAutoLabel = colVal ? `${isoDate} ${colVal}` : isoDate;
     s.set({ tableGenerated: true, totalRows: total, sessionAutoLabel });
     setTablePreviewOpen(true);
@@ -1174,26 +1184,10 @@ export function SettingsScreen() {
                 onChange={(e) => {
                   const newColId = e.target.value || null;
                   const isoDate = new Date().toISOString().slice(0, 10);
-                  let colVal = '';
                   const pickedCol = newColId
                     ? s.columns.find((c) => c.id === newColId)
                     : null;
-                  const effectiveCol =
-                    pickedCol ??
-                    s.columns.find(
-                      (c) =>
-                        c.input === 'auto' &&
-                        c.type !== 'date' &&
-                        c.auto.kind === 'fixed' &&
-                        c.auto.value &&
-                        c.auto.value !== '오늘',
-                    );
-                  if (effectiveCol) {
-                    if (effectiveCol.auto.kind === 'fixed') colVal = effectiveCol.auto.value;
-                    else if (effectiveCol.auto.kind === 'options' && effectiveCol.auto.selected.length === 1) {
-                      colVal = effectiveCol.auto.selected[0];
-                    }
-                  }
+                  const colVal = pickSessionLabelValue(s.columns, pickedCol);
                   s.set({
                     sessionLabelColId: newColId,
                     sessionAutoLabel: colVal ? `${isoDate} ${colVal}` : isoDate,
@@ -1364,7 +1358,7 @@ function TablePreviewModal({
   const MAX_PREVIEW = 50;
   const displayRows = Math.min(totalRows, MAX_PREVIEW);
   const colWidths = columns.map((c) =>
-    c.type === 'date' ? 110 : c.type === 'text' || c.type === 'options' ? 100 : 70,
+    c.type === 'date' ? 110 : c.type === 'text' || c.type === 'name' || c.type === 'options' ? 100 : 70,
   );
 
   return (

@@ -36,21 +36,33 @@ interface SettingsState {
 const MOCK_COLUMNS: Column[] = [
   { id: 'c1',  name: '조사일자', type: 'date',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' } },
   { id: 'c2',  name: '기준일자', type: 'date',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '2026-05-13' } },
-  { id: 'c3',  name: '농가명',   type: 'text',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' } },
+  { id: 'c3',  name: '농가명',   type: 'name',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' } },
   { id: 'c4',  name: '라벨',     type: 'text',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: 'A' } },
   { id: 'c5',  name: '처리',     type: 'text',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '시험' } },
   { id: 'c6',  name: '조사나무', type: 'int',   input: 'auto', ttsAnnounce: true,  auto: { kind: 'seq', from: 1, to: 10 } },
   { id: 'c7',  name: '조사과실', type: 'int',   input: 'auto', ttsAnnounce: true,  auto: { kind: 'seq', from: 1, to: 5 } },
   { id: 'c8',  name: '횡경',     type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1 },
   { id: 'c9',  name: '종경',     type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1 },
-  { id: 'c10', name: '비고',     type: 'text',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '' } },
+  { id: 'c10', name: '비고',     type: 'text',  input: 'touch', ttsAnnounce: false, auto: { kind: 'fixed', value: '' } },
 ];
+
+/**
+ * 항목명 기반 의미 기본값(파일/시트/기존 사용자 불문 일관 적용):
+ *  - "비고" → 터치 입력(메모). 사용자가 자유롭게 메모할 수 있어야 함.
+ *  - "농가명" → '이름' 데이터형.
+ */
+export function applySemanticDefaults(col: Column): Column {
+  const nm = col.name?.trim();
+  if (nm === '비고' && col.input !== 'touch') return { ...col, input: 'touch' };
+  if (nm === '농가명' && col.type !== 'name') return { ...col, type: 'name' };
+  return col;
+}
 
 /** Migrate legacy mode-based columns to new input/ttsAnnounce shape. */
 function migrateColumn(c: unknown): Column {
   const x = c as Partial<Column> & { mode?: LegacyInputMode };
   if (x.input !== undefined && x.ttsAnnounce !== undefined) {
-    return x as Column;
+    return applySemanticDefaults(x as Column);
   }
   let input: 'auto' | 'voice' = 'auto';
   let ttsAnnounce = true;
@@ -60,7 +72,7 @@ function migrateColumn(c: unknown): Column {
     case 'auto':
     default:       input = 'auto';  ttsAnnounce = true;  break;
   }
-  return {
+  return applySemanticDefaults({
     id: x.id || `c${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     name: x.name || '새 항목',
     type: x.type || 'text',
@@ -68,7 +80,7 @@ function migrateColumn(c: unknown): Column {
     ttsAnnounce,
     auto: x.auto || { kind: 'fixed', value: '' },
     decimals: x.decimals,
-  };
+  });
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -123,7 +135,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'survey-011-settings-v3',
-      version: 3,
+      version: 4,
       migrate: (persisted: unknown, _version: number) => {
         const s = persisted as Partial<SettingsState> & { columns?: unknown[] };
         if (Array.isArray(s.columns)) {

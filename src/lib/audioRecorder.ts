@@ -8,6 +8,7 @@
  */
 
 import { logger } from './logger';
+import { trimSilenceToWav } from './audioTrim';
 
 interface ClipSlot {
   recorder: MediaRecorder;
@@ -152,7 +153,18 @@ export class AudioRecorder {
     }
   }
 
-  stopClip(): Promise<Blob | null> {
+  /** 녹음 정지 후 앞뒤 무음을 트림한 클립을 반환한다(D2). 트림 실패 시 원본 그대로. */
+  async stopClip(): Promise<Blob | null> {
+    const raw = await this.stopClipRaw();
+    if (!raw) return null;
+    const trimmed = await trimSilenceToWav(raw);
+    if (trimmed !== raw) {
+      logger.log({ type: 'clip', extra: `clip_trimmed:${raw.size}->${trimmed.size}` });
+    }
+    return trimmed;
+  }
+
+  private stopClipRaw(): Promise<Blob | null> {
     const slot = this.active;
     return new Promise((resolve) => {
       if (!slot || slot.finalized) {

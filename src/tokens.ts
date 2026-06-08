@@ -22,6 +22,7 @@ export const TYPE_LABELS = {
   int: '정수',
   float: '실수',
   options: '리스트',
+  name: '이름',
 } as const;
 
 export const TYPE_COLORS = {
@@ -30,6 +31,7 @@ export const TYPE_COLORS = {
   int: { fg: '#FFB300', bg: 'rgba(255,179,0,0.13)' },
   float: { fg: '#FF9F70', bg: 'rgba(255,159,112,0.13)' },
   options: { fg: '#A78BFA', bg: 'rgba(167,139,250,0.13)' },
+  name: { fg: '#50C878', bg: 'rgba(80,200,120,0.13)' },
 } as const;
 
 export const DEVICE = {

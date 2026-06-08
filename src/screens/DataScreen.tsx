@@ -1148,7 +1148,7 @@ function FullRowTable({
   const cols = session.columns;
   const rows = session.rows;
   const colWidthFor = (c: Column) =>
-    c.type === 'date' ? 110 : c.type === 'text' ? 140 : c.type === 'options' ? 100 : 80;
+    c.type === 'date' ? 110 : c.type === 'text' || c.type === 'name' ? 140 : c.type === 'options' ? 100 : 80;
 
   return (
     <div
@@ -1379,7 +1379,7 @@ function EditableCell({
   const isVoice = col.input === 'voice';
   const hasClip = isVoice && !!audioClipKey;
   const isDate = col.type === 'date';
-  const isText = col.type === 'text';
+  const isText = col.type === 'text' || col.type === 'name';
   const inputType = isDate ? 'date' : 'text';
   const inputMode = col.type === 'int' ? 'numeric' : col.type === 'float' ? 'decimal' : 'text';
 
