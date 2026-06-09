@@ -15,7 +15,6 @@
 import { test, expect } from '@playwright/test';
 import {
   parseKoreanNumber,
-  extractRedoValue,
   extractModifyValue,
   detectCommand,
   isAmbiguousSingleSyllable,
@@ -142,25 +141,6 @@ test.describe('parseKoreanNumber — maxDecimals rounding', () => {
   });
 });
 
-test.describe('extractRedoValue (M1)', () => {
-  test('"다시 8.4" → "8.4"', () => {
-    expect(extractRedoValue('다시 8.4')).toBe('8.4');
-  });
-  // I-1 단일화: 별칭 '재입력' 제거 — 이제 redo 키워드는 '다시'만.
-  test('"재입력 20.5" → null (별칭 제거됨)', () => {
-    expect(extractRedoValue('재입력 20.5')).toBeNull();
-  });
-  test('"다시 칠십사 점 칠" → "칠십사 점 칠"', () => {
-    expect(extractRedoValue('다시 칠십사 점 칠')).toBe('칠십사 점 칠');
-  });
-  test('"다시" (no value) → null', () => {
-    expect(extractRedoValue('다시')).toBeNull();
-  });
-  test('does not match modify keywords', () => {
-    expect(extractRedoValue('수정 8.4')).toBeNull();
-  });
-});
-
 test.describe('extractModifyValue — 단일 단어 "수정"만 인식', () => {
   test('"수정 178.1" → "178.1"', () => {
     expect(extractModifyValue('수정 178.1')).toBe('178.1');
@@ -200,39 +180,44 @@ test.describe('T-2 — command confidence gate (detection contract the gate reli
   });
 });
 
-test.describe('I-1/I-2 — 단일 명령어 + 행 이동(이전행/다음행)', () => {
-  // 행 이동 신규 명령
-  test('"이전행" → prevRow', () => {
-    expect(detectCommand('이전행')).toBe('prevRow');
+test.describe('v0.4.4 — 명령어 통합·리네임 (이전/다음, 스킵·다시 제거)', () => {
+  // 행 이동 명령은 '이전행/다음행' → '이전/다음'으로 리네임됨.
+  test('"이전" → prevRow', () => {
+    expect(detectCommand('이전')).toBe('prevRow');
   });
-  test('"다음행" → nextRow', () => {
+  test('"다음" → nextRow', () => {
+    expect(detectCommand('다음')).toBe('nextRow');
+  });
+  // 활용형 꼬리 허용(startsWith): "다음행"도 여전히 nextRow로 인식(접두 일치).
+  test('"다음행" → nextRow (접두 일치)', () => {
     expect(detectCommand('다음행')).toBe('nextRow');
   });
-  // 충돌 해소: 과거 skip 별칭 '다음'이 제거되어 더 이상 skip으로 오인되지 않는다.
-  test('"다음" → null (skip 별칭 제거 — "다음행"과의 충돌 해소)', () => {
-    expect(detectCommand('다음')).toBeNull();
+  test('"이전행" → prevRow (접두 일치)', () => {
+    expect(detectCommand('이전행')).toBe('prevRow');
   });
-  // skip 표준 단어는 '스킵' 유지.
-  test('"스킵" → skip', () => {
-    expect(detectCommand('스킵')).toBe('skip');
+  // 스킵: '다음'으로 통합되어 제거됨 → 더 이상 명령으로 인식되지 않는다.
+  test('"스킵" → null (다음으로 통합·제거됨)', () => {
+    expect(detectCommand('스킵')).toBeNull();
   });
-  test('"건너" → null (skip 별칭 제거됨)', () => {
-    expect(detectCommand('건너')).toBeNull();
+  // 다시(redo): '수정'으로 통합되어 제거됨.
+  test('"다시" → null (수정으로 통합·제거됨)', () => {
+    expect(detectCommand('다시')).toBeNull();
   });
-  // 나머지 표준 단어 유지 + 별칭 제거 스팟 체크
-  test('표준 단어 유지: 취소/다시/일시정지/재시작/종료', () => {
+  // 나머지 표준 단어 유지 스팟 체크
+  test('표준 단어 유지: 수정/취소/일시정지/재시작/종료', () => {
+    expect(detectCommand('수정')).toBe('modify');
     expect(detectCommand('취소')).toBe('cancel');
-    expect(detectCommand('다시')).toBe('redo');
     expect(detectCommand('일시정지')).toBe('pause');
     expect(detectCommand('재시작')).toBe('resume');
     expect(detectCommand('종료')).toBe('end');
   });
-  test('별칭 제거 확인: 지우기/멈춤/계속/마침/스톱 → null', () => {
+  test('별칭/제거 확인: 지우기/멈춤/계속/마침/스톱/건너 → null', () => {
     expect(detectCommand('지우기')).toBeNull();
     expect(detectCommand('멈춤')).toBeNull();
     expect(detectCommand('계속')).toBeNull();
     expect(detectCommand('마침')).toBeNull();
     expect(detectCommand('스톱')).toBeNull();
+    expect(detectCommand('건너')).toBeNull();
   });
 });
 

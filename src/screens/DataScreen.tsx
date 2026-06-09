@@ -7,9 +7,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { syncSelected, type SyncReport, type SyncFailure } from '../lib/sync';
 import { downloadCsv, sessionsToCsv } from '../lib/csv';
 import { deleteSession as dbDeleteSession, saveSession, loadAudioClip } from '../lib/db';
-import { fetchAllRows, parseSpreadsheetId } from '../lib/sheets';
-import { getAccessToken } from '../lib/googleAuth';
-import type { Column, Session, SessionRow } from '../types';
+import type { Column, Session } from '../types';
 import { exportLogZip, downloadZip } from '../lib/exportLog';
 import { uploadLogToBothDrives, LOG_FOLDER_ID } from '../lib/driveUpload';
 import { hydrateSessions } from '../lib/hydrate';
@@ -31,8 +29,6 @@ export function DataScreen() {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [failureReport, setFailureReport] = useState<SyncReport | null>(null);
-  const [importPreview, setImportPreview] = useState<{ rows: number; headers: string[] } | null>(null);
-  const importDataRef = useRef<{ headers: string[]; rows: string[][] } | null>(null);
   // 다중 세션 로그 ZIP 내보내기 확인 대상 (v0.12 Codex MEDIUM): 여러 세션의 클립을 한 번에 압축하면
   // 용량/지연이 커질 수 있어 2개 이상일 때 확인 단계를 거친다. CSV는 가벼우니 확인 없이 즉시 진행.
   const [pendingZipIds, setPendingZipIds] = useState<string[] | null>(null);
@@ -195,42 +191,26 @@ export function DataScreen() {
     setMsg('세션 삭제됨');
   };
 
-  // 시트에서 가져오기
-  const handleImportClick = async () => {
+  // 세션 복구: 앱 업데이트/새로고침으로 목록에서 사라져 보이는 세션을 IDB에서 다시 불러온다.
+  // (v0.4.4: 입력은 값 커밋마다 증분 저장되므로 진행 중이던 행도 함께 복구됨.)
+  const handleRecoverClick = async () => {
     setMsg(null);
-    setBusy(null);
-    const settings = useSettingsStore.getState();
-    if (!getAccessToken()) {
-      setMsg('Google 로그인이 필요합니다.');
-      return;
-    }
-    const id = parseSpreadsheetId(settings.sheetUrl);
-    if (!id || !settings.sheetTab) {
-      setMsg('설정 탭에서 시트 URL과 탭을 먼저 설정하세요.');
-      return;
-    }
+    setBusy('세션 복구 중...');
     try {
-      setBusy('시트 데이터 조회 중...');
-      const { headers, rows } = await fetchAllRows(id, settings.sheetTab);
-      importDataRef.current = { headers, rows };
-      setImportPreview({ rows: rows.length, headers });
-    } catch (err) {
-      setMsg('가져오기 실패: ' + (err as Error).message);
+      const before = useDataStore.getState().sessions.length;
+      await hydrateSessions();
+      const after = useDataStore.getState().sessions.length;
+      const err = useDataStore.getState().hydrationError;
+      if (err) {
+        setMsg('복구 실패: ' + err);
+      } else if (after > before) {
+        setMsg(`✓ 세션 ${after - before}개를 복구했습니다.`);
+      } else {
+        setMsg(`✓ 저장된 세션 ${after}개를 모두 불러왔습니다.`);
+      }
     } finally {
       setBusy(null);
     }
-  };
-
-  const handleImportConfirm = async () => {
-    const data = importDataRef.current;
-    setImportPreview(null);
-    if (!data) return;
-    const settings = useSettingsStore.getState();
-    const session = importSheetToSession(data.headers, data.rows, settings.columns);
-    upsertSession(session);
-    try { await saveSession(session); } catch { /* ignore */ }
-    setMsg(`✓ ${data.rows.length}행 가져옴`);
-    importDataRef.current = null;
   };
 
   return (
@@ -271,7 +251,7 @@ export function DataScreen() {
           )}
         </button>
         <button
-          onClick={handleImportClick}
+          onClick={handleRecoverClick}
           disabled={busy !== null}
           style={{
             height: 52, padding: '0 14px', borderRadius: 14,
@@ -279,9 +259,9 @@ export function DataScreen() {
             color: T.text, fontSize: 13, fontWeight: 700,
             display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
           }}
-          title="시트에서 가져오기"
+          title="사라진 세션 복구 (저장된 기록 다시 불러오기)"
         >
-          {I.download(18, T.text)} 가져오기
+          {I.download(18, T.text)} 세션 복구
         </button>
         <button
           onClick={() => setExportModalOpen(true)}
@@ -423,47 +403,8 @@ export function DataScreen() {
         />
       )}
 
-      {importPreview && (
-        <ConfirmModal
-          title="시트에서 가져오기"
-          body={`${importPreview.rows}행을 새 세션으로 가져옵니다.\n헤더: ${importPreview.headers.slice(0, 6).join(', ')}${importPreview.headers.length > 6 ? ' ...' : ''}\n\n계속할까요?`}
-          confirmLabel="가져오기"
-          onCancel={() => { setImportPreview(null); importDataRef.current = null; }}
-          onConfirm={handleImportConfirm}
-        />
-      )}
     </div>
   );
-}
-
-// ─── import helper ───────────────────────────────────────────
-function importSheetToSession(headers: string[], rows: string[][], columns: Column[]): Session {
-  const colIndexById: Record<string, number> = {};
-  for (const c of columns) {
-    const idx = headers.findIndex((h) => h.trim() === c.name.trim());
-    if (idx >= 0) colIndexById[c.id] = idx;
-  }
-  const sessionRows: SessionRow[] = rows
-    .filter((row) => row.some((cell) => (cell ?? '').toString().trim() !== ''))
-    .map((row, i) => {
-      const values: Record<string, string> = {};
-      for (const c of columns) {
-        const idx = colIndexById[c.id];
-        values[c.id] = idx !== undefined ? (row[idx] || '').toString().trim() : '';
-      }
-      return { index: i + 1, values, complete: true };
-    });
-  return {
-    id: `imported_${Date.now()}`,
-    date: new Date().toISOString().slice(0, 10),
-    label: `시트에서 가져옴 (${sessionRows.length}행)`,
-    columns,
-    rows: sessionRows,
-    completedRows: sessionRows.length,
-    syncedRows: sessionRows.length,
-    startedAt: Date.now(),
-    finishedAt: Date.now(),
-  };
 }
 
 // ─── sync session modal ───────────────────────────────────────

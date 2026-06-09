@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
-import { parseKoreanNumber, detectCommand, extractModifyValue, extractRedoValue, isAmbiguousSingleSyllable } from './koreanNum';
+import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable } from './koreanNum';
 import { VOICE_COMMANDS } from './voiceCommands';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
@@ -192,8 +192,15 @@ export function useVoiceSession() {
     // Check backup BEFORE early return: if cascade correction is in progress and the correcting row
     // was the only completed row, we still need to persist the backup snapshot.
     const backup = correctionBackupRef.current;
-    if (completed.length === 0 && !backup) return;
-    const rows: SessionRow[] = completed.map((r) => {
+    // v0.4.4 증분 영속화: 진행 중(활성·미완료) 행도 부분값/클립이 있으면 저장 대상에 포함해, 행을 다
+    // 채우기 전 새로고침/앱 업데이트로 입력이 유실되는 것을 막는다. (sync는 complete 행만 업로드.)
+    const activeRow = sess.activeRow;
+    const activeHasData =
+      !completed.includes(activeRow) &&
+      (Object.values(sess.getRowValues(activeRow) ?? {}).some((v) => v !== '') ||
+        Object.keys(pendingClipsRef.current[activeRow] ?? {}).length > 0);
+    if (completed.length === 0 && !backup && !activeHasData) return;
+    const buildRow = (r: number, complete: boolean): SessionRow => {
       const auto = buildCyclingValues(settings.columns, r);
       const fixedAndAuto = autoNonCyclingValues(settings.columns, r);
       const voiceVals = sess.getRowValues(r);
@@ -209,16 +216,20 @@ export function useVoiceSession() {
       return {
         index: r,
         values: { ...fixedAndAuto, ...auto, ...voiceVals },
-        complete: true,
+        complete,
         audioClips: Object.keys(mergedClips).length > 0 ? mergedClips : undefined,
       };
-    });
+    };
+    const rows: SessionRow[] = completed.map((r) => buildRow(r, true));
     // If stop() fires while a cascade correction is in progress (row not yet re-completed),
     // include the backup snapshot so original measurements survive the persist.
     if (backup && !completed.includes(backup.index)) {
       rows.push({ ...backup });
-      rows.sort((a, b) => a.index - b.index);
     }
+    if (activeHasData && !rows.some((row) => row.index === activeRow)) {
+      rows.push(buildRow(activeRow, false));
+    }
+    rows.sort((a, b) => a.index - b.index);
     // D-2 (RACE-7): prefer the ref, but fall back to the store-persisted id/startedAt so a session
     // that lost its hook ref (unmount during pause) still persists with a valid id and a finite
     // startedAt instead of `id:''` + `startedAt:NaN`.
@@ -231,7 +242,7 @@ export function useVoiceSession() {
       label: sessionLabelRef.current || sess.sessionLabel,
       columns: settings.columns,
       rows,
-      completedRows: rows.length,
+      completedRows: rows.filter((r) => r.complete).length,
       syncedRows: 0,
       startedAt: resolvedStartedAt,
       finishedAt: Date.now(),
@@ -291,24 +302,21 @@ export function useVoiceSession() {
         isModify: opts?.isModify,
         previousValue: opts?.previousValue,
       };
-      // Codex MEDIUM-4: no clip is active until startClip() runs below. Clear here so that during
-      // the upcoming `say()` (including modify/jump re-announce, which don't pass through commit)
-      // the invariant holds: activeClipRef non-null ⟺ a clip has actually started for the current
-      // awaiting field. This rejects redo-inline values arriving before the clip starts.
-      activeClipRef.current = null;
+      // v0.4.4 barge-in 클립 복구: 클립을 announce TTS '이전에' 시작한다. 레코더(audioRecorder)는
+      // TTS mute와 무관하게 영구 mic 스트림에서 연속 캡처하므로, 안내 음성이 나가는 동안 사용자가
+      // 값을 말하면(barge-in) 그 발화가 클립에 담긴다. 이전엔 announce 후 시작이라 barge-in 구간이
+      // 비어 데이터탭 재생 시 무음이었음. (announce 후 시작을 강제하던 redo-inline 가드[MEDIUM-4]는
+      // redo 명령 제거로 사라짐.) 클립 앞에 새는 announce TTS는 mic AEC가 억제하고, 앞 무음은
+      // audioTrim이 정리한다.
+      clipStartRowRef.current = row;
+      clipStartColIdRef.current = col.id;
+      recorderRef.current?.startClip();
+      activeClipRef.current = { row, colId: col.id };
       const hint = opts?.isModify
         ? `수정. ${col.name} 다시 말씀해 주세요.`
         : `${col.name} 말씀해 주세요.`;
       useSessionStore.getState().setLastTts(hint);
       await say(opts?.isModify ? `수정. ${col.name}.` : `${col.name}.`, false);
-      // Start recording clip after TTS ends
-      clipStartRowRef.current = row;
-      clipStartColIdRef.current = col.id;
-      recorderRef.current?.startClip();
-      // Codex MEDIUM-4: clip is now active for this field. Set AFTER startClip so that during
-      // the preceding `say()` (TTS prompt) this ref still reflects no/previous active clip,
-      // letting the redo-inline guard reject values that arrive before the clip starts.
-      activeClipRef.current = { row, colId: col.id };
     },
     [say],
   );
@@ -533,39 +541,6 @@ export function useVoiceSession() {
     await announceField(target, { isModify: true, previousValue: prevTargetValue });
   }, [announceField, persistSession, say]);
 
-  // ── skip ───────────────────────────────────────────────────
-  const skipRow = useCallback(async () => {
-    const startEpoch = epochRef.current;
-    const settings = useSettingsStore.getState();
-    const sess = useSessionStore.getState();
-    const vc = voiceColsList();
-    const row = sess.activeRow;
-    const total = computeTotalRows(settings.columns);
-    for (const c of vc) {
-      sess.setRowValue(row, c.id, '');
-    }
-    sess.markRowComplete(row);
-    void persistSession();
-    awaitingFieldRef.current = null;
-    await say('건너뜁니다.');
-    if (epochRef.current !== startEpoch) return;
-    const next = findNextIncompleteRow(row + 1, total, vc);
-    if (next === null) {
-      sess.setPhase('done');
-      await say('모든 입력이 완료되었습니다.');
-      await stop(false);
-      return;
-    }
-    sess.setActiveRow(next);
-    const targetCol = firstIncompleteColIdx(next, vc);
-    sess.setActiveCol(targetCol);
-    sess.setRecognized('');
-    awaitingFieldRef.current = null;
-    await announceRowDiff(row, next);
-    if (epochRef.current !== startEpoch) return;
-    if (vc[targetCol]) await announceField(vc[targetCol]);
-  }, [announceField, announceRowDiff, persistSession, say]);
-
   // ── public: restart from a voice col (chip tap) ────────────
   const restartFromCol = useCallback(async (colId: string) => {
     const sess = useSessionStore.getState();
@@ -725,11 +700,6 @@ export function useVoiceSession() {
       await resumeRef.current();
       return;
     }
-    if (cmd === 'skip') {
-      cancelTts();
-      await skipRow();
-      return;
-    }
     if (cmd === 'prevRow') {
       await gotoAdjacentRow(-1);
       return;
@@ -753,43 +723,11 @@ export function useVoiceSession() {
       await enterModifyMode(modifyVal || undefined);
       return;
     }
-    // M1: "다시 8.4" — redo carrying an inline value should apply it to the CURRENT field.
-    // Tracked here so the value-commit path treats it like a deliberate (post-command) input.
-    let redoInlineValue = false;
-    if (cmd === 'cancel' || cmd === 'redo') {
+    if (cmd === 'cancel') {
       cancelTts();
-      // "다시 8.4" — redo carrying an inline value applies that value to the CURRENT field
-      // (the one we're awaiting) instead of discarding it. Rewrite `text` to just the value and
-      // fall through to the normal value-commit path so it still passes confidence/parse checks.
-      if (cmd === 'redo') {
-        const redoVal = extractRedoValue(text);
-        if (redoVal) {
-          // Codex MEDIUM-4: redo-inline bypasses the TTS-mute guard below, so only allow it when
-          // the recording clip for the awaiting field is actually active. If the clip hasn't
-          // started yet (announceField's TTS prompt still playing) the active clip ref is null or
-          // points at a previous field — committing now would stopClip() a non-existent clip and
-          // let the cancelled announceField start an obsolete clip. Re-prompt instead.
-          const ac = activeClipRef.current;
-          if (!ac || ac.row !== awaiting.row || ac.colId !== awaiting.colId) {
-            logger.log({ type: 'command', parsed: 'redo_inline_no_active_clip', text, extra: redoVal, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
-            useSessionStore.getState().setRecognized('');
-            await say(`${awaiting.name} 다시 말씀해 주세요.`);
-            return;
-          }
-          logger.log({ type: 'command', parsed: 'redo_inline_value', text, extra: redoVal, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
-          text = redoVal;
-          redoInlineValue = true;
-          // do not return — continue to the plain-value path below
-        } else {
-          useSessionStore.getState().setRecognized('');
-          await say(`${awaiting.name} 다시 말씀해 주세요.`);
-          return;
-        }
-      } else {
-        useSessionStore.getState().setRecognized('');
-        await say(`${awaiting.name} 다시 말씀해 주세요.`);
-        return;
-      }
+      useSessionStore.getState().setRecognized('');
+      await say(`${awaiting.name} 다시 말씀해 주세요.`);
+      return;
     }
 
     // Input-2 → barge-in (v0.4.3): TTS 재생 중 들어온 값을 폐기하지 않고, 재생 중 TTS를 끊고
@@ -797,8 +735,8 @@ export function useVoiceSession() {
     // 기존엔 폐기(stt_blocked_tts_muted) 후 재발화를 강요했음. 명령어는 위에서 이미 barge-in 처리됨.
     // 한계: 값은 final 단계에서 컷되므로 STT 확정까지 ~1~2초 TTS가 더 재생될 수 있음(명령어의 interim 컷보다 느림).
     // 잔여 에코 위험(TTS 숫자의 마이크 되먹임)은 아래 신뢰도 게이트(0.65 / noisy 0.80)가 1차 방어.
-    // "다시 <값>" 인라인 값(redoInlineValue)은 이미 명령 경로에서 TTS를 끊었으므로 중복 컷 불필요.
-    if (!redoInlineValue && ctrlRef.current?.isTtsMuted()) {
+    // v0.4.4: barge-in 발화도 클립에 담기도록 클립은 announceField에서 announce TTS 이전에 시작됨.
+    if (ctrlRef.current?.isTtsMuted()) {
       logger.log({ type: 'stt_barge_in', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
       cancelTts();
       epochRef.current++; // 진행 중인 advance/안내 체인 무효화
@@ -913,6 +851,10 @@ export function useVoiceSession() {
       ...pendingClipsRef.current[clipAwaitingRow],
       [clipAwaitingColId]: clipKey,
     };
+    // v0.4.4 증분 영속화: 값 커밋 직후(행이 완료되기 전이라도) 진행 행을 IDB에 저장한다. advance()가
+    // 행 완료 시 다시 저장하므로 중복이지만, 마지막 필드 입력 전 새로고침/앱 업데이트로 부분 입력이
+    // 유실되는 것을 막는 핵심 보호다. (fire-and-forget — echo TTS/진행을 막지 않음.)
+    void persistSession();
     // Codex MEDIUM-4: clip for this field is being committed (stopped) — no longer active.
     // The next announceField will re-set it after its own startClip().
     activeClipRef.current = null;
@@ -992,7 +934,7 @@ export function useVoiceSession() {
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
     await advance();
-  }, [advance, enterModifyMode, say, skipRow, gotoAdjacentRow]);
+  }, [advance, enterModifyMode, say, gotoAdjacentRow, persistSession]);
 
   // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async (label?: string) => {

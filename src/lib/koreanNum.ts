@@ -335,13 +335,3 @@ export function isAmbiguousSingleSyllable(raw: string): boolean {
   if (s.length !== 1) return false;
   return SINO[s] !== undefined;
 }
-
-/** "다시 8.4" → "8.4" — extract inline value after the redo keyword (단일 단어 '다시', 별칭 '재입력' 제거). */
-export function extractRedoValue(raw: string): string | null {
-  const prefix = raw.match(/^(?:다시)[\s,.]*(.+)/);
-  if (prefix) {
-    const v = prefix[1].trim();
-    return v ? v : null;
-  }
-  return null;
-}

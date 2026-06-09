@@ -13,15 +13,14 @@
  * — tells us whether any word needs a fallback later.
  *
  * IMPORTANT for matching: no canonical `word` may be a prefix of another (detectCommand uses
- * startsWith). Keep that invariant when editing this list — e.g. '다시'(redo) vs '다음행'(nextRow)
- * are safe because neither prefixes the other.
+ * startsWith). Keep that invariant when editing this list — e.g. '이전'(prevRow) vs '다음'(nextRow)
+ * are safe because neither prefixes the other. (사용자가 '이전행'/'다음행'으로 말해도 startsWith로
+ * 동일하게 인식된다.)
  */
 
 export type VoiceCommand =
   | 'modify'
   | 'cancel'
-  | 'redo'
-  | 'skip'
   | 'prevRow'
   | 'nextRow'
   | 'pause'
@@ -53,11 +52,9 @@ export interface CommandSpec {
 
 export const VOICE_COMMANDS: CommandSpec[] = [
   { id: 'modify',  word: '수정',     display: '수정',     desc: '직전에 입력한 값을 고칩니다',      primary: true, minConfidence: 0.55 },
-  { id: 'skip',    word: '스킵',     display: '스킵',     desc: '현재 행을 건너뜁니다',            primary: true },
-  { id: 'prevRow', word: '이전행',   display: '이전행',   desc: '이전 행으로 이동해 값을 검토·수정합니다' },
-  { id: 'nextRow', word: '다음행',   display: '다음행',   desc: '다음 행으로 이동합니다' },
+  { id: 'prevRow', word: '이전',     display: '이전',     desc: '이전 행으로 이동해 값을 검토·수정합니다' },
+  { id: 'nextRow', word: '다음',     display: '다음',     desc: '다음 행으로 이동합니다',          primary: true },
   { id: 'cancel',  word: '취소',     display: '취소',     desc: '현재 인식된 값을 지웁니다' },
-  { id: 'redo',    word: '다시',     display: '다시',     desc: '현재 항목을 다시 입력합니다' },
   { id: 'pause',   word: '일시정지', display: '일시정지', desc: '입력을 잠시 멈춥니다',            primary: true },
   { id: 'resume',  word: '재시작',   display: '재시작',   desc: '멈춘 입력을 다시 시작합니다',      primary: true },
   { id: 'end',     word: '종료',     display: '종료',     desc: '입력을 끝내고 저장합니다',        primary: true },

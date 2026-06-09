@@ -395,7 +395,7 @@ function ActiveState({
           );
         })()}
 
-        {/* I-2: 행 이동 (버튼 — 음성 "이전행"/"다음행"과 동일 동작) */}
+        {/* I-2: 행 이동 (버튼 — 음성 "이전"/"다음"과 동일 동작) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <button
             onClick={onPrevRow}
@@ -409,7 +409,7 @@ function ActiveState({
             }}
             title="이전 행으로 이동"
           >
-            ◀ 이전행
+            ◀ 이전
           </button>
           <button
             onClick={onNextRow}
@@ -423,7 +423,7 @@ function ActiveState({
             }}
             title="다음 행으로 이동"
           >
-            다음행 ▶
+            다음 ▶
           </button>
         </div>
         <div

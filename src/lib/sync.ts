@@ -60,7 +60,9 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
       continue;
     }
     if (session.syncedRows >= session.completedRows) continue;
-    const pending = session.rows.slice(session.syncedRows);
+    // v0.4.4: 증분 영속화로 세션에 '진행 중(미완료)' 행이 포함될 수 있으므로, 완료된 행만 골라
+    // syncedRows(=완료 행 동기화 개수) 이후를 업로드한다. 불완전 행이 시트로 새는 것을 차단.
+    const pending = session.rows.filter((r) => r.complete).slice(session.syncedRows);
     if (pending.length === 0) continue;
     const colIds = session.columns.map((c) => c.id);
     const matrix = pending.map((row) => colIds.map((colId) => row.values[colId] ?? ''));
