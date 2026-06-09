@@ -102,9 +102,56 @@ async function ensureTeamSubFolder(parentId: string, userEmail: string): Promise
   return created.id;
 }
 
-/** 사용자 본인 드라이브 (My Drive 루트)에 업로드. */
+const APP_FOLDER_NAME = 'survey-011';
+const USER_LOG_SUBFOLDER = 'log';
+
+/** 사용자 Drive에서 `name` 폴더를 parent(미지정=루트) 아래에서 찾거나 생성해 ID 반환.
+ *  중복이 있으면 createdTime asc로 가장 오래된 것을 선택해 일관성 유지. */
+async function ensureFolder(name: string, parentId?: string): Promise<string> {
+  const headers = await authHeader();
+  const safeName = escapeDriveQ(name);
+  const parentClause = parentId ? `'${escapeDriveQ(parentId)}' in parents` : `'root' in parents`;
+  const q = `${parentClause} and name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const searchUrl = `${FILES_API}?q=${encodeURIComponent(q)}&fields=files(id,createdTime)&orderBy=createdTime&spaces=drive`;
+  const sr = await fetch(searchUrl, { headers });
+  if (sr.ok) {
+    const data = (await sr.json()) as { files?: { id: string }[] };
+    if (data.files && data.files.length > 0) return data.files[0].id;
+  } else {
+    const errText = await sr.text().catch(() => `HTTP ${sr.status}`);
+    throw new Error(`폴더 검색 실패(${name}): ${errText}`);
+  }
+  const createRes = await fetch(FILES_API, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      mimeType: 'application/vnd.google-apps.folder',
+      ...(parentId ? { parents: [parentId] } : {}),
+    }),
+  });
+  if (!createRes.ok) {
+    const err = await createRes.text().catch(() => `HTTP ${createRes.status}`);
+    throw new Error(`폴더 생성 실패(${name}): ${err}`);
+  }
+  const created = (await createRes.json()) as { id: string };
+  return created.id;
+}
+
+/** 사용자 Drive `survey-011/log/` 폴더 ID (settingsStore 캐시 우선). */
+async function ensureUserLogFolder(): Promise<string> {
+  const cached = useSettingsStore.getState().userLogFolderId;
+  if (cached) return cached;
+  const appId = await ensureFolder(APP_FOLDER_NAME);
+  const logId = await ensureFolder(USER_LOG_SUBFOLDER, appId);
+  useSettingsStore.getState().set({ userLogFolderId: logId });
+  return logId;
+}
+
+/** 사용자 본인 드라이브 `survey-011/log/` 폴더에 업로드 (v0.4.5 Q1b: 루트 대신 전용 폴더). */
 export async function uploadLogToUserDrive(zipBlob: Blob, filename: string): Promise<string> {
-  return uploadZip(zipBlob, filename);
+  const folderId = await ensureUserLogFolder();
+  return uploadZip(zipBlob, filename, folderId);
 }
 
 /** 관리자 공유 폴더 내 {userEmail}/ 하위 폴더에 업로드.
@@ -135,11 +182,15 @@ export async function uploadLogToBothDrives(
 ): Promise<DualUploadResult> {
   const result: DualUploadResult = { errors: [], adminConfigured: !!LOG_FOLDER_ID };
 
-  // 1. 사용자 본인 드라이브
+  // 1. 사용자 본인 드라이브 (survey-011/log/)
   try {
     result.userDriveId = await uploadLogToUserDrive(zipBlob, filename);
   } catch (e) {
     result.errors.push(`user_drive: ${e instanceof Error ? e.message : String(e)}`);
+    // 캐시된 폴더 ID가 삭제/이동돼 실패했을 수 있음 — 무효화해 다음 시도에 재탐색/재생성.
+    if (useSettingsStore.getState().userLogFolderId) {
+      useSettingsStore.getState().set({ userLogFolderId: null });
+    }
   }
 
   // 2. 관리자 폴더의 팀원 하위 폴더 — LOG_FOLDER_ID 설정된 경우만

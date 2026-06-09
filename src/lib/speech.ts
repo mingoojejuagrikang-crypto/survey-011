@@ -9,7 +9,7 @@
  *  - On user request to interrupt TTS, we cancel synthesis queue
  */
 
-import { detectCommand } from './koreanNum';
+import { useSettingsStore } from '../stores/settingsStore';
 
 type SRCtor = new () => SpeechRecognitionLike;
 
@@ -149,8 +149,16 @@ export class SpeechController {
       const confidence = r[0]?.confidence ?? 1;
       const alts: string[] = [];
       for (let i = 0; i < r.length; i++) alts.push(r[i].transcript.trim());
-      if (!final && this.ttsMuted && detectCommand(text)) {
-        synth?.cancel();
+      // barge-in TTS 컷 (interim 단계).
+      // - 기본(이어폰): 명령어든 값이든 사용자가 말하기 시작하면(interim 비어있지 않음) 즉시 TTS 중단
+      //   → v0.4.5 I2: 값도 final까지 기다리지 않고 즉시 끊는다. 값 커밋은 handleFinal에서.
+      // - 스피커폰 모드(Q2): TTS 자기 음성이 마이크로 새어 명령(특히 '수정' 에코)을 자가발동/오컷하는
+      //   것을 막기 위해 interim 컷을 아예 하지 않는다(안내가 끝난 뒤 입력).
+      if (!final && this.ttsMuted) {
+        const speakerphone = useSettingsStore.getState().speakerphoneMode;
+        if (!speakerphone && text.length > 0) {
+          synth?.cancel();
+        }
       }
       if (final) this.cb.onFinal(text, alts, confidence);
       else this.cb.onInterim?.(text);

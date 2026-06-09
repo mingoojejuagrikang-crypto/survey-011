@@ -40,6 +40,9 @@ export function useVoiceSession() {
   // (i.e. while announceField's TTS prompt is still playing) — which would otherwise stop a
   // non-existent clip or let a cancelled announceField start an obsolete clip.
   const activeClipRef = useRef<{ row: number; colId: string } | null>(null);
+  // v0.4.5 I3: "이전" 재입력 모드. non-null이면 그 행을 1번 필드부터 순서대로 재입력 중 —
+  // advance가 채워진 필드를 건너뛰지 않고 모든 필드를 차례로 재프롬프트하고, 행 끝에서 해제된다.
+  const reentryRowRef = useRef<number | null>(null);
   // rowIndex → colId → IDB key; accumulated in-memory until persistSession writes to dataStore
   const pendingClipsRef = useRef<Record<number, Record<string, string>>>({});
   // Clip-preservation: monotonic per-cell attempt counter (`row:colId` → next attempt index) used
@@ -331,24 +334,38 @@ export function useVoiceSession() {
     const row = sess.activeRow;
     const total = computeTotalRows(settings.columns);
 
+    // v0.4.5 I3: 재입력 모드면 채워진 필드도 건너뛰지 않고 모든 필드를 순서대로 재프롬프트한다.
+    const isReentry = reentryRowRef.current === row;
+
     // Still voice cols in this row?
     const nextIdx = sess.activeColIdx + 1;
     if (nextIdx < vc.length) {
-      // Skip cols already filled with non-empty values (empty string = cleared by modify)
       const values = sess.getRowValues(row);
       let target = nextIdx;
-      while (target < vc.length) {
-        const v = values[vc[target].id];
-        if (v === undefined || v === '') break;
-        target++;
+      if (!isReentry) {
+        // Skip cols already filled with non-empty values (empty string = cleared by modify)
+        while (target < vc.length) {
+          const v = values[vc[target].id];
+          if (v === undefined || v === '') break;
+          target++;
+        }
       }
       if (target < vc.length) {
         sess.setActiveCol(target);
         sess.setRecognized('');
-        await announceField(vc[target]);
+        if (isReentry) {
+          const existing = values[vc[target].id] ?? '';
+          await announceField(vc[target], { isModify: true, previousValue: existing || undefined });
+        } else {
+          await announceField(vc[target]);
+        }
         return;
       }
     }
+
+    // Row end. 재입력 모드였다면 해제하고, 아래 normal tail(returnRow는 재입력 중 null이라 건너뜀)이
+    // 다음 행으로 전진시킨다.
+    if (isReentry) reentryRowRef.current = null;
 
     // All voice cols in this row filled — complete
     if (correctionBackupRef.current?.index === row) correctionBackupRef.current = null;
@@ -621,6 +638,40 @@ export function useVoiceSession() {
     [announceField, jumpToRow, say],
   );
 
+  // ── v0.4.5 I3: "이전" 재입력 모드 진입 ─────────────────────
+  // 이전 행으로 가서 1번 필드부터 모든 음성 필드를 순서대로 재입력. 기존 값은 유지하되 발화 시 교체,
+  // "유지"로 현재 값 보존하고 다음 필드, "다음"으로 다음 행 이동. setReturn을 쓰지 않아(복귀 안 함)
+  // advance가 행 끝에서 다음 행으로 전진한다.
+  const enterReentry = useCallback(async () => {
+    const sess = useSessionStore.getState();
+    const vc = voiceColsList();
+    const cur = sess.activeRow;
+    const target = cur - 1;
+    cancelTts();
+    epochRef.current++;
+    if (target < 1) {
+      const msg = '첫 행입니다.';
+      sess.setLastTts(msg);
+      await say(msg);
+      const c = vc[sess.activeColIdx];
+      if (c) await announceField(c);
+      return;
+    }
+    reentryRowRef.current = target;
+    sess.setReturn(null, null);
+    sess.setActiveRow(target);
+    sess.setActiveCol(0);
+    sess.setRecognized('');
+    sess.setPhase('active');
+    awaitingFieldRef.current = null;
+    await announceRowDiff(cur, target);
+    const first = vc[0];
+    if (first) {
+      const existing = sess.getRowValues(target)[first.id] ?? '';
+      await announceField(first, { isModify: true, previousValue: existing || undefined });
+    }
+  }, [announceField, announceRowDiff, say]);
+
   // ── final result handler ───────────────────────────────────
   const handleFinal = useCallback(async (textArg: string, alts: string[], confidence: number) => {
     // `text` is mutable so the redo-with-inline-value path (e.g. "다시 8.4") can rewrite the
@@ -637,6 +688,15 @@ export function useVoiceSession() {
         cancelTts();
         await resumeRef.current();
       }
+      return;
+    }
+
+    // v0.4.5 Q2: 스피커폰 모드에서는 TTS 재생 중 '명령어 실행'도 차단한다(true half-duplex).
+    // interim TTS 컷만 막으면 명령은 final에서 그대로 실행돼, modify 에코 TTS("수정 …")가 마이크로
+    // 새어 들어와 가짜 modify를 자가발동할 수 있다. 안내가 끝난 뒤 명령하도록 폐기한다.
+    // (resume은 위 paused 분기에서 처리되며 그땐 TTS가 재생 중이 아니므로 영향 없음.)
+    if (cmd && ctrlRef.current?.isTtsMuted() && useSettingsStore.getState().speakerphoneMode) {
+      logger.log({ type: 'stt_blocked_tts_muted', text, parsed: cmd, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
       return;
     }
 
@@ -701,11 +761,43 @@ export function useVoiceSession() {
       return;
     }
     if (cmd === 'prevRow') {
-      await gotoAdjacentRow(-1);
+      // v0.4.5 I3: "이전" → 이전 행 재입력 모드 진입.
+      await enterReentry();
       return;
     }
     if (cmd === 'nextRow') {
+      // v0.4.5 I3: 재입력 중 "다음" → 재입력 종료하고 다음 행으로 전진(복귀 없이).
+      if (reentryRowRef.current != null) {
+        reentryRowRef.current = null;
+        const sess = useSessionStore.getState();
+        const total = computeTotalRows(useSettingsStore.getState().columns);
+        const next = sess.activeRow + 1;
+        cancelTts();
+        epochRef.current++;
+        if (next > total) {
+          const msg = '마지막 행입니다.';
+          sess.setLastTts(msg);
+          await say(msg);
+          const vc = voiceColsList();
+          const c = vc[sess.activeColIdx];
+          if (c) await announceField(c);
+        } else {
+          await jumpToRow(next, { setReturn: false });
+        }
+        return;
+      }
       await gotoAdjacentRow(1);
+      return;
+    }
+    if (cmd === 'keep') {
+      // v0.4.5 I3: 재입력 중에만 유효 — 현재 필드 값을 그대로 두고 다음 필드로.
+      // (값 커밋 경로를 안 타므로 announceField가 시작한 클립은 저장되지 않아 기존 클립이 보존된다.)
+      cancelTts();
+      if (reentryRowRef.current != null) {
+        await advance();
+      } else {
+        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+      }
       return;
     }
     if (cmd === 'modify') {
@@ -737,6 +829,12 @@ export function useVoiceSession() {
     // 잔여 에코 위험(TTS 숫자의 마이크 되먹임)은 아래 신뢰도 게이트(0.65 / noisy 0.80)가 1차 방어.
     // v0.4.4: barge-in 발화도 클립에 담기도록 클립은 announceField에서 announce TTS 이전에 시작됨.
     if (ctrlRef.current?.isTtsMuted()) {
+      // v0.4.5 Q2: 스피커폰 모드면 에코 방지를 위해 TTS 중 값 입력을 폐기(barge-in 끔) — TTS가
+      // 끝난 뒤 말하도록. 기본(이어폰) 모드는 barge-in 유지.
+      if (useSettingsStore.getState().speakerphoneMode) {
+        logger.log({ type: 'stt_blocked_tts_muted', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        return;
+      }
       logger.log({ type: 'stt_barge_in', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
       cancelTts();
       epochRef.current++; // 진행 중인 advance/안내 체인 무효화
@@ -776,8 +874,10 @@ export function useVoiceSession() {
       }
     }
 
-    const noisyMode = useSettingsStore.getState().noisyMode;
-    const minConfidence = noisyMode ? 0.80 : 0.65;
+    const settingsNow = useSettingsStore.getState();
+    const noisyMode = settingsNow.noisyMode;
+    // v0.4.5 Q2: 스피커폰 모드도 신뢰도 임계를 상향(에코 오인식 방지).
+    const minConfidence = noisyMode || settingsNow.speakerphoneMode ? 0.80 : 0.65;
 
     // Input-3: 소음 환경 모드 — 1글자 이하 결과 거부
     if (noisyMode && text.replace(/\s/g, '').length <= 1) {
@@ -934,7 +1034,7 @@ export function useVoiceSession() {
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
     await advance();
-  }, [advance, enterModifyMode, say, gotoAdjacentRow, persistSession]);
+  }, [advance, enterModifyMode, say, gotoAdjacentRow, enterReentry, jumpToRow, persistSession]);
 
   // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async (label?: string) => {

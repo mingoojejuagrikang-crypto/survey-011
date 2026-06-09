@@ -553,31 +553,36 @@ function TtsVoiceSelector() {
     setPreferredVoiceName(s.preferredVoiceName);
   }, [s.preferredVoiceName]);
 
-  if (voices.length === 0) return null;
-
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>음성확인 음성</div>
-      <select
-        value={s.preferredVoiceName}
-        onChange={(e) => {
-          const name = e.target.value;
-          s.set({ preferredVoiceName: name });
-          setPreferredVoiceName(name);
-          speak('안녕하세요, 이 음성으로 안내합니다.', { interrupt: true, rate: 1.05 });
-        }}
-        style={{
-          flex: 1, maxWidth: 220, height: 36, borderRadius: 8,
-          background: T.inputBg, border: `1px solid ${T.line}`,
-          color: T.text, fontSize: 13, fontWeight: 600,
-          padding: '0 8px', outline: 'none',
-        }}
-      >
-        <option value="">(기본)</option>
-        {voices.map((v) => (
-          <option key={v.name} value={v.name}>{v.name}</option>
-        ))}
-      </select>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>안내 음성</div>
+        <select
+          value={s.preferredVoiceName}
+          onChange={(e) => {
+            const name = e.target.value;
+            s.set({ preferredVoiceName: name });
+            setPreferredVoiceName(name);
+            speak('안녕하세요, 이 음성으로 안내합니다.', { interrupt: true, rate: 1.05 });
+          }}
+          disabled={voices.length === 0}
+          style={{
+            flex: 1, maxWidth: 220, height: 36, borderRadius: 8,
+            background: T.inputBg, border: `1px solid ${T.line}`,
+            color: T.text, fontSize: 13, fontWeight: 600,
+            padding: '0 8px', outline: 'none',
+          }}
+        >
+          <option value="">(기본)</option>
+          {voices.map((v) => (
+            <option key={v.name} value={v.name}>{v.name}</option>
+          ))}
+        </select>
+      </div>
+      <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
+        음성이 하나뿐인가요? iPhone <b>설정 → 손쉬운 사용 → 음성 콘텐츠 → 음성 → 한국어</b>에서 음성을
+        추가로 내려받으면 여기 목록에 나타납니다. (앱에서 직접 내려받는 것은 불가합니다.)
+      </div>
     </div>
   );
 }
@@ -1258,6 +1263,41 @@ export function SettingsScreen() {
             </div>
             <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
               비닐하우스·기계 소음 환경에서 음성 인식 정확도를 높입니다 (낮은 신뢰도 결과 거부).
+            </div>
+
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 10, marginTop: 10,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+                스피커폰 모드
+              </div>
+              <button
+                onClick={() => s.set({ speakerphoneMode: !s.speakerphoneMode })}
+                style={{
+                  width: 60, height: 32, borderRadius: 16,
+                  background: s.speakerphoneMode ? T.blue : '#2A2D32',
+                  border: 'none', cursor: 'pointer',
+                  position: 'relative',
+                }}
+                title="이어폰 없이 스피커로 쓸 때, 안내 음성 중 입력을 차단해 에코 오인식을 막습니다"
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 4, left: s.speakerphoneMode ? 32 : 4,
+                    width: 24, height: 24, borderRadius: 12,
+                    background: '#fff',
+                    transition: 'left 150ms ease',
+                  }}
+                />
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
+              이어폰 없이 스피커로 사용할 때 켜세요. 안내 음성이 나오는 동안에는 음성 입력을 받지 않아,
+              기기 음성이 사용자 음성으로 잘못 인식되는 것을 막습니다 (안내가 끝난 뒤 말씀하세요).
             </div>
 
             <TtsVoiceSelector />

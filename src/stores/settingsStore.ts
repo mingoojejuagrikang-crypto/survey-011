@@ -21,10 +21,16 @@ interface SettingsState {
   sessionAutoLabel: string | null;
   /** Noisy environment mode — raises STT confidence threshold + rejects single-char results. */
   noisyMode: boolean;
+  /** v0.4.5 Q2: 스피커폰(에코 방지) 모드 — 이어폰 없이 스피커로 쓸 때 TTS 자기 음성이 STT로
+   *  오인식되는 것을 막는다. ON이면 TTS 재생 중 음성입력(값·명령어 barge-in)을 차단하고 신뢰도
+   *  임계를 상향(사실상 TTS 중 half-duplex). 기본 false. */
+  speakerphoneMode: boolean;
   /** Preferred Web Speech API voice name for ko-KR TTS. Empty string = auto (first available). */
   preferredVoiceName: string;
   /** v0.10.1: 캐시된 관리자 폴더 내 본인 팀 하위 폴더 ID — race 방지용. 첫 결정 후 재사용. */
   teamFolderId: string | null;
+  /** v0.4.5 Q1b: 캐시된 사용자 Drive 내 `survey-011/log/` 폴더 ID — 매 업로드 검색 방지. */
+  userLogFolderId: string | null;
 
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns'>>) => void;
   updateColumn: (id: string, next: Column) => void;
@@ -102,8 +108,10 @@ export const useSettingsStore = create<SettingsState>()(
       sessionLabelColId: null,
       sessionAutoLabel: null,
       noisyMode: false,
+      speakerphoneMode: false,
       preferredVoiceName: '',
       teamFolderId: null,
+      userLogFolderId: null,
 
       set: (partial) => set(partial),
       updateColumn: (id, next) =>
@@ -147,8 +155,10 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.sessionLabelColId !== 'string' && s.sessionLabelColId !== null) s.sessionLabelColId = null;
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
         if (typeof s.noisyMode !== 'boolean') s.noisyMode = false;
+        if (typeof s.speakerphoneMode !== 'boolean') s.speakerphoneMode = false;
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
+        if (typeof s.userLogFolderId !== 'string' && s.userLogFolderId !== null) s.userLogFolderId = null;
         return s as SettingsState;
       },
     },

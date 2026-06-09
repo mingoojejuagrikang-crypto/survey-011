@@ -6,7 +6,7 @@ import { useDataStore } from '../stores/dataStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { syncSelected, type SyncReport, type SyncFailure } from '../lib/sync';
 import { downloadCsv, sessionsToCsv } from '../lib/csv';
-import { deleteSession as dbDeleteSession, saveSession, loadAudioClip } from '../lib/db';
+import { deleteSession as dbDeleteSession, saveSession, loadAudioClip, resetDb } from '../lib/db';
 import type { Column, Session } from '../types';
 import { exportLogZip, downloadZip } from '../lib/exportLog';
 import { uploadLogToBothDrives, LOG_FOLDER_ID } from '../lib/driveUpload';
@@ -193,11 +193,13 @@ export function DataScreen() {
 
   // 세션 복구: 앱 업데이트/새로고침으로 목록에서 사라져 보이는 세션을 IDB에서 다시 불러온다.
   // (v0.4.4: 입력은 값 커밋마다 증분 저장되므로 진행 중이던 행도 함께 복구됨.)
+  // (v0.4.5 D1: resetDb()로 stale/끊긴 IDB 연결을 버리고 새로 열어 재시도 — 앱 업데이트 후 복구 실패 방지.)
   const handleRecoverClick = async () => {
     setMsg(null);
     setBusy('세션 복구 중...');
     try {
       const before = useDataStore.getState().sessions.length;
+      resetDb();
       await hydrateSessions();
       const after = useDataStore.getState().sessions.length;
       const err = useDataStore.getState().hydrationError;

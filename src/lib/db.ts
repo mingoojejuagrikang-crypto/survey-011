@@ -8,6 +8,9 @@ let dbPromise: Promise<IDBPDatabase> | null = null;
 
 function getDb() {
   if (!dbPromise) {
+    // D1(v0.4.5): rejected/끊긴 promise가 영구 캐시돼 "세션 복구"가 계속 실패하는 것을 방지.
+    // - rethrowing-catch: open이 실패하면 캐시를 비워 다음 호출이 새 연결을 연다(현재 호출자는 거부 수신).
+    // - terminated: 연결이 비정상 종료되면 캐시를 비워 다음 접근 시 재오픈.
     dbPromise = openDB(DB_NAME, DB_VERSION, {
       upgrade(db, oldVersion) {
         if (oldVersion < 1) {
@@ -25,9 +28,22 @@ function getDb() {
           logs.createIndex('bySessionId', 'sessionId');
         }
       },
+      terminated() {
+        // 연결이 예기치 않게 닫힘(브라우저 회수, PWA 업데이트 등) → 캐시 무효화.
+        dbPromise = null;
+      },
+    }).catch((e) => {
+      dbPromise = null;
+      throw e;
     });
   }
   return dbPromise;
+}
+
+/** D1(v0.4.5): 강제로 캐시된 연결을 버리고 다음 getDb()가 새로 열게 한다.
+ *  "세션 복구" 버튼에서 stale/끊긴 연결을 우회해 재하이드레이션하기 위해 사용. */
+export function resetDb(): void {
+  dbPromise = null;
 }
 
 export async function saveSession(session: Session): Promise<void> {

@@ -359,41 +359,7 @@ function ActiveState({
           padding: '0 20px', minHeight: 0, gap: 18,
         }}
       >
-        {/* I2: 값 중심(Hero) — 현재 항목명 + 값/마지막 인식값을 상시 크게 표시.
-            팝업(CenterValueBurst)이 사라진 뒤에도 남아 화면 중앙 빈 공간을 채운다. */}
-        {(() => {
-          const curCol = columns.find((c) => c.id === currentColId);
-          const heroName = curCol?.name ?? '';
-          const heroVal =
-            (currentColId ? rowValues[currentColId] : '') || sess.recognizedValue || '';
-          return (
-            <div
-              style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-                gap: 2, textAlign: 'center', maxWidth: '92vw', minHeight: 0,
-              }}
-            >
-              <span
-                style={{
-                  fontSize: 'clamp(18px, 5.5vw, 28px)', fontWeight: 700,
-                  color: T.textDim, whiteSpace: 'nowrap', letterSpacing: -0.3,
-                }}
-              >
-                {heroName}
-              </span>
-              <span
-                style={{
-                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                  fontSize: 'clamp(46px, 16vw, 82px)', fontWeight: 900,
-                  color: heroVal ? T.text : T.textMute, letterSpacing: -1.5, lineHeight: 1,
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '92vw',
-                }}
-              >
-                {heroVal || '—'}
-              </span>
-            </div>
-          );
-        })()}
+        {/* v0.4.5 I1: 중앙 Hero(항목명+큰 값) 제거 — 칩 영역(chip-pulse 블링크 + 값 표시)과 중복. */}
 
         {/* I-2: 행 이동 (버튼 — 음성 "이전"/"다음"과 동일 동작) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
