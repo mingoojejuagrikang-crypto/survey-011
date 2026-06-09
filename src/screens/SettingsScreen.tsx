@@ -25,17 +25,23 @@ import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
 import { getKoreanVoices, setPreferredVoiceName, speak } from '../lib/speech';
 
-const TYPE_ORDER: DataType[] = ['date', 'text', 'name', 'int', 'float', 'options'];
+const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
+
+/** 세션명 접미사 후보로 쓸 "농가명/이름" 컬럼 식별 (v0.4.3: '이름' 데이터형 대신 이름 문자열로 식별). */
+function isNameColumn(c: Column): boolean {
+  const nm = c.name?.trim();
+  return nm === '농가명' || nm === '이름';
+}
 
 /**
  * 세션명 접미사로 쓸 컬럼 값을 고른다.
- * 우선순위: 명시 선택(pickedCol) > '이름' 데이터형 컬럼 > 첫 auto 고정값 컬럼.
- * (세션명 기본값을 "날짜 + 이름"으로 구성하기 위해 '이름' 타입을 최우선.)
+ * 우선순위: 명시 선택(pickedCol) > '농가명/이름' 컬럼 > 첫 auto 고정값(날짜 제외) 컬럼.
+ * (세션명 기본값을 "날짜 + 이름"으로 구성하기 위해 이름 컬럼을 최우선.)
  */
 function pickSessionLabelValue(columns: Column[], pickedCol: Column | null | undefined): string {
   const effectiveCol =
     pickedCol ??
-    columns.find((c) => c.type === 'name' && c.auto.kind === 'fixed' && !!c.auto.value) ??
+    columns.find((c) => isNameColumn(c) && c.auto.kind === 'fixed' && !!c.auto.value) ??
     columns.find(
       (c) =>
         c.input === 'auto' &&

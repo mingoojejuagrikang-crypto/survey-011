@@ -183,10 +183,9 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
 
     // 항목명 기반 의미 기본값(파일/시트 불문):
     //  - "비고" → 터치 입력(메모). 사용자가 자유롭게 메모.
-    //  - "농가명"/"이름" → '이름' 데이터형.
+    // (v0.4.3 롤백: "농가명"/"이름" → '이름' 데이터형 강제는 제거. 세션명은 이름 문자열로 식별.)
     const trimmed = (name || '').trim();
     if (trimmed === '비고') input = 'touch';
-    if (trimmed === '농가명' || trimmed === '이름') type = 'name';
 
     return {
       id: `c${ci}_${Date.now()}`,

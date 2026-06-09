@@ -7,7 +7,7 @@ import { appendLogEvent } from './db';
 export interface LogEntry {
   ts: number;
   type: 'stt' | 'tts' | 'command' | 'session' | 'value' | 'error' | 'clip'
-    | 'stt_blocked_tts_muted' | 'stt_rejected_col_name' | 'stt_alt_used' | 'stt_parse_failed'
+    | 'stt_blocked_tts_muted' | 'stt_barge_in' | 'stt_rejected_col_name' | 'stt_alt_used' | 'stt_parse_failed'
     | 'stt_rejected_ambiguous_syllable';
   sessionId?: string;
   row?: number;

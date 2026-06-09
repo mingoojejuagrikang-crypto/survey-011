@@ -39,10 +39,20 @@ export interface CommandSpec {
   desc: string;
   /** Shown in the compact inline hint row (the full set lives in the help popup). */
   primary?: boolean;
+  /**
+   * Per-command STT confidence floor (handleFinal). Defaults to 0.7 when omitted — commands
+   * rewind/destroy state, so they clear a higher bar than the value gate (0.65).
+   * T-12: '수정'(modify) is the exception — it is recoverable (clip preserved, [CLIP-1]) and the
+   * ~10s replay cost that justified the strict bar is already gone (re-ask is short), so a
+   * false-reject costs ≈0 while a false-accept is recoverable. Real-device logs showed deliberate
+   * '수정' utterances rejected at 0.587/0.634 (just under the bar); 0.55 admits those while staying
+   * a comfortable margin above the noise cluster (max 0.313).
+   */
+  minConfidence?: number;
 }
 
 export const VOICE_COMMANDS: CommandSpec[] = [
-  { id: 'modify',  word: '수정',     display: '수정',     desc: '직전에 입력한 값을 고칩니다',      primary: true },
+  { id: 'modify',  word: '수정',     display: '수정',     desc: '직전에 입력한 값을 고칩니다',      primary: true, minConfidence: 0.55 },
   { id: 'skip',    word: '스킵',     display: '스킵',     desc: '현재 행을 건너뜁니다',            primary: true },
   { id: 'prevRow', word: '이전행',   display: '이전행',   desc: '이전 행으로 이동해 값을 검토·수정합니다' },
   { id: 'nextRow', word: '다음행',   display: '다음행',   desc: '다음 행으로 이동합니다' },

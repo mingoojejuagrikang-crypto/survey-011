@@ -3,6 +3,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { parseKoreanNumber, detectCommand, extractModifyValue, extractRedoValue, isAmbiguousSingleSyllable } from './koreanNum';
+import { VOICE_COMMANDS } from './voiceCommands';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
@@ -674,8 +675,10 @@ export function useVoiceSession() {
     // dead-locking commands on engines that never report confidence.
     // resume-from-paused is handled above this point and is intentionally NOT gated (it is the
     // user's only way out of pause).
-    const COMMAND_MIN_CONFIDENCE = 0.7;
-    if (cmd && confidence > 0 && confidence < COMMAND_MIN_CONFIDENCE) {
+    // Per-command floor from the registry (SSOT); defaults to 0.7. T-12: '수정'(modify) overrides
+    // to 0.55 because it is recoverable and a false-reject is cheap — see voiceCommands.ts.
+    const commandMinConfidence = VOICE_COMMANDS.find((c) => c.id === cmd)?.minConfidence ?? 0.7;
+    if (cmd && confidence > 0 && confidence < commandMinConfidence) {
       logger.log({
         type: 'command',
         text,
@@ -789,13 +792,16 @@ export function useVoiceSession() {
       }
     }
 
-    // Input-2: TTS 재생 중에는 값 입력 무시 (명령어는 위에서 이미 처리됨)
-    // 단, "다시 <값>" 처럼 명령과 함께 들어온 인라인 값은 의도된 입력이므로 mute 가드를 건너뛴다.
-    // (cancelTts()는 synth.cancel()만 호출하고 ttsMuted는 onend/oncancel에서 비동기로 해제되므로,
-    //  이 시점에 isTtsMuted()가 아직 true일 수 있어 값이 폐기되는 것을 방지)
+    // Input-2 → barge-in (v0.4.3): TTS 재생 중 들어온 값을 폐기하지 않고, 재생 중 TTS를 끊고
+    // 그대로 처리한다. 사용자가 안내 TTS를 끝까지 들을 필요 없이 즉시 다음 값을 말할 수 있게 함.
+    // 기존엔 폐기(stt_blocked_tts_muted) 후 재발화를 강요했음. 명령어는 위에서 이미 barge-in 처리됨.
+    // 한계: 값은 final 단계에서 컷되므로 STT 확정까지 ~1~2초 TTS가 더 재생될 수 있음(명령어의 interim 컷보다 느림).
+    // 잔여 에코 위험(TTS 숫자의 마이크 되먹임)은 아래 신뢰도 게이트(0.65 / noisy 0.80)가 1차 방어.
+    // "다시 <값>" 인라인 값(redoInlineValue)은 이미 명령 경로에서 TTS를 끊었으므로 중복 컷 불필요.
     if (!redoInlineValue && ctrlRef.current?.isTtsMuted()) {
-      logger.log({ type: 'stt_blocked_tts_muted', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
-      return;
+      logger.log({ type: 'stt_barge_in', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+      cancelTts();
+      epochRef.current++; // 진행 중인 advance/안내 체인 무효화
     }
 
     // Log STT event

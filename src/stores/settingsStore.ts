@@ -36,7 +36,7 @@ interface SettingsState {
 const MOCK_COLUMNS: Column[] = [
   { id: 'c1',  name: '조사일자', type: 'date',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' } },
   { id: 'c2',  name: '기준일자', type: 'date',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '2026-05-13' } },
-  { id: 'c3',  name: '농가명',   type: 'name',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' } },
+  { id: 'c3',  name: '농가명',   type: 'text',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' } },
   { id: 'c4',  name: '라벨',     type: 'text',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: 'A' } },
   { id: 'c5',  name: '처리',     type: 'text',  input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '시험' } },
   { id: 'c6',  name: '조사나무', type: 'int',   input: 'auto', ttsAnnounce: true,  auto: { kind: 'seq', from: 1, to: 10 } },
@@ -49,12 +49,14 @@ const MOCK_COLUMNS: Column[] = [
 /**
  * 항목명 기반 의미 기본값(파일/시트/기존 사용자 불문 일관 적용):
  *  - "비고" → 터치 입력(메모). 사용자가 자유롭게 메모할 수 있어야 함.
- *  - "농가명" → '이름' 데이터형.
+ *
+ * 롤백(v0.4.3): '농가명 → 이름 데이터형' 강제는 실사용에서 불편하여 제거. 세션명은 이름 문자열
+ * 식별로 대체(VoiceScreen/SettingsScreen). 기존 persisted 'name' 컬럼은 로드 시 'text'로 치유.
  */
 export function applySemanticDefaults(col: Column): Column {
   const nm = col.name?.trim();
   if (nm === '비고' && col.input !== 'touch') return { ...col, input: 'touch' };
-  if (nm === '농가명' && col.type !== 'name') return { ...col, type: 'name' };
+  if (col.type === 'name') return { ...col, type: 'text' };
   return col;
 }
 
