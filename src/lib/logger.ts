@@ -8,7 +8,10 @@ export interface LogEntry {
   ts: number;
   type: 'stt' | 'tts' | 'command' | 'session' | 'value' | 'error' | 'clip'
     | 'stt_blocked_tts_muted' | 'stt_barge_in' | 'stt_rejected_col_name' | 'stt_alt_used' | 'stt_parse_failed'
-    | 'stt_rejected_ambiguous_syllable';
+    | 'stt_rejected_ambiguous_syllable'
+    // v0.5.0 W7(T-19): 세션 밖 앱 수명주기 이벤트 — app_boot / hydration_ok / recover_* /
+    // drive_upload / setting_changed 등. sessionId가 없으면 '__app__' sentinel이 붙는다.
+    | 'app';
   sessionId?: string;
   row?: number;
   colId?: string;
@@ -42,6 +45,9 @@ export interface LogEntry {
   attempt?: number;
   kind?: 'value' | 'command';
   clipKey?: string;
+  /** v0.5.0 W6: preroll length (ms) merged into this clip — set on `clip_duration` /
+   *  `clip_trimmed` events. 0 = no preroll captured for this clip. */
+  prerollMs?: number;
 }
 
 /** Snapshot of session-level context, emitted on the `session` start/stop events. */
@@ -121,6 +127,10 @@ export const logger = {
   log(entry: Omit<LogEntry, 'ts'>): void {
     // sessionId 미지정 시 현재 세션 컨텍스트를 자동 첨부(entry가 명시하면 그대로 우선).
     const full = { ts: Date.now(), sessionId: currentSessionId, ...entry };
+    // v0.5.0 W7(T-19): 세션 밖 이벤트(app_boot, hydration, recover, 업로드, 설정 변경 등)는
+    // sessionId가 없어 IDB `bySessionId` 인덱스에 안 잡히고(undefined는 인덱싱 불가) 세션 필터
+    // ZIP에서 통째로 빠졌다. '__app__' sentinel을 부여해 영속화·내보내기 모두에 포함시킨다.
+    if (full.sessionId == null) full.sessionId = '__app__';
     entries.push(full);
     // Keep max 2000 entries in memory
     if (entries.length > 2000) entries.splice(0, entries.length - 2000);

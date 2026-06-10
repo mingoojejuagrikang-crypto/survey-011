@@ -11,6 +11,8 @@ import type { Column, Session } from '../types';
 import { exportLogZip, downloadZip } from '../lib/exportLog';
 import { uploadLogToBothDrives, LOG_FOLDER_ID } from '../lib/driveUpload';
 import { hydrateSessions } from '../lib/hydrate';
+import { recoverFromDriveLogs } from '../lib/recoverFromDrive';
+import { logger } from '../lib/logger';
 
 export function DataScreen() {
   const sessions = useDataStore((s) => s.sessions);
@@ -124,6 +126,16 @@ export function DataScreen() {
           const dual = await uploadLogToBothDrives(blob, filename);
           // backupOk: 본인 Drive 필수 + 관리자 폴더 설정 시 admin Drive도 필수
           backupOk = !!dual.userDriveId && (!dual.adminConfigured || !!dual.adminDriveId);
+          // v0.5.0 W7(T-19): 업로드 결과 계측 — 다음 로그 분석에서 zip이 Drive에 실제로 올라갔는지,
+          // 어느 목적지가 실패했는지 정량 확인. (text=파일명, parsed=대상 세션 id 목록)
+          logger.log({
+            type: 'app',
+            extra: dual.errors.length === 0
+              ? 'drive_upload:ok'
+              : `drive_upload:partial:${dual.errors.map((e) => e.split(':')[0]).join(',')}`,
+            text: filename,
+            parsed: report.successIds.join(','),
+          });
           const parts: string[] = [];
           if (dual.userDriveId) parts.push('본인 Drive');
           if (dual.adminDriveId) parts.push('관리자 Drive');
@@ -136,6 +148,7 @@ export function DataScreen() {
             console.warn('Drive 로그 부분 실패', dual.errors);
           }
         } catch (err) {
+          logger.log({ type: 'app', extra: `drive_upload:failed:${String((err as Error)?.message ?? err)}` });
           setMsg((m) => (m ? `${m} · ⚠️ 로그 백업 실패` : '⚠️ 시트 추가 OK, 로그 백업 실패'));
           console.warn('Drive 로그 업로드 실패', err);
         }
@@ -194,21 +207,60 @@ export function DataScreen() {
   // 세션 복구: 앱 업데이트/새로고침으로 목록에서 사라져 보이는 세션을 IDB에서 다시 불러온다.
   // (v0.4.4: 입력은 값 커밋마다 증분 저장되므로 진행 중이던 행도 함께 복구됨.)
   // (v0.4.5 D1: resetDb()로 stale/끊긴 IDB 연결을 버리고 새로 열어 재시도 — 앱 업데이트 후 복구 실패 방지.)
+  // (v0.5.0 W8: 2단계 — 로그인 상태면 Drive의 로그 zip(sessions.json + clips/)에서
+  //  로컬에 없는 세션+클립까지 복원. 다운로드는 이 버튼을 눌렀을 때만 발생.)
   const handleRecoverClick = async () => {
     setMsg(null);
     setBusy('세션 복구 중...');
+    // v0.5.0 W7(T-19): 복구 버튼 계측 — 사용자가 복구에 의존하는 빈도/성패를 로그로 확인.
+    // (Drive zip 기반 복구 확장(W8)의 recover_* 상세 이벤트는 이 위에 얹는다.)
+    logger.log({ type: 'app', extra: 'recover_clicked' });
     try {
+      // ── 1단계: 로컬 IDB 재하이드레이션 (현행) ──
       const before = useDataStore.getState().sessions.length;
       resetDb();
       await hydrateSessions();
       const after = useDataStore.getState().sessions.length;
       const err = useDataStore.getState().hydrationError;
+      logger.log({
+        type: 'app',
+        extra: err ? `recover_result:error:${err}` : `recover_result:ok:${before}->${after}`,
+      });
       if (err) {
         setMsg('복구 실패: ' + err);
       } else if (after > before) {
         setMsg(`✓ 세션 ${after - before}개를 복구했습니다.`);
       } else {
         setMsg(`✓ 저장된 세션 ${after}개를 모두 불러왔습니다.`);
+      }
+
+      // ── 2단계: Drive 로그 zip 복원 — 1단계가 실패해도 IDB 쓰기 자체는 가능할 수 있으나,
+      //    DB가 깨진 상태에 덮어쓰는 것을 피하기 위해 1단계 성공 시에만 진행한다. ──
+      if (!err) {
+        const localIds = new Set(useDataStore.getState().sessions.map((s) => s.id));
+        const drive = await recoverFromDriveLogs(localIds, (p) => setBusy(p));
+        if (drive.status === 'not_signed_in') {
+          setMsg((m) => `${m ?? ''} · Drive 복구는 설정탭 로그인 후 가능합니다.`);
+        } else if (drive.status === 'failed') {
+          setMsg((m) => `${m ?? ''} · ⚠️ Drive 복구 실패: ${drive.error}`);
+        } else if (drive.status === 'ok') {
+          if (drive.sessions > 0) {
+            setBusy('복구 세션 불러오는 중...');
+            await hydrateSessions();
+          }
+          const parts: string[] = [];
+          if (drive.sessions > 0) {
+            parts.push(`Drive 로그에서 세션 ${drive.sessions}개(클립 ${drive.clips}개) 복구`);
+          } else if (drive.zipsScanned > 0) {
+            parts.push('Drive 로그에 새로 복구할 세션 없음');
+          }
+          if (drive.legacyZips > 0) parts.push(`구버전 로그 ${drive.legacyZips}개 제외`);
+          if (drive.failedZips > 0) parts.push(`⚠️ 로그 ${drive.failedZips}개 읽기 실패`);
+          if (parts.length > 0) {
+            setMsg((m) => `${m ?? ''} · ${parts.join(' · ')}`);
+          }
+        }
+        // status === 'no_folder' (Drive에 백업 이력 없음)는 조용히 1단계 결과만 보여준다.
       }
     } finally {
       setBusy(null);
@@ -1151,11 +1203,14 @@ function FullRowTable({
               <div
                 style={{
                   width: 40, padding: '8px 6px',
-                  fontSize: 13, color: T.textMute, textAlign: 'center',
+                  // v0.5.0 NAV-1/요청3: '다음'으로 건너뛴(미완료) placeholder 행은 행 번호를
+                  // amber로 강조해 빈 행임을 한눈에 알 수 있게 한다. 셀 탭으로 채우면 된다.
+                  fontSize: 13, color: r.complete === false ? T.amber : T.textMute, textAlign: 'center',
                   position: 'sticky', left: 0, background: T.card, zIndex: 1,
                   borderRight: `1px solid ${T.line}`,
                   fontFamily: 'JetBrains Mono, ui-monospace, monospace', fontWeight: 700,
                 }}
+                title={r.complete === false ? '미완료 행 — 셀을 탭해 채워주세요' : undefined}
               >
                 {r.index}
               </div>

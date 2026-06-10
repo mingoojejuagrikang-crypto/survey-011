@@ -66,7 +66,7 @@ export function VoiceScreen() {
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}
         onPrevRow={() => voiceSession.gotoAdjacentRow(-1)}
-        onNextRow={() => voiceSession.gotoAdjacentRow(1)}
+        onNextRow={() => voiceSession.goNextRow()}
         onTouchCommit={(r, colId, v) => voiceSession.commitTouchValue(r, colId, v)}
         onTogglePause={() => {
           if (sess.phase === 'paused') voiceSession.resume();

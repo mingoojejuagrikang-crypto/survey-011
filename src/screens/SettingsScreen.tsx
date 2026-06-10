@@ -23,7 +23,8 @@ import {
 import { computeTotalRows, nestedAutoValue, buildCyclingValues } from '../lib/autoValue';
 import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
-import { getKoreanVoices, setPreferredVoiceName, speak } from '../lib/speech';
+import { getKoreanVoices, refreshVoices, setPreferredVoiceName, speak, warmupTts } from '../lib/speech';
+import { logger } from '../lib/logger';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
@@ -540,18 +541,52 @@ function ColumnCard({
 function TtsVoiceSelector() {
   const s = useSettingsStore();
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  // ko-voice count observed by the LAST manual refresh — null until the button is used.
+  // Drives the "iOS 플랫폼 제약" notice: only after the user explicitly refreshed and the
+  // list is still thin do we surface the platform-limitation explanation.
+  const [lastRefreshKo, setLastRefreshKo] = useState<number | null>(null);
 
   useEffect(() => {
-    const refresh = () => setVoices(getKoreanVoices());
+    // v0.5.0 W1: re-poll getVoices() on mount AND whenever the app returns to foreground —
+    // iOS Safari materializes newly-downloaded voices lazily, often only after the app
+    // regains visibility (user installs a voice in 설정 → switches back to the PWA).
+    const refresh = () => {
+      refreshVoices();
+      setVoices(getKoreanVoices());
+    };
     refresh();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
     window.speechSynthesis?.addEventListener('voiceschanged', refresh);
-    return () => window.speechSynthesis?.removeEventListener('voiceschanged', refresh);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.speechSynthesis?.removeEventListener('voiceschanged', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   // Sync preferred voice name into the speech module whenever it changes
   useEffect(() => {
     setPreferredVoiceName(s.preferredVoiceName);
   }, [s.preferredVoiceName]);
+
+  // 음성 새로고침: warmupTts()는 사용자 제스처 안에서 엔진을 깨워 iOS가 음성 목록을
+  // 채우도록 자극한다 → 300ms 뒤 재조회. (즉답이 아닌 이유: getVoices()가 warmup 직후
+  // 비동기로 채워지는 iOS 동작 보호.)
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      warmupTts();
+      await new Promise((r) => setTimeout(r, 300));
+      const { ko } = refreshVoices();
+      setVoices(getKoreanVoices());
+      setLastRefreshKo(ko);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
@@ -579,9 +614,39 @@ function TtsVoiceSelector() {
           ))}
         </select>
       </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+        <div
+          aria-live="polite"
+          style={{ fontSize: 12, fontWeight: 700, color: lastRefreshKo !== null ? T.text : T.textDim }}
+        >
+          {lastRefreshKo !== null
+            ? `새로고침 완료 — 한국어 음성 ${lastRefreshKo}개 감지`
+            : `한국어 음성 ${voices.length}개 감지`}
+        </div>
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          aria-busy={refreshing}
+          style={{
+            height: 36, padding: '0 14px', borderRadius: 8,
+            background: T.inputBg, border: `1px solid ${T.lineStrong}`,
+            color: T.text, fontSize: 13, fontWeight: 700,
+            cursor: refreshing ? 'wait' : 'pointer', opacity: refreshing ? 0.6 : 1,
+          }}
+        >
+          {refreshing ? '확인 중…' : '음성 새로고침'}
+        </button>
+      </div>
+      {lastRefreshKo !== null && lastRefreshKo <= 1 && (
+        <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.5 }}>
+          음성을 추가로 설치했는데도 목록이 늘지 않으면, iOS가 일부 고품질 음성을 웹에 제공하지
+          않는 제약일 수 있습니다. (Siri 계열 음성은 웹 앱에서 쓸 수 없는 기기가 있습니다.)
+        </div>
+      )}
       <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
         음성이 하나뿐인가요? iPhone <b>설정 → 손쉬운 사용 → 음성 콘텐츠 → 음성 → 한국어</b>에서 음성을
-        추가로 내려받으면 여기 목록에 나타납니다. (앱에서 직접 내려받는 것은 불가합니다.)
+        추가로 내려받은 뒤, 앱으로 돌아와 <b>음성 새로고침</b>을 누르면 목록에 나타납니다.
+        (앱에서 직접 내려받는 것은 불가합니다.)
       </div>
     </div>
   );
@@ -1241,7 +1306,12 @@ export function SettingsScreen() {
                 소음 환경 모드
               </div>
               <button
-                onClick={() => s.set({ noisyMode: !s.noisyMode })}
+                onClick={() => {
+                  const next = !s.noisyMode;
+                  s.set({ noisyMode: next });
+                  // v0.5.0 W7(T-19): 설정 변경 계측 — STT 정확도를 모드별로 귀속시키기 위함.
+                  logger.log({ type: 'app', extra: `setting_changed:noisyMode=${next}` });
+                }}
                 style={{
                   width: 60, height: 32, borderRadius: 16,
                   background: s.noisyMode ? T.blue : '#2A2D32',
@@ -1275,7 +1345,12 @@ export function SettingsScreen() {
                 스피커폰 모드
               </div>
               <button
-                onClick={() => s.set({ speakerphoneMode: !s.speakerphoneMode })}
+                onClick={() => {
+                  const next = !s.speakerphoneMode;
+                  s.set({ speakerphoneMode: next });
+                  // v0.5.0 W7(T-19): 설정 변경 계측 (barge-in/에코 분석의 전제 컨텍스트).
+                  logger.log({ type: 'app', extra: `setting_changed:speakerphoneMode=${next}` });
+                }}
                 style={{
                   width: 60, height: 32, borderRadius: 16,
                   background: s.speakerphoneMode ? T.blue : '#2A2D32',

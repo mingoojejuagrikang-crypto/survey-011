@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
-import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable } from './koreanNum';
+import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, getLastParseFailReason } from './koreanNum';
 import { VOICE_COMMANDS } from './voiceCommands';
-import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName } from './speech';
+import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip } from './db';
@@ -144,13 +144,20 @@ export function useVoiceSession() {
     const cmdKey = `${sessionIdRef.current}:${row}:${colId}:cmd${idx}`;
     const savePromise = (async () => {
       try {
-        const blob = await stopPromise;
+        const { blob, raw } = await stopPromise;
         if (!blob || blob.size <= 200) {
           logger.log({ type: 'clip', extra: `clip_cmd_empty:${blob ? blob.size : 'null'}`, kind: 'command', sessionId: sessionIdRef.current, row, colId });
           return;
         }
         await saveAudioClip(cmdKey, blob);
         logger.log({ type: 'clip', extra: 'clip_preserved', kind: 'command', attempt: idx, clipKey: cmdKey, sessionId: sessionIdRef.current, row, colId });
+        // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
+        // deleteSession의 prefix cascade와 exportLog의 `key.split(':')[0]` 세션 필터가 모두
+        // `sessionId:` prefix 기준이라 추가 배선 없이 zip clips/ 포함·삭제가 따라온다.
+        if (raw) {
+          await saveAudioClip(`${cmdKey}:raw`, raw);
+          logger.log({ type: 'clip', extra: `clip_raw_saved:${raw.size}`, kind: 'command', clipKey: `${cmdKey}:raw`, sessionId: sessionIdRef.current, row, colId });
+        }
       } catch (e) {
         logger.log({ type: 'error', extra: `clip_cmd_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row, colId });
       }
@@ -177,11 +184,11 @@ export function useVoiceSession() {
     return 0;
   };
 
+  // v0.5.0 NAV-1: 단방향 진행 — wrap-around 2차 루프(위쪽 빈 행으로 되돌아가던 탐색) 제거.
+  // '다음'/행 완료는 아래 방향으로만 전진하고, 건너뛴 행은 complete:false placeholder로 남아
+  // 데이터탭(EditableCell 터치 편집)에서 채운다.
   const findNextIncompleteRow = (start: number, total: number, vCols: Column[]): number | null => {
     for (let r = start; r <= total; r++) {
-      if (!isRowVoiceComplete(r, vCols)) return r;
-    }
-    for (let r = 1; r < start; r++) {
       if (!isRowVoiceComplete(r, vCols)) return r;
     }
     return null;
@@ -202,7 +209,11 @@ export function useVoiceSession() {
       !completed.includes(activeRow) &&
       (Object.values(sess.getRowValues(activeRow) ?? {}).some((v) => v !== '') ||
         Object.keys(pendingClipsRef.current[activeRow] ?? {}).length > 0);
-    if (completed.length === 0 && !backup && !activeHasData) return;
+    // v0.5.0 NAV-1: '다음'으로 건너뛴 행도 complete:false placeholder로 영속화 — 자동/고정값은
+    // 채워지고 음성 칸만 빈 채 데이터탭에 보여, 사용자가 터치로 채울 수 있다. (sync는 complete
+    // 행만 업로드하므로 placeholder는 시트에 올라가지 않는다 — 민구 결정 1.)
+    const skipped = sess.skippedRows.filter((r) => !completed.includes(r)).sort((a, b) => a - b);
+    if (completed.length === 0 && !backup && !activeHasData && skipped.length === 0) return;
     const buildRow = (r: number, complete: boolean): SessionRow => {
       const auto = buildCyclingValues(settings.columns, r);
       const fixedAndAuto = autoNonCyclingValues(settings.columns, r);
@@ -231,6 +242,9 @@ export function useVoiceSession() {
     }
     if (activeHasData && !rows.some((row) => row.index === activeRow)) {
       rows.push(buildRow(activeRow, false));
+    }
+    for (const r of skipped) {
+      if (!rows.some((row) => row.index === r)) rows.push(buildRow(r, false));
     }
     rows.sort((a, b) => a.index - b.index);
     // D-2 (RACE-7): prefer the ref, but fall back to the store-persisted id/startedAt so a session
@@ -324,6 +338,43 @@ export function useVoiceSession() {
     [say],
   );
 
+  // ── end-of-table (v0.5.0 NAV-1 / 요청3) ────────────────────
+  /** "3행, 7행" 식 행 목록 포맷. 목록이 길면 TTS가 늘어지므로 3개 + "외 N개 행"으로 요약. */
+  const formatRowList = (rows: number[]): string =>
+    rows.length <= 5
+      ? rows.map((r) => `${r}행`).join(', ')
+      : `${rows.slice(0, 3).map((r) => `${r}행`).join(', ')} 외 ${rows.length - 3}개 행`;
+
+  const listEmptyRows = (total: number, vCols: Column[]): number[] => {
+    const out: number[] = [];
+    for (let r = 1; r <= total; r++) {
+      if (!isRowVoiceComplete(r, vCols)) out.push(r);
+    }
+    return out;
+  };
+
+  /** 마지막 행 너머에 더 갈 곳이 없을 때의 종료 처리(민구 결정 4): 빈 행(placeholder)이 있으면
+   *  행 번호를 TTS로 안내한 뒤 자동 종료, 없으면 기존 "모든 입력 완료" 안내 후 종료. */
+  const finishAtEnd = useCallback(async () => {
+    const sess = useSessionStore.getState();
+    const vc = voiceColsList();
+    const total = computeTotalRows(useSettingsStore.getState().columns);
+    const empties = listEmptyRows(total, vc);
+    sess.setPhase('done');
+    if (empties.length > 0) {
+      const msg = `마지막 행까지 입력했습니다. ${formatRowList(empties)}이 비어 있습니다. 데이터 탭에서 확인해 주세요.`;
+      sess.setLastTts(msg);
+      logger.log({
+        type: 'session', extra: `end_with_empty_rows:${empties.join(',')}`,
+        sessionId: sessionIdRef.current,
+      });
+      await say(msg);
+    } else {
+      await say('모든 입력이 완료되었습니다.');
+    }
+    await stop(false);
+  }, [say]);
+
   // ── progression ────────────────────────────────────────────
   /** Move to next voice col in current row, or finalize row + jump to next target. */
   const advance = useCallback(async () => {
@@ -376,29 +427,32 @@ export function useVoiceSession() {
     await announceRowComplete(row);
     if (epochRef.current !== startEpoch) return;
 
-    // If returnRow set (came from modify/jump), go back
+    // If returnRow set (came from modify/jump), go back.
+    // v0.5.0 NAV-1 이중 가드: 복귀 대상이 이미 완료된 행이면 복귀하지 않는다 — 완료 행을
+    // 재프롬프트하며 같은 행으로 반복 복귀하던 루프의 2차 차단(1차는 goNextRow의 setReturn 제거).
     const ret = sess.returnRow;
     const retCol = sess.returnColIdx;
     if (ret != null && ret !== row) {
       sess.setReturn(null, null);
-      const targetCol = retCol ?? firstIncompleteColIdx(ret, vc);
-      sess.setActiveRow(ret);
-      sess.setActiveCol(targetCol);
-      sess.setRecognized('');
-      sess.setPhase('active');
-      awaitingFieldRef.current = null;
-      await announceRowDiff(row, ret);
-      if (epochRef.current !== startEpoch) return;
-      if (vc[targetCol]) await announceField(vc[targetCol]);
-      return;
+      if (!isRowVoiceComplete(ret, vc)) {
+        const targetCol = retCol ?? firstIncompleteColIdx(ret, vc);
+        sess.setActiveRow(ret);
+        sess.setActiveCol(targetCol);
+        sess.setRecognized('');
+        sess.setPhase('active');
+        awaitingFieldRef.current = null;
+        await announceRowDiff(row, ret);
+        if (epochRef.current !== startEpoch) return;
+        if (vc[targetCol]) await announceField(vc[targetCol]);
+        return;
+      }
+      // 완료 행으로의 복귀는 무시하고 아래 '다음 미완료 행' 탐색으로 폴스루.
     }
 
-    // Otherwise find next incomplete row
+    // Otherwise find next incomplete row (아래 방향만 — wrap-around 없음)
     const next = findNextIncompleteRow(row + 1, total, vc);
     if (next === null) {
-      sess.setPhase('done');
-      await say('모든 입력이 완료되었습니다.');
-      await stop(false);
+      await finishAtEnd();
       return;
     }
 
@@ -411,7 +465,7 @@ export function useVoiceSession() {
     await announceRowDiff(row, next);
     if (epochRef.current !== startEpoch) return;
     if (vc[targetCol]) await announceField(vc[targetCol]);
-  }, [announceField, announceRowComplete, announceRowDiff, persistSession, say]);
+  }, [announceField, announceRowComplete, announceRowDiff, finishAtEnd, persistSession, say]);
 
   // ── modify (cross-row) ─────────────────────────────────────
   const enterModifyMode = useCallback(async (preExtractedValue?: string) => {
@@ -613,19 +667,18 @@ export function useVoiceSession() {
     [announceField, announceRowDiff],
   );
 
-  // ── public: move to the previous/next row (I-2: 이전행/다음행, 버튼·음성 공용) ──
+  // ── public: move to the previous row (◀이전 버튼 전용 — v0.5.0 NAV-1에서 delta=-1 전용으로 축소) ──
   // Review/edit semantics: jumpToRow(setReturn:true) so finishing the visited row returns the
-  // flow to where the user was. On a boundary we REPROMPT instead of silently stalling (REVIEW-4).
+  // flow to where the user was. (복귀 대상이 그 사이 완료되면 advance의 NAV-1 가드가 복귀를 차단.)
+  // On a boundary we REPROMPT instead of silently stalling (REVIEW-4).
   const gotoAdjacentRow = useCallback(
-    async (delta: -1 | 1) => {
+    async (delta: -1) => {
       const sess = useSessionStore.getState();
-      const settings = useSettingsStore.getState();
-      const total = computeTotalRows(settings.columns);
       const target = sess.activeRow + delta;
       cancelTts();
-      if (target < 1 || target > total) {
+      if (target < 1) {
         epochRef.current++;
-        const msg = delta < 0 ? '첫 행입니다.' : '마지막 행입니다.';
+        const msg = '첫 행입니다.';
         useSessionStore.getState().setLastTts(msg);
         const vc = voiceColsList();
         const cur = vc[sess.activeColIdx];
@@ -637,6 +690,38 @@ export function useVoiceSession() {
     },
     [announceField, jumpToRow, say],
   );
+
+  // ── v0.5.0 NAV-1: '다음' 단방향 전진 (음성 '다음' + ▶다음 버튼 공용) ──────────
+  // 재입력 모드를 무조건 해제하고, 현재 행이 미완료면 skip 표시 + 즉시 영속화(placeholder)한 뒤
+  // 아래 방향의 다음 미완료 행으로만 이동한다. returnRow를 만들지 않으므로(기존 stale 복귀도
+  // 해제) 완료 행으로 반복 복귀하는 NAV-1 루프가 구조적으로 불가능해진다. 더 갈 행이 없으면
+  // 빈 행 안내 후 자동 종료(finishAtEnd).
+  const goNextRow = useCallback(async () => {
+    const sess = useSessionStore.getState();
+    const settings = useSettingsStore.getState();
+    const vc = voiceColsList();
+    const total = computeTotalRows(settings.columns);
+    cancelTts();
+    epochRef.current++; // in-flight advance/안내 체인 무효화 (RACE-1 패턴 유지)
+    reentryRowRef.current = null;
+    sess.setReturn(null, null);
+    const row = sess.activeRow;
+    if (!isRowVoiceComplete(row, vc)) {
+      sess.markRowSkipped(row);
+      logger.log({
+        type: 'command', parsed: 'nextRow', extra: `row_skipped:${row}`,
+        sessionId: sessionIdRef.current, row,
+      });
+      void persistSession(); // skip 즉시 영속화 — 데이터탭에 빈 행 placeholder가 바로 보이도록
+    }
+    const next = findNextIncompleteRow(row + 1, total, vc);
+    if (next === null) {
+      awaitingFieldRef.current = null;
+      await finishAtEnd();
+      return;
+    }
+    await jumpToRow(next, { setReturn: false });
+  }, [finishAtEnd, jumpToRow, persistSession]);
 
   // ── v0.4.5 I3: "이전" 재입력 모드 진입 ─────────────────────
   // 이전 행으로 가서 1번 필드부터 모든 음성 필드를 순서대로 재입력. 기존 값은 유지하되 발화 시 교체,
@@ -747,6 +832,18 @@ export function useVoiceSession() {
     }
     if (cmd === 'end') {
       cancelTts();
+      // v0.5.0 요청3: 종료 시에도 skip된 빈 행이 있으면 1회 안내 후 종료(민구 결정 4와 대칭).
+      // 아직 도달하지 않은 뒷 행은 '빈 행'으로 세지 않는다 — skip한 행만 대상.
+      {
+        const vcEnd = voiceColsList();
+        const skippedEmpty = useSessionStore.getState().skippedRows
+          .filter((r) => !isRowVoiceComplete(r, vcEnd));
+        if (skippedEmpty.length > 0) {
+          const msg = `${formatRowList(skippedEmpty)}이 비어 있습니다. 데이터 탭에서 확인해 주세요.`;
+          useSessionStore.getState().setLastTts(msg);
+          await say(msg);
+        }
+      }
       await stop(true);
       return;
     }
@@ -766,37 +863,27 @@ export function useVoiceSession() {
       return;
     }
     if (cmd === 'nextRow') {
-      // v0.4.5 I3: 재입력 중 "다음" → 재입력 종료하고 다음 행으로 전진(복귀 없이).
-      if (reentryRowRef.current != null) {
-        reentryRowRef.current = null;
-        const sess = useSessionStore.getState();
-        const total = computeTotalRows(useSettingsStore.getState().columns);
-        const next = sess.activeRow + 1;
-        cancelTts();
-        epochRef.current++;
-        if (next > total) {
-          const msg = '마지막 행입니다.';
-          sess.setLastTts(msg);
-          await say(msg);
-          const vc = voiceColsList();
-          const c = vc[sess.activeColIdx];
-          if (c) await announceField(c);
-        } else {
-          await jumpToRow(next, { setReturn: false });
-        }
-        return;
-      }
-      await gotoAdjacentRow(1);
+      // v0.5.0 NAV-1: '다음'은 재입력 여부와 무관하게 항상 단방향 전진(goNextRow) —
+      // 미완료 행은 skip(placeholder) 처리, returnRow 미등록, 완료 행 재프롬프트 없음.
+      await goNextRow();
       return;
     }
     if (cmd === 'keep') {
-      // v0.4.5 I3: 재입력 중에만 유효 — 현재 필드 값을 그대로 두고 다음 필드로.
+      // v0.5.0 NAV-2: '유지' 일반화 — 현재 칸에 값이 있으면(재입력 모드 포함) 그대로 두고
+      // 다음으로 진행. 값이 없으면 무엇을 유지할지 없음을 명시적으로 안내(무음 금지, [REVIEW-4]).
       // (값 커밋 경로를 안 타므로 announceField가 시작한 클립은 저장되지 않아 기존 클립이 보존된다.)
       cancelTts();
-      if (reentryRowRef.current != null) {
+      const curVal = useSessionStore.getState().getRowValues(awaiting.row)[awaiting.colId] ?? '';
+      if (reentryRowRef.current != null || curVal !== '') {
         await advance();
       } else {
-        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+        logger.log({
+          type: 'command', parsed: 'keep', extra: 'keep_no_value',
+          sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        });
+        const msg = `유지할 값이 없습니다. ${awaiting.name} 말씀해 주세요.`;
+        useSessionStore.getState().setLastTts(msg);
+        await say(msg);
       }
       return;
     }
@@ -916,6 +1003,10 @@ export function useVoiceSession() {
     // Plain value — with alts fallback on parse failure (item 11)
     const col = getColById(awaiting.colId);
     let parsed = col ? parseValueForCol(col, text) : null;
+    // v0.5.0 W4/W5: capture the parser's machine-readable fail reason from the PRIMARY
+    // transcript (before the alts loop overwrites it) — tags stt_parse_failed below so the
+    // next log analysis can split multi_numeric / decimal_fraction_lost re-asks from generic ones.
+    const parseFailReason = parsed === null ? getLastParseFailReason() : null;
     if (parsed === null && alts.length > 1) {
       for (let ai = 1; ai < Math.min(alts.length, 3); ai++) {
         const alt = alts[ai];
@@ -929,7 +1020,7 @@ export function useVoiceSession() {
       }
     }
     if (parsed === null) {
-      logger.log({ type: 'stt_parse_failed', text, altsCount: alts.length, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+      logger.log({ type: 'stt_parse_failed', text, altsCount: alts.length, extra: parseFailReason ?? undefined, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
       recorderRef.current?.startClip(); // restart clip
       await say(`${awaiting.name} 다시 말씀해 주세요.`);
       return;
@@ -958,11 +1049,12 @@ export function useVoiceSession() {
     // Codex MEDIUM-4: clip for this field is being committed (stopped) — no longer active.
     // The next announceField will re-set it after its own startClip().
     activeClipRef.current = null;
-    const clipStopPromise = recorderRef.current?.stopClip() ?? Promise.resolve(null);
+    const clipStopPromise = recorderRef.current?.stopClip()
+      ?? Promise.resolve({ blob: null, raw: null, prerollMs: 0 });
     const savePromise = (async () => {
       try {
         logger.log({ type: 'clip', extra: 'clip_stop_await', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-        const clipBlob = await clipStopPromise;
+        const { blob: clipBlob, raw: rawBlob } = await clipStopPromise;
         logger.log({ type: 'clip', extra: `clip_stop_resolved:${clipBlob ? clipBlob.size : 'null'}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
         if (!clipBlob) {
           logger.log({ type: 'error', extra: 'clip_empty', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
@@ -986,6 +1078,13 @@ export function useVoiceSession() {
         }
         await saveAudioClip(clipKey, clipBlob);
         logger.log({ type: 'clip', extra: `clip_saved:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+        // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
+        // pendingClips에는 등록하지 않으므로 데이터탭 재생 UI에는 노출되지 않고, 로그 zip의
+        // clips/(prefix 매칭)과 deleteSession cascade에만 따라간다. 분석 전용.
+        if (rawBlob) {
+          await saveAudioClip(`${clipKey}:raw`, rawBlob);
+          logger.log({ type: 'clip', extra: `clip_raw_saved:${rawBlob.size}`, clipKey: `${clipKey}:raw`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+        }
       } catch (e) {
         logger.log({ type: 'error', extra: `clip_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
         const m = pendingClipsRef.current[clipAwaitingRow];
@@ -1034,7 +1133,7 @@ export function useVoiceSession() {
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
     await advance();
-  }, [advance, enterModifyMode, say, gotoAdjacentRow, enterReentry, jumpToRow, persistSession]);
+  }, [advance, enterModifyMode, say, goNextRow, enterReentry, persistSession]);
 
   // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async (label?: string) => {
@@ -1064,6 +1163,9 @@ export function useVoiceSession() {
     }
 
     warmupTts();
+    // v0.5.0 W1: 세션 시작 시 음성 목록 재조회 1회 — iOS가 늦게 채운 한국어 음성을
+    // 이 세션의 TTS가 바로 쓸 수 있게 하고, tts_voices_loaded 텔레메트리(개수 변화 시)도 남긴다.
+    refreshVoices();
     epochRef.current = 0;
     pendingClipsRef.current = {};
     clipAttemptRef.current = {};
@@ -1270,7 +1372,7 @@ export function useVoiceSession() {
     // 다음 행 진행 시 persistSession에서 자연스럽게 반영됨.
   }, []);
 
-  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, pause, resume, commitTouchValue, lastConfidenceRef };
+  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, goNextRow, pause, resume, commitTouchValue, lastConfidenceRef };
 }
 
 // ─── helpers ─────────────────────────────────────────────────

@@ -143,11 +143,21 @@ function parseFractionDigits(text: string): string {
   return out;
 }
 
+/** v0.5.0 W4/W5: machine-readable reason for the most recent parseKoreanNumber() null.
+ *  Set fresh on every call; read by the caller (handleFinal) to tag stt_parse_failed.
+ *  - 'multi_numeric'          — ≥2 independent valid numeric tokens ("이 166.7") → ambiguous (STT-A)
+ *  - 'decimal_fraction_lost'  — "<정수> 점 <비숫자>" — decimal intent, fraction lost (STT-B) */
+let _lastParseFailReason: string | null = null;
+export function getLastParseFailReason(): string | null {
+  return _lastParseFailReason;
+}
+
 /**
  * Try to parse `raw` as a Korean spoken number.
  * `maxDecimals` (optional) rounds the result.
  */
 export function parseKoreanNumber(raw: string, maxDecimals?: number): string | null {
+  _lastParseFailReason = null;
   if (!raw) return null;
   const s = raw.replace(/[, 　]/g, ' ').trim();
   if (!s) return null;
@@ -156,8 +166,14 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
   const direct = tryArabic(s);
   if (direct !== null) return formatNum(direct, maxDecimals);
 
+  // v0.5.0 W5 (STT-B): a trailing 점/쩜 ("33 점", "삼십점") means the user spoke a decimal
+  // but STT dropped the fraction — the whole-spoken shortcut would silently commit the bare
+  // integer. Skip it and let the decimal-discriminator branch below re-ask. A trailing "."
+  // (punctuation, e.g. "33.") is NOT 점/쩜 and keeps the fast paths.
+  const trailingDecimalWord = /[점쩜]$/.test(s);
+
   // If the whole string is a clean spoken-Korean number (incl. 점-decimal), parse it.
-  const wholeSpoken = parseKoreanSpokenAll(s.replace(/\s+/g, ''));
+  const wholeSpoken = trailingDecimalWord ? null : parseKoreanSpokenAll(s.replace(/\s+/g, ''));
   if (
     wholeSpoken !== null &&
     Math.abs(wholeSpoken) <= OVERFLOW_THRESHOLD &&
@@ -200,7 +216,23 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       }
       return null;
     }
-    // frac empty → not a decimal → fall through (HIGH-1).
+    // v0.5.0 W5 (STT-B): decimal INTENT with a LOST fraction — "111 점 에" (STT garbled the
+    // fraction syllable). Discriminators: the head parses as a clean integer AND the tail
+    // carries no digit at all. Last-wins used to silently commit the bare integer (111),
+    // dropping the spoken decimal — a wrong measurement with no signal. Re-ask instead.
+    // "점수 8"/"당도 점수 8" stay safe: their head ("", "당도") is NOT an integer → fall through.
+    // "111 점 5" never reaches here (frac non-empty → handled above).
+    {
+      const head = decimalParts[0].trim().replace(/\s+/g, '');
+      if (head && !/\d/.test(tail)) {
+        const whole = parseKoreanInt(head);
+        if (whole !== null && Number.isInteger(whole)) {
+          _lastParseFailReason = 'decimal_fraction_lost';
+          return null;
+        }
+      }
+    }
+    // frac empty + head not an integer → not a decimal → fall through (HIGH-1).
   } else if (decimalParts.length >= 3) {
     // Codex HIGH-2: multiple 점/쩜 ("칠십사 점 칠 점 팔"). If the LAST segment starts with a
     // fraction digit, committing only the trailing token would be a silent wrong commit → null
@@ -214,15 +246,18 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
   const tokens = s.split(/\s+/).filter(Boolean);
   if (tokens.length > 1) {
     let lastValid: number | null = null;
+    let validCount = 0;
     for (const tok of tokens) {
       const a = tryArabic(tok);
       if (a !== null && Math.abs(a) <= OVERFLOW_THRESHOLD) {
         lastValid = a;
+        validCount++;
         continue;
       }
       const k = parseKoreanSpokenAll(tok);
       if (k !== null && Math.abs(k) <= OVERFLOW_THRESHOLD) {
         lastValid = k;
+        validCount++;
         continue;
       }
       // T-1 (silent wrong-value commit): this token parsed as NEITHER a clean
@@ -233,6 +268,16 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       // (useVoiceSession handleFinal) logs stt_parse_failed and re-asks,
       // exactly like the Codex HIGH-2 / MEDIUM-3 multi-token guards above.
       if (/\d/.test(tok)) return null;
+    }
+    // v0.5.0 W4 (STT-A): ≥2 independently-valid numeric tokens (e.g. "이 166.7" — STT split
+    // "이백 66.7" misrecognition; row would silently commit the LAST one). Legitimate multi-token
+    // numerals ("백 이십삼", "칠십사 점 칠") never reach this loop — the whole-spoken and decimal
+    // recombination paths above consume them. Whatever survives to here with two valid numbers
+    // is genuinely ambiguous → null so the caller logs stt_parse_failed:multi_numeric and re-asks.
+    // No auto-correction is attempted (민구/Trace decision — observe via telemetry first).
+    if (validCount >= 2) {
+      _lastParseFailReason = 'multi_numeric';
+      return null;
     }
     if (lastValid !== null) return formatNum(lastValid, maxDecimals);
   }

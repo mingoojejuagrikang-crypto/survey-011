@@ -20,6 +20,9 @@ export async function hydrateSessions(): Promise<void> {
     const sessions = await loadAllSessions();
     store.setSessions(sessions);
     store.setHydrationError(null);
+    // v0.5.0 W7(T-19): 성공 경로도 계측 — 실패(hydration_failed)만 찍으면 "이벤트 없음"이
+    // "성공"인지 "로드 자체가 안 돌았는지" 구분이 안 된다([REVIEW-1]의 관측 대칭성).
+    logger.log({ type: 'app', extra: `hydration_ok:${sessions.length}` });
   } catch (err) {
     const msg = String((err as Error)?.message ?? err);
     // Never swallow: a hydration failure is a data-safety event, not noise.

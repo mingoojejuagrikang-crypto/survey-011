@@ -27,6 +27,10 @@ interface SessionState {
   allRowValues: Record<number, Record<string, string>>;
   /** Row indices that have been fully completed */
   completedRows: number[];
+  /** v0.5.0 NAV-1: rows the user skipped with '다음' while incomplete. Persisted as
+   *  complete:false placeholder rows so the 데이터탭 shows the gap; removed when the
+   *  row is later completed. */
+  skippedRows: number[];
   /** When user jumps to another row (modify/chip), where to return after that row finishes */
   returnRow: number | null;
   returnColIdx: number | null;
@@ -42,6 +46,7 @@ interface SessionState {
   getRowValues: (row: number) => Record<string, string>;
   markRowComplete: (row: number) => void;
   markRowIncomplete: (row: number) => void;
+  markRowSkipped: (row: number) => void;
   isRowComplete: (row: number) => boolean;
   setReturn: (row: number | null, colIdx: number | null) => void;
   resetAll: () => void;
@@ -59,6 +64,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   valueBurst: null,
   allRowValues: {},
   completedRows: [],
+  skippedRows: [],
   returnRow: null,
   returnColIdx: null,
 
@@ -84,12 +90,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   markRowComplete: (row) =>
     set((s) => {
-      if (s.completedRows.includes(row)) return s;
-      return { completedRows: [...s.completedRows, row].sort((a, b) => a - b) };
+      // 완료되면 skip 표시는 해제 (placeholder가 실데이터로 채워짐).
+      const skippedRows = s.skippedRows.includes(row)
+        ? s.skippedRows.filter((r) => r !== row)
+        : s.skippedRows;
+      if (s.completedRows.includes(row)) return { skippedRows };
+      return {
+        completedRows: [...s.completedRows, row].sort((a, b) => a - b),
+        skippedRows,
+      };
     }),
 
   markRowIncomplete: (row) =>
     set((s) => ({ completedRows: s.completedRows.filter((r) => r !== row) })),
+
+  markRowSkipped: (row) =>
+    set((s) => {
+      if (s.completedRows.includes(row) || s.skippedRows.includes(row)) return s;
+      return { skippedRows: [...s.skippedRows, row].sort((a, b) => a - b) };
+    }),
 
   isRowComplete: (row) => get().completedRows.includes(row),
 
@@ -108,6 +127,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       valueBurst: null,
       allRowValues: {},
       completedRows: [],
+      skippedRows: [],
       returnRow: null,
       returnColIdx: null,
     }),

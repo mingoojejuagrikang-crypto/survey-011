@@ -105,22 +105,28 @@ async function ensureTeamSubFolder(parentId: string, userEmail: string): Promise
 const APP_FOLDER_NAME = 'survey-011';
 const USER_LOG_SUBFOLDER = 'log';
 
-/** 사용자 Drive에서 `name` 폴더를 parent(미지정=루트) 아래에서 찾거나 생성해 ID 반환.
- *  중복이 있으면 createdTime asc로 가장 오래된 것을 선택해 일관성 유지. */
-async function ensureFolder(name: string, parentId?: string): Promise<string> {
+/** 사용자 Drive에서 `name` 폴더를 parent(미지정=루트) 아래에서 검색만 한다(생성 없음).
+ *  중복이 있으면 createdTime asc로 가장 오래된 것을 선택해 일관성 유지. 미존재 시 null. */
+async function findFolder(name: string, parentId?: string): Promise<string | null> {
   const headers = await authHeader();
   const safeName = escapeDriveQ(name);
   const parentClause = parentId ? `'${escapeDriveQ(parentId)}' in parents` : `'root' in parents`;
   const q = `${parentClause} and name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
   const searchUrl = `${FILES_API}?q=${encodeURIComponent(q)}&fields=files(id,createdTime)&orderBy=createdTime&spaces=drive`;
   const sr = await fetch(searchUrl, { headers });
-  if (sr.ok) {
-    const data = (await sr.json()) as { files?: { id: string }[] };
-    if (data.files && data.files.length > 0) return data.files[0].id;
-  } else {
+  if (!sr.ok) {
     const errText = await sr.text().catch(() => `HTTP ${sr.status}`);
     throw new Error(`폴더 검색 실패(${name}): ${errText}`);
   }
+  const data = (await sr.json()) as { files?: { id: string }[] };
+  return data.files && data.files.length > 0 ? data.files[0].id : null;
+}
+
+/** 사용자 Drive에서 `name` 폴더를 parent(미지정=루트) 아래에서 찾거나 생성해 ID 반환. */
+async function ensureFolder(name: string, parentId?: string): Promise<string> {
+  const found = await findFolder(name, parentId);
+  if (found) return found;
+  const headers = await authHeader();
   const createRes = await fetch(FILES_API, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
@@ -152,6 +158,69 @@ async function ensureUserLogFolder(): Promise<string> {
 export async function uploadLogToUserDrive(zipBlob: Blob, filename: string): Promise<string> {
   const folderId = await ensureUserLogFolder();
   return uploadZip(zipBlob, filename, folderId);
+}
+
+// ─── v0.5.0 W8: 로그 zip 기반 세션 복구 — Drive 읽기 경로 ──────────────────────
+// 업로드와 같은 폴더 규약(`survey-011/log`)·캐시(settingsStore.userLogFolderId)를 재사용하되,
+// 복구는 읽기 전용이므로 폴더를 **생성하지 않는다**(없으면 백업도 없음).
+
+/** `survey-011/log` 폴더 ID를 검색만으로 찾는다(캐시 우선, 생성 없음). 미존재 시 null. */
+export async function findUserLogFolderId(): Promise<string | null> {
+  const cached = useSettingsStore.getState().userLogFolderId;
+  if (cached) return cached;
+  const appId = await findFolder(APP_FOLDER_NAME);
+  if (!appId) return null;
+  const logId = await findFolder(USER_LOG_SUBFOLDER, appId);
+  if (logId) useSettingsStore.getState().set({ userLogFolderId: logId });
+  return logId;
+}
+
+/** 캐시된 로그 폴더 ID 무효화 — 폴더 삭제/이동으로 stale해진 캐시를 재탐색하게 한다. */
+export function invalidateUserLogFolderCache(): void {
+  if (useSettingsStore.getState().userLogFolderId) {
+    useSettingsStore.getState().set({ userLogFolderId: null });
+  }
+}
+
+export interface DriveLogZip {
+  id: string;
+  name: string;
+  createdTime: string;
+}
+
+/** 로그 폴더의 zip 목록을 **최신순**(createdTime desc)으로 조회. 페이지네이션 포함. */
+export async function listLogZips(folderId: string): Promise<DriveLogZip[]> {
+  const headers = await authHeader();
+  const q = `'${escapeDriveQ(folderId)}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'`;
+  const files: DriveLogZip[] = [];
+  let pageToken: string | undefined;
+  do {
+    const url =
+      `${FILES_API}?q=${encodeURIComponent(q)}` +
+      `&fields=${encodeURIComponent('nextPageToken,files(id,name,createdTime)')}` +
+      `&orderBy=${encodeURIComponent('createdTime desc')}&pageSize=100&spaces=drive` +
+      (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '');
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => `HTTP ${res.status}`);
+      throw new Error(`로그 목록 조회 실패: ${errText}`);
+    }
+    const data = (await res.json()) as { nextPageToken?: string; files?: DriveLogZip[] };
+    files.push(...(data.files ?? []).filter((f) => f.name.toLowerCase().endsWith('.zip')));
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  return files;
+}
+
+/** Drive 파일 본문 다운로드 (zip 바이너리). 복구 시에만 호출 — 평시 네트워크 0. */
+export async function downloadDriveFile(fileId: string): Promise<Blob> {
+  const headers = await authHeader();
+  const res = await fetch(`${FILES_API}/${encodeURIComponent(fileId)}?alt=media`, { headers });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => `HTTP ${res.status}`);
+    throw new Error(`로그 다운로드 실패: ${errText}`);
+  }
+  return res.blob();
 }
 
 /** 관리자 공유 폴더 내 {userEmail}/ 하위 폴더에 업로드.

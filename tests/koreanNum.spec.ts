@@ -18,6 +18,7 @@ import {
   extractModifyValue,
   detectCommand,
   isAmbiguousSingleSyllable,
+  getLastParseFailReason,
 } from '../src/lib/koreanNum';
 
 test.describe('parseKoreanNumber — decimal preservation (H1)', () => {
@@ -114,6 +115,72 @@ test.describe('parseKoreanNumber — T-1 silent wrong-value commit (digit-bearin
   // still commit — this is the "당도 점수 8" class and must NOT become null.
   test('"당도 8" → "8" (non-digit garbage token still commits)', () => {
     expect(parseKoreanNumber('당도 8')).toBe('8');
+  });
+});
+
+test.describe('v0.5.0 W4 (STT-A) — multiple valid numeric tokens must not silently commit', () => {
+  // Field log 2026-06-10 (STT-A): "수정 266.7" was recognized as "수정이 166.7";
+  // extractModifyValue handed the parser "이 166.7" — two independently-valid numeric
+  // tokens — and last-wins silently committed 166.7 (wrong value, no signal).
+  // Now ambiguous → null → re-ask, tagged multi_numeric.
+  test('"이 166.7" → null (two valid numeric tokens, was silently 166.7)', () => {
+    expect(parseKoreanNumber('이 166.7')).toBeNull();
+    expect(getLastParseFailReason()).toBe('multi_numeric');
+  });
+  test('"오 25.5" → null (sino syllable + arabic decimal)', () => {
+    expect(parseKoreanNumber('오 25.5')).toBeNull();
+    expect(getLastParseFailReason()).toBe('multi_numeric');
+  });
+  // Boundary doc: pure-arabic utterances with spaces are joined by the TOP fast path
+  // (tryArabic strips [,\s] — thousand-separator tolerance, pre-existing since v0.1).
+  // They never reach the per-token loop, so W4 does not change this behavior.
+  test('"3 5" → "35" (pre-existing arabic fast path, untouched by W4)', () => {
+    expect(parseKoreanNumber('3 5')).toBe('35');
+  });
+  // Legitimate multi-token numerals are consumed by the whole-spoken / decimal recombination
+  // paths BEFORE the per-token loop — they must keep parsing.
+  test('회귀: "백 이십삼" → "123" (whole-spoken path, not multi_numeric)', () => {
+    expect(parseKoreanNumber('백 이십삼')).toBe('123');
+  });
+  test('회귀: "칠십사 점 칠" → "74.7"', () => {
+    expect(parseKoreanNumber('칠십사 점 칠')).toBe('74.7');
+  });
+  test('회귀: "백이십삼" → "123"', () => {
+    expect(parseKoreanNumber('백이십삼')).toBe('123');
+  });
+  test('회귀: "이십 점 오" → "20.5"', () => {
+    expect(parseKoreanNumber('이십 점 오')).toBe('20.5');
+  });
+  // Single numeric token + non-numeric garbage still commits (the "당도 8" class).
+  test('회귀: "당도 8" → "8" (one valid numeric token only)', () => {
+    expect(parseKoreanNumber('당도 8')).toBe('8');
+  });
+});
+
+test.describe('v0.5.0 W5 (STT-B) — "점" 뒤 소수부 유실 시 재질문', () => {
+  // Field log 2026-06-10: "111.5" spoken, STT returned "111 점 에" — the fraction syllable
+  // got garbled into "에". The fall-through used to commit the bare 111 (decimal silently
+  // dropped). Decimal INTENT (integer head + 점 + digit-free tail) must now re-ask.
+  test('"111 점 에" → null (was silently 111)', () => {
+    expect(parseKoreanNumber('111 점 에')).toBeNull();
+    expect(getLastParseFailReason()).toBe('decimal_fraction_lost');
+  });
+  test('"33 점" → null (trailing 점, fraction never spoken)', () => {
+    expect(parseKoreanNumber('33 점')).toBeNull();
+  });
+  // The literal-word "점" classes must keep falling through (HIGH-1 보존).
+  test('폴스루 유지: "점수 8" → "8" (head가 정수가 아님)', () => {
+    expect(parseKoreanNumber('점수 8')).toBe('8');
+  });
+  test('폴스루 유지: "당도 점수 8" → "8"', () => {
+    expect(parseKoreanNumber('당도 점수 8')).toBe('8');
+  });
+  // Genuine decimals through the same branch keep combining.
+  test('회귀: "111 점 5" → "111.5"', () => {
+    expect(parseKoreanNumber('111 점 5')).toBe('111.5');
+  });
+  test('회귀: "33 점 칠" → "33.7"', () => {
+    expect(parseKoreanNumber('33 점 칠')).toBe('33.7');
   });
 });
 

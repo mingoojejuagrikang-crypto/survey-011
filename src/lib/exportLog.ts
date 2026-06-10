@@ -1,7 +1,8 @@
 import JSZip from 'jszip';
 import { logger } from './logger';
-import { loadAudioClip, loadAllAudioClipKeys, loadLogEvents } from './db';
+import { loadAudioClip, loadAllAudioClipKeys, loadLogEvents, loadAllSessions } from './db';
 import { getCurrentEmail } from './googleAuth';
+import { buildSessionsSnapshot } from './sessionSnapshot';
 
 /** Export logs + audio clips as a ZIP.
  *  - `sessionIds` undefined → include ALL events and clips (used by manual LOG button)
@@ -22,14 +23,28 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
 
   let events: unknown[];
   try {
-    events = await loadLogEvents(sessionIds);
+    // v0.5.0 W7(T-19): 세션 필터 ZIP에도 앱 수명주기 이벤트('__app__' sentinel — app_boot,
+    // hydration, recover, drive_upload, setting_changed)를 항상 동봉해 계측 공백을 없앤다.
+    events = await loadLogEvents(sessionIds ? [...sessionIds, '__app__'] : undefined);
   } catch {
     events = logger.getAll().filter((e) => {
       if (!filterSet) return true;
-      return e.sessionId != null && filterSet.has(e.sessionId);
+      return e.sessionId != null && (filterSet.has(e.sessionId) || e.sessionId === '__app__');
     });
   }
   zip.file('events.json', JSON.stringify(events, null, 2));
+
+  // v0.5.0 W8: 복구용 세션 스냅샷 — export 범위 세션의 전체 Session 객체를 sessions.json으로 동봉.
+  // "세션 복구" 2단계가 Drive의 이 zip만으로 세션+클립을 복원한다(별도 백업 업로드 없음 —
+  // 클립은 아래 clips/를 그대로 공유, 중복 없음). 실패해도 zip 자체는 유효(구버전 zip과 동일 취급)
+  // 하지만 [REVIEW-1] "빈 catch 금지" — 실패는 반드시 로깅한다.
+  try {
+    const allSessions = await loadAllSessions();
+    const scoped = filterSet ? allSessions.filter((s) => filterSet.has(s.id)) : allSessions;
+    zip.file('sessions.json', buildSessionsSnapshot(scoped, deviceWithUser.appVersion));
+  } catch (e) {
+    logger.log({ type: 'app', extra: `export_sessions_json_failed:${String((e as Error)?.message ?? e)}` });
+  }
 
   // Include audio clips
   try {

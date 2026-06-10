@@ -5,6 +5,7 @@ import { VoiceScreen } from './screens/VoiceScreen';
 import { DataScreen } from './screens/DataScreen';
 import { T, DEVICE } from './tokens';
 import { hydrateSessions } from './lib/hydrate';
+import { logger } from './lib/logger';
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('settings');
@@ -20,6 +21,9 @@ export default function App() {
   // `hydrationError` (D-1) so DataScreen can offer a retry instead of a misleading empty state.
   // Auto-sync intentionally disabled — user explicitly picks sessions in DataScreen.
   useEffect(() => {
+    // v0.5.0 W7(T-19): 앱 기동 계측 — 다음 로그 분석에서 "앱이 떴는데 세션이 없다"와
+    // "앱 자체가 안 떴다"를 구분할 수 있게 한다.
+    logger.log({ type: 'app', extra: 'app_boot', meta: { appVersion: logger.device().appVersion } });
     void hydrateSessions();
   }, []);
 

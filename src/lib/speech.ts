@@ -10,6 +10,7 @@
  */
 
 import { useSettingsStore } from '../stores/settingsStore';
+import { logger } from './logger';
 
 type SRCtor = new () => SpeechRecognitionLike;
 
@@ -207,20 +208,37 @@ export function setActiveController(ctrl: SpeechController | null) {
 const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
 let voicesCache: SpeechSynthesisVoice[] = [];
 
-function loadVoices() {
-  if (!synth) return;
+const isKo = (v: SpeechSynthesisVoice) => v.lang?.toLowerCase().startsWith('ko');
+
+/** v0.5.0 W1: re-pull the synth voice list on demand. iOS Safari populates getVoices()
+ *  lazily (often only after a speak/warmup or app foreground), and `voiceschanged` is
+ *  unreliable there — so callers (TtsVoiceSelector mount/visibilitychange/새로고침 버튼,
+ *  session start()) re-poll explicitly. Logs `tts_voices_loaded {total,ko}` (type:'app',
+ *  '__app__' sentinel — W7) only when the counts actually change, so boot + late-arrival
+ *  each produce exactly one telemetry event. */
+export function refreshVoices(): { total: number; ko: number } {
+  if (!synth) return { total: 0, ko: 0 };
+  const prevTotal = voicesCache.length;
+  const prevKo = voicesCache.filter(isKo).length;
   voicesCache = synth.getVoices();
+  const total = voicesCache.length;
+  const ko = voicesCache.filter(isKo).length;
+  if (total !== prevTotal || ko !== prevKo) {
+    logger.log({ type: 'app', extra: `tts_voices_loaded:total=${total},ko=${ko}` });
+  }
+  return { total, ko };
 }
+
 if (synth) {
-  loadVoices();
-  synth.onvoiceschanged = loadVoices;
+  refreshVoices();
+  synth.onvoiceschanged = refreshVoices;
 }
 
 let _preferredVoiceName = '';
 export function setPreferredVoiceName(name: string) { _preferredVoiceName = name; }
 
 function pickKoreanVoice(): SpeechSynthesisVoice | null {
-  const candidates = voicesCache.filter((v) => v.lang?.toLowerCase().startsWith('ko'));
+  const candidates = voicesCache.filter(isKo);
   if (_preferredVoiceName) {
     const preferred = candidates.find((v) => v.name === _preferredVoiceName);
     if (preferred) return preferred;
@@ -230,7 +248,7 @@ function pickKoreanVoice(): SpeechSynthesisVoice | null {
 
 /** Returns all available Korean voices. */
 export function getKoreanVoices(): SpeechSynthesisVoice[] {
-  return voicesCache.filter((v) => v.lang?.toLowerCase().startsWith('ko'));
+  return voicesCache.filter(isKo);
 }
 
 export interface SpeakOptions {
