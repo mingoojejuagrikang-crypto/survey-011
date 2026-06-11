@@ -246,7 +246,7 @@
 - **원인:** `enterModifyMode`의 direct-modify 경로가 "stale 클립 매칭 방지" 목적으로 셀의 `audioClips` 포인터를 **삭제**했는데, direct modify는 새 값 클립을 재녹음하지 않으므로 셀에 연결된 클립이 사라짐. (cascade/restart는 재녹음 전제라 무관.)
 - **해결·회피:** 직전 `preserveCommandClip`이 저장한 수정 발화(`:cmd<n>`) 클립을 셀 포인터로 **재연결**. 재생버튼 유지 + 재생 내용이 새 값과 일치. 이전 값은 `:a<n>` archive로 ZIP에 보존.
 - **출처:** `2026-06-08 세션` (민구 제보 + 로그 row3·6·18·19·23·29) → **survey-011 v0.4.2** 수정; `2026-06-11 실기기 로그` — **변형 재발(컬럼 id 어긋남)**: row16·17에서 종경(c8) 칸을 듣는 중 `"수정 311.7"`/`"수정 333.3"`을 발화해 횡경(c7)을 direct_modify했더니, cmd 클립 재연결 키가 **명령 발화 컬럼(c8)** 기준으로 만들어져 c7 셀 포인터가 `…:16:c8…:cmd1`로 어긋남. c7 전용 cmd 클립(`16:c7…cmd1.wav`)은 디스크에 존재하나 orphan, 재생버튼은 c8 수정 발화를 가리킴(숫자 자체는 맞아 값 오염은 아님).
-- **현재 상태:** ✅수정됨(재생버튼 소실 원형) / ⚠️주시(컬럼 id 어긋남 변형) — cmd 클립 재연결 키를 **명령 발화 컬럼이 아니라 수정 대상 셀의 colId**로 구성해야 함 (`src/lib/useVoiceSession.ts` `enterModifyMode` cmdKey 재연결, direct_modify target column 기준). 06-11 백로그 CLIP-CMD(P1).
+- **현재 상태:** ✅수정됨(재생버튼 소실 원형 + 컬럼 id 어긋남 변형, **survey-011 v0.6.0**) — cmd 클립 재연결 키를 **명령 발화 컬럼이 아니라 수정 대상 셀의 colId**로 구성하도록 변경: `preserveCommandClip`이 `saveFor(targetRow, targetColId)`를 노출하고 `enterModifyMode`의 direct_modify 경로가 `saveFor(targetRow, target.id)`로 **수정 대상 셀** 키(`…:targetRow:target.id:cmd<n>`)에 저장·재연결한다(`src/lib/useVoiceSession.ts`). 종경 안내 중 횡경을 수정해도 c7 포인터가 c8 키로 orphan되지 않음. (이전: 06-11 백로그 CLIP-CMD(P1))
 
 ### [CLIP-2] 음성 클립에 발화 전후 무음이 과다하게 포함됨
 - **증상:** 저장된 클립 재생 시 앞뒤 공백이 김. 06-08 로그 녹음 길이 평균 5.7초·최대 20.9초인데 실제 발화는 1–3초.
@@ -261,7 +261,28 @@
 - **원인(가설):** 0.5s 프리롤 링버퍼 워밍업과 **세션 첫 녹음 stop** 사이 타이밍 — 첫 캡처가 프리롤 PCM이 채워지기 전 stop돼 빈 버퍼 반환(`clip_stop_resolved:null` → `error clip_empty`). 둘째 클립부터는 정상. 빈 catch 아님(정상 계측됨 — REVIEW-1 준수).
 - **해결·회피:** ① 빈 캡처 감지 시 셀 audioClip **포인터 등록 회수**(broken pointer 방지 — [CLIP-2/persistSession] 회수 패턴), 또는 ② 첫 녹음 전 프리롤 1프레임 워밍업 보장. 값은 영향 없으므로 우선순위 낮음(P2).
 - **출처:** `2026-06-11 실기기 로그` (단일 세션 1건: row1 c7 `clip_empty`)
-- **현재 상태:** ⚠️주시 (`src/lib/audioRecorder.ts` `stopClip` 빈 버퍼 가드, `src/lib/useVoiceSession.ts` 첫 행 클립 키 사전등록 회수 — 06-11 백로그 CLIP-EMPTY)
+- **현재 상태:** ✅수정됨(broken pointer 차단, **survey-011 v0.6.0**) — 빈 캡처(`clip_empty`) 감지 시 `unlinkBrokenPointer`가 셀 audioClip 포인터를 **메모리(pendingClipsRef)와 이미 영속화된 세션 양쪽에서** 회수하되, 포인터가 여전히 우리 clipKey와 같을 때만 해제(이후 restart/modify가 재지정한 경우 보존)한다. 데이터탭이 404 재생버튼을 더는 렌더하지 않음. 값(audit-trail 외 측정값)은 원래부터 영향 없음. (이전: 06-11 백로그 CLIP-EMPTY(P2)) (`src/lib/useVoiceSession.ts`, `src/lib/audioRecorder.ts` `stopClip` 빈 버퍼 가드)
+
+### [SYNC-1] sheetRow 매핑이 외부 변경(시트 정렬·행 삽입/삭제)에 취약 — update가 엉뚱한 행을 덮을 수 있음
+- **증상:** v0.6.0 행 단위 재동기화는 각 행이 처음 append된 1-based 시트 행번호(`sheetRow`)를 기억해 두고, 그 행을 수정하면 같은 행을 PUT(UPDATE)한다. 그런데 사용자가 **구글 시트에서 직접 행을 정렬·삽입·삭제**하면 그 행번호가 어긋나, UPDATE가 의도와 다른 행을 덮을 수 있다.
+- **원인:** Sheets values API는 안정적 행 ID가 없어 위치(A1)로만 쓴다. 외부 편집은 앱이 알 수 없다.
+- **해결·회피(완화):** updateRow가 404/400을 받으면(행이 사라짐/이동) 해당 행의 `sheetRow`를 초기화해 **다음 동기화에서 append로 폴백**하고 `sync_row_mismatch` 텔레메트리를 남긴다. 위치가 살아있는 채 내용만 밀린 경우(정렬)는 감지 못 하므로, **동기화 후에는 구글 시트에서 행 순서를 바꾸지 말 것**을 권장. C5(탭명 따옴표)로 탭명 특수문자發 가짜 mismatch는 제거됨.
+- **출처:** `survey-011 v0.6.0` Codex 교차점검(C5 연계); 회피 경로 회귀 `tests/sync-skip-rows.spec.ts`("update 404 → sheetRow 초기화 후 append 폴백").
+- **현재 상태:** ⚠️주시(설계상 한계 — 404/400 폴백으로 데이터 손실은 막되, 정렬發 덮어쓰기는 사용자 운용으로 회피) (`src/lib/sync.ts` pass-2 404/400 폴백, `src/lib/sheets.ts` `rowA1Range`/`quoteSheetTitle`)
+
+### [SYNC-2] append HTTP 성공인데 updatedRange 파싱 실패 — synced-without-sheetRow 엣지(이후 수정 시 재append 중복 수용)
+- **증상:** `values:append`가 200으로 성공(데이터는 이미 시트에 있음)했으나 응답의 `updatedRange`를 파싱하지 못해 각 행이 시트 어느 위치에 떨어졌는지 모르는 극히 드문 경우.
+- **원인:** 예기치 못한 응답 페이로드 등으로 `parseUpdatedRangeFirstRow`가 null 반환.
+- **해결·회피:** **방침(C1):** 진실은 "데이터는 시트에 있다"이므로 해당 행들을 `syncState:'synced'`로 마크하되 `sheetRow`는 미설정(in-place UPDATE 불가). 성공으로 집계(appended 카운트·successIds 정상) → 백업/자동삭제 정상 진행, **재시도해도 synced 행이라 재append 안 함**(중복 방지의 핵심). 단, 이런 행이 **이후 수정되면** dirty이지만 sheetRow가 없어 pass-1 재append 대상이 됨 → 값은 최신으로 정확히 올라가나 **그 한 번의 중복 행은 수용**한다(극히 드문 엣지, 데이터 무손실 우선). 이전 방침(F4: 세션 실패→재시도)은 append HTTP가 이미 성공했으므로 재시도가 같은 행을 다시 올리는 더 흔한 중복을 유발해 폐기.
+- **출처:** `survey-011 v0.6.0` Codex 교차점검(C1); 회귀 `tests/sync-skip-rows.spec.ts`("C1 — synced-without-sheetRow … 재append 안 함").
+- **현재 상태:** ⚠️주시(수용된 엣지 — 발생 빈도 극저, 데이터 무손실) (`src/lib/sync.ts` pass-1 no-range 분기)
+
+### [SYNC-3] 컬럼 스키마 순서 변경 시 기존 synced 행 한계
+- **증상:** 세션 생성 후 설정에서 **컬럼 순서를 바꾸면**, 이미 `synced`로 시트에 올라간 행들은 시트의 열 순서(append 당시 순서)와 로컬 열 순서가 어긋날 수 있다. 동기화는 행을 `synced`로 보고 다시 손대지 않으므로 기존 시트 행은 옛 순서 그대로 남는다.
+- **원인:** 행 단위 재동기화는 값 변경(dirty)만 추적하고, **열 매핑 변화는 추적하지 않는다.** sheetRow는 위치만 가리키고 열 순서 메타는 행에 없다.
+- **해결·회피:** 코드 수정 없음(C6 — 문서화만). 운용 회피: **세션을 만들고 동기화하기 시작했으면 그 세션의 컬럼 순서를 바꾸지 말 것.** 순서를 꼭 바꿔야 하면 새 세션으로 분리하거나 시트를 수동 정리한다.
+- **출처:** `survey-011 v0.6.0` Codex 교차점검(C6, 한계 인정).
+- **현재 상태:** ⚠️주시(설계상 한계 — 운용으로 회피) (`src/lib/sync.ts`)
 
 ---
 

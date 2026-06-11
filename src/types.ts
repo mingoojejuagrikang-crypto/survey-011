@@ -46,6 +46,14 @@ export interface SessionRow {
   complete: boolean;
   /** colId → IDB key for audio clip blob */
   audioClips?: Record<string, string>;
+  /** v0.6.0 — Sheets 1-based row number this row was appended to. Set after the row's first
+   *  append so a later re-sync can UPDATE the same sheet row instead of appending a duplicate.
+   *  undefined = never appended yet (or append updatedRange parse failed → retry next sync). */
+  sheetRow?: number;
+  /** v0.6.0 — per-row sync state for row-level re-sync.
+   *  'synced' = matches the sheet; 'dirty' = locally edited after upload, needs UPDATE.
+   *  undefined = not yet appended (legacy sessions also lack this; see syncedRows fallback). */
+  syncState?: 'synced' | 'dirty';
 }
 
 export interface Session {

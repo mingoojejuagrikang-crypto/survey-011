@@ -235,15 +235,41 @@ export async function appendRow(
   if (!r.ok) throw new Error(`행 추가 실패: ${r.status}`);
 }
 
-/** Batch append for efficiency (one HTTP request per session sync). */
+/** Result of a batch append — carries the sheet position so callers can record
+ *  each appended row's 1-based sheet row number for later row-level UPDATE.
+ *  firstSheetRow is null when the API response's updatedRange could not be parsed
+ *  (e.g. an unexpected payload) — callers must NOT mark such rows as synced then. */
+export interface AppendResult {
+  firstSheetRow: number | null;
+  rowCount: number;
+}
+
+/**
+ * Parse the 1-based first row from an A1 updatedRange like "Sheet1!A5:J7" or "'My Tab'!A5".
+ * Returns null when the range can't be parsed (caller treats append as not-yet-tracked).
+ */
+export function parseUpdatedRangeFirstRow(updatedRange: string | undefined): number | null {
+  if (!updatedRange) return null;
+  // Strip the sheet-name prefix (everything up to and including the last '!').
+  const bang = updatedRange.lastIndexOf('!');
+  const a1 = bang >= 0 ? updatedRange.slice(bang + 1) : updatedRange;
+  // First cell of the range, e.g. "A5" or "AB12" → capture the trailing row number.
+  const m = a1.match(/^[A-Za-z]+(\d+)/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Batch append for efficiency (one HTTP request per session sync).
+ *  Returns the sheet position of the appended block (v0.6.0 row-level re-sync). */
 export async function appendRows(
   spreadsheetId: string,
   sheetTitle: string,
   rows: (string | number)[][],
-): Promise<void> {
+): Promise<AppendResult> {
   const range = `${encodeURIComponent(sheetTitle)}!A1`;
   const r = await authFetch(
-    `${API}/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+    `${API}/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS&includeValuesInResponse=false`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -253,5 +279,75 @@ export async function appendRows(
   if (!r.ok) {
     const t = await r.text();
     throw new Error(`행 일괄 추가 실패 (${r.status}): ${t}`);
+  }
+  // updates.updatedRange (e.g. "Sheet1!A5:J7") tells us where the block landed.
+  let updatedRange: string | undefined;
+  try {
+    const d = (await r.json()) as { updates?: { updatedRange?: string } };
+    updatedRange = d.updates?.updatedRange;
+  } catch {
+    updatedRange = undefined;
+  }
+  return { firstSheetRow: parseUpdatedRangeFirstRow(updatedRange), rowCount: rows.length };
+}
+
+/** Convert a 1-based column number to its A1 letters (1→A, 26→Z, 27→AA, 52→AZ, 53→BA …).
+ *  F8: addColumn is unbounded but updateRow previously clamped to A:Z, silently dropping
+ *  columns 27+. This multi-letter conversion removes that ceiling. */
+export function colToA1(col: number): string {
+  let n = Math.max(Math.floor(col), 1);
+  let s = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+/** Quote a sheet/tab title for an A1 range when it contains characters that break bare A1 parsing
+ *  (`!`, spaces, quotes, etc.). Google A1 wraps such titles in single quotes and escapes any inner
+ *  single quote by doubling it: `My!Tab` → `'My!Tab'`, `O'Brien` → `'O''Brien'`. C5 — without this,
+ *  a tab named e.g. `Sheet!1` produced `Sheet!1!A5:B5`, which the API parsed as tab `Sheet`
+ *  row-range `1!A5:B5` → a phantom range mismatch that pushed updateRow into a false append/duplicate.
+ */
+export function quoteSheetTitle(title: string): string {
+  // Bare titles (letters/digits/underscore, not starting with a digit) need no quoting.
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(title)) return title;
+  return `'${title.replace(/'/g, "''")}'`;
+}
+
+/** Build an A1 range for a single full row, e.g. ("측정", 7, 4) → "측정!A7:D7". */
+function rowA1Range(sheetTitle: string, sheetRow: number, colCount: number): string {
+  // colCount → last column letters (multi-letter for 27+; no clamp — F8).
+  const lastLetter = colToA1(Math.max(colCount, 1));
+  // C5 — quote the tab name so titles with '!' / spaces / quotes don't corrupt the range.
+  return `${quoteSheetTitle(sheetTitle)}!A${sheetRow}:${lastLetter}${sheetRow}`;
+}
+
+/**
+ * Overwrite a single existing sheet row in place (v0.6.0 row-level re-sync).
+ * PUT values/{range}?valueInputOption=USER_ENTERED. Throws on non-2xx so the
+ * caller can fall back to append on 404/400 (e.g. the row was deleted in-sheet).
+ */
+export async function updateRow(
+  spreadsheetId: string,
+  sheetTitle: string,
+  sheetRow: number,
+  values: (string | number)[],
+): Promise<void> {
+  const a1 = rowA1Range(sheetTitle, sheetRow, values.length);
+  const range = encodeURIComponent(a1);
+  const r = await authFetch(
+    `${API}/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values: [values] }),
+    },
+  );
+  if (!r.ok) {
+    const t = await r.text().catch(() => `HTTP ${r.status}`);
+    throw new Error(`행 갱신 실패 (${r.status}): ${t}`);
   }
 }

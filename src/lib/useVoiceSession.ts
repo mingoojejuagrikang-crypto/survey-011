@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
+import { recountSynced } from './sessionSync';
 import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, getLastParseFailReason } from './koreanNum';
 import { VOICE_COMMANDS } from './voiceCommands';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices } from './speech';
@@ -11,6 +12,16 @@ import { saveSession, saveAudioClip, loadAudioClip } from './db';
 import { AudioRecorder } from './audioRecorder';
 import { logger } from './logger';
 
+
+/** v0.6.0 CLIP-CMD — a captured '수정'/'정정' utterance whose save is deferred until the modify
+ *  target cell is known, so a direct "수정 <값>" clip is keyed to the cell it corrects. */
+interface PendingCommandClip {
+  /** Save the utterance under (targetRow:targetColId):cmd<n> and return that cmdKey (or null if
+   *  empty/already saved). Used by the direct-modify path to re-link the corrected cell's pointer. */
+  saveFor: (targetRow: number, targetColId: string) => string | null;
+  /** Save against the awaiting cell (cascade/restart path — no pointer re-link needed). */
+  saveDefault: () => void;
+}
 
 interface AwaitingField {
   row: number;
@@ -132,38 +143,61 @@ export function useVoiceSession() {
    *  the exact utterance that declared the correction alongside the surrounding value attempts.
    *  Fully background — the save promise is tracked but NEVER awaited before announcing, so the
    *  voice flow is not delayed (top-priority constraint). */
-  const preserveCommandClip = useCallback((row: number, colId: string): void => {
+  const preserveCommandClip = useCallback((row: number, colId: string): PendingCommandClip | null => {
     const rec = recorderRef.current;
-    if (!rec) return;
+    if (!rec) return null;
     // Detach the active clip's stop now, before enterModifyMode's announceField starts a new one.
+    // We CAPTURE the stop here (the '수정' utterance is spoken into the AWAITING cell's clip) but
+    // DEFER the save until the modify TARGET cell is resolved — for a direct "수정 <값>" the clip
+    // is the new value's audio and must be keyed to the cell it corrects, not the awaiting cell
+    // (CLIP-CMD: keying it to the awaiting colId left the corrected cell's pointer orphaned).
     const stopPromise = rec.stopClip();
     activeClipRef.current = null;
-    const cellKey = `${row}:${colId}`;
-    const idx = (cmdClipRef.current[cellKey] ?? 0) + 1;
-    cmdClipRef.current[cellKey] = idx;
-    const cmdKey = `${sessionIdRef.current}:${row}:${colId}:cmd${idx}`;
-    const savePromise = (async () => {
-      try {
-        const { blob, raw } = await stopPromise;
-        if (!blob || blob.size <= 200) {
-          logger.log({ type: 'clip', extra: `clip_cmd_empty:${blob ? blob.size : 'null'}`, kind: 'command', sessionId: sessionIdRef.current, row, colId });
-          return;
+
+    let saved = false;
+    /** Persist the captured utterance under the given cell's :cmd<n> key. Returns the cmdKey on
+     *  success (clip non-empty), or null if empty/failed. Idempotent — saves at most once. */
+    const saveFor = (targetRow: number, targetColId: string): string | null => {
+      if (saved) return null;
+      saved = true;
+      const cellKey = `${targetRow}:${targetColId}`;
+      const idx = (cmdClipRef.current[cellKey] ?? 0) + 1;
+      cmdClipRef.current[cellKey] = idx;
+      const cmdKey = `${sessionIdRef.current}:${targetRow}:${targetColId}:cmd${idx}`;
+      const savePromise = (async () => {
+        try {
+          const { blob, raw } = await stopPromise;
+          if (!blob || blob.size <= 200) {
+            logger.log({ type: 'clip', extra: `clip_cmd_empty:${blob ? blob.size : 'null'}`, kind: 'command', sessionId: sessionIdRef.current, row: targetRow, colId: targetColId });
+            return;
+          }
+          await saveAudioClip(cmdKey, blob);
+          logger.log({ type: 'clip', extra: 'clip_preserved', kind: 'command', attempt: idx, clipKey: cmdKey, sessionId: sessionIdRef.current, row: targetRow, colId: targetColId });
+          // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
+          // deleteSession의 prefix cascade와 exportLog의 `key.split(':')[0]` 세션 필터가 모두
+          // `sessionId:` prefix 기준이라 추가 배선 없이 zip clips/ 포함·삭제가 따라온다.
+          if (raw) {
+            await saveAudioClip(`${cmdKey}:raw`, raw);
+            logger.log({ type: 'clip', extra: `clip_raw_saved:${raw.size}`, kind: 'command', clipKey: `${cmdKey}:raw`, sessionId: sessionIdRef.current, row: targetRow, colId: targetColId });
+          }
+        } catch (e) {
+          logger.log({ type: 'error', extra: `clip_cmd_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row: targetRow, colId: targetColId });
         }
-        await saveAudioClip(cmdKey, blob);
-        logger.log({ type: 'clip', extra: 'clip_preserved', kind: 'command', attempt: idx, clipKey: cmdKey, sessionId: sessionIdRef.current, row, colId });
-        // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
-        // deleteSession의 prefix cascade와 exportLog의 `key.split(':')[0]` 세션 필터가 모두
-        // `sessionId:` prefix 기준이라 추가 배선 없이 zip clips/ 포함·삭제가 따라온다.
-        if (raw) {
-          await saveAudioClip(`${cmdKey}:raw`, raw);
-          logger.log({ type: 'clip', extra: `clip_raw_saved:${raw.size}`, kind: 'command', clipKey: `${cmdKey}:raw`, sessionId: sessionIdRef.current, row, colId });
-        }
-      } catch (e) {
-        logger.log({ type: 'error', extra: `clip_cmd_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row, colId });
-      }
-    })();
-    pendingClipSavesRef.current.add(savePromise);
-    void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
+      })();
+      pendingClipSavesRef.current.add(savePromise);
+      void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
+      // Return the cmdKey synchronously so the caller can re-link the cell pointer; the actual
+      // bytes land asynchronously (background save, never awaited — voice flow not delayed).
+      return cmdKey;
+    };
+
+    return {
+      // Key the saved clip + return the cmdKey for the cell being corrected.
+      saveFor,
+      // Cascade/restart path doesn't re-link a pointer — save against the awaiting cell as before
+      // (analysis still gets the utterance; the cell is re-recorded so no pointer is needed).
+      saveDefault: () => { saveFor(row, colId); },
+    };
   }, []);
 
   const isRowVoiceComplete = (row: number, vCols: Column[]): boolean => {
@@ -214,24 +248,40 @@ export function useVoiceSession() {
     // 행만 업로드하므로 placeholder는 시트에 올라가지 않는다 — 민구 결정 1.)
     const skipped = sess.skippedRows.filter((r) => !completed.includes(r)).sort((a, b) => a - b);
     if (completed.length === 0 && !backup && !activeHasData && skipped.length === 0) return;
+    // F1: read the existing persisted session once so each row can preserve its sheetRow/syncState
+    // (the same source we merge audioClips from). Without this, every persist after a sync wiped
+    // row-level tracking → the next sync re-appended already-uploaded rows (duplicates).
+    const existingSession = useDataStore.getState().sessions.find(
+      (s) => s.id === sessionIdRef.current,
+    );
     const buildRow = (r: number, complete: boolean): SessionRow => {
       const auto = buildCyclingValues(settings.columns, r);
       const fixedAndAuto = autoNonCyclingValues(settings.columns, r);
       const voiceVals = sess.getRowValues(r);
-      // Merge stored clips (from previous persists) with newly recorded clips
-      const existingSession = useDataStore.getState().sessions.find(
-        (s) => s.id === sessionIdRef.current,
-      );
       const existingRow = existingSession?.rows.find((row) => row.index === r);
+      // Merge stored clips (from previous persists) with newly recorded clips
       const mergedClips = {
         ...(existingRow?.audioClips ?? {}),
         ...(pendingClipsRef.current[r] ?? {}),
       };
+      const values = { ...fixedAndAuto, ...auto, ...voiceVals };
+      // F1: preserve the row's sheetRow/syncState across re-persists. If a previously-synced row's
+      // value changed in this persist, demote synced→dirty so the next sync UPDATEs it in place
+      // (no duplicate append). Unchanged synced rows keep 'synced'.
+      let sheetRow = existingRow?.sheetRow;
+      let syncState = existingRow?.syncState;
+      if (existingRow && syncState === 'synced') {
+        const colIds = settings.columns.map((c) => c.id);
+        const changed = colIds.some((c) => (existingRow.values[c] ?? '') !== (values[c] ?? ''));
+        if (changed) syncState = 'dirty';
+      }
       return {
         index: r,
-        values: { ...fixedAndAuto, ...auto, ...voiceVals },
+        values,
         complete,
         audioClips: Object.keys(mergedClips).length > 0 ? mergedClips : undefined,
+        ...(sheetRow !== undefined ? { sheetRow } : {}),
+        ...(syncState !== undefined ? { syncState } : {}),
       };
     };
     const rows: SessionRow[] = completed.map((r) => buildRow(r, true));
@@ -260,7 +310,9 @@ export function useVoiceSession() {
       columns: settings.columns,
       rows,
       completedRows: rows.filter((r) => r.complete).length,
-      syncedRows: 0,
+      // F1: derive syncedRows from per-row syncState (recountSynced) instead of hardcoding 0,
+      // which used to erase the uploaded-row count after every voice persist.
+      syncedRows: recountSynced(rows),
       startedAt: resolvedStartedAt,
       finishedAt: Date.now(),
     };
@@ -468,7 +520,7 @@ export function useVoiceSession() {
   }, [announceField, announceRowComplete, announceRowDiff, finishAtEnd, persistSession, say]);
 
   // ── modify (cross-row) ─────────────────────────────────────
-  const enterModifyMode = useCallback(async (preExtractedValue?: string) => {
+  const enterModifyMode = useCallback(async (preExtractedValue?: string, pendingCmd?: PendingCommandClip | null) => {
     const sess = useSessionStore.getState();
     const vc = voiceColsList();
     const curRow = sess.activeRow;
@@ -479,7 +531,8 @@ export function useVoiceSession() {
     let targetIdx = curIdx - 1;
     if (targetIdx < 0) {
       if (curRow <= 1) {
-        // No previous — treat as redo current
+        // No previous — treat as redo current. Save the utterance against the awaiting cell.
+        pendingCmd?.saveDefault();
         sess.setRowValue(curRow, vc[curIdx].id, '');
         sess.setRecognized('');
         await announceField(vc[curIdx]);
@@ -498,16 +551,13 @@ export function useVoiceSession() {
         const prevDirectValue = sess.getRowValues(targetRow)[target.id];
         sess.setRowValue(targetRow, target.id, parsed);
         // D1(2026-06-08): 수정한 셀의 음성 클립/재생버튼이 사라지는 문제 수정.
-        // Direct modify는 새 값 클립을 재녹음하지 않지만, 직전 호출된 preserveCommandClip이 수정
-        // 발화("수정 82.7" — 곧 새 값을 담은 음성)를 awaiting 셀의 :cmd 키로 저장해 둔다. 이전처럼
-        // 셀 포인터를 비우면(재생버튼 소멸) 대신, 그 수정 발화 클립을 셀에 재연결한다 → 재생버튼
-        // 유지 + 재생 내용이 새 값과 일치. 이전(잘못 인식된) 값은 archive(:a) 키로 ZIP에 그대로 보존.
-        const awaitingColId = vc[curIdx]?.id;
-        const cmdIdx = awaitingColId ? cmdClipRef.current[`${curRow}:${awaitingColId}`] : undefined;
-        const cmdKey =
-          cmdIdx && awaitingColId
-            ? `${sessionIdRef.current}:${curRow}:${awaitingColId}:cmd${cmdIdx}`
-            : null;
+        // Direct modify는 새 값 클립을 재녹음하지 않지만, 직전 캡처한 수정 발화("수정 82.7" — 곧
+        // 새 값을 담은 음성)를 저장해 둔다. 이전처럼 셀 포인터를 비우면(재생버튼 소멸) 대신, 그
+        // 수정 발화 클립을 셀에 재연결한다 → 재생버튼 유지 + 재생 내용이 새 값과 일치.
+        // v0.6.0 CLIP-CMD: cmd 클립을 **수정 대상 셀**(targetRow:target.id) 키로 저장·재연결한다.
+        // 종경(c8) 안내 중 횡경(c7)을 direct_modify했을 때 cmd 클립이 c8 키로 만들어져 c7 포인터가
+        // orphan되던 문제(명령 발화 컬럼≠수정 대상 컬럼)를 차단. saveFor가 그 cmdKey를 돌려준다.
+        const cmdKey = pendingCmd?.saveFor(targetRow, target.id) ?? null;
         // (1) pendingClipsRef: archive 이전 시도 → 수정 발화 클립으로 포인터 재연결(없으면 unlink)
         const pendingMap = pendingClipsRef.current[targetRow];
         if (pendingMap && pendingMap[target.id]) {
@@ -522,14 +572,23 @@ export function useVoiceSession() {
           archiveCellClip(targetRow, target.id);
           const { [target.id]: _removed, ...restClips } = existingRow.audioClips;
           const nextClips = cmdKey ? { ...restClips, [target.id]: cmdKey } : restClips;
-          const updatedRow = {
+          // F3: direct-modify of an already-synced row must demote it synced→dirty so the next
+          // sync UPDATEs its sheet row in place (this path upserts directly + re-links the clip
+          // pointer, so it can't go through patchRowValues — apply the invariant inline).
+          const valueChanged = (existingRow.values[target.id] ?? '') !== (parsed ?? '');
+          const nextSyncState =
+            existingRow.syncState === 'synced' && valueChanged ? 'dirty' : existingRow.syncState;
+          const updatedRow: SessionRow = {
             ...existingRow,
             values: { ...existingRow.values, [target.id]: parsed },
             audioClips: Object.keys(nextClips).length > 0 ? nextClips : undefined,
+            ...(nextSyncState !== undefined ? { syncState: nextSyncState } : {}),
           };
+          const nextRows = existing.rows.map((r) => (r.index === targetRow ? updatedRow : r));
           const updatedSession = {
             ...existing,
-            rows: existing.rows.map((r) => (r.index === targetRow ? updatedRow : r)),
+            rows: nextRows,
+            syncedRows: recountSynced(nextRows),
           };
           useDataStore.getState().upsertSession(updatedSession);
           void saveSession(updatedSession).catch(() => {});
@@ -561,6 +620,10 @@ export function useVoiceSession() {
         return;
       }
     }
+
+    // Cascade re-record path (no usable inline value): the target cell is re-recorded fresh, so no
+    // pointer re-link is needed — save the '수정' utterance against the awaiting cell for analysis.
+    pendingCmd?.saveDefault();
 
     // Snapshot the existing row before clearing in-memory. persistSession() includes this backup
     // if stop() fires before re-completion. If persistSession fire-and-forget hasn't flushed yet
@@ -889,17 +952,20 @@ export function useVoiceSession() {
     }
     if (cmd === 'modify') {
       cancelTts();
-      // Preserve the '수정'/'정정' utterance itself (spoken into the awaiting cell's active clip)
-      // before enterModifyMode starts a fresh clip. Background save — does not block the flow.
-      // NOTE for analysis: this command clip is logged against the AWAITING cell; the cell it
-      // CORRECTS is the previous voice column (resolved inside enterModifyMode).
-      preserveCommandClip(awaiting.row, awaiting.colId);
+      // Capture the '수정'/'정정' utterance itself (spoken into the awaiting cell's active clip)
+      // before enterModifyMode starts a fresh clip. The SAVE is deferred: enterModifyMode resolves
+      // the modify TARGET cell, and a direct "수정 <값>" re-keys the clip to that target so its
+      // pointer isn't orphaned (CLIP-CMD). Background save — never blocks the voice flow.
+      const pendingCmd = preserveCommandClip(awaiting.row, awaiting.colId);
       if (awaiting.isModify) {
+        // No target re-link here (we're already re-listening for the value) — save against the
+        // awaiting cell so the utterance still survives for analysis.
+        pendingCmd?.saveDefault();
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
       const modifyVal = extractModifyValue(text);
-      await enterModifyMode(modifyVal || undefined);
+      await enterModifyMode(modifyVal || undefined, pendingCmd);
       return;
     }
     if (cmd === 'cancel') {
@@ -1051,6 +1117,27 @@ export function useVoiceSession() {
     activeClipRef.current = null;
     const clipStopPromise = recorderRef.current?.stopClip()
       ?? Promise.resolve({ blob: null, raw: null, prerollMs: 0 });
+    // v0.6.0 CLIP-EMPTY: drop the cell's audioClip pointer when the clip never saved (empty/too
+    // small/failed). The pointer was pre-registered in pendingClipsRef AND may already be in the
+    // persisted session (persistSession ran above before the clip resolved) — clean BOTH so the
+    // data-tab doesn't render a broken (404) play button. Only unlink if the pointer still equals
+    // OUR clipKey (a later restart/modify may have re-pointed it). Telemetry is kept upstream.
+    const unlinkBrokenPointer = () => {
+      const m = pendingClipsRef.current[clipAwaitingRow];
+      if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+      const sess = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+      const prow = sess?.rows.find((r) => r.index === clipAwaitingRow);
+      if (sess && prow?.audioClips?.[clipAwaitingColId] === clipKey) {
+        const { [clipAwaitingColId]: _gone, ...rest } = prow.audioClips;
+        const updatedRow = { ...prow, audioClips: Object.keys(rest).length > 0 ? rest : undefined };
+        const updatedSession = {
+          ...sess,
+          rows: sess.rows.map((r) => (r.index === clipAwaitingRow ? updatedRow : r)),
+        };
+        useDataStore.getState().upsertSession(updatedSession);
+        void saveSession(updatedSession).catch(() => {});
+      }
+    };
     const savePromise = (async () => {
       try {
         logger.log({ type: 'clip', extra: 'clip_stop_await', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
@@ -1058,14 +1145,12 @@ export function useVoiceSession() {
         logger.log({ type: 'clip', extra: `clip_stop_resolved:${clipBlob ? clipBlob.size : 'null'}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
         if (!clipBlob) {
           logger.log({ type: 'error', extra: 'clip_empty', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-          const m = pendingClipsRef.current[clipAwaitingRow];
-          if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+          unlinkBrokenPointer();
           return;
         }
         if (clipBlob.size <= 200) {
           logger.log({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-          const m = pendingClipsRef.current[clipAwaitingRow];
-          if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+          unlinkBrokenPointer();
           return;
         }
         // v0.11.0 Codex HIGH: pendingClipsRef로 stale save 차단.
@@ -1087,8 +1172,7 @@ export function useVoiceSession() {
         }
       } catch (e) {
         logger.log({ type: 'error', extra: `clip_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-        const m = pendingClipsRef.current[clipAwaitingRow];
-        if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
+        unlinkBrokenPointer();
       }
     })();
     pendingClipSavesRef.current.add(savePromise);
@@ -1357,15 +1441,13 @@ export function useVoiceSession() {
     logger.log({ type: 'command', parsed: 'touch_commit', extra: 'touch', text: value, sessionId: sessionIdRef.current, row, colId });
     sess.setRowValue(row, colId, value);
     // persistSession은 completedRows만 IDB에 저장. touch 값을 그 사이에 반영하려면
-    // dataStore의 기존 세션을 찾아 즉시 patch.
-    const dataStore = useDataStore.getState();
-    const existing = dataStore.sessions.find((s) => s.id === sessionIdRef.current);
-    if (existing) {
-      const updatedRows = existing.rows.map((r) =>
-        r.index === row ? { ...r, values: { ...r.values, [colId]: value } } : r,
-      );
-      const updatedSession = { ...existing, rows: updatedRows };
-      dataStore.upsertSession(updatedSession);
+    // dataStore의 기존 세션을 patchRowValues로 즉시 갱신한다. F2: patchRowValues가
+    // "값 변경 ⇒ synced→dirty" 불변식을 적용 → 업로드된 행을 touch로 고쳐도 다음 sync가
+    // 시트 행을 UPDATE한다(이전엔 upsertSession 직접 호출로 dirty 마크를 우회해 시트 미반영).
+    const updatedSession = useDataStore
+      .getState()
+      .patchRowValues(sessionIdRef.current, row, { [colId]: value });
+    if (updatedSession) {
       try { await saveSession(updatedSession); } catch { /* ignore */ }
     }
     // 행이 아직 완료된 적이 없으면(persistSession 한 번도 호출 안 됨) sessionStore만 업데이트.

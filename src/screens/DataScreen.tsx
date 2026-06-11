@@ -5,14 +5,58 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { useDataStore } from '../stores/dataStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { syncSelected, type SyncReport, type SyncFailure } from '../lib/sync';
+import { hasSyncState } from '../lib/sessionSync';
 import { downloadCsv, sessionsToCsv } from '../lib/csv';
 import { deleteSession as dbDeleteSession, saveSession, loadAudioClip, resetDb } from '../lib/db';
 import type { Column, Session } from '../types';
 import { exportLogZip, downloadZip } from '../lib/exportLog';
 import { uploadLogToBothDrives, LOG_FOLDER_ID } from '../lib/driveUpload';
 import { hydrateSessions } from '../lib/hydrate';
-import { recoverFromDriveLogs } from '../lib/recoverFromDrive';
+import { getAccessToken } from '../lib/googleAuth';
+import {
+  listRecoverableSessionsFromDrive,
+  restoreSelectedSessions,
+  type ZipCache,
+  type ZipSessionMeta,
+} from '../lib/recoverFromDrive';
 import { logger } from '../lib/logger';
+
+/** v0.6.0 — human label for a sync result that may both append and update rows in place.
+ *  "N행 추가", "M행 갱신", or "N행 추가, M행 갱신" depending on what happened. */
+function syncCountLabel(report: SyncReport): string {
+  const parts: string[] = [];
+  if (report.rows > 0) parts.push(`${report.rows}행 추가`);
+  if (report.updatedRows > 0) parts.push(`${report.updatedRows}행 갱신`);
+  if (parts.length === 0) parts.push('변경 없음');
+  let label = parts.join(', ');
+  if (report.fallbackAppended > 0) label += ` (${report.fallbackAppended}행 재추가)`;
+  return label;
+}
+
+/** v0.6.0 — count of rows that still need a push for a session (append OR in-place update).
+ *  Per-row syncState is authoritative; legacy sessions (no syncState) fall back to the
+ *  completedRows - syncedRows counter so their pending badge keeps working. */
+function sessionPending(s: Session): number {
+  if (hasSyncState(s.rows)) return s.rows.filter((r) => r.syncState !== 'synced').length;
+  return Math.max(0, s.completedRows - s.syncedRows);
+}
+
+/** F9 — has this session EVER been uploaded (any row tracked on the sheet)? Row-based, so a
+ *  session whose uploaded rows were all later edited (now 'dirty') still reads as "uploaded",
+ *  not "미업로드". Legacy sessions fall back to the syncedRows counter. */
+function sessionEverUploaded(s: Session): boolean {
+  if (hasSyncState(s.rows)) {
+    return s.rows.some(
+      (r) => r.sheetRow !== undefined || r.syncState === 'synced' || r.syncState === 'dirty',
+    );
+  }
+  return s.syncedRows > 0;
+}
+
+/** F9 — count of rows uploaded earlier but edited since (need an in-place UPDATE next sync). */
+function sessionDirtyCount(s: Session): number {
+  return s.rows.filter((r) => r.syncState === 'dirty').length;
+}
 
 export function DataScreen() {
   const sessions = useDataStore((s) => s.sessions);
@@ -23,7 +67,7 @@ export function DataScreen() {
   const upsertSession = useDataStore((s) => s.upsertSession);
   const hydrationError = useDataStore((s) => s.hydrationError);
 
-  const unsynced = sessions.filter((s) => s.syncedRows < s.completedRows).length;
+  const unsynced = sessions.filter((s) => sessionPending(s) > 0).length;
   const empty = sessions.length === 0;
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -34,6 +78,7 @@ export function DataScreen() {
   // 다중 세션 로그 ZIP 내보내기 확인 대상 (v0.12 Codex MEDIUM): 여러 세션의 클립을 한 번에 압축하면
   // 용량/지연이 커질 수 있어 2개 이상일 때 확인 단계를 거친다. CSV는 가벼우니 확인 없이 즉시 진행.
   const [pendingZipIds, setPendingZipIds] = useState<string[] | null>(null);
+  const [recoverModalOpen, setRecoverModalOpen] = useState(false);
 
   const lastSelectedIdsRef = useRef<string[]>([]);
 
@@ -109,10 +154,10 @@ export function DataScreen() {
       if (report.message) {
         setMsg(report.message);
       } else if (report.failed > 0) {
-        setMsg(`${report.ok}개 세션 성공, ${report.failed}개 실패 (${report.rows}행 추가됨)`);
+        setMsg(`${report.ok}개 세션 성공, ${report.failed}개 실패 (${syncCountLabel(report)})`);
         setFailureReport(report);
       } else if (report.ok > 0) {
-        setMsg(`✓ ${report.rows}행을 시트에 추가했습니다`);
+        setMsg(`✓ ${syncCountLabel(report)}`);
       } else {
         setMsg('추가할 새 데이터가 없습니다.');
       }
@@ -213,7 +258,6 @@ export function DataScreen() {
     setMsg(null);
     setBusy('세션 복구 중...');
     // v0.5.0 W7(T-19): 복구 버튼 계측 — 사용자가 복구에 의존하는 빈도/성패를 로그로 확인.
-    // (Drive zip 기반 복구 확장(W8)의 recover_* 상세 이벤트는 이 위에 얹는다.)
     logger.log({ type: 'app', extra: 'recover_clicked' });
     try {
       // ── 1단계: 로컬 IDB 재하이드레이션 (현행) ──
@@ -234,38 +278,33 @@ export function DataScreen() {
         setMsg(`✓ 저장된 세션 ${after}개를 모두 불러왔습니다.`);
       }
 
-      // ── 2단계: Drive 로그 zip 복원 — 1단계가 실패해도 IDB 쓰기 자체는 가능할 수 있으나,
-      //    DB가 깨진 상태에 덮어쓰는 것을 피하기 위해 1단계 성공 시에만 진행한다. ──
+      // ── 2단계: 로그인 상태면 RecoverModal(기간 조회 + 세션 선택) 오픈. DB가 깨진 상태(1단계
+      //    실패)에 덮어쓰는 것을 피하기 위해 1단계 성공 시에만 진행한다. 미로그인이면 안내만. ──
       if (!err) {
-        const localIds = new Set(useDataStore.getState().sessions.map((s) => s.id));
-        const drive = await recoverFromDriveLogs(localIds, (p) => setBusy(p));
-        if (drive.status === 'not_signed_in') {
+        if (getAccessToken()) {
+          setRecoverModalOpen(true);
+        } else {
           setMsg((m) => `${m ?? ''} · Drive 복구는 설정탭 로그인 후 가능합니다.`);
-        } else if (drive.status === 'failed') {
-          setMsg((m) => `${m ?? ''} · ⚠️ Drive 복구 실패: ${drive.error}`);
-        } else if (drive.status === 'ok') {
-          if (drive.sessions > 0) {
-            setBusy('복구 세션 불러오는 중...');
-            await hydrateSessions();
-          }
-          const parts: string[] = [];
-          if (drive.sessions > 0) {
-            parts.push(`Drive 로그에서 세션 ${drive.sessions}개(클립 ${drive.clips}개) 복구`);
-          } else if (drive.zipsScanned > 0) {
-            parts.push('Drive 로그에 새로 복구할 세션 없음');
-          }
-          if (drive.legacyZips > 0) parts.push(`구버전 로그 ${drive.legacyZips}개 제외`);
-          if (drive.failedZips > 0) parts.push(`⚠️ 로그 ${drive.failedZips}개 읽기 실패`);
-          if (parts.length > 0) {
-            setMsg((m) => `${m ?? ''} · ${parts.join(' · ')}`);
-          }
         }
-        // status === 'no_folder' (Drive에 백업 이력 없음)는 조용히 1단계 결과만 보여준다.
       }
     } finally {
       setBusy(null);
     }
   };
+
+  // RecoverModal "선택 복구" 완료 콜백 — 선택 세션을 IDB에 저장한 뒤 재하이드레이션해 카드로 노출.
+  const handleRecoverRestore = useCallback(async (
+    selectedIds: Set<string>,
+    cache: ZipCache,
+    onProgress: (msg: string) => void,
+  ) => {
+    const localIds = new Set(useDataStore.getState().sessions.map((s) => s.id));
+    const r = await restoreSelectedSessions(selectedIds, localIds, cache, onProgress);
+    if (r.sessions > 0) {
+      await hydrateSessions();
+    }
+    return r;
+  }, []);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -443,6 +482,14 @@ export function DataScreen() {
         />
       )}
 
+      {recoverModalOpen && (
+        <RecoverModal
+          localIds={new Set(sessions.map((s) => s.id))}
+          onClose={() => setRecoverModalOpen(false)}
+          onRestore={handleRecoverRestore}
+        />
+      )}
+
       {pendingZipIds && (
         <ConfirmModal
           title="음성 로그 ZIP 내보내기"
@@ -470,7 +517,7 @@ function SyncSessionModal({
   onConfirm: (ids: string[], autoDelete: boolean) => void;
 }) {
   const defaultIds = useMemo(
-    () => sessions.filter((s) => s.syncedRows < s.completedRows).map((s) => s.id),
+    () => sessions.filter((s) => sessionPending(s) > 0).map((s) => s.id),
     [sessions],
   );
   const [selected, setSelected] = useState<Set<string>>(new Set(defaultIds));
@@ -520,8 +567,8 @@ function SyncSessionModal({
           ) : (
             sessions.map((s) => {
               const checked = selected.has(s.id);
-              const fullySynced = s.syncedRows >= s.completedRows && s.completedRows > 0;
-              const pending = s.completedRows - s.syncedRows;
+              const pending = sessionPending(s);
+              const fullySynced = pending === 0 && s.completedRows > 0;
               return (
                 <button
                   key={s.id}
@@ -552,7 +599,7 @@ function SyncSessionModal({
                     </div>
                     <div style={{ fontSize: 12, color: T.textMute, marginTop: 2 }}>
                       {s.completedRows}행
-                      {fullySynced ? ' · ✓ 업로드완료' : pending > 0 ? ` · ${pending}행 신규` : ''}
+                      {fullySynced ? ' · ✓ 업로드완료' : pending > 0 ? ` · ${pending}행 변경` : ''}
                     </div>
                   </div>
                 </button>
@@ -803,6 +850,305 @@ function ExportModal({
   );
 }
 
+// ─── recover modal ───────────────────────────────────────────
+// v0.6.0 W8 — "세션 복구" 2단계: 기간 칩으로 Drive 로그 목록을 조회한 뒤, 복구할 세션을 골라
+// IDB로 복원한다. ExportModal/Checkbox/Backdrop 패턴 재사용. 이미 로컬에 있는 세션은 회색·선택 불가.
+type RecoverStage = 'idle' | 'listing' | 'list' | 'restoring' | 'done';
+const RANGE_CHIPS: { key: '7' | '30' | 'all'; label: string; days: number | null }[] = [
+  { key: '7', label: '최근 7일', days: 7 },
+  { key: '30', label: '최근 30일', days: 30 },
+  { key: 'all', label: '전체', days: null },
+];
+
+function RecoverModal({
+  localIds, onClose, onRestore,
+}: {
+  localIds: Set<string>;
+  onClose: () => void;
+  onRestore: (
+    selectedIds: Set<string>,
+    cache: ZipCache,
+    onProgress: (msg: string) => void,
+  ) => Promise<{ sessions: number; clips: number; skipped: number }>;
+}) {
+  const [rangeKey, setRangeKey] = useState<'7' | '30' | 'all'>('30'); // 기본 30일
+  const [stage, setStage] = useState<RecoverStage>('idle');
+  const [progress, setProgress] = useState('');
+  const [list, setList] = useState<ZipSessionMeta[]>([]);
+  const [cache, setCache] = useState<ZipCache>(new Map());
+  const [legacyZips, setLegacyZips] = useState(0);
+  const [failedZips, setFailedZips] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [resultMsg, setResultMsg] = useState<string | null>(null);
+
+  const runList = async () => {
+    setStage('listing');
+    setError(null);
+    setResultMsg(null);
+    const chip = RANGE_CHIPS.find((c) => c.key === rangeKey)!;
+    const since = chip.days === null ? null : new Date(Date.now() - chip.days * 86400_000);
+    const { result, cache: c } = await listRecoverableSessionsFromDrive(since, (p) => setProgress(p));
+    if (result.status === 'no_folder') {
+      setError('Drive에 백업된 로그가 없습니다.');
+      setStage('idle');
+      return;
+    }
+    if (result.status === 'not_signed_in') {
+      setError('설정 탭에서 로그인 후 다시 시도하세요.');
+      setStage('idle');
+      return;
+    }
+    if (result.status === 'failed') {
+      setError(`Drive 목록 조회 실패: ${result.error ?? '알 수 없는 오류'}`);
+      setStage('idle');
+      return;
+    }
+    setList(result.sessions);
+    setCache(c);
+    setLegacyZips(result.legacyZips);
+    setFailedZips(result.failedZips);
+    // 로컬에 없는 세션만 기본 선택.
+    setSelected(new Set(result.sessions.filter((s) => !localIds.has(s.id)).map((s) => s.id)));
+    setStage('list');
+  };
+
+  const toggle = (id: string) => {
+    if (localIds.has(id)) return; // 이미 있는 세션은 선택 불가
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const runRestore = async () => {
+    setStage('restoring');
+    setProgress('복구 중...');
+    const r = await onRestore(selected, cache, (p) => setProgress(p));
+    setResultMsg(`✓ 세션 ${r.sessions}개(클립 ${r.clips}개) 복구됨`);
+    // F10: drop the cached zip blobs (each is a full downloaded log zip held in memory) once
+    // restore is done — they're no longer needed and would otherwise pin Blob memory until the
+    // modal unmounts. A fresh "목록 조회" rebuilds the cache.
+    setCache(new Map());
+    setStage('done');
+  };
+
+  const restorableCount = list.filter((s) => !localIds.has(s.id)).length;
+
+  return (
+    <Backdrop onClose={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 380, maxHeight: '82vh',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div
+          style={{
+            padding: '14px 16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            borderBottom: `1px solid ${T.line}`,
+          }}
+        >
+          <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>Drive에서 세션 복구</div>
+          <button
+            onClick={onClose}
+            aria-label="닫기"
+            style={{
+              width: 36, height: 36, borderRadius: 18,
+              border: 'none', background: 'rgba(255,255,255,0.06)',
+              color: T.textDim, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            {I.close(18, T.textDim)}
+          </button>
+        </div>
+
+        {/* 기간 칩 */}
+        <div style={{ padding: '12px 16px 6px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 12, color: T.textMute }}>조회 기간 (Drive 업로드 날짜 기준)</div>
+          <div role="radiogroup" aria-label="조회 기간" style={{ display: 'flex', gap: 8 }}>
+            {RANGE_CHIPS.map((c) => {
+              const active = rangeKey === c.key;
+              return (
+                <button
+                  key={c.key}
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setRangeKey(c.key)}
+                  disabled={stage === 'listing' || stage === 'restoring'}
+                  style={{
+                    flex: 1, height: 40, borderRadius: 10,
+                    border: `1px solid ${active ? T.blue : T.lineStrong}`,
+                    background: active ? 'rgba(41,121,255,0.14)' : 'transparent',
+                    color: active ? T.text : T.textDim,
+                    fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                  }}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 본문: idle/list 상태별 */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px', minHeight: 60 }}>
+          {error && (
+            <div style={{ padding: 14, fontSize: 13, color: T.amber, lineHeight: 1.5 }}>{error}</div>
+          )}
+          {(stage === 'listing' || stage === 'restoring') && (
+            <div style={{ padding: 20, textAlign: 'center', color: T.textDim, fontSize: 13 }} aria-live="polite">
+              {progress || (stage === 'listing' ? 'Drive 로그 목록 조회 중...' : '복구 중...')}
+            </div>
+          )}
+          {stage === 'done' && (
+            <div style={{ padding: 20, textAlign: 'center', color: T.green, fontSize: 15, fontWeight: 700 }} aria-live="polite">
+              {resultMsg}
+            </div>
+          )}
+          {stage === 'list' && (
+            <>
+              {(legacyZips > 0 || failedZips > 0) && (
+                <div style={{ padding: '4px 8px 8px', fontSize: 11, color: T.textMute, lineHeight: 1.5 }}>
+                  {legacyZips > 0 && `구버전 로그 ${legacyZips}개 제외`}
+                  {legacyZips > 0 && failedZips > 0 && ' · '}
+                  {failedZips > 0 && `⚠️ 로그 ${failedZips}개 읽기 실패`}
+                </div>
+              )}
+              {list.length === 0 ? (
+                <div style={{ padding: 20, textAlign: 'center', color: T.textMute, fontSize: 13 }}>
+                  이 기간에 복구할 세션이 없습니다.
+                </div>
+              ) : (
+                list.map((s) => {
+                  const already = localIds.has(s.id);
+                  const checked = selected.has(s.id);
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => toggle(s.id)}
+                      disabled={already}
+                      style={{
+                        width: '100%',
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        padding: '12px 10px',
+                        background: 'transparent', border: 'none',
+                        color: 'inherit',
+                        borderBottom: `1px solid ${T.line}`,
+                        cursor: already ? 'not-allowed' : 'pointer',
+                        textAlign: 'left', opacity: already ? 0.5 : 1,
+                      }}
+                    >
+                      <Checkbox checked={checked && !already} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: 15, fontWeight: 700, color: T.text,
+                            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                          }}
+                        >
+                          {s.date}
+                          {s.label && (
+                            <span style={{ marginLeft: 8, fontSize: 12, color: T.textMute, fontFamily: 'inherit' }}>
+                              {s.label}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: T.textMute, marginTop: 2 }}>
+                          {s.rowCount}행
+                          {already && ' · 이미 있음'}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </>
+          )}
+        </div>
+
+        {/* 푸터 */}
+        <div
+          style={{
+            padding: '10px 16px',
+            borderTop: `1px solid ${T.line}`,
+            display: 'flex', gap: 10,
+          }}
+        >
+          {stage === 'list' ? (
+            <>
+              <button
+                onClick={onClose}
+                style={{
+                  flex: 1, height: 48, borderRadius: 14,
+                  border: `1px solid ${T.lineStrong}`, background: 'transparent',
+                  color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                닫기
+              </button>
+              <button
+                onClick={runRestore}
+                disabled={selected.size === 0}
+                style={{
+                  flex: 1, height: 48, borderRadius: 14, border: 'none',
+                  background: selected.size === 0 ? '#2A2D32' : T.blue,
+                  color: selected.size === 0 ? T.textMute : '#fff',
+                  fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
+                  cursor: selected.size === 0 ? 'not-allowed' : 'pointer',
+                  boxShadow: selected.size === 0 ? 'none' : `0 4px 14px ${T.blueGlow}`,
+                }}
+              >
+                선택 복구 ({selected.size})
+              </button>
+            </>
+          ) : stage === 'done' ? (
+            <button
+              onClick={onClose}
+              style={{
+                flex: 1, height: 48, borderRadius: 14, border: 'none',
+                background: T.blue, color: '#fff',
+                fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                boxShadow: `0 4px 14px ${T.blueGlow}`,
+              }}
+            >
+              완료
+            </button>
+          ) : (
+            <button
+              onClick={runList}
+              disabled={stage === 'listing' || stage === 'restoring'}
+              aria-busy={stage === 'listing'}
+              style={{
+                flex: 1, height: 48, borderRadius: 14, border: 'none',
+                background: stage === 'listing' ? '#2A2D32' : T.blue,
+                color: stage === 'listing' ? T.textMute : '#fff',
+                fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
+                cursor: stage === 'listing' ? 'wait' : 'pointer',
+                boxShadow: stage === 'listing' ? 'none' : `0 4px 14px ${T.blueGlow}`,
+              }}
+            >
+              {stage === 'listing' ? '조회 중…' : '목록 조회'}
+            </button>
+          )}
+        </div>
+        {stage === 'list' && restorableCount === 0 && list.length > 0 && (
+          <div style={{ padding: '0 16px 10px', fontSize: 11, color: T.textMute, textAlign: 'center' }}>
+            조회된 세션이 모두 이미 기기에 있습니다.
+          </div>
+        )}
+      </div>
+    </Backdrop>
+  );
+}
+
 // ─── failure modal ───────────────────────────────────────────
 function FailureModal({
   report, onClose, onRetry,
@@ -1027,17 +1373,24 @@ function SessionCard({
   onDelete: () => void;
   onCellSave: (rowIndex: number, colId: string, value: string) => void;
 }) {
-  const fullySynced = session.syncedRows >= session.completedRows && session.completedRows > 0;
-  const partial = session.syncedRows > 0 && !fullySynced;
+  const pending = sessionPending(session);
+  const fullySynced = pending === 0 && session.completedRows > 0;
+  // F9: "uploaded before" is row-based, not the raw syncedRows counter — a session whose uploaded
+  // rows were all edited since (now 'dirty', syncedRows=0) must still read as partial, not 미업로드.
+  const everUploaded = sessionEverUploaded(session);
+  const partial = everUploaded && !fullySynced;
+  const dirtyCount = sessionDirtyCount(session);
   const syncIcon = fullySynced
     ? I.cloudCheck(16, T.green)
     : partial
     ? I.cloud(16, T.amber)
     : I.cloudOff(16, T.textMute);
+  // Label: fully synced → 업로드완료. Partial with edits-since → "N행 변경" (distinct amber state).
+  // Partial without edits (some rows just not uploaded yet) → "synced/completed" progress.
   const syncLabel = fullySynced
     ? '업로드완료'
     : partial
-    ? `${session.syncedRows}/${session.completedRows}`
+    ? (dirtyCount > 0 ? `${dirtyCount}행 변경` : `${session.syncedRows}/${session.completedRows}`)
     : '미업로드';
   const syncColor = fullySynced ? T.green : partial ? T.amber : T.textMute;
 

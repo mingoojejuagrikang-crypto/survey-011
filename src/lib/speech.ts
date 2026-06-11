@@ -216,6 +216,10 @@ const isKo = (v: SpeechSynthesisVoice) => v.lang?.toLowerCase().startsWith('ko')
  *  session start()) re-poll explicitly. Logs `tts_voices_loaded {total,ko}` (type:'app',
  *  '__app__' sentinel — W7) only when the counts actually change, so boot + late-arrival
  *  each produce exactly one telemetry event. */
+/** Stable hash of the current voice list (name|lang|localService each), so we emit the diagnostic
+ *  snapshot exactly once per distinct list rather than on every poll (iOS re-polls aggressively). */
+let _lastVoicesSnapshotHash = '';
+
 export function refreshVoices(): { total: number; ko: number } {
   if (!synth) return { total: 0, ko: 0 };
   const prevTotal = voicesCache.length;
@@ -225,6 +229,16 @@ export function refreshVoices(): { total: number; ko: number } {
   const ko = voicesCache.filter(isKo).length;
   if (total !== prevTotal || ko !== prevKo) {
     logger.log({ type: 'app', extra: `tts_voices_loaded:total=${total},ko=${ko}` });
+  }
+  // v0.6.0 (Pax iOS research): per-device diagnostic of WHICH voices the OS actually exposes to
+  // the web (iOS hides Enhanced/Premium/Siri/Personal Voice — only isSystemVoice surfaces). Record
+  // the full name/lang/localService list once per distinct snapshot to analyze device patterns.
+  // Hash-gated so a stable list logs only once (no aggressive-repoll spam).
+  const hash = voicesCache.map((v) => `${v.name}|${v.lang}|${v.localService ? 1 : 0}`).join(';;');
+  if (hash !== _lastVoicesSnapshotHash) {
+    _lastVoicesSnapshotHash = hash;
+    const list = voicesCache.map((v) => `${v.name}~${v.lang}~${v.localService ? 'L' : 'R'}`).join(', ');
+    logger.log({ type: 'app', extra: `tts_voices_snapshot:total=${total},ko=${ko}`, text: list });
   }
   return { total, ko };
 }
@@ -237,13 +251,21 @@ if (synth) {
 let _preferredVoiceName = '';
 export function setPreferredVoiceName(name: string) { _preferredVoiceName = name; }
 
+/** Names iOS exposes for its built-in Korean voice even when lang isn't reported as ko-*.
+ *  Used only as a fallback when no isKo voice is present (rare; some iOS builds mislabel lang). */
+const KO_VOICE_NAME_RE = /yuna|korean|한국/i;
+
 function pickKoreanVoice(): SpeechSynthesisVoice | null {
   const candidates = voicesCache.filter(isKo);
   if (_preferredVoiceName) {
     const preferred = candidates.find((v) => v.name === _preferredVoiceName);
     if (preferred) return preferred;
   }
-  return candidates[0] || null;
+  if (candidates[0]) return candidates[0];
+  // Fallback: 0 lang-tagged Korean voices. Try a name-matched Korean voice (e.g. Yuna) the OS
+  // exposed without a ko-* lang tag; otherwise null → speak() relies on u.lang='ko-KR'.
+  const named = voicesCache.find((v) => KO_VOICE_NAME_RE.test(v.name));
+  return named || null;
 }
 
 /** Returns all available Korean voices. */

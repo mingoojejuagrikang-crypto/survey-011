@@ -108,7 +108,22 @@ export async function restoreSessionsFromZip(
   const snapshot = parseSessionsSnapshot(await snapFile.async('text'));
   if (!snapshot) return { legacy: true, restoredSessions: 0, restoredClips: 0 };
 
-  const targets = snapshot.sessions.filter((s) => !localIds.has(s.id));
+  // 전량 모드: localIds에 없는 모든 세션. (v0.6.0 selectedIds=null 위임)
+  return restoreSessionTargets(zip, snapshot, null, localIds, deps);
+}
+
+/** zip + 파싱된 스냅샷에서 대상 세션을 복원하는 공용 코어.
+ *  @param selectedIds null이면 localIds에 없는 전 세션, Set이면 그 교집합만 복원(v0.6.0 선택 복구). */
+async function restoreSessionTargets(
+  zip: JSZip,
+  snapshot: SessionsSnapshot,
+  selectedIds: Set<string> | null,
+  localIds: Set<string>,
+  deps: ZipRestoreDeps,
+): Promise<ZipRestoreResult> {
+  const targets = snapshot.sessions.filter(
+    (s) => !localIds.has(s.id) && (selectedIds === null || selectedIds.has(s.id)),
+  );
   if (targets.length === 0) return { legacy: false, restoredSessions: 0, restoredClips: 0 };
 
   // 세션 먼저 저장 — 클립 일부가 실패해도 세션 데이터(값)는 살아남는다.
@@ -137,4 +152,31 @@ export async function restoreSessionsFromZip(
   }
 
   return { legacy: false, restoredSessions: targets.length, restoredClips };
+}
+
+/** v0.6.0 "세션 복구" 2단계: 1단계가 다운로드해 캐시한 zip blob + 파싱 스냅샷.
+ *  V15: 1단계가 이미 loadAsync한 JSZip 인스턴스를 보관해 restore 단계의 중복 loadAsync(같은
+ *  blob 두 번 해제)를 제거한다. 구버전 캐시(zip 미보관) 호환을 위해 optional. */
+export interface CachedZip {
+  blob: Blob;
+  snapshot: SessionsSnapshot | null;
+  legacy: boolean;
+  /** 1단계에서 파싱한 JSZip 인스턴스(있으면 restore가 재사용 — blob 재해제 방지). */
+  zip?: JSZip;
+}
+
+/**
+ * 캐시된 zip에서 **선택된 세션만** 복원한다(restoreSessionsFromZip의 선택 복구 변형).
+ * V15: 1단계가 보관한 JSZip 인스턴스가 있으면 재사용하고, 없을 때만 blob을 다시 푼다.
+ * 세션은 selectedIds ∩ (localIds 밖)만 저장한다.
+ */
+export async function restoreFromCachedZip(
+  cached: CachedZip,
+  selectedIds: Set<string>,
+  localIds: Set<string>,
+  deps: ZipRestoreDeps = { saveSession: dbSaveSession, saveAudioClip: dbSaveAudioClip },
+): Promise<ZipRestoreResult> {
+  if (!cached.snapshot) return { legacy: true, restoredSessions: 0, restoredClips: 0 };
+  const zip = cached.zip ?? (await JSZip.loadAsync(await cached.blob.arrayBuffer()));
+  return restoreSessionTargets(zip, cached.snapshot, selectedIds, localIds, deps);
 }

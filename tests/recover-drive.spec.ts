@@ -1,16 +1,11 @@
 /**
- * v0.5.0 W8 e2e — "세션 복구" 2단계: Drive 로그 zip에서 세션+클립 복원.
+ * v0.6.0 W8 e2e — "세션 복구" 2단계(기간 조회 + 세션 선택) RecoverModal 경유.
  *
- * page.route로 Drive API 전체를 stub:
- *   폴더 검색(survey-011 → log) → zip 목록(최신순) → zip 바이너리(alt=media) 응답.
- * zip 바이너리는 실제 exportLogZip 구조(sessions.json + clips/)로 Node에서 JSZip으로 생성.
+ * (구 v0.5.0 무조건 전량 복구 → v0.6.0 모달 선택 복구로 플로우 변경. 핵심 계약은 유지:
+ *  Drive zip의 sessions.json + clips/를 IDB로 복원, 클립 키 문자열 그대로 round-trip,
+ *  실물 없는 클립 포인터는 재생 시 무해, 미로그인 시 Drive 호출 0회, 목록 조회 실패 graceful.)
  *
- * 검증:
- *   1. 로그인 상태: 복원 → "Drive 로그에서 세션 N개(클립 M개) 복구" + 구버전 zip "제외" 집계
- *      + 데이터탭에 세션 카드 표시 + IDB round-trip(클립 키 그대로) + 클립 없는 재생 버튼 무해.
- *   2. 미로그인: Drive 호출 0회 + "설정탭 로그인 후 가능" 안내.
- *   3. 목록 조회 실패(서버 오류/오프라인 등): graceful 실패 메시지, 1단계 복구는 유지.
- *
+ * page.route로 Drive API 전체 stub: 폴더 검색 → zip 목록(최신순) → zip alt=media.
  * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
  */
 
@@ -36,15 +31,15 @@ const DRIVE_SESSION = {
   ],
   completedRows: 2,
   syncedRows: 0,
-  startedAt: 1781000000000,
-  finishedAt: 1781000600000,
+  startedAt: Date.parse('2026-06-09T01:00:00Z'),
+  finishedAt: Date.parse('2026-06-09T01:10:00Z'),
 };
 
 async function buildSnapshotZip(): Promise<Buffer> {
   const zip = new JSZip();
   zip.file('device.json', '{}');
   zip.file('events.json', '[]');
-  zip.file('sessions.json', JSON.stringify({ schema: 1, appVersion: '0.5.0', sessions: [DRIVE_SESSION] }));
+  zip.file('sessions.json', JSON.stringify({ schema: 1, appVersion: '0.6.0', sessions: [DRIVE_SESSION] }));
   // 키 문자열 그대로 round-trip 검증용 — 행 1 클립만 실물 포함 (행 2 포인터는 의도적 누락)
   zip.file('clips/drv-s1:1:c8.wav', new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0]));
   return zip.generateAsync({ type: 'nodebuffer' });
@@ -57,6 +52,9 @@ async function buildLegacyZip(): Promise<Buffer> {
   zip.file('clips/old-s9:1:c8.webm', new Uint8Array([1, 2, 3]));
   return zip.generateAsync({ type: 'nodebuffer' });
 }
+
+const NOW = Date.parse('2026-06-11T12:00:00Z');
+const ISO = (daysAgo: number) => new Date(NOW - daysAgo * 86400_000).toISOString();
 
 /** Drive API 전체 stub. 반환된 배열에 수신한 요청 URL이 쌓인다. */
 async function stubDriveApi(page: Page, opts: { listFails?: boolean } = {}): Promise<string[]> {
@@ -72,11 +70,11 @@ async function stubDriveApi(page: Page, opts: { listFails?: boolean } = {}): Pro
     if (u.pathname === '/drive/v3/files' && u.searchParams.has('q')) {
       const q = u.searchParams.get('q') ?? '';
       if (q.includes("name='survey-011'")) {
-        await route.fulfill({ json: { files: [{ id: 'fld-app', createdTime: '2026-06-01T00:00:00Z' }] } });
+        await route.fulfill({ json: { files: [{ id: 'fld-app', createdTime: ISO(60) }] } });
         return;
       }
       if (q.includes("name='log'")) {
-        await route.fulfill({ json: { files: [{ id: 'fld-log', createdTime: '2026-06-01T00:00:00Z' }] } });
+        await route.fulfill({ json: { files: [{ id: 'fld-log', createdTime: ISO(60) }] } });
         return;
       }
       if (q.includes("'fld-log' in parents")) {
@@ -87,8 +85,8 @@ async function stubDriveApi(page: Page, opts: { listFails?: boolean } = {}): Pro
         await route.fulfill({
           json: {
             files: [
-              { id: 'zip-new', name: 'growth-log_2026-06-09_2.zip', createdTime: '2026-06-09T10:00:00Z' },
-              { id: 'zip-legacy', name: 'growth-log_2026-06-05_1.zip', createdTime: '2026-06-05T10:00:00Z' },
+              { id: 'zip-new', name: 'growth-log_2026-06-09_2.zip', createdTime: ISO(2) },
+              { id: 'zip-legacy', name: 'growth-log_2026-06-05_1.zip', createdTime: ISO(6) },
             ],
           },
         });
@@ -148,25 +146,35 @@ async function readIdb(page: Page, store: 'sessions' | 'audioClips') {
   }, store);
 }
 
-test('W8 — 로그인 상태: Drive zip에서 세션+클립 복원, 구버전 zip 제외 집계, 재생 버튼 무해', async ({ page }) => {
+test('W8 — 로그인 상태: 모달 목록 조회 → 선택 복구, 클립 round-trip, 구버전 제외, 재생 버튼 무해', async ({ page }) => {
   const pageErrors: Error[] = [];
   page.on('pageerror', (e) => pageErrors.push(e));
   await stubDriveApi(page);
   await bootApp(page, { signedIn: true });
 
   await page.locator('text=세션 복구').click();
+  await page.waitForTimeout(400);
+  await expect(page.locator('text=Drive에서 세션 복구')).toBeVisible();
 
-  // 복구 결과 메시지 — 세션 1개/클립 1개(행 2 클립은 zip에 없음) + 구버전 1개 제외
-  await expect(page.locator('text=Drive 로그에서 세션 1개(클립 1개) 복구')).toBeVisible({ timeout: 15_000 });
+  // 목록 조회(기본 30일 → 2일·6일 zip 모두 포함)
+  await page.locator('button:has-text("목록 조회")').click();
+  await page.waitForTimeout(800);
+  await expect(page.locator('text=Drive복구')).toBeVisible();
   await expect(page.locator('text=구버전 로그 1개 제외')).toBeVisible();
 
-  // 데이터탭에 복원 세션 카드 표시 (재하이드레이션 완료)
+  // 선택 복구 — 세션 1개/클립 1개(행 2 클립은 zip에 없음)
+  await page.locator('button:has-text("선택 복구")').click();
+  await page.waitForTimeout(800);
+  await expect(page.locator('text=세션 1개(클립 1개) 복구됨')).toBeVisible();
+
+  // 완료 후 모달 닫기 → 데이터탭에 카드 표시
+  await page.locator('button:has-text("완료")').click();
+  await page.waitForTimeout(300);
   await expect(page.locator('text=2026-06-09').first()).toBeVisible();
-  await expect(page.locator('text=Drive복구').first()).toBeVisible();
 
   // IDB round-trip: 세션 그대로 + 클립 키 문자열 그대로
   const sessions = await readIdb(page, 'sessions');
-  expect((sessions.values as Array<{ id: string; completedRows: number }>).map((s) => s.id)).toEqual(['drv-s1']);
+  expect((sessions.values as Array<{ id: string }>).map((s) => s.id)).toEqual(['drv-s1']);
   expect((sessions.values[0] as { rows: unknown[] }).rows).toHaveLength(2);
   const clips = await readIdb(page, 'audioClips');
   expect(clips.keys).toEqual(['drv-s1:1:c8']);
@@ -175,29 +183,32 @@ test('W8 — 로그인 상태: Drive zip에서 세션+클립 복원, 구버전 z
   await page.locator('text=2026-06-09').first().click();
   await page.waitForTimeout(400);
   const playButtons = page.locator('button[title="음성 재생"]');
-  expect(await playButtons.count()).toBe(2); // 포인터 기준 2개 (실물은 1개)
-  await playButtons.nth(1).click(); // 클립 없는 쪽
+  expect(await playButtons.count()).toBe(2);
+  await playButtons.nth(1).click();
   await page.waitForTimeout(600);
-  await playButtons.nth(0).click(); // 실물 있는 쪽 (가짜 WAV — onerror로 무해 종료)
+  await playButtons.nth(0).click();
   await page.waitForTimeout(600);
   expect(pageErrors).toEqual([]);
 });
 
-test('W8 — 미로그인: Drive 호출 0회 + 로그인 안내', async ({ page }) => {
+test('W8 — 미로그인: Drive 호출 0회 + 로그인 안내(모달 미오픈)', async ({ page }) => {
   const calls = await stubDriveApi(page);
   await bootApp(page, { signedIn: false });
 
   await page.locator('text=세션 복구').click();
+  await page.waitForTimeout(400);
   await expect(page.locator('text=Drive 복구는 설정탭 로그인 후 가능합니다')).toBeVisible({ timeout: 10_000 });
-  expect(calls.filter((c) => c.includes('/drive/'))).toEqual([]); // 평시/미로그인 네트워크 0
+  await expect(page.locator('text=Drive에서 세션 복구')).toHaveCount(0); // 모달 미오픈
+  expect(calls.filter((c) => c.includes('/drive/'))).toEqual([]);
 });
 
-test('W8 — 목록 조회 실패(서버 오류): graceful 실패 메시지, 1단계 로컬 복구는 유지', async ({ page }) => {
+test('W8 — 목록 조회 실패(서버 오류): 모달 내 graceful 실패 메시지', async ({ page }) => {
   await stubDriveApi(page, { listFails: true });
   await bootApp(page, { signedIn: true });
 
   await page.locator('text=세션 복구').click();
-  // 1단계 결과 + 2단계 실패 안내가 같은 메시지 줄에 공존
-  await expect(page.locator('text=Drive 복구 실패')).toBeVisible({ timeout: 15_000 });
-  await expect(page.locator('text=모두 불러왔습니다')).toBeVisible();
+  await page.waitForTimeout(400);
+  await page.locator('button:has-text("목록 조회")').click();
+  await page.waitForTimeout(800);
+  await expect(page.locator('text=Drive 목록 조회 실패')).toBeVisible({ timeout: 15_000 });
 });

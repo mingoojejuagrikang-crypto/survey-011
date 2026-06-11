@@ -639,14 +639,14 @@ function TtsVoiceSelector() {
       </div>
       {lastRefreshKo !== null && lastRefreshKo <= 1 && (
         <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.5 }}>
-          음성을 추가로 설치했는데도 목록이 늘지 않으면, iOS가 일부 고품질 음성을 웹에 제공하지
-          않는 제약일 수 있습니다. (Siri 계열 음성은 웹 앱에서 쓸 수 없는 기기가 있습니다.)
+          iOS는 기본 내장 음성만 웹 앱에 제공합니다. 설정에서 추가로 내려받은 고품질·Siri 음성은
+          Apple 정책상 여기 표시되지 않습니다 — 새로고침을 반복해도 목록에 나타나지 않습니다.
         </div>
       )}
       <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
-        음성이 하나뿐인가요? iPhone <b>설정 → 손쉬운 사용 → 음성 콘텐츠 → 음성 → 한국어</b>에서 음성을
-        추가로 내려받은 뒤, 앱으로 돌아와 <b>음성 새로고침</b>을 누르면 목록에 나타납니다.
-        (앱에서 직접 내려받는 것은 불가합니다.)
+        iPhone <b>설정 → 손쉬운 사용 → 음성 콘텐츠 → 음성 → 한국어</b>에서 <b>기본 음성</b>을
+        선택하면 안내가 또렷해질 수 있습니다. 단, 고품질(Enhanced/Premium)·Siri 음성은 웹 앱에
+        제공되지 않으므로 위 목록에는 기본 내장 음성만 나타납니다.
       </div>
     </div>
   );
