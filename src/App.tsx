@@ -3,6 +3,7 @@ import { TabBar, type TabId } from './components/TabBar';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { VoiceScreen } from './screens/VoiceScreen';
 import { DataScreen } from './screens/DataScreen';
+import { ReviewScreen } from './screens/ReviewScreen';
 import { T, DEVICE } from './tokens';
 import { hydrateSessions } from './lib/hydrate';
 import { logger } from './lib/logger';
@@ -55,6 +56,7 @@ export default function App() {
         {tab === 'settings' && <SettingsScreen />}
         {tab === 'voice' && <VoiceScreen />}
         {tab === 'data' && <DataScreen />}
+        {tab === 'review' && <ReviewScreen />}
       </div>
       <TabBar tab={tab} setTab={setTab} />
     </div>

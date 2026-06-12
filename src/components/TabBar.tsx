@@ -1,7 +1,7 @@
 import { T } from '../tokens';
 import { I } from './icons';
 
-export type TabId = 'settings' | 'voice' | 'data';
+export type TabId = 'settings' | 'voice' | 'data' | 'review';
 
 interface Props {
   tab: TabId;
@@ -12,6 +12,7 @@ const tabs: { id: TabId; label: string; icon: (s?: number, c?: string) => JSX.El
   { id: 'settings', label: '설정', icon: I.settings },
   { id: 'voice', label: '입력', icon: I.mic },
   { id: 'data', label: '데이터', icon: I.data },
+  { id: 'review', label: '조회', icon: I.search },
 ];
 
 export function TabBar({ tab, setTab }: Props) {

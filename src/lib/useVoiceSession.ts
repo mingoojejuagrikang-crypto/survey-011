@@ -11,6 +11,9 @@ import type { Column, Session, SessionRow } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip } from './db';
 import { AudioRecorder } from './audioRecorder';
 import { logger } from './logger';
+import { getCachedIndex, prefetchPastIndex, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
+import { checkTrend, type TrendViolation } from './trendCheck';
+import { getAccessToken } from './googleAuth';
 
 
 /** v0.6.0 CLIP-CMD — a captured '수정'/'정정' utterance whose save is deferred until the modify
@@ -33,6 +36,10 @@ interface AwaitingField {
    *  Captured at modify-entry (pre-clear) and logged with the final value so analysis can tell
    *  STT prefix-drop (e.g. 133.3→33.3) apart from deliberate user re-entry. */
   previousValue?: string;
+  /** v0.7.0 B4: 추세 검증 확인 모드 — 위반 알림 직후 '확인'/'유지'(값 확정·진행) 또는 새 값
+   *  (기존 isModify 의미론으로 재커밋 → 재검증)을 기다리는 상태. 이때 isModify=true,
+   *  previousValue=방금 커밋된 값으로 함께 무장된다. 커밋된 값 자체는 유효하게 저장돼 있다. */
+  trendConfirm?: boolean;
 }
 
 export function useVoiceSession() {
@@ -68,6 +75,20 @@ export function useVoiceSession() {
   // Snapshot of a persisted row being cascade-corrected; included in persistSession if stop()
   // fires before re-completion so original measurements are not lost.
   const correctionBackupRef = useRef<SessionRow | null>(null);
+  // [CLIP-VAL-1]③ / [CLIP-3] unlink race: tombstones for clip keys whose capture FAILED
+  // (clip_empty / clip_too_small / clip_save_failed). persistSession builds its rows
+  // synchronously BEFORE its first await, so an in-flight persist could re-persist a pointer
+  // that unlinkBrokenPointer just removed (06-11 v0.6.0 row8 c7 — pointer resurrected in the
+  // harvested sessions.json). Every audioClips merge consults this set, and persistSession
+  // re-checks it AFTER its await, so a tombstoned key can never be re-persisted. A key is
+  // cleared only when a NEW clip is successfully saved under it. Reset in start().
+  const brokenClipKeysRef = useRef<Set<string>>(new Set());
+  // v0.7.0 B4: trend_skip 원인별 1회 로깅(세션당) — 같은 원인(no_index 등)이 셀마다 반복
+  // 로깅돼 텔레메트리를 도배하지 않게 한다. start()에서 리셋.
+  const trendSkipLoggedRef = useRef<Set<string>>(new Set());
+  // 세션 시작 시점의 로컬 오늘 ISO — evaluateTrend가 값 커밋마다 Date를 새로 만들지 않게
+  // start()에서 1회 계산(현장 세션은 자정을 의미 있게 넘기지 않는다).
+  const sessionTodayRef = useRef<string>('');
   // Ref to resume() — breaks the circular dependency between handleFinal and resume.
   const resumeRef = useRef<() => Promise<void>>(async () => {});
 
@@ -244,8 +265,8 @@ export function useVoiceSession() {
       (Object.values(sess.getRowValues(activeRow) ?? {}).some((v) => v !== '') ||
         Object.keys(pendingClipsRef.current[activeRow] ?? {}).length > 0);
     // v0.5.0 NAV-1: '다음'으로 건너뛴 행도 complete:false placeholder로 영속화 — 자동/고정값은
-    // 채워지고 음성 칸만 빈 채 데이터탭에 보여, 사용자가 터치로 채울 수 있다. (sync는 complete
-    // 행만 업로드하므로 placeholder는 시트에 올라가지 않는다 — 민구 결정 1.)
+    // 채워지고 음성 칸만 빈 채 데이터탭에 보여, 사용자가 터치로 채울 수 있다. (v0.6.0부터
+    // sync가 placeholder도 공백 행으로 시트에 업로드해 sheetRow를 예약한다 — 행 단위 재동기화.)
     const skipped = sess.skippedRows.filter((r) => !completed.includes(r)).sort((a, b) => a - b);
     if (completed.length === 0 && !backup && !activeHasData && skipped.length === 0) return;
     // F1: read the existing persisted session once so each row can preserve its sheetRow/syncState
@@ -255,16 +276,18 @@ export function useVoiceSession() {
       (s) => s.id === sessionIdRef.current,
     );
     const buildRow = (r: number, complete: boolean): SessionRow => {
-      const auto = buildCyclingValues(settings.columns, r);
-      const fixedAndAuto = autoNonCyclingValues(settings.columns, r);
-      const voiceVals = sess.getRowValues(r);
       const existingRow = existingSession?.rows.find((row) => row.index === r);
       // Merge stored clips (from previous persists) with newly recorded clips
       const mergedClips = {
         ...(existingRow?.audioClips ?? {}),
         ...(pendingClipsRef.current[r] ?? {}),
       };
-      const values = { ...fixedAndAuto, ...auto, ...voiceVals };
+      // [CLIP-VAL-1]③: tombstoned keys (failed captures) must never be persisted — without this
+      // a persist whose existingRow predates an unlink would resurrect the broken pointer.
+      for (const k of Object.keys(mergedClips)) {
+        if (brokenClipKeysRef.current.has(mergedClips[k])) delete mergedClips[k];
+      }
+      const values = composeRowValues(settings.columns, r);
       // F1: preserve the row's sheetRow/syncState across re-persists. If a previously-synced row's
       // value changed in this persist, demote synced→dirty so the next sync UPDATEs it in place
       // (no duplicate append). Unchanged synced rows keep 'synced'.
@@ -305,7 +328,10 @@ export function useVoiceSession() {
       sess.startedAt || parseInt(resolvedId.replace('sess_', ''), 10) || Date.now();
     const session: Session = {
       id: resolvedId,
-      date: new Date().toISOString().slice(0, 10),
+      // v0.7.0: LOCAL date, not UTC — toISOString() stamped KST 00:00~08:59 sessions with
+      // yesterday's date, so the 조회 탭(ReviewScreen)의 localTodayISO() 오늘-세션 매칭에서
+      // 그날 아침 세션이 사라졌다. 코드베이스 지배 규약도 로컬(autoValue.ts 날짜 컬럼).
+      date: localTodayISO(),
       label: sessionLabelRef.current || sess.sessionLabel,
       columns: settings.columns,
       rows,
@@ -317,7 +343,42 @@ export function useVoiceSession() {
       finishedAt: Date.now(),
     };
     try { await saveSession(session); } catch { /* ignore */ }
-    useDataStore.getState().upsertSession(session);
+    // [CLIP-VAL-1]③ re-check AFTER the await, synchronously with the upsert: a clip_empty
+    // unlink may have tombstoned a key while saveSession was in flight (this session's rows
+    // were built synchronously before it). Without this re-strip the upsert below would
+    // resurrect the unlinked pointer in dataStore ([CLIP-3] race, 06-11 row8 c7). When
+    // pendingClipsRef meanwhile re-pointed the cell to a healthy key (e.g. the cmd-clip
+    // relink), substitute that instead of dropping the pointer. The strip, the upsert and
+    // the creation of the compensating save share one synchronous block, so no tombstone can
+    // be added in between; the compensating IDB save is created after the unlink's own save,
+    // so the clean state lands last — and it is AWAITED before this function resolves, so a
+    // page death right after persistSession cannot leave the broken pointer as the last
+    // durably-persisted state.
+    let finalSession = session;
+    if (brokenClipKeysRef.current.size > 0) {
+      let changed = false;
+      const strippedRows = session.rows.map((r) => {
+        if (!r.audioClips) return r;
+        const next: Record<string, string> = {};
+        let rowChanged = false;
+        for (const [colId, key] of Object.entries(r.audioClips)) {
+          if (!brokenClipKeysRef.current.has(key)) { next[colId] = key; continue; }
+          rowChanged = true;
+          const fresh = pendingClipsRef.current[r.index]?.[colId];
+          if (fresh && !brokenClipKeysRef.current.has(fresh)) next[colId] = fresh;
+        }
+        if (!rowChanged) return r;
+        changed = true;
+        return { ...r, audioClips: Object.keys(next).length > 0 ? next : undefined };
+      });
+      if (changed) {
+        finalSession = { ...session, rows: strippedRows };
+      }
+    }
+    useDataStore.getState().upsertSession(finalSession);
+    if (finalSession !== session) {
+      await saveSession(finalSession).catch(() => {});
+    }
   }, []);
 
   // ── announcements ──────────────────────────────────────────
@@ -361,6 +422,19 @@ export function useVoiceSession() {
     [say],
   );
 
+  /** [CLIP-VAL-1]① — start (or restart) the recording slot for a cell, with the full
+   *  announceField choreography: mark the start refs, start the clip, and register it as the
+   *  active clip. Called BEFORE the accompanying TTS so a barge-in utterance lands in the clip.
+   *  Shared by announceField, the B4 trend-alert prompt, and the modify/cancel re-prompts —
+   *  the latter two used to re-ask via say() WITHOUT restarting the slot, so the re-spoken
+   *  value was deterministically never recorded (06-11 v0.6.0 row8: "155.5" → clip_empty). */
+  const armClipForCell = useCallback((row: number, colId: string) => {
+    clipStartRowRef.current = row;
+    clipStartColIdRef.current = colId;
+    recorderRef.current?.startClip();
+    activeClipRef.current = { row, colId };
+  }, []);
+
   const announceField = useCallback(
     async (col: Column, opts?: { isModify?: boolean; previousValue?: string }) => {
       const row = useSessionStore.getState().activeRow;
@@ -377,17 +451,14 @@ export function useVoiceSession() {
       // 비어 데이터탭 재생 시 무음이었음. (announce 후 시작을 강제하던 redo-inline 가드[MEDIUM-4]는
       // redo 명령 제거로 사라짐.) 클립 앞에 새는 announce TTS는 mic AEC가 억제하고, 앞 무음은
       // audioTrim이 정리한다.
-      clipStartRowRef.current = row;
-      clipStartColIdRef.current = col.id;
-      recorderRef.current?.startClip();
-      activeClipRef.current = { row, colId: col.id };
+      armClipForCell(row, col.id);
       const hint = opts?.isModify
         ? `수정. ${col.name} 다시 말씀해 주세요.`
         : `${col.name} 말씀해 주세요.`;
       useSessionStore.getState().setLastTts(hint);
       await say(opts?.isModify ? `수정. ${col.name}.` : `${col.name}.`, false);
     },
-    [say],
+    [armClipForCell, say],
   );
 
   // ── end-of-table (v0.5.0 NAV-1 / 요청3) ────────────────────
@@ -820,6 +891,44 @@ export function useVoiceSession() {
     }
   }, [announceField, announceRowDiff, say]);
 
+  // ── v0.7.0 B4: 추세 검증 ───────────────────────────────────
+  /** trend_skip 텔레메트리 — 같은 원인은 세션당 1회만 기록(셀마다 반복돼 로그를 도배하지 않게).
+   *  Set은 start()에서 리셋된다. */
+  const logTrendSkip = useCallback((cause: string, row: number, colId: string) => {
+    if (trendSkipLoggedRef.current.has(cause)) return;
+    trendSkipLoggedRef.current.add(cause);
+    logger.log({ type: 'trend', extra: `trend_skip:${cause}`, sessionId: sessionIdRef.current, row, colId });
+  }, []);
+
+  /** 방금 커밋된 값의 추세 위반 검사. 마스터 토글 off/규칙 없는 컬럼은 검사 자체가 없고(로그 없음),
+   *  판정 불가(인덱스 없음·키 불완전·직전 회차/과거값 없음)는 조용히 skip + trend_skip 1회.
+   *  여기서는 절대 fetch하지 않는다 — start()의 프리페치가 채운 캐시(getCachedIndex)만 본다
+   *  (행 단위 재fetch 금지, B2 설계). */
+  const evaluateTrend = useCallback(
+    (col: Column | null, row: number, colId: string, nextRaw: string): TrendViolation | null => {
+      const s = useSettingsStore.getState();
+      const rule = col?.trendRule;
+      if (!s.trendAlertEnabled || !col || (rule !== 'increase' && rule !== 'decrease')) return null;
+      const index = getCachedIndex();
+      if (!index) { logTrendSkip('no_index', row, colId); return null; } // 오프라인/프리페치 실패/TTL 만료
+      const kc = keyColumns(s.columns);
+      if (kc.length === 0) { logTrendSkip('no_key_cols', row, colId); return null; } // 기능 비활성 케이스
+      // 현재 행의 전체 값(자동·고정·음성) — persistSession과 같은 composeRowValues 합성.
+      const rowValues = composeRowValues(s.columns, row);
+      const key = buildSampleKey(kc, rowValues);
+      if (!key) { logTrendSkip('incomplete_key', row, colId); return null; }
+      // 로컬 날짜(UTC 아님 — KST 자정 직후 어긋남 방지). previousRound는 오늘 미만 strictly.
+      // start()에서 세션당 1회 계산(핫패스 호이스팅) — ref가 빈 경우(이론상 hook 재마운트)만 지연 계산.
+      const today = sessionTodayRef.current || localTodayISO();
+      const round = previousRound(index, key, today);
+      if (!round) { logTrendSkip('no_prev_round', row, colId); return null; }
+      const prevRaw = pastValue(index, key, round, colId);
+      if (prevRaw === null) { logTrendSkip('no_past_value', row, colId); return null; }
+      return checkTrend(rule, prevRaw, nextRaw);
+    },
+    [logTrendSkip],
+  );
+
   // ── final result handler ───────────────────────────────────
   const handleFinal = useCallback(async (textArg: string, alts: string[], confidence: number) => {
     // `text` is mutable so the redo-with-inline-value path (e.g. "다시 8.4") can rewrite the
@@ -893,6 +1002,33 @@ export function useVoiceSession() {
         extra: ctrlRef.current?.isTtsMuted() ? 'tts_was_speaking' : 'tts_silent',
       });
     }
+
+    // ── v0.7.0 B4: 추세 확인 모드 해소 — 알림 TTS 직후의 첫 응답 ──
+    // 커밋된 값은 이미 저장돼 있다(알림 ≠ 롤백). '확인'/'유지'는 그대로 확정·진행, 새 값 발화는
+    // 아래 값 경로로 폴스루해 기존 isModify 의미론으로 재커밋(재위반 시 재알림), 타 명령은 알림만
+    // 해제하고 정상 dispatch된다.
+    if (awaiting.trendConfirm) {
+      if (cmd === 'confirm' || cmd === 'keep') {
+        cancelTts();
+        logger.log({
+          type: 'trend', extra: 'trend_alert_confirmed', parsed: cmd,
+          sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+          ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
+        });
+        awaitingFieldRef.current = null;
+        await advance();
+        return;
+      }
+      if (cmd) {
+        logger.log({
+          type: 'trend', extra: `trend_alert_dismissed:${cmd}`,
+          sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        });
+        awaiting.trendConfirm = false; // 알림만 해제 — 아래 정상 명령 dispatch로 폴스루
+      }
+      // 명령이 아니면(새 값) 값 경로로 폴스루 — 커밋 지점에서 trend_alert_corrected 기록.
+    }
+
     if (cmd === 'end') {
       cancelTts();
       // v0.5.0 요청3: 종료 시에도 skip된 빈 행이 있으면 1회 안내 후 종료(민구 결정 4와 대칭).
@@ -950,6 +1086,15 @@ export function useVoiceSession() {
       }
       return;
     }
+    if (cmd === 'confirm') {
+      // v0.7.0 B4: 추세 알림 상태 밖의 '확인' — 상태 변경 없이 짧은 재안내만(무음 금지, REVIEW-4).
+      // trendConfirm 중의 '확인'은 위 해소 분기에서 이미 처리됐다.
+      cancelTts();
+      const msg = `확인할 알림이 없습니다. ${awaiting.name} 말씀해 주세요.`;
+      useSessionStore.getState().setLastTts(msg);
+      await say(msg);
+      return;
+    }
     if (cmd === 'modify') {
       cancelTts();
       // Capture the '수정'/'정정' utterance itself (spoken into the awaiting cell's active clip)
@@ -961,6 +1106,11 @@ export function useVoiceSession() {
         // No target re-link here (we're already re-listening for the value) — save against the
         // awaiting cell so the utterance still survives for analysis.
         pendingCmd?.saveDefault();
+        // [CLIP-VAL-1]①: preserveCommandClip above STOPPED the active clip — restart the slot
+        // before the re-ask TTS so the re-spoken value IS recorded (it deterministically wasn't:
+        // say() never starts a clip, unlike announceField). Also the landing path for a B4
+        // trendConfirm dismissed by '수정' (trendConfirm arms isModify:true).
+        armClipForCell(awaiting.row, awaiting.colId);
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
@@ -971,6 +1121,11 @@ export function useVoiceSession() {
     if (cmd === 'cancel') {
       cancelTts();
       useSessionStore.getState().setRecognized('');
+      // [CLIP-VAL-1]① (cancel sibling): same structure as the isModify re-ask — make sure a
+      // recording slot is armed for the re-utterance. After a '수정'→'취소' chain the previous
+      // slot was consumed by preserveCommandClip; without this the next value goes unrecorded.
+      // startClip() safely truncates/replaces a still-active slot, so arming is idempotent here.
+      armClipForCell(awaiting.row, awaiting.colId);
       await say(`${awaiting.name} 다시 말씀해 주세요.`);
       return;
     }
@@ -1099,11 +1254,29 @@ export function useVoiceSession() {
     sess.pushValueBurst(awaiting.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
     awaitingFieldRef.current = null;
 
+    // v0.7.0 B4: 추세 알림에 새 값으로 응답한 재커밋 — 정정 기록(오알림률 분모) + 이전 값 발화
+    // 클립 보존. 새 저장이 같은 bare key(`sess:row:colId`)를 덮어쓰므로 :a<n>로 먼저 보관한다
+    // (RACE-4 보존 원칙 — enterModifyMode의 archive 패턴과 동일, 백그라운드).
+    if (awaiting.trendConfirm) {
+      logger.log({
+        type: 'trend', extra: 'trend_alert_corrected',
+        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        text, parsed,
+        ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
+      });
+      archiveCellClip(awaiting.row, awaiting.colId);
+    }
+
     // v0.10 클립 누락 수정: stopClip을 echo TTS 이전에 시작 (병렬 실행)
     // 이전 버그: await speak(echo) 동안 마이크 stream이 idle → 다음 startClip이 호출되면 이전 슬롯 손실
     const clipKey = `${sessionIdRef.current}:${awaiting.row}:${awaiting.colId}`;
     const clipAwaitingRow = awaiting.row;
     const clipAwaitingColId = awaiting.colId;
+    // [CLIP-VAL-1]②: whether this commit is a modify re-record — on a failed capture the cell's
+    // pointer is re-linked to the modify-command clip (`…:cmd<n>`) instead of being left on the
+    // canonical key (which still holds the PREVIOUS value's audio — the "155.5 cell plays 177.7"
+    // defect) or silently unlinked.
+    const wasModify = !!awaiting.isModify;
     pendingClipsRef.current[clipAwaitingRow] = {
       ...pendingClipsRef.current[clipAwaitingRow],
       [clipAwaitingColId]: clipKey,
@@ -1138,6 +1311,67 @@ export function useVoiceSession() {
         void saveSession(updatedSession).catch(() => {});
       }
     };
+    // [CLIP-VAL-1]②: re-point the cell's audioClip from the failed canonical key to a healthy
+    // key (the modify-command clip). pendingClipsRef gate mirrors unlinkBrokenPointer: only act
+    // while WE still own the pointer (a later restart/modify re-owns the cell and is left alone).
+    // On the persisted side accept `undefined` too — the [CLIP-VAL-1]③ tombstone strip may have
+    // already removed our canonical entry from the persisted row.
+    const relinkPointer = (newKey: string): boolean => {
+      const m = pendingClipsRef.current[clipAwaitingRow];
+      if (!m || m[clipAwaitingColId] !== clipKey) return false;
+      m[clipAwaitingColId] = newKey;
+      const sess = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+      const prow = sess?.rows.find((r) => r.index === clipAwaitingRow);
+      const persisted = prow?.audioClips?.[clipAwaitingColId];
+      if (sess && prow && (persisted === clipKey || persisted === undefined)) {
+        const updatedRow = {
+          ...prow,
+          audioClips: { ...(prow.audioClips ?? {}), [clipAwaitingColId]: newKey },
+        };
+        const updatedSession = {
+          ...sess,
+          rows: sess.rows.map((r) => (r.index === clipAwaitingRow ? updatedRow : r)),
+        };
+        useDataStore.getState().upsertSession(updatedSession);
+        void saveSession(updatedSession).catch(() => {});
+      }
+      return true;
+    };
+    // [CLIP-VAL-1]②③ — a capture under the canonical key failed. Tombstone the key FIRST (so an
+    // in-flight persistSession can never re-persist it), then: if this was a modify re-record and
+    // its command clip (`…:cmd<n>` — for "수정 <값>" it carries the NEW value's utterance) actually
+    // saved, re-link the cell's playback pointer to it (06-11 row8: the correct audio WAS on disk
+    // as `8:c7:cmd1`); otherwise unlink so no stale previous-value audio remains canonical.
+    const resolveFailedCapture = async (savePromiseSelf: Promise<unknown> | null) => {
+      brokenClipKeysRef.current.add(clipKey);
+      if (wasModify) {
+        const n = cmdClipRef.current[`${clipAwaitingRow}:${clipAwaitingColId}`];
+        if (n) {
+          const cmdKey = `${sessionIdRef.current}:${clipAwaitingRow}:${clipAwaitingColId}:cmd${n}`;
+          // The cmd-clip save may still be in flight — flush other pending saves (not ourselves)
+          // before the existence check (archiveCellClip's flush pattern, bounded).
+          const others = Array.from(pendingClipSavesRef.current).filter((p) => p !== savePromiseSelf);
+          if (others.length > 0) {
+            await Promise.race([
+              Promise.allSettled(others),
+              new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+            ]);
+          }
+          const cmdBlob = await loadAudioClip(cmdKey).catch(() => null);
+          if (cmdBlob && relinkPointer(cmdKey)) {
+            logger.log({
+              type: 'clip', extra: 'clip_relink_cmd', kind: 'command', clipKey: cmdKey,
+              sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId,
+            });
+            return;
+          }
+        }
+      }
+      unlinkBrokenPointer();
+    };
+    // Holder for the savePromise's own identity (assigned right after creation, before the
+    // IIFE's first await resumes) so resolveFailedCapture can exclude itself from the flush.
+    let savePromiseSelf: Promise<unknown> | null = null;
     const savePromise = (async () => {
       try {
         logger.log({ type: 'clip', extra: 'clip_stop_await', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
@@ -1145,12 +1379,12 @@ export function useVoiceSession() {
         logger.log({ type: 'clip', extra: `clip_stop_resolved:${clipBlob ? clipBlob.size : 'null'}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
         if (!clipBlob) {
           logger.log({ type: 'error', extra: 'clip_empty', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-          unlinkBrokenPointer();
+          await resolveFailedCapture(savePromiseSelf);
           return;
         }
         if (clipBlob.size <= 200) {
           logger.log({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-          unlinkBrokenPointer();
+          await resolveFailedCapture(savePromiseSelf);
           return;
         }
         // v0.11.0 Codex HIGH: pendingClipsRef로 stale save 차단.
@@ -1162,6 +1396,9 @@ export function useVoiceSession() {
           return;
         }
         await saveAudioClip(clipKey, clipBlob);
+        // [CLIP-VAL-1]③: fresh bytes landed under this key — lift the tombstone so the pointer
+        // may persist again (a previous failed attempt on the same cell reuses the same key).
+        brokenClipKeysRef.current.delete(clipKey);
         logger.log({ type: 'clip', extra: `clip_saved:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
         // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
         // pendingClips에는 등록하지 않으므로 데이터탭 재생 UI에는 노출되지 않고, 로그 zip의
@@ -1172,11 +1409,51 @@ export function useVoiceSession() {
         }
       } catch (e) {
         logger.log({ type: 'error', extra: `clip_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-        unlinkBrokenPointer();
+        await resolveFailedCapture(savePromiseSelf);
       }
     })();
+    savePromiseSelf = savePromise;
     pendingClipSavesRef.current.add(savePromise);
     void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
+
+    // ── v0.7.0 B4: 추세 검증 — 값 커밋 직후 · echo/advance 전 ──
+    // 값↔클립 매핑은 위에서 이미 확정됐고 커밋된 값은 위반이어도 그대로 선다(롤백 없음 — 민구
+    // 결정: 알림 후 '확인'/'유지'는 유지·진행, 새 값 발화는 재입력). 위반이면 echo 대신 알림
+    // TTS를 내보내고 advance를 중단한 채 trendConfirm 상태로 응답을 기다린다.
+    const trendViolation = evaluateTrend(col, awaiting.row, awaiting.colId, parsed);
+    if (trendViolation) {
+      const v = trendViolation;
+      logger.log({
+        type: 'trend', extra: 'trend_alert_fired',
+        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        colName: awaiting.name, text, parsed, confidence, previousValue: String(v.prev),
+      });
+      // value 이벤트는 정상 커밋과 동일하게 남긴다 — 분석 파이프라인이 위반 여부와 무관하게 본다.
+      logger.log({
+        type: 'value',
+        sessionId: sessionIdRef.current,
+        row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
+        text, parsed, confidence,
+        ...(awaiting.isModify && awaiting.previousValue != null
+          ? { previousValue: awaiting.previousValue }
+          : {}),
+      });
+      // 응답 대기 상태 무장 — 새 값 발화가 기존 수정(isModify) 의미론으로 재커밋되도록
+      // previousValue=방금 커밋된 값과 함께 세팅한다.
+      awaitingFieldRef.current = {
+        row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
+        isModify: true, previousValue: parsed, trendConfirm: true,
+      };
+      // 응답 발화('확인'/새 값) 클립 시작 — announceField 패턴(TTS 이전 시작, barge-in 수록).
+      armClipForCell(awaiting.row, awaiting.colId);
+      const pctPart = v.pctText ? ` ${v.pctText}%` : ''; // prev=0이면 % 구절 생략
+      const alertText =
+        `${formatForTts(parsed)}. 직전 조사보다${pctPart} ` +
+        `${v.direction === 'down' ? '작아졌습니다' : '커졌습니다'}. 확인해주세요.`;
+      useSessionStore.getState().setLastTts(alertText);
+      await say(alertText);
+      return; // advance 중단 — 해소는 handleFinal 상단의 trendConfirm 분기
+    }
 
     const echoText = awaiting.isModify
       ? `수정 ${awaiting.name} ${formatForTts(parsed)}`
@@ -1217,7 +1494,7 @@ export function useVoiceSession() {
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
     await advance();
-  }, [advance, enterModifyMode, say, goNextRow, enterReentry, persistSession]);
+  }, [advance, enterModifyMode, say, goNextRow, enterReentry, persistSession, evaluateTrend, archiveCellClip, armClipForCell]);
 
   // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async (label?: string) => {
@@ -1254,7 +1531,14 @@ export function useVoiceSession() {
     pendingClipsRef.current = {};
     clipAttemptRef.current = {};
     cmdClipRef.current = {};
+    brokenClipKeysRef.current = new Set();
     correctionBackupRef.current = null;
+    trendSkipLoggedRef.current = new Set();
+    sessionTodayRef.current = localTodayISO();
+    // v0.7.0 B4: 과거값 인덱스 프리페치(fire-and-forget) — 마스터 토글 on + Google 연결 시에만.
+    // loadPastIndex는 모든 실패를 null로 해소하고 past_index_skip 텔레메트리만 남기므로
+    // 세션 시작 흐름을 절대 막지 않는다. 셀 단위 검사(evaluateTrend)는 이 캐시만 읽는다.
+    if (s.trendAlertEnabled && getAccessToken()) prefetchPastIndex();
     logger.setSessionId(sessionIdRef.current);
     // #1 reach telemetry: attach session-meta alongside the existing `extra:'start'` tag.
     // `extra` is preserved so any analysis keying on it keeps working; new fields are additive.
@@ -1465,6 +1749,22 @@ function autoNonCyclingValues(columns: Column[], row: number): Record<string, st
     out[c.id] = nestedAutoValue(columns, c, row);
   }
   return out;
+}
+
+/** 행 전체 값 합성(고정/비순환 자동 → 순환 자동 → 음성 입력 순으로 덮어씀) —
+ *  persistSession과 evaluateTrend가 공유하는 단일 합성 규칙. */
+function composeRowValues(columns: Column[], row: number): Record<string, string> {
+  return {
+    ...autoNonCyclingValues(columns, row),
+    ...buildCyclingValues(columns, row),
+    ...useSessionStore.getState().getRowValues(row),
+  };
+}
+
+/** 로컬(기기) 기준 오늘 ISO — toISOString()은 UTC라 자정 부근에 하루 어긋난다. */
+function localTodayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function parseValueForCol(col: Column, raw: string): string | null {

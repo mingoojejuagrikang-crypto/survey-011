@@ -184,6 +184,73 @@ test.describe('v0.5.0 W5 (STT-B) — "점" 뒤 소수부 유실 시 재질문', 
   });
 });
 
+test.describe('v0.7.0 STT-C — 단일 숫자 + 무관 비숫자 토큰은 침묵 커밋하지 않는다 (extraneous_token)', () => {
+  // Field log 2026-06-11 v0.6.0 (evt 108): "백칠십칠 점 칠"(177.7 의도)이 "제17.7"로 인식돼
+  // 17.7이 침묵 커밋됨(선행 음절 유실). 같은 세션 evt 493: "삼백삼십삼 점 삼"(333.3 의도)이
+  // "현백 33.3"으로 인식돼 33.3 침묵 커밋. 누적 4건(06-10×1, 06-11×1, 06-12 분석분×2).
+  test('"제17.7" → null (was silently 17.7; no-space sibling)', () => {
+    expect(parseKoreanNumber('제17.7')).toBeNull();
+    expect(getLastParseFailReason()).toBe('extraneous_token');
+  });
+  test('"현백 33.3" → null (was silently 33.3; spaced sibling)', () => {
+    expect(parseKoreanNumber('현백 33.3')).toBeNull();
+    expect(getLastParseFailReason()).toBe('extraneous_token');
+  });
+  // [STT-6] documented 백-mishear family — same shape, must also re-ask now.
+  test('"액 77.7" → null ([STT-6] 백→액 mishear)', () => {
+    expect(parseKoreanNumber('액 77.7')).toBeNull();
+    expect(getLastParseFailReason()).toBe('extraneous_token');
+  });
+  test('"에봇 15.5" → null ([STT-6] 백→에봇 mishear)', () => {
+    expect(parseKoreanNumber('에봇 15.5')).toBeNull();
+  });
+  test('"개 95.5" → null ([STT-6] 백→개 mishear — 개는 화이트리스트에 없다)', () => {
+    expect(parseKoreanNumber('개 95.5')).toBeNull();
+  });
+
+  // Whitelisted units / particles still commit (no false-positive re-asks).
+  const stillCommit: Array<[string, string]> = [
+    ['33.3 밀리', '33.3'],
+    ['155.5 센치', '155.5'],
+    ['177.7 그램', '177.7'],
+    ['20.5 mm', '20.5'],
+    ['35 입니다', '35'],
+    ['33.3이요', '33.3'], // no-space particle suffix
+    ['12.5밀리', '12.5'], // no-space unit suffix
+  ];
+  for (const [input, expected] of stillCommit) {
+    test(`화이트리스트 유지: "${input}" → ${expected}`, () => {
+      expect(parseKoreanNumber(input)).toBe(expected);
+    });
+  }
+
+  // Pre-existing commit contracts (HIGH-1 / T-1 suites) — must stay green.
+  test('회귀: "당도 8" → "8" (기존 커밋 계약 유지)', () => {
+    expect(parseKoreanNumber('당도 8')).toBe('8');
+  });
+  test('회귀: "당도 점수 8" → "8"', () => {
+    expect(parseKoreanNumber('당도 점수 8')).toBe('8');
+  });
+  test('회귀: "다시 점수 8" → "8"', () => {
+    expect(parseKoreanNumber('다시 점수 8')).toBe('8');
+  });
+
+  // The healthy re-question guards observed working in the same field log stay intact.
+  test('회귀: "111 점 에" → null + decimal_fraction_lost (W5 유지)', () => {
+    expect(parseKoreanNumber('111 점 에')).toBeNull();
+    expect(getLastParseFailReason()).toBe('decimal_fraction_lost');
+  });
+  test('회귀: "이 166.7" → null + multi_numeric (W4 유지)', () => {
+    expect(parseKoreanNumber('이 166.7')).toBeNull();
+    expect(getLastParseFailReason()).toBe('multi_numeric');
+  });
+  // The alt-transcript rescue shape (06-11 evt 170: primary "111 점 에" → alt "111 .1" committed
+  // 111.1) rides the top arabic fast path — untouched by STT-C.
+  test('회귀: "111 .1" → "111.1" (alt-transcript rescue shape, arabic fast path)', () => {
+    expect(parseKoreanNumber('111 .1')).toBe('111.1');
+  });
+});
+
 test.describe('parseKoreanNumber — integer regression guards', () => {
   const cases: Array<[string, string]> = [
     ['칠십사', '74'],

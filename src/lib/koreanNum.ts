@@ -146,10 +146,35 @@ function parseFractionDigits(text: string): string {
 /** v0.5.0 W4/W5: machine-readable reason for the most recent parseKoreanNumber() null.
  *  Set fresh on every call; read by the caller (handleFinal) to tag stt_parse_failed.
  *  - 'multi_numeric'          — ≥2 independent valid numeric tokens ("이 166.7") → ambiguous (STT-A)
- *  - 'decimal_fraction_lost'  — "<정수> 점 <비숫자>" — decimal intent, fraction lost (STT-B) */
+ *  - 'decimal_fraction_lost'  — "<정수> 점 <비숫자>" — decimal intent, fraction lost (STT-B)
+ *  - 'extraneous_token'       — single number + unrelated non-numeric token(s) ("제17.7",
+ *                               "현백 33.3") → ambiguous, re-ask (STT-C, v0.7.0) */
 let _lastParseFailReason: string | null = null;
 export function getLastParseFailReason(): string | null {
   return _lastParseFailReason;
+}
+
+/** v0.7.0 STT-C: non-numeric residual tokens that legitimately accompany a spoken measurement
+ *  and must NOT make a single-number utterance ambiguous. Deliberately tight — the documented
+ *  leading-syllable mishears ([STT-6] 백→액/에봇/개/엑, 06-12 제/현백) are NOT here, so those
+ *  shapes re-ask instead of silently committing a value with its hundreds digit lost. */
+const HARMLESS_RESIDUAL_TOKENS = new Set([
+  // 단위어 — 측정 발화에 정당하게 동반 ("33.3 밀리", "20.5 mm")
+  '밀리미터', '미리미터', '밀리', '미리', '밀',
+  '센티미터', '센치미터', '센티', '센치', '미터',
+  '그램', '그람', '킬로그램', '킬로', '키로',
+  '브릭스', '퍼센트', '프로', '도',
+  'mm', 'cm', 'kg', 'g',
+  // 조사·어미 — 값에 붙는 종결/조사 ("33.3이요", "35 입니다")
+  '은', '는', '이', '가', '요', '이요', '예요', '이에요', '에요', '입니다', '임',
+  // 기존 커밋 보장 어휘(HIGH-1/T-1 회귀 계약 — "당도 8"/"점수 8"/"다시 점수 8"은 커밋 유지)
+  '당도', '점수', '다시',
+]);
+
+function isHarmlessResidual(tok: string): boolean {
+  const t = tok.replace(/[\s.,!?]+/g, '').toLowerCase();
+  if (!t) return true;
+  return HARMLESS_RESIDUAL_TOKENS.has(t);
 }
 
 /**
@@ -247,6 +272,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
   if (tokens.length > 1) {
     let lastValid: number | null = null;
     let validCount = 0;
+    const residuals: string[] = [];
     for (const tok of tokens) {
       const a = tryArabic(tok);
       if (a !== null && Math.abs(a) <= OVERFLOW_THRESHOLD) {
@@ -268,6 +294,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       // (useVoiceSession handleFinal) logs stt_parse_failed and re-asks,
       // exactly like the Codex HIGH-2 / MEDIUM-3 multi-token guards above.
       if (/\d/.test(tok)) return null;
+      residuals.push(tok);
     }
     // v0.5.0 W4 (STT-A): ≥2 independently-valid numeric tokens (e.g. "이 166.7" — STT split
     // "이백 66.7" misrecognition; row would silently commit the LAST one). Legitimate multi-token
@@ -277,6 +304,16 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
     // No auto-correction is attempted (민구/Trace decision — observe via telemetry first).
     if (validCount >= 2) {
       _lastParseFailReason = 'multi_numeric';
+      return null;
+    }
+    // v0.7.0 STT-C: exactly ONE valid number accompanied by unrelated non-numeric token(s)
+    // ("현백 33.3" — intended 333.3, STT mangled the leading "삼백" into a noun; cumulative ×4
+    // across 3 field sessions). The dot-bearing siblings are caught by W4/W5 above, but this
+    // dot-less single-number shape used to silently commit the bare number with its hundreds
+    // digit lost. Unless EVERY residual token is a known-harmless unit/particle ("33.3 밀리",
+    // "35 입니다" still commit), treat as ambiguous → re-ask, tagged 'extraneous_token'.
+    if (lastValid !== null && residuals.length > 0 && !residuals.every(isHarmlessResidual)) {
+      _lastParseFailReason = 'extraneous_token';
       return null;
     }
     if (lastValid !== null) return formatNum(lastValid, maxDecimals);
@@ -297,7 +334,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
     return null;
   }
 
-  // Look for arabic chunks inside text (e.g. STT mixed "값33.5").
+  // Look for arabic chunks inside text (e.g. STT mixed "33.3이요").
   const arabicMatches = allArabicChunks;
   if (arabicMatches.length) {
     const candidates = arabicMatches.filter((x) => {
@@ -305,7 +342,19 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       return intPart.length <= 4 && parseFloat(intPart) <= OVERFLOW_THRESHOLD;
     });
     if (candidates.length) {
-      const n = parseFloat(candidates[candidates.length - 1]);
+      // v0.7.0 STT-C (no-space sibling): "제17.7" — intended 77.7, STT mangled the leading
+      // "칠십" syllable into "제" (field log 06-11 evt 108) and the bare 17.7 was silently
+      // committed. A single embedded number may only carry known-harmless unit/particle
+      // residue ("33.3이요", "20.5mm" commit); anything else is ambiguous → re-ask.
+      const chunk = candidates[candidates.length - 1];
+      const idx = s.lastIndexOf(chunk);
+      const pre = s.slice(0, idx);
+      const post = s.slice(idx + chunk.length);
+      if (!isHarmlessResidual(pre) || !isHarmlessResidual(post)) {
+        _lastParseFailReason = 'extraneous_token';
+        return null;
+      }
+      const n = parseFloat(chunk);
       if (Number.isFinite(n)) return formatNum(n, maxDecimals);
     }
   }

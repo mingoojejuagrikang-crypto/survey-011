@@ -1063,6 +1063,12 @@ function RecoverModal({
                         </div>
                         <div style={{ fontSize: 12, color: T.textMute, marginTop: 2 }}>
                           {s.rowCount}행
+                          {/* v0.7.0 B0 — 같은 날짜 세션 구분용 시작 시각(hh:mm).
+                              레거시 zip은 startedAt이 없거나 0 → 표시 생략. */}
+                          {Number.isFinite(s.startedAt) && s.startedAt > 0 &&
+                            ` · ${new Date(s.startedAt).toLocaleTimeString('ko-KR', {
+                              hour: '2-digit', minute: '2-digit', hour12: false,
+                            })}`}
                           {already && ' · 이미 있음'}
                         </div>
                       </div>

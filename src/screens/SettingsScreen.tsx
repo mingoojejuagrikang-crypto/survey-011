@@ -25,6 +25,7 @@ import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
 import { getKoreanVoices, refreshVoices, setPreferredVoiceName, speak, warmupTts } from '../lib/speech';
 import { logger } from '../lib/logger';
+import { effectiveSampleKey, isTrendEligible } from '../lib/columnFlags';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
@@ -85,16 +86,17 @@ function MiniInput({
 }
 
 function SegmentToggle<V extends string>({
-  label, value, options, onChange, disabled,
+  label, value, options, onChange, disabled, testId,
 }: {
   label: string;
   value: V;
   options: { id: V; label: string }[];
   onChange: (v: V) => void;
   disabled?: boolean;
+  testId?: string;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div data-testid={testId} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <span style={{ fontSize: 12, color: T.textMute, fontWeight: 700, letterSpacing: 0.4 }}>
         {label}
       </span>
@@ -387,6 +389,7 @@ function ColumnCard({
   const typ = TYPE_COLORS[col.type];
   return (
     <div
+      data-testid={`col-card-${col.id}`}
       style={{
         background: T.card,
         borderRadius: 14,
@@ -520,6 +523,33 @@ function ColumnCard({
           }}
           disabled={col.input === 'voice'}
         />
+        {/* v0.7.0 — 샘플 식별 키 여부. 기본값은 자동 유추(effectiveSampleKey), 사용자는 확인·수정. */}
+        <SegmentToggle
+          label="샘플키"
+          testId={`sample-key-${col.id}`}
+          value={effectiveSampleKey(col) ? 'on' : 'off'}
+          options={[
+            { id: 'on', label: '유' },
+            { id: 'off', label: '무' },
+          ]}
+          onChange={(v) => onChange({ ...col, sampleKey: v === 'on' })}
+        />
+        {/* v0.7.0 — 추세 방향. 적격(사용자 입력 숫자) 컬럼만 노출; 부적격 전환 시 store가 클리어. */}
+        {isTrendEligible(col) && (
+          <SegmentToggle
+            label="추세"
+            testId={`trend-rule-${col.id}`}
+            value={col.trendRule ?? 'off'}
+            options={[
+              { id: 'off', label: '없음' },
+              { id: 'increase', label: '커짐' },
+              { id: 'decrease', label: '작아짐' },
+            ]}
+            onChange={(v) =>
+              onChange({ ...col, trendRule: v === 'off' ? undefined : v })
+            }
+          />
+        )}
       </div>
 
       {col.input === 'auto' && col.type !== 'options' && (
@@ -1373,6 +1403,87 @@ export function SettingsScreen() {
             <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
               이어폰 없이 스피커로 사용할 때 켜세요. 안내 음성이 나오는 동안에는 음성 입력을 받지 않아,
               기기 음성이 사용자 음성으로 잘못 인식되는 것을 막습니다 (안내가 끝난 뒤 말씀하세요).
+            </div>
+
+            {/* v0.7.0 — 추세 검증 알림 (전역 마스터 토글) */}
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 10, marginTop: 10,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+                추세 검증 알림
+              </div>
+              <button
+                data-testid="trend-alert-toggle"
+                onClick={() => {
+                  const next = !s.trendAlertEnabled;
+                  s.set({ trendAlertEnabled: next });
+                  // W7(T-19) 패턴: 설정 변경 계측 — 추세 알림 발화율을 설정 상태에 귀속.
+                  logger.log({ type: 'app', extra: `setting_changed:trendAlertEnabled=${next}` });
+                }}
+                style={{
+                  width: 60, height: 32, borderRadius: 16,
+                  background: s.trendAlertEnabled ? T.blue : '#2A2D32',
+                  border: 'none', cursor: 'pointer',
+                  position: 'relative',
+                }}
+                title="음성 입력 값이 직전 조사 대비 지정한 방향과 반대로 변하면 즉시 알립니다"
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 4, left: s.trendAlertEnabled ? 32 : 4,
+                    width: 24, height: 24, borderRadius: 12,
+                    background: '#fff',
+                    transition: 'left 150ms ease',
+                  }}
+                />
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
+              입력한 값이 직전 조사보다 지정한 방향(커짐/작아짐)과 반대로 변하면 즉시 알리고 확인을
+              요청합니다. 측정 항목별 방향은 위 컬럼 카드의 <b>추세</b>에서 지정하세요.
+            </div>
+
+            {/* v0.7.0 — 조사시기(회차) 컬럼 선택. null = 자동(첫 date 컬럼, '조사일자' 우선). */}
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 10, marginTop: 10,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+                조사시기 컬럼
+              </div>
+              <select
+                data-testid="round-date-col"
+                value={s.roundDateColId ?? ''}
+                onChange={(e) => {
+                  const colId = e.target.value || null;
+                  s.set({ roundDateColId: colId });
+                  logger.log({ type: 'app', extra: `setting_changed:roundDateColId=${colId ?? 'auto'}` });
+                }}
+                style={{
+                  flex: 1, maxWidth: 200, height: 36, borderRadius: 8,
+                  background: T.inputBg, border: `1px solid ${T.line}`,
+                  color: T.text, fontSize: 14, fontWeight: 600,
+                  padding: '0 8px', outline: 'none',
+                }}
+              >
+                <option value="">자동 (조사일자)</option>
+                {s.columns
+                  .filter((c) => c.type === 'date')
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
+              과거 조사 회차를 구분하는 날짜 컬럼입니다. 조회·추세 검증이 이 컬럼으로 직전 조사를 찾습니다.
             </div>
 
             <TtsVoiceSelector />

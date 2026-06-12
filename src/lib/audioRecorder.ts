@@ -32,6 +32,12 @@ interface ClipSlot {
    *  Captured synchronously at startClip() from the live ring buffer; null when preroll
    *  capture is unavailable on this device. */
   preroll: PrerollPcm | null;
+  /** B5: pending delayed recorder.stop() (post-roll). Cleared + stopped immediately when the
+   *  next clip starts or the recorder is disposed (graceful truncation protecting the next clip). */
+  delayedStopTimer: ReturnType<typeof setTimeout> | null;
+  /** B5: performance.now() at stopClip request — onstop logs postrollMs = actualStop − this.
+   *  null = this clip was never stop-requested (e.g. replaced by a re-ask restart). */
+  stopRequestedAt: number | null;
 }
 
 /** stopClip()이 호출자에게 돌려주는 결과 — 트림본 + 트림 전 원본(다르면) + 프리롤 길이. */
@@ -44,8 +50,13 @@ export interface ClipResult {
   prerollMs: number;
 }
 
-/** onstop이 끝내 발화하지 않는 환경(iOS Safari 마이크 점유 등)에서 hang을 막는 안전장치. */
+/** onstop이 끝내 발화하지 않는 환경(iOS Safari 마이크 점유 등)에서 hang을 막는 안전장치.
+ *  B5: 실제 stop은 POSTROLL_MS 지연되므로 가드 스케줄 시 POSTROLL_MS를 더해 건다. */
 const STOP_TIMEOUT_MS = 2000;
+/** B5 — 클립 후반 0.5s post-roll: stopClip 요청 후에도 0.5s 더 녹음한 뒤 stop한다(지연 정지).
+ *  발화 꼬리가 STT final 직후 잘리던 후반 짤림 보강. 음성 플로우는 stopClip을 await하지 않으므로
+ *  체감 지연 0. 다음 클립이 0.5s 안에 시작되면 타이머를 클리어하고 즉시 stop(우아한 절단). */
+const POSTROLL_MS = 500;
 /** 링버퍼 보관량 / startClip 시 스냅샷할 프리롤 길이. */
 const RING_BUFFER_MS = 1500;
 const PREROLL_MS = 500;
@@ -269,6 +280,10 @@ export class AudioRecorder {
     // ONLY its own captured `slot` reference, so they cannot pollute the new slot.
     const prev = this.active;
     if (prev) {
+      // B5: a delayed post-roll stop may still be pending — clear it and stop IMMEDIATELY so the
+      // post-roll of the previous clip can never bleed into (or delay) the next clip. This is the
+      // graceful-truncation path: the previous clip keeps everything captured so far.
+      if (prev.delayedStopTimer) { clearTimeout(prev.delayedStopTimer); prev.delayedStopTimer = null; }
       // If prev still has a pending stopClip waiter, resolve it now with whatever it captured.
       // The actual onstop may still fire later, but it will be a no-op (finalized guard).
       if (!prev.finalized && prev.recorder.state !== 'inactive') {
@@ -280,6 +295,19 @@ export class AudioRecorder {
         const blob = prev.chunks.length > 0
           ? new Blob(prev.chunks, { type: prev.mimeType || 'audio/webm' })
           : null;
+        // B5 telemetry: this clip WAS stop-requested but its post-roll got truncated by the next
+        // clip's start. onstop won't log clip_duration (finalized guard) — log it here so the
+        // measured duration + actually-delivered postrollMs (<POSTROLL_MS) stay observable.
+        // Clips never stop-requested (re-ask restarts) keep their pre-B5 behavior: no event.
+        if (prev.stopRequestedAt != null) {
+          logger.log({
+            type: 'clip',
+            extra: 'clip_duration',
+            durationMs: Math.round(performance.now() - prev.startedAt),
+            prerollMs: prev.preroll ? Math.round((prev.preroll.pcm.length / prev.preroll.sampleRate) * 1000) : 0,
+            postrollMs: Math.max(0, Math.round(performance.now() - prev.stopRequestedAt)),
+          });
+        }
         prev.resolveStop(blob);
         prev.resolveStop = null;
       }
@@ -305,6 +333,8 @@ export class AudioRecorder {
         startedAt: performance.now(),
         // W6 마크: 이 클립 시작 직전 0.5s — barge-in으로 잘린 첫 음절이 이 안에 있다.
         preroll: this.snapshotPreroll(PREROLL_MS),
+        delayedStopTimer: null,
+        stopRequestedAt: null,
       };
 
       // Callbacks close over `slot` exclusively — no `this.*` access, so a stale recorder
@@ -322,11 +352,16 @@ export class AudioRecorder {
           : null;
         // #2: measured clip duration (webm header has no duration cue → ffprobe sees N/A).
         // W6: prerollMs 동봉 — 이 클립에 결합될 프리롤 길이(0 = 프리롤 없음).
+        // B5: postrollMs 동봉 — stop 요청 → 실제 stop까지 실측(≈POSTROLL_MS = 후반 보강 작동,
+        // <POSTROLL_MS = 다음 클립 시작으로 절단). stop 요청이 없던 클립엔 미동봉.
         logger.log({
           type: 'clip',
           extra: 'clip_duration',
           durationMs: Math.round(performance.now() - slot.startedAt),
           prerollMs: slot.preroll ? Math.round((slot.preroll.pcm.length / slot.preroll.sampleRate) * 1000) : 0,
+          ...(slot.stopRequestedAt != null
+            ? { postrollMs: Math.max(0, Math.round(performance.now() - slot.stopRequestedAt)) }
+            : {}),
         });
         slot.resolveStop?.(blob);
         slot.resolveStop = null;
@@ -376,20 +411,31 @@ export class AudioRecorder {
         return;
       }
       slot.resolveStop = resolve;
+      slot.stopRequestedAt = performance.now();
       // onstop이 끝내 발화하지 않는 환경(iOS 마이크 점유)에서 hang 방지:
       // timeout 시 지금까지 수집된 chunks로 blob을 만들어 resolve.
+      // B5: 실제 stop이 POSTROLL_MS 늦게 나가므로 가드도 POSTROLL_MS만큼 연장 — 정상 post-roll이
+      // timeout으로 오인 절단되지 않게 한다(iOS onstop 미발화 보호는 그대로 유지).
       slot.stopTimer = setTimeout(() => {
         if (slot.finalized) return;
         slot.finalized = true;
         slot.stopTimer = null;
+        if (slot.delayedStopTimer) { clearTimeout(slot.delayedStopTimer); slot.delayedStopTimer = null; }
         const blob = slot.chunks.length > 0
           ? new Blob(slot.chunks, { type: slot.mimeType || 'audio/webm' })
           : null;
         logger.log({ type: 'error', extra: `clip_stop_timeout:${slot.chunks.length}` });
         slot.resolveStop?.(blob);
         slot.resolveStop = null;
-      }, STOP_TIMEOUT_MS);
-      try { slot.recorder.stop(); } catch { /* ignore */ }
+      }, STOP_TIMEOUT_MS + POSTROLL_MS);
+      // B5 지연 정지: 즉시 stop하지 않고 POSTROLL_MS 동안 더 녹음한다(꼬리 발화 수록).
+      // 이어붙임 없는 연속 녹음 — 같은 recorder가 계속 도는 것이라 별도 결합 처리가 없다.
+      // startClip(prev-detach)/dispose()가 이 타이머를 클리어하고 즉시 stop해 다음 클립을 보호한다.
+      slot.delayedStopTimer = setTimeout(() => {
+        slot.delayedStopTimer = null;
+        if (slot.finalized) return;
+        try { slot.recorder.stop(); } catch { /* ignore */ }
+      }, POSTROLL_MS);
     });
   }
 
@@ -398,6 +444,9 @@ export class AudioRecorder {
     const slot = this.active;
     this.active = null;
     if (slot && !slot.finalized) {
+      // B5: pending post-roll delayed stop — clear FIRST and stop immediately (the stream is
+      // about to be torn down; a late delayed stop would fire on a dead recorder).
+      if (slot.delayedStopTimer) { clearTimeout(slot.delayedStopTimer); slot.delayedStopTimer = null; }
       slot.finalized = true;
       if (slot.stopTimer) { clearTimeout(slot.stopTimer); slot.stopTimer = null; }
       if (slot.recorder.state !== 'inactive') {

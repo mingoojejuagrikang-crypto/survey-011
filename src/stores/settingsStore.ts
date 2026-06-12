@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Column, SheetConfig, LegacyInputMode } from '../types';
+import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
 
 interface SettingsState {
   googleConnected: boolean;
@@ -31,6 +32,13 @@ interface SettingsState {
   teamFolderId: string | null;
   /** v0.4.5 Q1b: 캐시된 사용자 Drive 내 `survey-011/log/` 폴더 ID — 매 업로드 검색 방지. */
   userLogFolderId: string | null;
+  /** v0.7.0 — 추세 검증 알림 전역 마스터 토글. 컬럼별 방향은 Column.trendRule. 기본 false. */
+  trendAlertEnabled: boolean;
+  /** v0.7.0 — 조사시기(회차) 컬럼 id. null = 자동(첫 date 컬럼, '조사일자' 우선) —
+   *  해석은 pastValues.resolveRoundCol. */
+  roundDateColId: string | null;
+  /** v0.7.0 — 조회 탭 기본 비교 범위: 직전 조사 vs 작기 전체. */
+  reviewScope: 'prevRound' | 'season';
 
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns'>>) => void;
   updateColumn: (id: string, next: Column) => void;
@@ -101,7 +109,8 @@ export const useSettingsStore = create<SettingsState>()(
       sheetTab: '',
       availableSheets: [],
       manualMode: false,
-      columns: MOCK_COLUMNS,
+      // 신규 설치 기본 컬럼에도 샘플키 유추값을 미리 부여(prev===next → undefined일 때만 유추).
+      columns: MOCK_COLUMNS.map((c) => reconcileColumnFlags(c, c)),
       tableGenerated: false,
       totalRows: 50,
       ttsRate: 1.05,
@@ -112,26 +121,30 @@ export const useSettingsStore = create<SettingsState>()(
       preferredVoiceName: '',
       teamFolderId: null,
       userLogFolderId: null,
+      trendAlertEnabled: false,
+      roundDateColId: null,
+      reviewScope: 'prevRound',
 
       set: (partial) => set(partial),
       updateColumn: (id, next) =>
         set((state) => ({
-          columns: state.columns.map((c) => (c.id === id ? next : c)),
+          // v0.7.0 — input/type 변경 시 sampleKey 재유추 + 부적격 trendRule 제거(columnFlags 규칙).
+          columns: state.columns.map((c) => (c.id === id ? reconcileColumnFlags(c, next) : c)),
         })),
       addColumn: () =>
-        set((state) => ({
-          columns: [
-            ...state.columns,
-            {
-              id: 'c' + Date.now(),
-              name: '새 항목',
-              type: 'text',
-              input: 'auto',
-              ttsAnnounce: false,
-              auto: { kind: 'fixed', value: '' },
-            },
-          ],
-        })),
+        set((state) => {
+          const col: Column = {
+            id: 'c' + Date.now(),
+            name: '새 항목',
+            type: 'text',
+            input: 'auto',
+            ttsAnnounce: false,
+            auto: { kind: 'fixed', value: '' },
+          };
+          // v0.7.0 — 신규 컬럼도 샘플키 유추 기본값을 받는다(auto+text → true).
+          col.sampleKey = inferSampleKey(col);
+          return { columns: [...state.columns, col] };
+        }),
       removeColumn: (id) =>
         set((state) => ({ columns: state.columns.filter((c) => c.id !== id) })),
       reorderColumns: (fromIdx, toIdx) =>
@@ -145,11 +158,16 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'survey-011-settings-v3',
-      version: 4,
+      version: 5,
       migrate: (persisted: unknown, _version: number) => {
         const s = persisted as Partial<SettingsState> & { columns?: unknown[] };
         if (Array.isArray(s.columns)) {
-          s.columns = (s.columns as unknown[]).map(migrateColumn);
+          // v5 — 기존 컬럼 전부에 샘플키 유추 기본값 부여(사용자가 이미 토글한 boolean은 보존:
+          // prev===next 호출은 structural change가 아니므로 undefined일 때만 유추) + 잘못된
+          // trendRule 값 방어적 정규화(columnFlags 규칙).
+          s.columns = (s.columns as unknown[])
+            .map(migrateColumn)
+            .map((c) => reconcileColumnFlags(c, c));
         }
         if (typeof s.ttsRate !== 'number') s.ttsRate = 1.05;
         if (typeof s.sessionLabelColId !== 'string' && s.sessionLabelColId !== null) s.sessionLabelColId = null;
@@ -159,6 +177,10 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
         if (typeof s.userLogFolderId !== 'string' && s.userLogFolderId !== null) s.userLogFolderId = null;
+        // v5 — 추세 검증·조회 탭 설정 기본값
+        if (typeof s.trendAlertEnabled !== 'boolean') s.trendAlertEnabled = false;
+        if (typeof s.roundDateColId !== 'string' && s.roundDateColId !== null) s.roundDateColId = null;
+        if (s.reviewScope !== 'prevRound' && s.reviewScope !== 'season') s.reviewScope = 'prevRound';
         return s as SettingsState;
       },
     },

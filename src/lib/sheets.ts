@@ -217,6 +217,27 @@ export async function fetchAllRows(
   return { headers: all[0] || [], rows: all.slice(1) };
 }
 
+/**
+ * v0.7.0 — 탭 전체를 한 번의 GET으로 읽는다. range를 **따옴표 처리한 탭명만**으로 보내면
+ * Sheets API가 데이터가 있는 전 범위를 돌려주므로, fetchAllRows의 A1:Z 바운드가 만들던
+ * 26컬럼/2000행 클램프가 없다. 과거값 인덱스(pastValues) 전용 — 행 단위 재fetch 금지.
+ */
+export async function fetchAllRowsUnbounded(
+  spreadsheetId: string,
+  sheetTitle: string,
+): Promise<{ headers: string[]; rows: string[][] }> {
+  const range = encodeURIComponent(quoteSheetTitle(sheetTitle));
+  const r = await authFetch(`${API}/${spreadsheetId}/values/${range}`);
+  if (!r.ok) {
+    let body = '';
+    try { body = await r.text(); } catch { /* ignore */ }
+    throw new Error(`시트 조회 실패 (HTTP ${r.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+  }
+  const d = (await r.json()) as { values?: string[][] };
+  const all = d.values || [];
+  return { headers: all[0] || [], rows: all.slice(1) };
+}
+
 /** Append a single row to the sheet. */
 export async function appendRow(
   spreadsheetId: string,

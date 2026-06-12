@@ -27,6 +27,7 @@ export type VoiceCommand =
   | 'pause'
   | 'resume'
   | 'end'
+  | 'confirm'
   | null;
 
 export interface CommandSpec {
@@ -57,6 +58,10 @@ export const VOICE_COMMANDS: CommandSpec[] = [
   { id: 'nextRow', word: '다음',     display: '다음',     desc: '다음 행으로 넘어갑니다 (입력 중이던 행은 빈 행으로 남아 데이터 탭에서 채울 수 있어요)', primary: true },
   { id: 'cancel',  word: '취소',     display: '취소',     desc: '현재 인식된 값을 지웁니다' },
   { id: 'keep',    word: '유지',     display: '유지',     desc: '현재 항목의 값을 그대로 두고 다음으로 넘어갑니다' },
+  // v0.7.0 B4: 추세 검증 알림의 확인 응답("확인해주세요" → "확인"). 알림 상태 밖에서는 짧은
+  // 재안내만 한다(useVoiceSession). prefix 불변식 검증: 기존 단어(수정·이전·다음·취소·유지·
+  // 일시정지·재시작·종료) 어느 것과도 서로 prefix 관계가 아니다.
+  { id: 'confirm', word: '확인',     display: '확인',     desc: '추세 알림에서 방금 입력한 값을 그대로 확정합니다' },
   { id: 'pause',   word: '일시정지', display: '일시정지', desc: '입력을 잠시 멈춥니다',            primary: true },
   { id: 'resume',  word: '재시작',   display: '재시작',   desc: '멈춘 입력을 다시 시작합니다',      primary: true },
   { id: 'end',     word: '종료',     display: '종료',     desc: '입력을 끝내고 저장합니다',        primary: true },

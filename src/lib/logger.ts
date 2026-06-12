@@ -11,7 +11,11 @@ export interface LogEntry {
     | 'stt_rejected_ambiguous_syllable'
     // v0.5.0 W7(T-19): 세션 밖 앱 수명주기 이벤트 — app_boot / hydration_ok / recover_* /
     // drive_upload / setting_changed 등. sessionId가 없으면 '__app__' sentinel이 붙는다.
-    | 'app';
+    | 'app'
+    // v0.7.0 B4: 추세 검증 — extra에 trend_alert_fired / trend_alert_confirmed /
+    // trend_alert_corrected / trend_alert_dismissed:<cmd> / trend_skip:<cause>를 싣는다.
+    // 차기 로그 분석이 오알림률(fired 대비 corrected 비율)을 측정하는 근거.
+    | 'trend';
   sessionId?: string;
   row?: number;
   colId?: string;
@@ -48,6 +52,11 @@ export interface LogEntry {
   /** v0.5.0 W6: preroll length (ms) merged into this clip — set on `clip_duration` /
    *  `clip_trimmed` events. 0 = no preroll captured for this clip. */
   prerollMs?: number;
+  /** v0.7.0 B5: measured post-roll (ms) actually delivered before the recorder stopped —
+   *  stop-request → actual stop. ≈500 when the full post-roll ran; <500 when a fast next-field
+   *  startClip (or dispose) truncated it gracefully. Set on `clip_duration` events whose clip
+   *  had a stop requested; absent on clips that were never stop-requested. */
+  postrollMs?: number;
 }
 
 /** Snapshot of session-level context, emitted on the `session` start/stop events. */

@@ -56,7 +56,7 @@
 - **원인:** STT가 leading `"백"`을 유사한 한절 명사로 잘못 인식하고, 파서가 비숫자 토큰을 버리면서 오류가 침묵 커밋됨.
 - **해결·회피:** 앞단의 무관한 한절 명사가 "백"과 발음이 유사한 단어("액", "개", "엑", "에봇" 등)이면 ambiguous 처리하여 재질문하거나 기대 범위 오차 임계(이상치) 검사 적용 필요. **v0.5.0 가드(부분):** 같은 계열의 "유실된 채 침묵 커밋" 경로 2종을 차단 — ① 유효 숫자 토큰 2개 이상이면 `null`(재질문), ② `정수 + 점 + 비숫자 잔여`(소수부가 비숫자로 오인식)도 `null`(재질문). 단 leading "백"이 통째로 비숫자 1토큰으로 오인식되는 원형 케이스는 여전히 커밋될 수 있음.
 - **출처:** `2026-06-05 세션` (실기기 로그 분석); `2026-06-10 실기기 로그` — **수정 경로 재발(소수부 유실형)**: `"111 점 에"`로 인식돼 소수부가 비숫자로 유실된 채 정수 `111`만 침묵 커밋됨; `2026-06-11 실기기 로그` — **v0.5.0 소수부 가드 작동 확인**: `"111 점 에"`·`"300 점 부다"` 둘 다 `stt_parse_failed:decimal_fraction_lost`로 **재질문**(침묵커밋 안 함) → 정상값 커밋. **단 점-없는 잔여형 잔존**: `"277 정체"`(row14, 277.7 의도)는 `점`이 없어 가드 밖 → 정수 `277` 커밋(사용자가 직후 수정으로 277.7 정정). 정수+무관 비숫자 토큰형은 미차단; `2026-06-12 분석`(06-11 v0.6.0 실기기 로그) — **점-없는 잔여형 재발 2건**: `"제17.7"`→`17.7` 침묵 커밋(의도 77.7, 선행 음절 유실)·`"현백 33.3"`→`33.3` 침묵 커밋(의도 333.3) — 둘 다 사용자가 수정 명령으로 즉시 정정(누적 4건, 빈도 상승 → v0.7.0 가드 승격 후보).
-- **현재 상태:** ⚠️주시 (`점`+비숫자 침묵커밋 가드 2종은 v0.5.0에서 작동 확인 — `src/lib/koreanNum.ts`, 회귀 `tests/koreanNum.spec.ts`. **점-없는 정수+비숫자 잔여형은 잔존** — 06-11 백로그 STT-C, 텔레메트리 관측 우선)
+- **현재 상태:** ✅수정됨(점-없는 잔여형 가드, **survey-011 v0.7.0 STT-C**) — 단일 숫자 + 무관 비숫자 잔여 토큰("제17.7", "현백 33.3")은 ambiguous(`null`) 처리해 재질문(`stt_parse_failed:extraneous_token`). 단위어·조사·기존 커밋 보장 어휘는 의도적으로 좁은 화이트리스트(`HARMLESS_RESIDUAL_TOKENS`, `src/lib/koreanNum.ts`)로 통과시켜 "당도 8" 류 정상 커밋은 유지. 침묵 커밋 3계열(multi_numeric·decimal_fraction_lost·extraneous_token) 모두 재질문으로 전환 — STT 오인식 자체는 잔존([STT-10] 화이트리스트 정밀도 관측). 회귀 `tests/koreanNum.spec.ts`.
 
 ### [STT-7] 수정 명령 `"수정"`이 `"수변"` / `"수 벽"`으로 오인식되어 무시되거나 파싱 실패
 - **증상:** 수정하고 싶을 때 `"수정"`이라고 말했으나 STT가 `"수변"`으로 오인식하여 TTS가 켜져 있어 차단(`stt_blocked_tts_muted`)되거나, `"수 벽"`으로 오인식하여 파싱 실패(`stt_parse_failed`)되어 정정 진입이 안 됨.
@@ -78,6 +78,13 @@
 - **해결·회피:** 임계값 추가 인하는 노이즈 오탐([STT-3]) 위험과 트레이드오프 — 현행 0.55 유지하고 텔레메트리로 빈도 관측 지속.
 - **출처:** `survey-011 v0.4.3`(T-12 임계값 0.55 도입); `2026-06-10 실기기 로그` — 저신뢰 거부 재발 1건 관측(세션 480 이벤트 중 1건, 빈도는 크게 완화된 상태).
 - **현재 상태:** ⚠️주시
+
+### [STT-10] STT-C 재질문 가드의 융합 잔여 토큰 — 단위어+조사 융합형("밀리요", "프로요", "mm입니다")은 현재 재질문됨
+- **증상:** v0.7.0 STT-C 가드(`extraneous_token`)의 화이트리스트(`HARMLESS_RESIDUAL_TOKENS`, `src/lib/koreanNum.ts` 161~172)는 단위어·조사를 **개별 토큰**으로만 통과시킨다. STT가 단위어와 조사를 한 토큰으로 융합하면("33.3 밀리요", "8 프로요", "20.5 mm입니다") 화이트리스트 밖이라 정상 발화도 재질문된다.
+- **원인:** 의도적으로 좁은 화이트리스트 — [STT-6]의 선행 음절 오인식("액", "제", "현백" 등)을 통과시키지 않는 것이 우선이라, 융합형을 선제 추가하면 침묵 커밋 구멍이 다시 열릴 위험.
+- **해결·회피:** 재질문은 안전한 쪽 실패(값 유실 없음). **다음 실기기 로그 분석에서 `extraneous_token`의 정밀도/재현율을 측정한 뒤** 화이트리스트 확장(또는 "단위어 prefix + 조사 suffix" 분해 매칭)을 결정한다 — 측정 전 확장 금지.
+- **출처:** `2026-06-12 v0.7.0` Codex 교차점검(watch-item).
+- **현재 상태:** ⚠️주시 (텔레메트리 관측 우선 — 필드 로그에서 `stt_parse_failed:extraneous_token` 빈도·오탐 수확)
 
 ---
 
@@ -262,7 +269,7 @@
 - **해결·회피:** ① 빈 캡처 감지 시 셀 audioClip **포인터 등록 회수**(broken pointer 방지 — [CLIP-2/persistSession] 회수 패턴), 또는 ② 첫 녹음 전 프리롤 1프레임 워밍업 보장. 값은 영향 없으므로 우선순위 낮음(P2).
 - **출처:** `2026-06-11 실기기 로그` (단일 세션 1건: row1 c7 `clip_empty`)
 - **현재 상태:** ⚠️주시(가드는 들어갔으나 **레이스에 덮이는 실기기 증거 발견**, 2026-06-12) — 빈 캡처(`clip_empty`) 감지 시 `unlinkBrokenPointer`가 셀 audioClip 포인터를 **메모리(pendingClipsRef)와 이미 영속화된 세션 양쪽에서** 회수하되, 포인터가 여전히 우리 clipKey와 같을 때만 해제(이후 restart/modify가 재지정한 경우 보존)한다. 데이터탭이 404 재생버튼을 더는 렌더하지 않음. 값(audit-trail 외 측정값)은 원래부터 영향 없음. (이전: 06-11 백로그 CLIP-EMPTY(P2)) (`src/lib/useVoiceSession.ts`, `src/lib/audioRecorder.ts` `stopClip` 빈 버퍼 가드)
-- **레이스(2026-06-12 발견):** 값 커밋이 포인터 사전등록 + fire-and-forget `persistSession()`을 먼저 실행하므로(첫 await 전에 포인터 포함 행을 동기 빌드), 그 persist가 in-flight인 동안 `clip_empty`→`unlinkBrokenPointer()`가 실행되면 **늦은 `upsertSession`/`saveSession`이 unlink를 되덮어 포인터가 부활**한다. 06-11 v0.6.0 실기기 로그 row8 c7에서 관측(수확된 sessions.json에 포인터 잔존). 해결은 [CLIP-VAL-1] ③(tombstone 또는 persist 직렬화)과 동일.
+- **레이스(2026-06-12 발견):** 값 커밋이 포인터 사전등록 + fire-and-forget `persistSession()`을 먼저 실행하므로(첫 await 전에 포인터 포함 행을 동기 빌드), 그 persist가 in-flight인 동안 `clip_empty`→`unlinkBrokenPointer()`가 실행되면 **늦은 `upsertSession`/`saveSession`이 unlink를 되덮어 포인터가 부활**한다. 06-11 v0.6.0 실기기 로그 row8 c7에서 관측(수확된 sessions.json에 포인터 잔존). 해결은 [CLIP-VAL-1] ③(tombstone 또는 persist 직렬화)과 동일 — **v0.7.0에서 tombstone으로 봉합**([CLIP-VAL-1] ✅ 참조, 회귀 `tests/clip-modify-rerecord.spec.ts`).
 
 ### [CLIP-VAL-1] 수정 재녹음 중 빈 캡처 → 이전 값 음성이 새 값 셀의 재생버튼으로 남음 (3중 결함)
 - **증상:** row8 횡경(c7) 값은 155.5(시트 1560 일치)인데 데이터탭 재생버튼은 **이전 값 177.7 발화**를 재생. 사용자가 시트 비고에 "음성클립과 값 불일치"를 직접 남김.
@@ -270,7 +277,7 @@
 - **원인(4b0185c 코드 추적, 3중):** ① modify 핸들러의 `if (awaiting.isModify) { pendingCmd?.saveDefault(); await say(…); return; }` 분기가 `announceField()`와 달리 **클립을 재시작하지 않아** 다음 발화가 결정적으로 미녹음(`cancel` 분기도 동일 구조 — 잠재 동일 결함). ② `clip_empty`의 unlink가 in-flight `persistSession`에 되덮임([CLIP-3] 레이스). ③ 재녹음 커밋이 캐노니컬 키 `sess:row:colId`를 재사용해 빈 캡처 시 **이전 값 음성이 그 키 밑에 그대로 재생 대상**으로 남음.
 - **해결·회피(v0.7.0 권장):** ① isModify/cancel 재안내 후 녹음 슬롯 재시작. ② 수정 재녹음 `clip_empty` 시 포인터를 `:cmd<n>` 클립으로 재연결(새 값 발화를 담고 있음 — 이번 건 정답은 `8:c7:cmd1`), 없으면 unlink. ③ unlink tombstone(`brokenClipKeysRef`를 persistSession `mergedClips`가 존중) 또는 persist 직렬화.
 - **출처:** `2026-06-12 분석`(06-11 v0.6.0 실기기 로그 row8; 사용자 제보 메모 동반) — Trace 백로그 P1, ICE 7.3.
-- **현재 상태:** ⚠️주시(최종 v0.6.0의 현재 버그 — v0.7.0 수정 대상)
+- **현재 상태:** ✅수정됨(**survey-011 v0.7.0**, 3중 모두) — ① isModify/cancel 재안내가 `armClipForCell`로 녹음 슬롯을 재시작(재발화가 결정적으로 녹음됨), ② 수정 재녹음 `clip_empty`/`clip_too_small`/`clip_save_failed` 시 포인터를 `:cmd<n>` 클립으로 재연결(`clip_relink_cmd` — 새 값 발화를 담음), 없으면 unlink, ③ 실패 캡처 키 tombstone(`brokenClipKeysRef`)을 persistSession의 모든 audioClips 병합 + await 후 re-strip이 존중하고, 보정 clean save는 **await**로 영속 보장(페이지 사망 창 차단). (`src/lib/useVoiceSession.ts`; 회귀 `tests/clip-modify-rerecord.spec.ts` 4케이스 — 재안내 후 녹음·cancel 분기·cmd 재연결 생존·unlink 비부활)
 
 ### [SYNC-1] sheetRow 매핑이 외부 변경(시트 정렬·행 삽입/삭제)에 취약 — update가 엉뚱한 행을 덮을 수 있음
 - **증상:** v0.6.0 행 단위 재동기화는 각 행이 처음 append된 1-based 시트 행번호(`sheetRow`)를 기억해 두고, 그 행을 수정하면 같은 행을 PUT(UPDATE)한다. 그런데 사용자가 **구글 시트에서 직접 행을 정렬·삽입·삭제**하면 그 행번호가 어긋나, UPDATE가 의도와 다른 행을 덮을 수 있다.

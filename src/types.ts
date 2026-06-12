@@ -8,6 +8,10 @@ export type AutoValue =
   | { kind: 'seq'; from: number; to: number }
   | { kind: 'options'; available: string[]; selected: string[] };
 
+/** v0.7.0 — 추세 검증 방향. increase = 직전 조사보다 커져야 함, decrease = 작아져야 함.
+ *  Column.trendRule이 없으면(undefined) 검증 off. */
+export type TrendRule = 'increase' | 'decrease';
+
 export interface Column {
   id: string;
   name: string;
@@ -19,6 +23,11 @@ export interface Column {
   auto: AutoValue;
   /** decimal places when type === 'float' (default 1) */
   decimals?: number;
+  /** v0.7.0 — 샘플 식별 키 컬럼 여부. 기본값은 자동 유추(input==='auto' && type!=='date');
+   *  규칙·폴백은 src/lib/columnFlags.ts가 SSOT. undefined = 아직 유추 전(소비자는 폴백 적용). */
+  sampleKey?: boolean;
+  /** v0.7.0 — 추세 검증 방향. 적격 컬럼((int|float) && input!=='auto')에서만 유지. 없으면 off. */
+  trendRule?: TrendRule;
 }
 
 export interface SheetConfig {
