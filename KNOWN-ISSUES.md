@@ -76,14 +76,14 @@
 - **증상:** "수정"이라고 말했으나 STT confidence가 낮게 산출되어 명령이 거부됨. v0.4.3에서 수정 명령 전용 임계값을 0.55로 낮췄으나(T-12), 이후에도 드물게 재발.
 - **원인:** STT 엔진이 또렷한 발화에도 낮은 confidence를 산출하는 경우가 잔존 — 엔진 한계.
 - **해결·회피:** 임계값 추가 인하는 노이즈 오탐([STT-3]) 위험과 트레이드오프 — 현행 0.55 유지하고 텔레메트리로 빈도 관측 지속.
-- **출처:** `survey-011 v0.4.3`(T-12 임계값 0.55 도입); `2026-06-10 실기기 로그` — 저신뢰 거부 재발 1건 관측(세션 480 이벤트 중 1건, 빈도는 크게 완화된 상태).
+- **출처:** `survey-011 v0.4.3`(T-12 임계값 0.55 도입); `2026-06-10 실기기 로그` — 저신뢰 거부 재발 1건 관측(세션 480 이벤트 중 1건, 빈도는 크게 완화된 상태). `2026-06-15 v0.7.0 실기기 로그` — 저신뢰 거부 2건("수정" conf .28 id48 / "유지" conf .29 id323), 둘 다 재발화로 즉시 복구. 빈도 완화 상태 유지.
 - **현재 상태:** ⚠️주시
 
 ### [STT-10] STT-C 재질문 가드의 융합 잔여 토큰 — 단위어+조사 융합형("밀리요", "프로요", "mm입니다")은 현재 재질문됨
 - **증상:** v0.7.0 STT-C 가드(`extraneous_token`)의 화이트리스트(`HARMLESS_RESIDUAL_TOKENS`, `src/lib/koreanNum.ts` 161~172)는 단위어·조사를 **개별 토큰**으로만 통과시킨다. STT가 단위어와 조사를 한 토큰으로 융합하면("33.3 밀리요", "8 프로요", "20.5 mm입니다") 화이트리스트 밖이라 정상 발화도 재질문된다.
 - **원인:** 의도적으로 좁은 화이트리스트 — [STT-6]의 선행 음절 오인식("액", "제", "현백" 등)을 통과시키지 않는 것이 우선이라, 융합형을 선제 추가하면 침묵 커밋 구멍이 다시 열릴 위험.
 - **해결·회피:** 재질문은 안전한 쪽 실패(값 유실 없음). **다음 실기기 로그 분석에서 `extraneous_token`의 정밀도/재현율을 측정한 뒤** 화이트리스트 확장(또는 "단위어 prefix + 조사 suffix" 분해 매칭)을 결정한다 — 측정 전 확장 금지.
-- **출처:** `2026-06-12 v0.7.0` Codex 교차점검(watch-item).
+- **출처:** `2026-06-12 v0.7.0` Codex 교차점검(watch-item); `2026-06-15 v0.7.0 실기기 로그` — **정밀도 측정 n=1: true positive**(`"우정 77.7"` row4 → `extraneous_token` 재질문 → 재발화로 정상 커밋, 정상 발화 오탐 아님). 융합 토큰("밀리요" 류)은 이번 세션 미발생. **화이트리스트 확장 보류 방침 유지**(샘플 더 필요).
 - **현재 상태:** ⚠️주시 (텔레메트리 관측 우선 — 필드 로그에서 `stt_parse_failed:extraneous_token` 빈도·오탐 수확)
 
 ---
@@ -188,6 +188,13 @@
 - **해결·회피:** `speak()`/`warmupTts()`에서 voice 할당 시 타입 가드.
 - **출처:** `growth-survey-010@0eaa59a`
 - **현재 상태:** ⚠️주시 (survey-011 `src/lib/speech.ts` voice 설정 경로 점검 권장)
+
+### [IOS-5] 스피커폰 모드 ON인데 출력이 이어피스(리시버)로 강제 전환 — getUserMedia `echoCancellation:true`의 voice-processing 세션
+- **증상:** 사용자가 설정에서 스피커폰 모드를 켰는데도(소음 현장 대응) TTS 안내 음성이 스피커가 아니라 **이어피스(리시버)** 로 나가 잘 안 들림. iOS 18.7 / WebKit 26.5 실기기.
+- **원인(코드+플랫폼 추론):** 앱은 출력 라우팅을 전혀 제어하지 않는다(`setSinkId`/`sinkId`/`setAudioOutput` grep = NONE; `speakerphoneMode`는 `speech.ts:159`·`useVoiceSession.ts:955,1188`의 소프트웨어 half-duplex/STT 임계값 전용). 마이크는 `audioRecorder.ts:135-139`에서 `echoCancellation:true`로 열린다. iOS WebKit은 `echoCancellation:true`를 요청받으면 마이크를 **voice-processing 오디오 세션**(AVAudioSession 통신/voice-chat 모드)으로 열고, 이 모드에서 OS가 출력을 리시버로 라우팅한다. iOS Safari엔 출력을 강제할 Web API가 없다(`HTMLMediaElement.setSinkId` 미지원). → **OS/WebKit 레벨 제약, 앱 코드로 직접 해결 불가.**
+- **해결·회피(미확정 — 트레이드오프):** `echoCancellation:false`(또는 speakerphoneMode일 때만 false)로 열면 voice-processing 세션을 피해 스피커 출력이 유지될 *가능성*. 단 [CLIP-4]의 의도적 `echoCancellation:on`(빗소리 에코 되먹임 감소)과 [IOS-3] phantom 입력 위험과 충돌 → **블라인드 플립 금지, 측정 A/B 필요**(라우팅·에코·노이즈 오인식 3축 비교).
+- **출처:** `2026-06-15 v0.7.0 실기기 로그` (민구 제보; 코드 firsthand 확인). 메커니즘 외부 출처 교차확인은 **미수행**(WebSearch 도구 부재 — 확인 필요).
+- **현재 상태:** ⚠️주시 (미확정 가설 — Vance A/B + Pax 외부확인 선결. `src/lib/audioRecorder.ts:135-139`)
 
 ---
 
