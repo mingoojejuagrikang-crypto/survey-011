@@ -119,7 +119,7 @@ async function setSequential(page: Page, to: number) {
 
 /** 테이블 생성 + 미리보기 닫기 */
 async function generateTable(page: Page) {
-  const generateBtn = page.locator('text=오늘 테이블 생성').first();
+  const generateBtn = page.locator('text=입력 테이블 생성').first();
   if (!(await generateBtn.isVisible().catch(() => false))) return;
   await generateBtn.click();
   await page.waitForTimeout(400);
@@ -618,7 +618,7 @@ test('[설정] 테이블 미리보기 팝업 내용 검증', async ({ page }) =>
   await setSequential(page, 3);
   await addColumn(page, { input: 'voice', name: '측정값' });
 
-  const generateBtn = page.locator('text=오늘 테이블 생성').first();
+  const generateBtn = page.locator('text=입력 테이블 생성').first();
   if (!(await generateBtn.isVisible().catch(() => false))) {
     console.log('ℹ 테이블 생성 버튼 없음 — 스킵');
     return;
@@ -660,7 +660,7 @@ test('[설정] 컬럼 0개 → 테이블 생성 버튼 표시 but 행 없음', a
   await freshSettings(page);
 
   // 컬럼 추가 안 함 → 테이블 생성 시 행이 0개여야 함
-  const generateBtn = page.locator('text=오늘 테이블 생성').first();
+  const generateBtn = page.locator('text=입력 테이블 생성').first();
   if (!(await generateBtn.isVisible().catch(() => false))) {
     console.log('ℹ 생성 버튼 없음 — 스킵');
     return;

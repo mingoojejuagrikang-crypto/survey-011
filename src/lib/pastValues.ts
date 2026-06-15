@@ -184,6 +184,26 @@ export function previousRound(index: PastIndex, key: string, beforeDate: string)
   return best;
 }
 
+/**
+ * v0.8.0 — 화면 전역 비교 기준: 인덱스에 존재하는 **최근 2개 회차**(직전→최근).
+ *
+ * 조회탭은 "각 샘플이 시간 경과(직전→최근)에 따라 어떻게 변하는지"를 보는 탭이다.
+ * 샘플을 섞지 않으므로(집계 금지) 이 함수는 **샘플별이 아니라 전역**이다 — 전체 화면이
+ * 같은 두 회차를 쓰고, 각 샘플은 그 두 회차에서 자기 값을 읽는다(없으면 '—').
+ * (대조: previousRound는 샘플별로 다른 직전 회차를 돌려준다 — 추세 검증/음성용으로 유지.)
+ *
+ *  - rounds는 buildPastIndex에서 오름차순 정렬됨 → 끝의 2개가 직전·최근.
+ *  - 회차가 1개뿐이면 prev=null(변화 표시 불가, 값만), 0개면 둘 다 null.
+ *  - **집계(합계·평균) 함수가 아니다.** 두 회차의 ISO 문자열만 고른다.
+ */
+export function latestTwoRounds(index: PastIndex): { latest: string | null; prev: string | null } {
+  const r = index.rounds;
+  return {
+    latest: r.length >= 1 ? r[r.length - 1] : null,
+    prev: r.length >= 2 ? r[r.length - 2] : null,
+  };
+}
+
 /** (키, 회차, 컬럼)의 과거값. 없거나 빈 문자열이면 null. */
 export function pastValue(
   index: PastIndex,

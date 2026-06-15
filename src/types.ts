@@ -8,8 +8,9 @@ export type AutoValue =
   | { kind: 'seq'; from: number; to: number }
   | { kind: 'options'; available: string[]; selected: string[] };
 
-/** v0.7.0 — 추세 검증 방향. increase = 직전 조사보다 커져야 함, decrease = 작아져야 함.
- *  Column.trendRule이 없으면(undefined) 검증 off. */
+/** v0.8.0 — 이상치 알람 방향(의미 반전). increase = 직전 조사보다 **커지면** 알람,
+ *  decrease = 직전 조사보다 **작아지면** 알람. Column.trendRule이 없으면(undefined) 방향 알람 off.
+ *  (telemetry 키 'trend'/trend_alert_* 는 로그 연속성을 위해 유지 — 사용자 노출 문자열만 변경.) */
 export type TrendRule = 'increase' | 'decrease';
 
 export interface Column {
@@ -26,8 +27,12 @@ export interface Column {
   /** v0.7.0 — 샘플 식별 키 컬럼 여부. 기본값은 자동 유추(input==='auto' && type!=='date');
    *  규칙·폴백은 src/lib/columnFlags.ts가 SSOT. undefined = 아직 유추 전(소비자는 폴백 적용). */
   sampleKey?: boolean;
-  /** v0.7.0 — 추세 검증 방향. 적격 컬럼((int|float) && input!=='auto')에서만 유지. 없으면 off. */
+  /** v0.8.0 — 이상치 알람 방향(의미 반전: increase=커지면 알람). 적격 컬럼((int|float) &&
+   *  input!=='auto')에서만 유지. 없으면 방향 알람 off. */
   trendRule?: TrendRule;
+  /** v0.8.0 — 변동률 % 임계값(방향 무관). |Δ|/|prev|×100 ≥ 임계값이면 알람. 적격 컬럼에서만
+   *  유지. undefined = off(값을 입력했을 때만 활성). 방향 알람과 독립(OR). */
+  pctThreshold?: number;
 }
 
 export interface SheetConfig {

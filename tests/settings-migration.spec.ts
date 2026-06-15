@@ -1,15 +1,16 @@
 /**
- * v0.7.0 B1 — settings persist v4→v5 마이그레이션 + 샘플키 자동 유추 + 설정탭 토글 round-trip.
+ * settings persist 마이그레이션 + 설정탭 토글 round-trip.
  *
- * addInitScript로 version-4 localStorage 페이로드(샘플키/추세 필드 없음 + 일부 junk 값)를
- * 심고 부팅 → zustand persist migrate(4→5)가 실행된 결과를 설정탭 UI와 localStorage로 검증.
+ * v0.7.0 B1: v4→v5 — 샘플키 자동 유추 + junk 정규화.
+ * v0.8.0 WS1: v5→v6 — "추세 검증" → "이상치 알람" 전환.
+ *   - 전역 마스터 토글 trendAlertEnabled 삭제(이상치 알람은 컬럼별 규칙 유무로 활성).
+ *   - 컬럼별 trendRule을 off로 초기화(의미 반전이라 기존 값은 사용자 의도와 반대 — 클리어).
+ *   - pctThreshold(신규 변동률 % 임계값) reconcile 정규화(부적격/비유한수/≤0 제거).
+ *   - reviewScope(직전 조사/작기 전체 모드) 삭제 — 조회탭은 최근 2회차 고정(WS4).
+ *   - roundDateColId는 보존(UI만 v0.8.0 조회탭으로 이전 — WS4).
  *
- * 검증:
- *   1. 유추 기본값 — sampleKey = (input==='auto' && type!=='date'); junk 값 방어 정규화;
- *      추세 토글은 적격(사용자 입력 숫자) 컬럼에만 노출; 전역 토글·조사시기 셀렉터 기본값.
- *   2. 토글 round-trip — 사용자가 바꾼 샘플키/추세/전역 토글/조사시기 컬럼이 v5 페이로드로
- *      저장되고 reload 후 유지된다.
- *   3. 적격성 전환 — input 변경 시 trendRule 클리어 + sampleKey 재유추(columnFlags 규칙).
+ * 샘플키 토글 UI는 v0.8.0에서 조회탭으로 이전(WS4)되므로 설정탭 UI 검증 대신 store 페이로드로
+ * 마이그레이션 결과를 검증한다.
  *
  * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
  */
@@ -18,13 +19,27 @@ import { test, expect, type Page } from '@playwright/test';
 test.setTimeout(60_000);
 const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
-const BLUE = 'rgb(41, 121, 255)'; // T.blue — SegmentToggle/토글 활성 배경
+const BLUE = 'rgb(41, 121, 255)'; // T.blue — SegmentToggle 활성 배경
 
-/** v0.6.0(version 4) 시절 페이로드 — sampleKey/trendRule/전역 필드 없음. junk 2건 포함:
- *  c3.sampleKey가 string, c8.trendRule이 미지원 값 → migrate가 방어 정규화해야 한다. */
+async function readStore(page: Page): Promise<{ version: number; state: Record<string, unknown> }> {
+  return page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), STORE_KEY);
+}
+
+function colById(stored: { state: Record<string, unknown> }, id: string): Record<string, unknown> {
+  const cols = stored.state.columns as Array<Record<string, unknown>>;
+  return cols.find((c) => c.id === id)!;
+}
+
+/** SegmentToggle 내부에서 라벨이 정확히 일치하는 옵션 버튼. */
+function opt(page: Page, toggleId: string, label: string) {
+  return page.locator(`[data-testid="${toggleId}"]`).getByRole('button', { name: label, exact: true });
+}
+
+// ─── v4→v5: 샘플키 자동 유추 + junk 정규화 (store 페이로드로 검증) ─────────────
+
+/** v0.6.0(version 4) 페이로드 — sampleKey/trendRule/전역 필드 없음. junk 2건 포함. */
 const V4_COLUMNS = [
   { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' } },
-  { id: 'c2', name: '기준일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '2026-05-13' } },
   { id: 'c3', name: '농가명', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' }, sampleKey: 'yes' },
   { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 10 } },
   { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, trendRule: 'bogus' },
@@ -42,99 +57,170 @@ const V4_PAYLOAD = {
   version: 4,
 };
 
-async function bootSettings(page: Page) {
-  // reload 후에도 init script가 다시 돌므로, 이미 값이 있으면(post-migrate v5) 덮지 않는다.
+async function bootWith(page: Page, payload: unknown) {
   await page.addInitScript(
-    ({ key, payload }) => {
-      if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(payload));
+    ({ key, p }) => {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(p));
     },
-    { key: STORE_KEY, payload: V4_PAYLOAD },
+    { key: STORE_KEY, p: payload },
   );
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-  await page.locator('[data-testid="tab-settings"]').click();
 }
 
-/** SegmentToggle 내부에서 라벨이 정확히 일치하는 옵션 버튼. */
-function opt(page: Page, toggleId: string, label: string) {
-  return page.locator(`[data-testid="${toggleId}"]`).getByRole('button', { name: label, exact: true });
-}
+test('v4→v6 migrate — 샘플키 자동 유추 + junk 정규화 + 최신 버전', async ({ page }) => {
+  await bootWith(page, V4_PAYLOAD);
 
-async function readStore(page: Page): Promise<{ version: number; state: Record<string, unknown> }> {
-  return page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), STORE_KEY);
-}
+  await expect.poll(async () => (await readStore(page)).version).toBe(6);
+  const stored = await readStore(page);
 
-test('v4→v5 migrate — 샘플키 자동 유추 + junk 정규화 + 추세 토글 적격 컬럼 한정', async ({ page }) => {
-  await bootSettings(page);
+  // 샘플키 유추 규칙: auto && !date → true. junk 'yes'(c3)는 boolean 아니라 유추 적용.
+  expect(colById(stored, 'c1').sampleKey).toBe(false); // date → 무
+  expect(colById(stored, 'c3').sampleKey).toBe(true);  // junk 'yes' → 유추 true
+  expect(colById(stored, 'c6').sampleKey).toBe(true);  // auto int → 유
+  expect(colById(stored, 'c8').sampleKey).toBe(false); // voice → 무
+  expect(colById(stored, 'c10').sampleKey).toBe(false); // touch → 무
 
-  // 유추 규칙: auto && !date → 유. date(c1)·voice(c8)·터치는 input 기준으로만 판정.
-  await expect(opt(page, 'sample-key-c1', '무')).toHaveCSS('background-color', BLUE);   // date → 무
-  await expect(opt(page, 'sample-key-c3', '유')).toHaveCSS('background-color', BLUE);   // junk 'yes' → 유추 true
-  await expect(opt(page, 'sample-key-c6', '유')).toHaveCSS('background-color', BLUE);   // auto int → 유
-  await expect(opt(page, 'sample-key-c8', '무')).toHaveCSS('background-color', BLUE);   // voice → 무
-  await expect(opt(page, 'sample-key-c10', '무')).toHaveCSS('background-color', BLUE);  // touch → 무
-
-  // 추세 토글: 적격(int|float && !auto) = c8만. junk 'bogus'는 클리어돼 '없음' 활성.
-  await expect(page.locator('[data-testid="trend-rule-c8"]')).toBeVisible();
-  await expect(opt(page, 'trend-rule-c8', '없음')).toHaveCSS('background-color', BLUE);
-  await expect(page.locator('[data-testid="trend-rule-c6"]')).toHaveCount(0);  // auto int → 부적격
-  await expect(page.locator('[data-testid="trend-rule-c10"]')).toHaveCount(0); // text → 부적격
-
-  // 전역: 추세 검증 알림 기본 off(#2A2D32), 조사시기 컬럼 기본 자동 + date 컬럼만 목록.
-  await expect(page.locator('[data-testid="trend-alert-toggle"]')).toHaveCSS(
-    'background-color', 'rgb(42, 45, 50)',
-  );
-  const roundSel = page.locator('[data-testid="round-date-col"]');
-  await expect(roundSel).toHaveValue('');
-  await expect(roundSel.locator('option')).toHaveText(['자동 (조사일자)', '조사일자', '기준일자']);
+  // v6 전환: trendRule(junk 'bogus' 포함) 전부 클리어, pctThreshold 없음, 전역 토글 삭제.
+  expect(colById(stored, 'c8').trendRule).toBeUndefined();
+  expect(colById(stored, 'c8').pctThreshold).toBeUndefined();
+  expect(stored.state.trendAlertEnabled).toBeUndefined();
+  // reviewScope는 삭제(조회탭 최근 2회차 고정), roundDateColId는 보존(UI만 WS4 조회탭으로 이전).
+  expect(stored.state.reviewScope).toBeUndefined();
+  expect(stored.state.roundDateColId).toBe(null);
 });
 
-test('토글 round-trip — v5 페이로드 저장 + reload 후 유지', async ({ page }) => {
-  await bootSettings(page);
+// ─── v5→v6: 이상치 알람 전환 ──────────────────────────────────────────────
 
-  await opt(page, 'sample-key-c3', '무').click();        // 유추 true → 사용자 명시 false
-  await opt(page, 'trend-rule-c8', '커짐').click();      // trendRule: 'increase'
-  await page.locator('[data-testid="trend-alert-toggle"]').click();
-  await page.locator('[data-testid="round-date-col"]').selectOption('c2');
+/** v0.7.0(version 5) 페이로드 — 전역 trendAlertEnabled + 컬럼별 trendRule(구 의미) + pctThreshold
+ *  junk. v6 migrate가 토글 삭제 + trendRule 클리어 + pctThreshold 정규화를 해야 한다. */
+const V5_COLUMNS = [
+  { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
+  { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 10 }, sampleKey: true },
+  // 적격 컬럼 — trendRule(구 의미) 저장돼 있고 pctThreshold도 음수 junk.
+  { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false, trendRule: 'increase', pctThreshold: -5 },
+  // 부적격(텍스트) 컬럼에 잘못 들어간 pctThreshold도 제거돼야 한다.
+  { id: 'c10', name: '비고', type: 'text', input: 'touch', ttsAnnounce: false, auto: { kind: 'fixed', value: '' }, sampleKey: false, pctThreshold: 20 },
+];
 
-  // 저장된 페이로드가 v5 + 정규화·토글 반영인지
-  await expect.poll(async () => (await readStore(page)).version).toBe(5);
+const V5_PAYLOAD = {
+  state: {
+    googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+    availableSheets: [], manualMode: false, columns: V5_COLUMNS, tableGenerated: false,
+    totalRows: 50, ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: null,
+    noisyMode: false, speakerphoneMode: false, preferredVoiceName: '',
+    teamFolderId: null, userLogFolderId: null,
+    trendAlertEnabled: true, roundDateColId: 'c1', reviewScope: 'season',
+  },
+  version: 5,
+};
+
+test('v5→v6 migrate — trendAlertEnabled 삭제 + trendRule 초기화 + pctThreshold 정규화', async ({ page }) => {
+  await bootWith(page, V5_PAYLOAD);
+
+  await expect.poll(async () => (await readStore(page)).version).toBe(6);
   const stored = await readStore(page);
-  const cols = stored.state.columns as Array<Record<string, unknown>>;
-  const byId = (id: string) => cols.find((c) => c.id === id)!;
-  expect(byId('c1').sampleKey).toBe(false);
-  expect(byId('c3').sampleKey).toBe(false);              // 사용자 토글 반영
-  expect(byId('c6').sampleKey).toBe(true);
-  expect(byId('c8').trendRule).toBe('increase');
-  expect(stored.state.trendAlertEnabled).toBe(true);
-  expect(stored.state.roundDateColId).toBe('c2');
-  expect(stored.state.reviewScope).toBe('prevRound');
 
-  // reload(이미 v5라 init script는 덮지 않음) 후 UI에 유지
+  // 전역 마스터 토글 제거.
+  expect(stored.state.trendAlertEnabled).toBeUndefined();
+
+  // 컬럼별 trendRule off로 초기화(의미 반전 → 클리어).
+  expect(colById(stored, 'c8').trendRule).toBeUndefined();
+
+  // pctThreshold: 음수 junk(c8)·부적격 컬럼(c10) 모두 제거.
+  expect(colById(stored, 'c8').pctThreshold).toBeUndefined();
+  expect(colById(stored, 'c10').pctThreshold).toBeUndefined();
+
+  // reviewScope('season')는 삭제, roundDateColId('c1')는 보존(UI만 WS4 조회탭으로 이전).
+  expect(stored.state.reviewScope).toBeUndefined();
+  expect(stored.state.roundDateColId).toBe('c1');
+});
+
+test('v5→v6 migrate idempotent — 이미 v6면 사용자가 새 의미로 설정한 trendRule 보존', async ({ page }) => {
+  const v6Payload = {
+    state: { ...V5_PAYLOAD.state, trendAlertEnabled: undefined,
+      columns: [
+        { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false, trendRule: 'increase', pctThreshold: 15 },
+      ] },
+    version: 6,
+  };
+  await bootWith(page, v6Payload);
+
+  await expect.poll(async () => (await readStore(page)).version).toBe(6);
+  const stored = await readStore(page);
+  // v6 이상은 새 의미 — trendRule/pctThreshold 보존.
+  expect(colById(stored, 'c8').trendRule).toBe('increase');
+  expect(colById(stored, 'c8').pctThreshold).toBe(15);
+});
+
+test('다운그레이드 라운드트립 방어 — v5로 재기록돼도 마커 있으면 v6 trendRule 보존', async ({ page }) => {
+  // 시나리오: v6에서 trendRule 설정(+마커 set) → v5 번들로 열려 스토리지가 version:5로 재기록
+  // (마커는 shallow merge로 잔존) → v6 재오픈. version<6이 다시 참이지만 마커 때문에 재클리어 안 함.
+  const downgradedPayload = {
+    state: {
+      ...V5_PAYLOAD.state,
+      trendRuleClearedV6: true, // v6 클리어를 이미 1회 수행했다는 마커(다운그레이드에도 잔존)
+      columns: [
+        { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false, trendRule: 'increase', pctThreshold: 15 },
+      ],
+    },
+    version: 5, // 다운그레이드로 v5로 재기록된 상태
+  };
+  await bootWith(page, downgradedPayload);
+
+  await expect.poll(async () => (await readStore(page)).version).toBe(6);
+  const stored = await readStore(page);
+  // 마커가 있으므로 재클리어하지 않고 사용자가 v6에서 설정한 값 보존.
+  expect(colById(stored, 'c8').trendRule).toBe('increase');
+  expect(colById(stored, 'c8').pctThreshold).toBe(15);
+});
+
+// ─── 설정탭 토글 round-trip (이상치 알람 라벨 + % 임계값 입력) ──────────────
+
+test('이상치 알람 토글 round-trip — 증가 선택 + % 임계값 입력 → store 반영 + reload 유지', async ({ page }) => {
+  await bootWith(page, V4_PAYLOAD);
+  await page.locator('[data-testid="tab-settings"]').click();
+
+  // c8(적격) 이상치 알람: '증가' 선택(구 라벨 '커짐' 대체).
+  await opt(page, 'trend-rule-c8', '증가').click();
+  // % 변동률 임계값 입력.
+  const pct = page.locator('[data-testid="pct-threshold-c8"]');
+  await pct.fill('15');
+  await pct.blur();
+
+  await expect.poll(async () => colById(await readStore(page), 'c8').trendRule).toBe('increase');
+  expect(colById(await readStore(page), 'c8').pctThreshold).toBe(15);
+
+  // reload 후 유지.
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.locator('[data-testid="tab-settings"]').click();
-  await expect(opt(page, 'sample-key-c3', '무')).toHaveCSS('background-color', BLUE);
-  await expect(opt(page, 'trend-rule-c8', '커짐')).toHaveCSS('background-color', BLUE);
-  await expect(page.locator('[data-testid="trend-alert-toggle"]')).toHaveCSS('background-color', BLUE);
-  await expect(page.locator('[data-testid="round-date-col"]')).toHaveValue('c2');
+  await expect(opt(page, 'trend-rule-c8', '증가')).toHaveCSS('background-color', BLUE);
+  await expect(page.locator('[data-testid="pct-threshold-c8"]')).toHaveValue('15');
 });
 
-test('적격성 전환 — input 변경 시 trendRule 클리어 + sampleKey 재유추', async ({ page }) => {
-  await bootSettings(page);
+test('% 임계값 빈 값 → undefined, 부적격 전환 시 trendRule·pctThreshold 클리어', async ({ page }) => {
+  await bootWith(page, V4_PAYLOAD);
+  await page.locator('[data-testid="tab-settings"]').click();
 
-  await opt(page, 'trend-rule-c8', '커짐').click();
+  await opt(page, 'trend-rule-c8', '감소').click();
+  const pct = page.locator('[data-testid="pct-threshold-c8"]');
+  await pct.fill('30');
+  await pct.blur();
+  await expect.poll(async () => colById(await readStore(page), 'c8').pctThreshold).toBe(30);
 
-  // c8 입력을 음성 → 자동: 부적격 전환 → 추세 토글 소멸 + trendRule 클리어, 샘플키 재유추(유)
+  // 빈 값 → undefined.
+  await pct.fill('');
+  await pct.blur();
+  await expect.poll(async () => colById(await readStore(page), 'c8').pctThreshold).toBeUndefined();
+
+  // c8 입력 음성 → 자동: 부적격 전환 → 토글·% 입력 소멸 + trendRule/pctThreshold 클리어.
+  await opt(page, 'trend-rule-c8', '증가').click();
+  await pct.fill('25'); // 다시 채우고
+  await pct.blur();
   const c8Card = page.locator('[data-testid="col-card-c8"]');
   await c8Card.getByRole('button', { name: '자동', exact: true }).click();
   await expect(page.locator('[data-testid="trend-rule-c8"]')).toHaveCount(0);
-  await expect(opt(page, 'sample-key-c8', '유')).toHaveCSS('background-color', BLUE);
-  const stored = await readStore(page);
-  const c8 = (stored.state.columns as Array<Record<string, unknown>>).find((c) => c.id === 'c8')!;
+  await expect(page.locator('[data-testid="pct-threshold-c8"]')).toHaveCount(0);
+  const c8 = colById(await readStore(page), 'c8');
   expect(c8.trendRule).toBeUndefined();
-  expect(c8.sampleKey).toBe(true);
-
-  // 다시 자동 → 음성: 적격 복귀하되 방향은 초기화('없음'), 샘플키도 재유추(무)
-  await c8Card.getByRole('button', { name: '음성', exact: true }).click();
-  await expect(opt(page, 'trend-rule-c8', '없음')).toHaveCSS('background-color', BLUE);
-  await expect(opt(page, 'sample-key-c8', '무')).toHaveCSS('background-color', BLUE);
+  expect(c8.pctThreshold).toBeUndefined();
 });

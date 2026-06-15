@@ -21,6 +21,7 @@ import {
   normalizeDateCell,
   buildPastIndex,
   previousRound,
+  latestTwoRounds,
   pastValue,
 } from '../src/lib/pastValues';
 import type { Column } from '../src/types';

@@ -67,8 +67,8 @@ test('[설정] 기본 UI 요소 표시', async ({ page }) => {
   await expect(urlInput).toBeVisible();
   console.log('✓ URL 입력창 표시');
 
-  // 컬럼 없을 때 "오늘 테이블 생성" 버튼
-  const generateBtn = page.locator('text=오늘 테이블 생성').first();
+  // 컬럼 없을 때 "입력 테이블 생성" 버튼
+  const generateBtn = page.locator('text=입력 테이블 생성').first();
   await expect(generateBtn).toBeVisible();
   console.log('✓ 테이블 생성 버튼 표시');
 });
@@ -167,7 +167,7 @@ test('[설정] 테이블 생성 후 미리보기 팝업 (S1-C)', async ({ page }
   await page.waitForTimeout(200);
 
   // 테이블 생성 버튼 클릭
-  const generateBtn = page.locator('text=오늘 테이블 생성').first();
+  const generateBtn = page.locator('text=입력 테이블 생성').first();
   if (await generateBtn.isVisible()) {
     await generateBtn.click();
     await page.waitForTimeout(400);
@@ -297,7 +297,7 @@ test('[입력] 테이블 생성 후 시작 버튼 활성화', async ({ page }) =
   await page.waitForTimeout(200);
 
   // 테이블 생성
-  const generateBtn = page.locator('text=오늘 테이블 생성').first();
+  const generateBtn = page.locator('text=입력 테이블 생성').first();
   if (await generateBtn.isVisible()) {
     await generateBtn.click();
     await page.waitForTimeout(500);

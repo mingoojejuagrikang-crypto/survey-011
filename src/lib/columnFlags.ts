@@ -42,6 +42,8 @@ export function effectiveSampleKey(col: Column): boolean {
  *    아니므로 "undefined일 때만 유추"가 된다.)
  *  - trendRule은 적격 컬럼에서만 유지: 부적격 전환 시, 그리고 잘못된 값(과거 빌드/수동 편집)은
  *    방어적으로 제거한다.
+ *  - pctThreshold(v0.8.0, 변동률 % 임계값)도 적격 컬럼에서만 유지: 부적격 전환 시, 그리고
+ *    잘못된 값(NaN·음수·0 이하)은 방어적으로 제거한다(undefined = off는 그대로 둔다).
  */
 export function reconcileColumnFlags(prev: Column | null, next: Column): Column {
   const out: Column = { ...next };
@@ -54,6 +56,14 @@ export function reconcileColumnFlags(prev: Column | null, next: Column): Column 
     !isTrendEligible(out)
   ) {
     delete out.trendRule;
+  }
+  // v0.8.0 — pctThreshold: undefined(off)는 보존. 정의됐는데 부적격이거나 비유한수·≤0이면 제거.
+  // (NaN <= 0 은 false이므로 Number.isFinite로 NaN을 별도로 잡는다.)
+  if (
+    out.pctThreshold !== undefined &&
+    (!isTrendEligible(out) || !Number.isFinite(out.pctThreshold) || out.pctThreshold <= 0)
+  ) {
+    delete out.pctThreshold;
   }
   return out;
 }

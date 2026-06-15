@@ -12,7 +12,7 @@ import { saveSession, saveAudioClip, loadAudioClip } from './db';
 import { AudioRecorder } from './audioRecorder';
 import { logger } from './logger';
 import { getCachedIndex, prefetchPastIndex, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
-import { checkTrend, type TrendViolation } from './trendCheck';
+import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { getAccessToken } from './googleAuth';
 
 
@@ -900,15 +900,18 @@ export function useVoiceSession() {
     logger.log({ type: 'trend', extra: `trend_skip:${cause}`, sessionId: sessionIdRef.current, row, colId });
   }, []);
 
-  /** 방금 커밋된 값의 추세 위반 검사. 마스터 토글 off/규칙 없는 컬럼은 검사 자체가 없고(로그 없음),
-   *  판정 불가(인덱스 없음·키 불완전·직전 회차/과거값 없음)는 조용히 skip + trend_skip 1회.
+  /** 방금 커밋된 값의 이상치 알람 검사(v0.8.0). 전역 마스터 토글 제거 — 컬럼에 방향 규칙
+   *  (trendRule) 또는 변동률 % 임계값(pctThreshold)이 하나라도 있으면 활성. 규칙 없는 컬럼은
+   *  검사 자체가 없고(로그 없음), 판정 불가(인덱스 없음·키 불완전·직전 회차/과거값 없음)는
+   *  조용히 skip + trend_skip 1회(telemetry 키 'trend'/trend_skip 유지 — 로그 연속성).
    *  여기서는 절대 fetch하지 않는다 — start()의 프리페치가 채운 캐시(getCachedIndex)만 본다
    *  (행 단위 재fetch 금지, B2 설계). */
   const evaluateTrend = useCallback(
     (col: Column | null, row: number, colId: string, nextRaw: string): TrendViolation | null => {
       const s = useSettingsStore.getState();
       const rule = col?.trendRule;
-      if (!s.trendAlertEnabled || !col || (rule !== 'increase' && rule !== 'decrease')) return null;
+      const hasRule = rule === 'increase' || rule === 'decrease' || col?.pctThreshold != null;
+      if (!col || !hasRule) return null;
       const index = getCachedIndex();
       if (!index) { logTrendSkip('no_index', row, colId); return null; } // 오프라인/프리페치 실패/TTL 만료
       const kc = keyColumns(s.columns);
@@ -924,7 +927,7 @@ export function useVoiceSession() {
       if (!round) { logTrendSkip('no_prev_round', row, colId); return null; }
       const prevRaw = pastValue(index, key, round, colId);
       if (prevRaw === null) { logTrendSkip('no_past_value', row, colId); return null; }
-      return checkTrend(rule, prevRaw, nextRaw);
+      return checkAnomaly(col, prevRaw, nextRaw);
     },
     [logTrendSkip],
   );
@@ -1449,7 +1452,7 @@ export function useVoiceSession() {
       const pctPart = v.pctText ? ` ${v.pctText}%` : ''; // prev=0이면 % 구절 생략
       const alertText =
         `${formatForTts(parsed)}. 직전 조사보다${pctPart} ` +
-        `${v.direction === 'down' ? '작아졌습니다' : '커졌습니다'}. 확인해주세요.`;
+        `${v.direction === 'up' ? '증가' : '감소'}했습니다. 확인해주세요.`;
       useSessionStore.getState().setLastTts(alertText);
       await say(alertText);
       return; // advance 중단 — 해소는 handleFinal 상단의 trendConfirm 분기
@@ -1535,10 +1538,14 @@ export function useVoiceSession() {
     correctionBackupRef.current = null;
     trendSkipLoggedRef.current = new Set();
     sessionTodayRef.current = localTodayISO();
-    // v0.7.0 B4: 과거값 인덱스 프리페치(fire-and-forget) — 마스터 토글 on + Google 연결 시에만.
+    // v0.8.0: 과거값 인덱스 프리페치(fire-and-forget) — 마스터 토글 제거 → 이상치 알람 규칙
+    // (방향 trendRule 또는 변동률 pctThreshold)이 한 컬럼이라도 있고 Google 연결 시에만.
     // loadPastIndex는 모든 실패를 null로 해소하고 past_index_skip 텔레메트리만 남기므로
     // 세션 시작 흐름을 절대 막지 않는다. 셀 단위 검사(evaluateTrend)는 이 캐시만 읽는다.
-    if (s.trendAlertEnabled && getAccessToken()) prefetchPastIndex();
+    const anyAnomalyRule = s.columns.some(
+      (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
+    );
+    if (anyAnomalyRule && getAccessToken()) prefetchPastIndex();
     logger.setSessionId(sessionIdRef.current);
     // #1 reach telemetry: attach session-meta alongside the existing `extra:'start'` tag.
     // `extra` is preserved so any analysis keying on it keeps working; new fields are additive.

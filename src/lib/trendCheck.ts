@@ -1,16 +1,24 @@
 /**
- * v0.7.0 B4 — 추세 검증 순수 로직 (pastValues.ts / columnFlags.ts 패턴: 브라우저 의존 없음,
+ * v0.8.0 — 이상치 알람 순수 로직 (pastValues.ts / columnFlags.ts 패턴: 브라우저 의존 없음,
  * tests/trendCheck.spec.ts에서 Node로 직접 검증).
  *
- * 규칙(민구 결정):
- *  - increase 위반 = next < prev (같음은 통과 — 허용 오차 없음, 반대 방향만 알림)
- *  - decrease 위반 = next > prev (같음은 통과)
- *  - rule이 undefined(컬럼 trendRule 없음) / prev 또는 next가 숫자가 아님 / prev 없음 → null
- *  - pct = |next-prev| / |prev| * 100, 소수 1자리. prev === 0이면 pctText '' —
- *    호출자(useVoiceSession)는 % 구절을 생략한 문구로 안내한다.
- *  - 시트 셀은 '1,234.5' 같은 천단위 콤마가 올 수 있어 파싱 전에 콤마를 제거한다.
+ * v0.7.0 "추세 검증"에서 의미가 **정반대로 반전**됐다(민구 결정). 사용자 멘탈모델:
+ * "입력값이 과거 대비 이상하게 느껴지면 알람".
+ *
+ * 규칙:
+ *  - 방향 알람(trendRule):
+ *      increase = next > prev (직전보다 **커지면** 알람)
+ *      decrease = next < prev (직전보다 **작아지면** 알람)
+ *      같음(next === prev)은 통과. trendRule 없으면 방향 알람 off.
+ *  - % 변동률 알람(pctThreshold): 방향 무관 절대 변동률 |next-prev|/|prev|*100 ≥ 임계값이면 알람.
+ *      값(임계값)을 입력했을 때만 활성(undefined=off). prev===0이면 pct 계산 불가 → % 알람 안 침.
+ *  - 두 알람은 독립(OR): 하나라도 fired면 TrendViolation 반환, 아니면 null.
+ *  - rule/threshold 둘 다 없음 / prev·next 비숫자 / prev 없음 → null(조용히 통과).
+ *  - 시트 셀은 '1,234.5' 같은 천단위 콤마가 올 수 있어 파싱 전에 콤마를 제거한다(parseNumeric SSOT).
+ *
+ * telemetry 키('trend'/trend_alert_*)는 로그 연속성을 위해 유지 — 함수명·문구만 변경.
  */
-import type { TrendRule } from '../types';
+import type { Column } from '../types';
 
 export interface TrendViolation {
   /** 직전 회차 값(숫자). */
@@ -19,8 +27,10 @@ export interface TrendViolation {
   next: number;
   /** |next-prev|/|prev|*100, 소수 1자리 문자열. prev===0이면 '' (문구에서 % 생략). */
   pctText: string;
-  /** 위반 방향 — down: 작아졌습니다(increase 위반), up: 커졌습니다(decrease 위반). */
+  /** 실제 변화 방향 — up: 증가했습니다, down: 감소했습니다. (% 단독 발화도 실제 부호로 안내) */
   direction: 'down' | 'up';
+  /** 어떤 조건이 알람을 울렸는지 — 'direction'(방향만) | 'pct'(변동률만) | 'both'(둘 다). */
+  trigger: 'direction' | 'pct' | 'both';
 }
 
 /** 숫자 파싱 — trim + 콤마 제거 후 유한수만. 비숫자/빈 값은 null.
@@ -34,24 +44,46 @@ export function parseNumeric(raw: string | null | undefined): number | null {
 }
 
 /**
- * 추세 위반 검사. 위반이면 TrendViolation, 통과/판정 불가면 null.
- * 판정 불가(null) 사유: rule 없음, prev 누락, prev/next 비숫자 — 호출자는 조용히 통과시킨다.
+ * 이상치 알람 검사. 알람이면 TrendViolation, 통과/판정 불가면 null.
+ * 판정 불가(null) 사유: 규칙 없음(방향·%둘다 off), prev 누락, prev/next 비숫자 — 호출자는 조용히 통과.
+ *
+ * @param col trendRule(방향) + pctThreshold(변동률 %)만 본다.
  */
-export function checkTrend(
-  rule: TrendRule | undefined,
+export function checkAnomaly(
+  col: Pick<Column, 'trendRule' | 'pctThreshold'>,
   prevRaw: string | null | undefined,
   nextRaw: string,
 ): TrendViolation | null {
-  if (rule !== 'increase' && rule !== 'decrease') return null;
+  const rule = col.trendRule;
+  const threshold = col.pctThreshold;
+  const hasRule = rule === 'increase' || rule === 'decrease';
+  const hasPct = threshold != null;
+  if (!hasRule && !hasPct) return null;
+
   const prev = parseNumeric(prevRaw);
   const next = parseNumeric(nextRaw);
   if (prev === null || next === null) return null;
-  const violated = rule === 'increase' ? next < prev : next > prev;
-  if (!violated) return null;
+
+  // 방향 알람(의미 반전): increase=커지면, decrease=작아지면.
+  const dirFired = rule === 'increase' ? next > prev : rule === 'decrease' ? next < prev : false;
+
+  // % 변동률 알람(방향 무관). prev===0이거나 비정상(subnormal) prev로 나눗셈이 Infinity로
+  // 오버플로하면 계산 불가 → null('Infinity%' 누출 방지).
+  const pctRaw = prev === 0 ? null : (Math.abs(next - prev) / Math.abs(prev)) * 100;
+  const pct = pctRaw != null && Number.isFinite(pctRaw) ? pctRaw : null;
+  const pctFired = hasPct && pct != null && pct >= (threshold as number);
+
+  if (!dirFired && !pctFired) return null;
+
+  const trigger: TrendViolation['trigger'] =
+    dirFired && pctFired ? 'both' : dirFired ? 'direction' : 'pct';
+
   return {
     prev,
     next,
-    pctText: prev === 0 ? '' : ((Math.abs(next - prev) / Math.abs(prev)) * 100).toFixed(1),
-    direction: next < prev ? 'down' : 'up',
+    pctText: pct === null ? '' : pct.toFixed(1),
+    // 실제 변화 부호 — % 단독 발화도 올바른 방향을 안내. 같음(0)은 위 fired 조건상 도달 불가.
+    direction: next > prev ? 'up' : 'down',
+    trigger,
   };
 }

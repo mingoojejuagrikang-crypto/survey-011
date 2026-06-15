@@ -32,13 +32,13 @@ interface SettingsState {
   teamFolderId: string | null;
   /** v0.4.5 Q1b: 캐시된 사용자 Drive 내 `survey-011/log/` 폴더 ID — 매 업로드 검색 방지. */
   userLogFolderId: string | null;
-  /** v0.7.0 — 추세 검증 알림 전역 마스터 토글. 컬럼별 방향은 Column.trendRule. 기본 false. */
-  trendAlertEnabled: boolean;
   /** v0.7.0 — 조사시기(회차) 컬럼 id. null = 자동(첫 date 컬럼, '조사일자' 우선) —
    *  해석은 pastValues.resolveRoundCol. */
   roundDateColId: string | null;
-  /** v0.7.0 — 조회 탭 기본 비교 범위: 직전 조사 vs 작기 전체. */
-  reviewScope: 'prevRound' | 'season';
+  /** v0.8.0(v6) 내부 마이그레이션 마커 — "추세→이상치" trendRule 클리어를 이미 1회 수행했는지.
+   *  다운그레이드(v5) 라운드트립 후 재업그레이드 시 사용자가 v6에서 새로 지정한 trendRule을
+   *  다시 지우지 않도록 한다. 사용자 설정 아님(UI 미노출). */
+  trendRuleClearedV6?: boolean;
 
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns'>>) => void;
   updateColumn: (id: string, next: Column) => void;
@@ -121,9 +121,7 @@ export const useSettingsStore = create<SettingsState>()(
       preferredVoiceName: '',
       teamFolderId: null,
       userLogFolderId: null,
-      trendAlertEnabled: false,
       roundDateColId: null,
-      reviewScope: 'prevRound',
 
       set: (partial) => set(partial),
       updateColumn: (id, next) =>
@@ -158,13 +156,18 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'survey-011-settings-v3',
-      version: 5,
-      migrate: (persisted: unknown, _version: number) => {
-        const s = persisted as Partial<SettingsState> & { columns?: unknown[] };
+      version: 6,
+      migrate: (persisted: unknown, version: number) => {
+        const s = persisted as Partial<SettingsState> & {
+          columns?: unknown[];
+          trendAlertEnabled?: unknown;
+          reviewScope?: unknown;
+          trendRuleClearedV6?: boolean;
+        };
         if (Array.isArray(s.columns)) {
-          // v5 — 기존 컬럼 전부에 샘플키 유추 기본값 부여(사용자가 이미 토글한 boolean은 보존:
+          // 기존 컬럼 전부에 샘플키 유추 기본값 부여(사용자가 이미 토글한 boolean은 보존:
           // prev===next 호출은 structural change가 아니므로 undefined일 때만 유추) + 잘못된
-          // trendRule 값 방어적 정규화(columnFlags 규칙).
+          // trendRule/pctThreshold 값 방어적 정규화(columnFlags 규칙).
           s.columns = (s.columns as unknown[])
             .map(migrateColumn)
             .map((c) => reconcileColumnFlags(c, c));
@@ -177,10 +180,37 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
         if (typeof s.userLogFolderId !== 'string' && s.userLogFolderId !== null) s.userLogFolderId = null;
-        // v5 — 추세 검증·조회 탭 설정 기본값
-        if (typeof s.trendAlertEnabled !== 'boolean') s.trendAlertEnabled = false;
+        // v0.7.0 — 조사시기(회차) 컬럼 id는 유지(UI만 v0.8.0 조회탭으로 이전 — WS4).
         if (typeof s.roundDateColId !== 'string' && s.roundDateColId !== null) s.roundDateColId = null;
-        if (s.reviewScope !== 'prevRound' && s.reviewScope !== 'season') s.reviewScope = 'prevRound';
+
+        // ── v6 (v0.8.0) — "추세 검증" → "이상치 알람" 전환 ──────────────────────────
+        // 의미가 정반대로 반전됐으므로(increase: 작아지면 알람 → 커지면 알람) 기존 저장값을
+        // 그대로 두면 사용자 의도와 반대로 동작한다. 따라서 마이그레이션 시 안전하게 초기화한다.
+        //  1) 제거된 전역 마스터 토글 trendAlertEnabled 삭제(이상치 알람은 컬럼별 규칙 유무로 활성).
+        //  2) 컬럼별 trendRule을 off로 초기화(민구 확정: swap 아닌 클리어). v0.7.0 신기능이라
+        //     운영 설정값이 거의 없고, 라벨(커짐→증가) 혼란을 방지한다.
+        //  3) pctThreshold는 신규 필드 → 위 reconcileColumnFlags가 정규화(부적격/비유한수/≤0 제거).
+        // idempotent: 이미 v6 이상이면 trendRule은 사용자가 새 의미로 설정한 값이므로 보존한다.
+        // 다운그레이드 라운드트립 방어: v0.8.0(v6)에서 설정 → v5 번들로 열려 스토리지가 v5로
+        // 재기록 → v0.8.0 재오픈 시 version<6이 다시 참이 되어 사용자가 v6에서 새로 지정한
+        // trendRule을 또 지우는 문제가 있다. 1회성 마커(trendRuleClearedV6)로 "이미 클리어함"을
+        // 기억해, 한 번 클리어된 뒤에는 재삭제하지 않는다.
+        if (version < 6 && !s.trendRuleClearedV6) {
+          delete s.trendAlertEnabled;
+          // 조회 탭 범위(직전 조사/작기 전체) 모드 폐기 — 조회탭은 이제 최근 2회차 고정(WS4).
+          delete s.reviewScope;
+          if (Array.isArray(s.columns)) {
+            s.columns = (s.columns as Column[]).map((c) => {
+              const out = { ...c };
+              delete out.trendRule; // 권고: off로 초기화
+              // 대안(swap): delete 대신 의미 반전 변환을 쓰려면 아래로 교체.
+              //   if (out.trendRule === 'increase') out.trendRule = 'decrease';
+              //   else if (out.trendRule === 'decrease') out.trendRule = 'increase';
+              return out;
+            });
+          }
+          s.trendRuleClearedV6 = true;
+        }
         return s as SettingsState;
       },
     },

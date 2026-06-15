@@ -339,6 +339,13 @@
 - **출처:** `2026-06-04~05 세션`(survey-011 `CLAUDE.md` line 33, `AGENTS.md` line 31 모두 `tsx scripts/test-*.mjs` 명시)
 - **현재 상태:** ⚠️주시 (문서 드리프트 미수정 — 문서는 이번 작업 범위 밖)
 
+### [ENV-9] settings persist migrate가 시드 trendRule을 삼킴 — Playwright 시드는 최신 version으로
+- **증상:** v0.8.0 작업 중 `tests/review-screen.spec.ts`가 컬럼 `trendRule:'increase'`를 시드했는데, 부팅 후 화면에서 이상치 강조(data-violation)가 전혀 안 떴다. 셀은 정상 렌더(`data-arrow='up'`)되지만 `checkAnomaly`가 발화하지 않음.
+- **원인:** 시드 페이로드가 `version:5`였는데 store persist가 `version:6`으로 올라감 → 부팅 시 v5→v6 migrate 블록이 실행되어 `delete c.trendRule`(이상치 알람 의미 반전에 따른 클리어)을 적용 → 하이드레이트 시점에 trendRule이 사라져 규칙이 비활성.
+- **해결·회피:** **활성 이상치 알람(trendRule/pctThreshold)을 테스트하는 Playwright 시드는 store의 현재 persist version으로 맞춰라**(현재 `6`). 이미 최신 version이면 migrate가 idempotent 경로로 빠져 사용자 설정값을 보존한다. settings/trend/review 스펙 모두 `version:6`으로 시드해 해결.
+- **출처:** `2026-06-15 v0.8.0 작업(WS1~WS3)` — `src/stores/settingsStore.ts` persist `version:6` + v6 migrate(`delete c.trendRule`); `tests/review-screen.spec.ts`·`tests/trend-alert.spec.ts`·`tests/settings-migration.spec.ts` 시드 version 정렬.
+- **현재 상태:** ✅회피됨 (영향 스펙 전부 version:6 시드로 정렬, 320/320 통과). 일반 교훈: migrate가 필드를 삭제/변환하는 버전에서는 시드 version이 migrate 동작을 바꾼다 — 시드 version을 의도적으로 선택할 것.
+
 ### [ENV-5] "세션 리플레이" 클립이 실제론 오디오 전용 (영상 트랙 0)
 - **증상:** 시각 디버깅을 기대했지만 클립이 opus 오디오 전용, 영상 트랙 0개.
 - **원인:** "session replay"는 화면 녹화가 아니라 음성 + 이벤트 로그 + 오디오 클립 기반.
