@@ -138,6 +138,15 @@ export class SpeechController {
     this.rec = null;
   }
 
+  /** v0.9.0 조기확정(빠른 인식): interim 안정화로 값을 이미 커밋했을 때, 같은 발화에 대해 곧
+   *  도착할 브라우저 final을 폐기하기 위해 현재 인식기를 abort한다. abort()는 결과 없이 종료하므로
+   *  in-flight 발화의 final이 발생하지 않아 이중 커밋을 막는다. active=true이므로 onEnd 핸들러가
+   *  다음 필드용으로 인식기를 자동 재시작한다(scheduleRestart). */
+  restartRecognition() {
+    if (!this.active) return;
+    try { this.rec?.abort(); } catch { /* ignore — onEnd→scheduleRestart가 복구 */ }
+  }
+
   private bind() {
     if (!this.rec) return;
     const rec = this.rec;

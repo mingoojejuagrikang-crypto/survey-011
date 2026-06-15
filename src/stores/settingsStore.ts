@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Column, SheetConfig, LegacyInputMode } from '../types';
 import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
+import { isCycling } from '../lib/autoValue';
 
 interface SettingsState {
   googleConnected: boolean;
@@ -26,6 +27,14 @@ interface SettingsState {
    *  오인식되는 것을 막는다. ON이면 TTS 재생 중 음성입력(값·명령어 barge-in)을 차단하고 신뢰도
    *  임계를 상향(사실상 TTS 중 half-duplex). 기본 false. */
   speakerphoneMode: boolean;
+  /** v0.9.0 (IOS-5/AUDIO-ROUTE-1 실험) — 입력탭 출력 라우팅 토글. true=스피커 시도(마이크를
+   *  echoCancellation:false로 재취득 → iOS playAndRecord 리시버 고착 해제 시도), false=이어폰/기본
+   *  (echoCancellation:true). OS/기기 의존이라 실제 출력 전환은 미보장 — 실기기 A/B 측정용. */
+  speakerOutput: boolean;
+  /** v0.9.0 (딜레이 단축 실험) — 빠른 인식. true면 interim(중간) 결과가 유효 숫자로 안정되면
+   *  브라우저 final(무음 종료감지)을 기다리지 않고 조기 커밋한다. 미완성 숫자 절단 리스크가 있어
+   *  기본 false(실기기 A/B용). */
+  fastRecognition: boolean;
   /** Preferred Web Speech API voice name for ko-KR TTS. Empty string = auto (first available). */
   preferredVoiceName: string;
   /** v0.10.1: 캐시된 관리자 폴더 내 본인 팀 하위 폴더 ID — race 방지용. 첫 결정 후 재사용. */
@@ -118,6 +127,8 @@ export const useSettingsStore = create<SettingsState>()(
       sessionAutoLabel: null,
       noisyMode: false,
       speakerphoneMode: false,
+      speakerOutput: false,
+      fastRecognition: false,
       preferredVoiceName: '',
       teamFolderId: null,
       userLogFolderId: null,
@@ -125,10 +136,21 @@ export const useSettingsStore = create<SettingsState>()(
 
       set: (partial) => set(partial),
       updateColumn: (id, next) =>
-        set((state) => ({
+        set((state) => {
+          const prev = state.columns.find((c) => c.id === id) ?? null;
+          let merged = next;
+          // v0.9.0 — 순차/복수선택(cycling) 자동입력으로 *전이*할 때만 음성확인(ttsAnnounce) 기본값을
+          // '유'로 올린다. 전이 기반(객체/파라미터 비교가 아님)이라, 한 번 cycling이 된 뒤 사용자가
+          // 수동으로 '무'로 되돌리거나 seq 범위·options를 편집해도 그 값이 보존된다(민구 명시 요구:
+          // "굳이 들을 필요 없다고 판단하면 수동으로 다시 무로"). non-cycling→cycling 진입에서만 발동.
+          if (prev && !isCycling(prev) && isCycling(next)) {
+            merged = { ...next, ttsAnnounce: true };
+          }
           // v0.7.0 — input/type 변경 시 sampleKey 재유추 + 부적격 trendRule 제거(columnFlags 규칙).
-          columns: state.columns.map((c) => (c.id === id ? reconcileColumnFlags(c, next) : c)),
-        })),
+          return {
+            columns: state.columns.map((c) => (c.id === id ? reconcileColumnFlags(prev, merged) : c)),
+          };
+        }),
       addColumn: () =>
         set((state) => {
           const col: Column = {
@@ -177,6 +199,8 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
         if (typeof s.noisyMode !== 'boolean') s.noisyMode = false;
         if (typeof s.speakerphoneMode !== 'boolean') s.speakerphoneMode = false;
+        if (typeof s.speakerOutput !== 'boolean') s.speakerOutput = false;
+        if (typeof s.fastRecognition !== 'boolean') s.fastRecognition = false;
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
         if (typeof s.userLogFolderId !== 'string' && s.userLogFolderId !== null) s.userLogFolderId = null;

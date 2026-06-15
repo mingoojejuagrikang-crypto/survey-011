@@ -9,6 +9,8 @@ export interface LogEntry {
   type: 'stt' | 'tts' | 'command' | 'session' | 'value' | 'error' | 'clip'
     | 'stt_blocked_tts_muted' | 'stt_barge_in' | 'stt_rejected_col_name' | 'stt_alt_used' | 'stt_parse_failed'
     | 'stt_rejected_ambiguous_syllable'
+    // v0.9.0 빠른 인식(조기확정): interim 안정화로 final 대기 없이 커밋. 절단/정정율 측정 근거.
+    | 'stt_early_commit'
     // v0.5.0 W7(T-19): 세션 밖 앱 수명주기 이벤트 — app_boot / hydration_ok / recover_* /
     // drive_upload / setting_changed 등. sessionId가 없으면 '__app__' sentinel이 붙는다.
     | 'app'
@@ -33,6 +35,9 @@ export interface LogEntry {
   altIdx?: number;
   originalText?: string;
   altsCount?: number;
+  /** v0.9.0 딜레이 계측: 마지막 interim → final까지의 간격(ms) = 브라우저 무음 종료감지(EOS) 꼬리.
+   *  `stt` 이벤트에 동봉. 앱 처리는 ~1ms이므로 이 값이 사용자 체감 딜레이의 실제 병목 지표. */
+  eosTailMs?: number;
   // ── reach telemetry (additive; all optional, only set on specific events) ──
   /** Session-meta, attached to the `session` start/stop events. Lets multiple sessions be
    *  aggregated for real-field reach without changing existing `extra:'start'|'stop'` tags. */

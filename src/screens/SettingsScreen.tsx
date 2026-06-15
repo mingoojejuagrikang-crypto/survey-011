@@ -1432,6 +1432,46 @@ export function SettingsScreen() {
               기기 음성이 사용자 음성으로 잘못 인식되는 것을 막습니다 (안내가 끝난 뒤 말씀하세요).
             </div>
 
+            {/* v0.9.0 — 빠른 인식(조기확정) 실험 토글. 기본 OFF(미완성 숫자 절단 리스크). */}
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 10, marginTop: 10,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+                빠른 인식 (실험)
+              </div>
+              <button
+                onClick={() => {
+                  const next = !s.fastRecognition;
+                  s.set({ fastRecognition: next });
+                  logger.log({ type: 'app', extra: `setting_changed:fastRecognition=${next}` });
+                }}
+                style={{
+                  width: 60, height: 32, borderRadius: 16,
+                  background: s.fastRecognition ? T.blue : '#2A2D32',
+                  border: 'none', cursor: 'pointer',
+                  position: 'relative',
+                }}
+                title="안내까지의 딜레이를 줄이려 중간 인식이 안정되면 곧바로 확정합니다(실험)"
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 4, left: s.fastRecognition ? 32 : 4,
+                    width: 24, height: 24, borderRadius: 12,
+                    background: '#fff',
+                    transition: 'left 150ms ease',
+                  }}
+                />
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
+              음성을 멈춘 뒤 인식 확정까지의 대기(딜레이)를 줄입니다. 중간 인식이 잠깐 안정되면 바로
+              확정하므로 소수점을 늦게 말하면 잘릴 수 있습니다. 실험 기능이라 기본은 꺼져 있습니다.
+            </div>
+
             {/* v0.8.0 — 추세 검증 전역 마스터 토글 제거(이상치 알람은 컬럼별 규칙 유무로 활성).
                 조사시기(회차) 컬럼 선택은 조회탭으로 이전(WS4) — roundDateColId 필드는 유지. */}
 

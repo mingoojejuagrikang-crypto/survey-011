@@ -36,7 +36,7 @@ import { getAccessToken } from '../lib/googleAuth';
 import { parseSpreadsheetId } from '../lib/sheets';
 import { isTrendEligible, effectiveSampleKey } from '../lib/columnFlags';
 import { checkAnomaly, parseNumeric } from '../lib/trendCheck';
-import { formatWeekRange, isoWeek } from '../lib/isoWeek';
+import { isoWeek } from '../lib/isoWeek';
 import {
   keyColumns,
   latestTwoRounds,
@@ -58,8 +58,6 @@ const FS = {
   small: 'clamp(12px, 3vw, 13px)',
 } as const;
 
-type ViewMode = 'list' | 'pivot' | 'group';
-
 function fmtTime(epoch: number): string {
   return new Date(epoch).toLocaleTimeString('ko-KR', {
     hour: '2-digit',
@@ -68,12 +66,13 @@ function fmtTime(epoch: number): string {
   });
 }
 
-/** 회차 ISO → "2026 · 6/1~6/7"(주차 번호 대신 월-일 기간 — 민구 지시). 파싱 불가는 ISO 그대로. */
+/** 회차 ISO → "YYYY. NN주차 (mm-dd ~ mm-dd)"(민구 v0.9.0 지시). 파싱 불가는 ISO 그대로. */
 function roundLabel(iso: string | null): string {
   if (!iso) return '—';
   const w = isoWeek(iso);
-  const range = formatWeekRange(iso);
-  return w && range ? `${w.year} · ${range}` : iso;
+  if (!w) return iso;
+  const md = (s: string) => s.slice(5); // 'YYYY-MM-DD' → 'MM-DD' (toIso가 0-pad 보장)
+  return `${w.year}. ${w.week}주차 (${md(w.start)} ~ ${md(w.end)})`;
 }
 
 interface SampleEntry {
@@ -155,8 +154,6 @@ export function ReviewScreen() {
   const [loadedAt, setLoadedAt] = useState<number | null>(() => (getCachedIndex() ? Date.now() : null));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
-  const [showPct, setShowPct] = useState(false);
   const triedAutoLoad = useRef(false);
 
   const signedIn = s.googleConnected || !!getAccessToken();
@@ -235,7 +232,7 @@ export function ReviewScreen() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <ScreenHeader
-        title="조회"
+        title="비교"
         sub="직전→최근 변화"
         right={
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
@@ -411,71 +408,16 @@ export function ReviewScreen() {
               onRoundDateCol={(id) => s.set({ roundDateColId: id })}
             />
 
-            {/* 회차 라벨 + 보기 토글(퍼센트/피봇/그룹) — 모두 샘플 비혼합 */}
-            <ViewControls
+            {/* v0.9.0 — 회차 축(직전→최근, 주차+조사일자) + 공통 키(불변, 상단 고정) */}
+            <CompareHeader
               prevRound={prevRound}
               latestRound={latestRound}
-              viewMode={viewMode}
-              onViewMode={setViewMode}
-              showPct={showPct}
-              onShowPct={setShowPct}
+              constant={derived.constant}
+              rec={derived.entries[0]?.rec ?? {}}
+              duplicateCount={index.duplicateCount}
             />
 
-            {/* 고정 키 카드 — 범위 내 불변 키 값(농가명·처리 등) + 중복 배지 */}
-            <div
-              style={{
-                position: 'sticky',
-                top: 0,
-                zIndex: 5,
-                background: T.bg,
-                paddingBottom: 2,
-              }}
-            >
-              <div
-                data-testid="review-key-card"
-                style={{
-                  background: T.card,
-                  border: `1px solid ${T.line}`,
-                  borderRadius: 14,
-                  padding: '10px 12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  flexWrap: 'wrap',
-                }}
-              >
-                {derived.constant.length === 0 ? (
-                  <span style={{ fontSize: FS.small, color: T.textMute }}>공통 키 없음</span>
-                ) : (
-                  derived.constant.map((c) => (
-                    <Chip key={c.id} strong color={T.text} bg="rgba(255,255,255,0.08)">
-                      <span style={{ color: T.textMute, fontWeight: 500 }}>{c.name}</span>
-                      {(derived.entries[0]?.rec[c.id] ?? '').trim()}
-                    </Chip>
-                  ))
-                )}
-                {index.duplicateCount > 0 && (
-                  <span
-                    data-testid="review-badge-duplicate"
-                    title="같은 샘플·같은 회차의 행이 시트에 2번 이상 있습니다. 마지막 행 값을 표시합니다."
-                    style={{
-                      marginLeft: 'auto',
-                      padding: '3px 9px',
-                      borderRadius: 999,
-                      background: 'rgba(255,179,0,0.13)',
-                      color: T.amber,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    중복 {index.duplicateCount}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* 샘플 목록(또는 피봇/그룹) */}
+            {/* 샘플별 비교 표: 가변 키 앞열 + 측정값 직전/현재 뒷열(집계 없음) */}
             {derived.entries.length === 0 ? (
               <StateCard
                 testId="review-state-empty"
@@ -487,24 +429,14 @@ export function ReviewScreen() {
                     : '시트에 업로드된 조사 데이터가 쌓이면 여기서 직전→최근 변화를 볼 수 있습니다.'
                 }
               />
-            ) : viewMode === 'pivot' ? (
-              <PivotMatrix
-                entries={derived.entries}
-                index={index}
-                measuredCols={measuredCols}
-                prevRound={prevRound}
-                latestRound={latestRound}
-                showPct={showPct}
-              />
             ) : (
-              <SampleList
+              <CompareTable
                 entries={derived.entries}
                 index={index}
+                variable={derived.variable}
                 measuredCols={measuredCols}
                 prevRound={prevRound}
                 latestRound={latestRound}
-                showPct={showPct}
-                grouped={viewMode === 'group'}
               />
             )}
           </>
@@ -649,411 +581,124 @@ function SettingsPanel({
   );
 }
 
-// ─── 회차 라벨 + 보기 토글 ──────────────────────────────────────────────────
+// ─── 비교 헤더 (회차 축 + 공통 키, 상단 고정) ─────────────────────────────────
 
-function ViewControls({
+function CompareHeader({
   prevRound,
   latestRound,
-  viewMode,
-  onViewMode,
-  showPct,
-  onShowPct,
+  constant,
+  rec,
+  duplicateCount,
 }: {
   prevRound: string | null;
   latestRound: string | null;
-  viewMode: ViewMode;
-  onViewMode: (v: ViewMode) => void;
-  showPct: boolean;
-  onShowPct: (v: boolean) => void;
+  constant: Column[];
+  rec: Record<string, string>;
+  duplicateCount: number;
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {/* 회차 라벨: 직전 → 최근 (주차 대신 월-일 기간) */}
+    <div style={{ position: 'sticky', top: 0, zIndex: 5, background: T.bg, paddingBottom: 2 }}>
       <div
-        data-testid="review-rounds"
+        data-testid="review-key-card"
         style={{
+          background: T.card,
+          border: `1px solid ${T.line}`,
+          borderRadius: 14,
+          padding: '10px 12px',
           display: 'flex',
-          alignItems: 'center',
+          flexDirection: 'column',
           gap: 8,
-          fontSize: FS.small,
-          color: T.textDim,
-          fontWeight: 600,
-          flexWrap: 'wrap',
         }}
       >
-        <span data-testid="review-round-prev" style={{ fontFamily: MONO }}>
-          {roundLabel(prevRound)}
-        </span>
-        <span aria-hidden style={{ color: T.textMute }}>→</span>
-        <span data-testid="review-round-latest" style={{ fontFamily: MONO, color: T.text, fontWeight: 700 }}>
-          {roundLabel(latestRound)}
-        </span>
-      </div>
-
-      {/* 보기 토글 행 */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* 회차 축: 직전 → 최근 (주차 + 조사일자 기간) */}
         <div
-          data-testid="review-viewmode"
-          role="group"
-          aria-label="보기 방식"
-          style={{
-            display: 'inline-flex',
-            background: T.inputBg,
-            borderRadius: 12,
-            padding: 3,
-            border: `1px solid ${T.line}`,
-            minHeight: 44,
-          }}
+          data-testid="review-rounds"
+          style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: FS.small, color: T.textDim }}
         >
-          {(
-            [
-              { id: 'list', label: '카드' },
-              { id: 'group', label: '그룹' },
-              { id: 'pivot', label: '피봇' },
-            ] as const
-          ).map((o) => {
-            const active = viewMode === o.id;
-            return (
-              <button
-                key={o.id}
-                data-testid={`review-view-${o.id}`}
-                aria-pressed={active}
-                onClick={() => onViewMode(o.id)}
-                style={{
-                  border: 'none',
-                  background: active ? T.blue : 'transparent',
-                  color: active ? '#fff' : T.textDim,
-                  fontSize: FS.label,
-                  fontWeight: active ? 700 : 600,
-                  padding: '0 16px',
-                  borderRadius: 9,
-                  cursor: 'pointer',
-                  letterSpacing: -0.1,
-                }}
-              >
-                {o.label}
-              </button>
-            );
-          })}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ color: T.textMute, fontWeight: 700, minWidth: 28 }}>직전</span>
+            <span data-testid="review-round-prev" style={{ fontFamily: MONO }}>{roundLabel(prevRound)}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ color: T.textMute, fontWeight: 700, minWidth: 28 }}>최근</span>
+            <span
+              data-testid="review-round-latest"
+              style={{ fontFamily: MONO, color: T.text, fontWeight: 700 }}
+            >
+              {roundLabel(latestRound)}
+            </span>
+          </div>
         </div>
 
-        {/* 퍼센트 토글: 절대값 ↔ 변화율 */}
-        <button
-          data-testid="review-pct-toggle"
-          aria-pressed={showPct}
-          onClick={() => onShowPct(!showPct)}
-          style={{
-            minHeight: 44,
-            padding: '0 16px',
-            borderRadius: 12,
-            border: `1px solid ${showPct ? T.blue : T.line}`,
-            background: showPct ? T.blueGlow : T.inputBg,
-            color: showPct ? '#BBD4FF' : T.textDim,
-            fontSize: FS.label,
-            fontWeight: showPct ? 700 : 600,
-            cursor: 'pointer',
-            letterSpacing: -0.1,
-          }}
-        >
-          % 변화율
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── 샘플 카드 목록 (그룹 토글: 항목 기준 묶음 — 합산 아님) ───────────────────
-
-function SampleList({
-  entries,
-  index,
-  measuredCols,
-  prevRound,
-  latestRound,
-  showPct,
-  grouped,
-}: {
-  entries: SampleEntry[];
-  index: PastIndex;
-  measuredCols: Column[];
-  prevRound: string | null;
-  latestRound: string | null;
-  showPct: boolean;
-  grouped: boolean;
-}) {
-  if (grouped) {
-    // 그룹: **항목별로 묶어** 모든 샘플의 같은 항목 변화를 나란히. 합산·평균 아님 — 샘플은 그대로 나열.
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {measuredCols.map((col) => (
-          <section
-            key={col.id}
-            data-testid="review-group"
-            data-col={col.id}
-            style={{
-              background: T.card,
-              border: `1px solid ${T.line}`,
-              borderRadius: 14,
-              padding: '10px 12px',
-            }}
-          >
-            <div
+        {/* 공통 키(세션 내 불변) + 중복 배지 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          {constant.length === 0 ? (
+            <span style={{ fontSize: FS.small, color: T.textMute }}>공통 키 없음</span>
+          ) : (
+            constant.map((c) => (
+              <Chip key={c.id} strong color={T.text} bg="rgba(255,255,255,0.08)">
+                <span style={{ color: T.textMute, fontWeight: 500 }}>{c.name}</span>
+                {(rec[c.id] ?? '').trim()}
+              </Chip>
+            ))
+          )}
+          {duplicateCount > 0 && (
+            <span
+              data-testid="review-badge-duplicate"
+              title="같은 샘플·같은 회차의 행이 시트에 2번 이상 있습니다. 마지막 행 값을 표시합니다."
               style={{
-                fontSize: FS.cardLabel,
+                marginLeft: 'auto',
+                padding: '3px 9px',
+                borderRadius: 999,
+                background: 'rgba(255,179,0,0.13)',
+                color: T.amber,
+                fontSize: 12,
                 fontWeight: 700,
-                color: T.text,
-                marginBottom: 6,
-                letterSpacing: -0.2,
+                whiteSpace: 'nowrap',
               }}
             >
-              {col.name}
-            </div>
-            <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {entries.map((e) => (
-                <li
-                  key={e.key}
-                  data-testid="review-sample"
-                  data-key={e.key}
-                  style={{ listStyle: 'none' }}
-                >
-                  <MeasureRow
-                    col={col}
-                    rowLabel={e.label}
-                    prev={prevRound ? pastValue(index, e.key, prevRound, col.id) : null}
-                    latest={latestRound ? pastValue(index, e.key, latestRound, col.id) : null}
-                    showPct={showPct}
-                  />
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
+              중복 {duplicateCount}
+            </span>
+          )}
+        </div>
       </div>
-    );
-  }
-
-  // 카드: 샘플별 카드 + 그 안에 측정 항목들(기본 보기).
-  return (
-    <ul
-      style={{
-        listStyle: 'none',
-        margin: 0,
-        padding: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-      }}
-    >
-      {entries.map((e) => (
-        <SampleCard
-          key={e.key}
-          entry={e}
-          index={index}
-          measuredCols={measuredCols}
-          prevRound={prevRound}
-          latestRound={latestRound}
-          showPct={showPct}
-        />
-      ))}
-    </ul>
-  );
-}
-
-// ─── 샘플 카드 ─────────────────────────────────────────────────────────────
-
-function SampleCard({
-  entry,
-  index,
-  measuredCols,
-  prevRound,
-  latestRound,
-  showPct,
-}: {
-  entry: SampleEntry;
-  index: PastIndex;
-  measuredCols: Column[];
-  prevRound: string | null;
-  latestRound: string | null;
-  showPct: boolean;
-}) {
-  return (
-    <li
-      data-testid="review-sample"
-      data-key={entry.key}
-      style={{
-        background: T.card,
-        border: `1px solid ${T.line}`,
-        borderRadius: 14,
-        padding: '10px 12px',
-      }}
-    >
-      <div
-        style={{
-          fontSize: FS.cardLabel,
-          fontWeight: 700,
-          color: T.text,
-          letterSpacing: -0.2,
-          marginBottom: 6,
-        }}
-      >
-        {entry.label}
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {measuredCols.map((col) => (
-          <MeasureRow
-            key={col.id}
-            col={col}
-            prev={prevRound ? pastValue(index, entry.key, prevRound, col.id) : null}
-            latest={latestRound ? pastValue(index, entry.key, latestRound, col.id) : null}
-            showPct={showPct}
-          />
-        ))}
-      </div>
-    </li>
-  );
-}
-
-/**
- * 측정 컬럼 한 줄: 직전 회차값 → 최근 회차값 + 변화(절대/%). 두 값 모두 시트 인덱스에서 온다.
- * 위반(이상치) 판정은 checkAnomaly SSOT. 가로 스크롤 없이 grid(1fr auto auto)로 배치.
- * rowLabel이 있으면(그룹 보기) 항목명 대신 샘플 라벨을 왼쪽에 표시한다.
- */
-function MeasureRow({
-  col,
-  prev,
-  latest,
-  showPct,
-  rowLabel,
-}: {
-  col: Column;
-  prev: string | null;
-  latest: string | null;
-  showPct: boolean;
-  rowLabel?: string;
-}) {
-  const ch = computeChange(col, prev, latest);
-  const arrowGlyph =
-    ch.arrow === 'up' ? '↑' : ch.arrow === 'down' ? '↓' : ch.arrow === 'flat' ? '→' : '';
-  const deltaColor = ch.violation ? T.red : col.trendRule && ch.arrow ? T.green : T.textDim;
-  const deltaText = showPct ? ch.pct : ch.delta;
-  const leftLabel = rowLabel ?? col.name;
-
-  return (
-    <div
-      data-testid={`review-cell-${col.id}`}
-      data-arrow={ch.arrow ?? undefined}
-      data-violation={ch.violation ? 'true' : undefined}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr auto auto',
-        alignItems: 'center',
-        columnGap: 8,
-        padding: '6px 8px',
-        borderRadius: 9,
-        background: ch.violation ? 'rgba(255,82,82,0.10)' : T.cardAlt,
-        border: ch.violation ? '1px solid rgba(255,82,82,0.40)' : '1px solid transparent',
-        overflowX: 'hidden',
-      }}
-    >
-      <span
-        style={{
-          fontSize: FS.label,
-          color: T.textDim,
-          fontWeight: 600,
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {leftLabel}
-      </span>
-
-      {/* 직전 → 최근 값 (가로 스크롤 없이 한 그리드 셀 안에서 줄어듦) */}
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'baseline',
-          gap: 6,
-          minWidth: 0,
-          fontFamily: MONO,
-        }}
-      >
-        <span
-          style={{
-            fontSize: FS.value,
-            fontWeight: 700,
-            color: ch.prev === null ? T.textMute : T.textDim,
-          }}
-        >
-          {ch.prev ?? '—'}
-        </span>
-        <span aria-hidden style={{ color: T.textMute, fontSize: FS.small }}>→</span>
-        <span
-          style={{
-            fontSize: FS.value,
-            fontWeight: 800,
-            color: ch.violation ? T.red : ch.latest === null ? T.textMute : T.text,
-          }}
-        >
-          {ch.latest ?? '—'}
-        </span>
-      </span>
-
-      {/* 변화(절대 또는 %) */}
-      {deltaText ? (
-        <span
-          aria-label={
-            ch.violation
-              ? `${col.name} 이상치: 직전 ${ch.prev}에서 ${ch.latest}`
-              : `${col.name} 직전 대비 ${deltaText}`
-          }
-          style={{
-            fontSize: FS.delta,
-            fontWeight: 800,
-            fontFamily: MONO,
-            color: deltaColor,
-            background: ch.violation ? 'rgba(255,82,82,0.14)' : 'rgba(255,255,255,0.05)',
-            padding: '2px 7px',
-            borderRadius: 999,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {arrowGlyph} {deltaText}
-        </span>
-      ) : (
-        <span aria-hidden />
-      )}
     </div>
   );
 }
 
-// ─── 피봇 매트릭스 (샘플=행 × 항목=열, 셀=변화 — 값 안 섞음) ──────────────────
+// ─── 비교 표 (가변 키 앞열 + 측정값 직전/현재 뒷열, 집계 없음) ─────────────────
 
-function PivotMatrix({
+const cellBase = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+} as const;
+
+function CompareTable({
   entries,
   index,
+  variable,
   measuredCols,
   prevRound,
   latestRound,
-  showPct,
 }: {
   entries: SampleEntry[];
   index: PastIndex;
+  variable: Column[];
   measuredCols: Column[];
   prevRound: string | null;
   latestRound: string | null;
-  showPct: boolean;
 }) {
-  // 행=샘플, 열=항목. 가로 스크롤 없이 균등 폭 grid(헤더 1열 + 항목 N열).
-  const cols = measuredCols.length;
-  const template = `minmax(0, 1.2fr) repeat(${cols}, minmax(0, 1fr))`;
+  // 앞열 = 가변 키(샘플 라벨), 뒷열 = 측정 항목별 직전|현재 2열. 가로 스크롤 0(minmax(0,1fr) 압축).
+  const template =
+    `${variable.map(() => 'minmax(0, 1.2fr)').join(' ')} ` +
+    `repeat(${measuredCols.length * 2}, minmax(0, 1fr))`;
   return (
     <div
-      data-testid="review-pivot"
+      data-testid="review-table"
       role="table"
-      aria-label="샘플별 항목 변화 매트릭스"
+      aria-label="샘플별 직전→현재 비교 표"
       style={{
         background: T.card,
         border: `1px solid ${T.line}`,
@@ -1062,32 +707,54 @@ function PivotMatrix({
         overflowX: 'hidden',
       }}
     >
-      {/* 헤더 행 */}
-      <div role="row" style={{ display: 'grid', gridTemplateColumns: template, columnGap: 4 }}>
-        <span role="columnheader" aria-hidden style={{ minWidth: 0 }} />
-        {measuredCols.map((c) => (
+      {/* 헤더: 가변 키명(앞) + 측정 항목명(2열 span, 아래 직전/현재) */}
+      <div
+        role="row"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: template,
+          columnGap: 4,
+          alignItems: 'end',
+          borderBottom: `1px solid ${T.line}`,
+          paddingBottom: 4,
+        }}
+      >
+        {variable.map((c) => (
           <span
             role="columnheader"
             key={c.id}
-            style={{
-              fontSize: FS.small,
-              fontWeight: 700,
-              color: T.textDim,
-              textAlign: 'center',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-              padding: '4px 2px',
-            }}
+            style={{ ...cellBase, fontSize: FS.small, fontWeight: 700, color: T.textDim, padding: '0 2px' }}
           >
             {c.name}
           </span>
         ))}
+        {measuredCols.map((c) => (
+          <div role="columnheader" key={c.id} style={{ gridColumn: 'span 2', minWidth: 0 }}>
+            <div
+              style={{
+                ...cellBase,
+                fontSize: FS.small,
+                fontWeight: 700,
+                color: T.text,
+                textAlign: 'center',
+              }}
+            >
+              {c.name}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 4 }}>
+              <span style={{ ...cellBase, fontSize: 11, color: T.textMute, fontWeight: 600, textAlign: 'center' }}>
+                직전
+              </span>
+              <span style={{ ...cellBase, fontSize: 11, color: T.textMute, fontWeight: 600, textAlign: 'center' }}>
+                현재
+              </span>
+            </div>
+          </div>
+        ))}
       </div>
 
-      {/* 샘플 행들 */}
-      {entries.map((e) => (
+      {/* 본문: 샘플 1행 (앞열 가변 키 값 + 측정 항목별 직전/현재 셀) */}
+      {entries.map((e, i) => (
         <div
           role="row"
           key={e.key}
@@ -1098,32 +765,26 @@ function PivotMatrix({
             gridTemplateColumns: template,
             columnGap: 4,
             alignItems: 'center',
-            borderTop: `1px solid ${T.line}`,
-            padding: '4px 0',
+            padding: '5px 0',
+            borderTop: i === 0 ? 'none' : `1px solid ${T.line}`,
+            background: i % 2 === 1 ? 'rgba(255,255,255,0.02)' : 'transparent',
           }}
         >
-          <span
-            role="rowheader"
-            style={{
-              fontSize: FS.small,
-              fontWeight: 600,
-              color: T.textDim,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-              paddingLeft: 4,
-            }}
-          >
-            {e.label}
-          </span>
+          {variable.map((c) => (
+            <span
+              role="cell"
+              key={c.id}
+              style={{ ...cellBase, fontSize: FS.label, fontWeight: 700, color: T.text, padding: '0 2px' }}
+            >
+              {(e.rec[c.id] ?? '').trim() || '—'}
+            </span>
+          ))}
           {measuredCols.map((col) => (
-            <PivotCell
+            <CompareValueCells
               key={col.id}
               col={col}
               prev={prevRound ? pastValue(index, e.key, prevRound, col.id) : null}
               latest={latestRound ? pastValue(index, e.key, latestRound, col.id) : null}
-              showPct={showPct}
             />
           ))}
         </div>
@@ -1132,67 +793,55 @@ function PivotMatrix({
   );
 }
 
-/** 피봇 셀: 최근값 + 변화 배지(작게). 값을 섞지 않음 — 그 샘플·그 항목의 직전→최근만. */
-function PivotCell({
+/** 한 측정 항목의 직전/현재 2개 셀(Fragment로 표 그리드의 2열에 직접 배치). 최근 셀에 화살표·이상치
+ *  강조와 testid(review-cell-<colId>)를 단다. 직전 셀은 review-prev-<colId>. */
+function CompareValueCells({
   col,
   prev,
   latest,
-  showPct,
 }: {
   col: Column;
   prev: string | null;
   latest: string | null;
-  showPct: boolean;
 }) {
   const ch = computeChange(col, prev, latest);
-  const arrowGlyph =
-    ch.arrow === 'up' ? '↑' : ch.arrow === 'down' ? '↓' : ch.arrow === 'flat' ? '' : '';
-  const deltaColor = ch.violation ? T.red : col.trendRule && ch.arrow ? T.green : T.textMute;
-  const deltaText = showPct ? ch.pct : ch.delta;
+  const arrowGlyph = ch.arrow === 'up' ? '↑' : ch.arrow === 'down' ? '↓' : '';
+  const latestColor = ch.violation ? T.red : ch.latest === null ? T.textMute : T.text;
   return (
-    <div
-      role="cell"
-      data-testid={`review-cell-${col.id}`}
-      data-arrow={ch.arrow ?? undefined}
-      data-violation={ch.violation ? 'true' : undefined}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: 1,
-        minWidth: 0,
-        padding: '3px 1px',
-        borderRadius: 7,
-        background: ch.violation ? 'rgba(255,82,82,0.12)' : 'transparent',
-      }}
-    >
+    <>
       <span
+        role="cell"
+        data-testid={`review-prev-${col.id}`}
         style={{
-          fontSize: FS.label,
-          fontWeight: 800,
+          ...cellBase,
           fontFamily: MONO,
-          color: ch.violation ? T.red : ch.latest === null ? T.textMute : T.text,
-          maxWidth: '100%',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
+          fontSize: FS.value,
+          fontWeight: 700,
+          color: ch.prev === null ? T.textMute : T.textDim,
+          textAlign: 'center',
         }}
       >
-        {ch.latest ?? '—'}
+        {ch.prev ?? '—'}
       </span>
-      {deltaText && (
-        <span
-          style={{
-            fontSize: FS.delta,
-            fontWeight: 700,
-            fontFamily: MONO,
-            color: deltaColor,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {arrowGlyph}{deltaText}
-        </span>
-      )}
-    </div>
+      <span
+        role="cell"
+        data-testid={`review-cell-${col.id}`}
+        data-arrow={ch.arrow ?? undefined}
+        data-violation={ch.violation ? 'true' : undefined}
+        style={{
+          ...cellBase,
+          fontFamily: MONO,
+          fontSize: FS.value,
+          fontWeight: 800,
+          color: latestColor,
+          textAlign: 'center',
+          borderRadius: 6,
+          background: ch.violation ? 'rgba(255,82,82,0.14)' : 'transparent',
+        }}
+      >
+        {arrowGlyph}{ch.latest ?? '—'}
+      </span>
+    </>
   );
 }
 

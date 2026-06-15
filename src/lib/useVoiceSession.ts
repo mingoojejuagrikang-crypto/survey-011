@@ -42,6 +42,10 @@ interface AwaitingField {
   trendConfirm?: boolean;
 }
 
+/** v0.9.0 빠른 인식(조기확정): interim 숫자가 이 시간(ms) 동안 같은 값으로 안정되면 final을
+ *  기다리지 않고 커밋한다. 짧을수록 빠르지만 미완성 숫자(소수점 추가 전) 절단 위험이 커진다. */
+const EARLY_COMMIT_STABLE_MS = 400;
+
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
   const sessionIdRef = useRef<string>('');
@@ -49,6 +53,11 @@ export function useVoiceSession() {
   const awaitingFieldRef = useRef<AwaitingField | null>(null);
   const epochRef = useRef(0);
   const lastConfidenceRef = useRef<number>(1);
+  // v0.9.0 딜레이 계측 — 마지막 interim(중간) 결과의 텍스트·도착시각. final 시 (final.ts − 이 시각)
+  // = EOS 꼬리(브라우저 무음 종료감지 대기)를 정량화한다(stt_eos_tail).
+  const lastInterimRef = useRef<{ text: string; at: number } | null>(null);
+  // v0.9.0 빠른 인식(조기확정) — 같은 파싱값이 interim에서 안정되기 시작한 시각. 임계 시간 유지 시 커밋.
+  const earlyCommitStableRef = useRef<{ value: string; since: number } | null>(null);
   const recorderRef = useRef<AudioRecorder | null>(null);
   const clipStartRowRef = useRef<number>(0);
   const clipStartColIdRef = useRef<string>('');
@@ -438,6 +447,8 @@ export function useVoiceSession() {
   const announceField = useCallback(
     async (col: Column, opts?: { isModify?: boolean; previousValue?: string }) => {
       const row = useSessionStore.getState().activeRow;
+      // v0.9.0 — 다음 필드로 진입하면 이전 이상치 알람 팝업은 해제(해소된 것으로 간주).
+      useSessionStore.getState().setAnomalyAlert(null);
       awaitingFieldRef.current = {
         row,
         colId: col.id,
@@ -1013,6 +1024,7 @@ export function useVoiceSession() {
     if (awaiting.trendConfirm) {
       if (cmd === 'confirm' || cmd === 'keep') {
         cancelTts();
+        useSessionStore.getState().setAnomalyAlert(null); // 팝업 해제
         logger.log({
           type: 'trend', extra: 'trend_alert_confirmed', parsed: cmd,
           sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
@@ -1023,6 +1035,7 @@ export function useVoiceSession() {
         return;
       }
       if (cmd) {
+        useSessionStore.getState().setAnomalyAlert(null); // 타 명령으로 해제 → 팝업 닫음
         logger.log({
           type: 'trend', extra: `trend_alert_dismissed:${cmd}`,
           sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
@@ -1153,6 +1166,11 @@ export function useVoiceSession() {
 
     // Log STT event
     lastConfidenceRef.current = confidence;
+    // v0.9.0 EOS 계측: 마지막 interim → 이 final까지의 간격 = 브라우저 무음 종료감지 꼬리.
+    // 앱 처리는 ~1ms이므로 사용자 체감 딜레이의 실제 병목. 조기확정 시엔 ≈0으로 찍힌다.
+    const eosTailMs = lastInterimRef.current ? Math.max(0, Date.now() - lastInterimRef.current.at) : null;
+    lastInterimRef.current = null;
+    earlyCommitStableRef.current = null;
     logger.log({
       type: 'stt',
       sessionId: sessionIdRef.current,
@@ -1162,6 +1180,7 @@ export function useVoiceSession() {
       text,
       confidence,
       alts,
+      ...(eosTailMs != null ? { eosTailMs } : {}),
     });
 
     // Item 12: 컬럼명 완전 일치 STT 거부 — 숫자/날짜 컬럼에만 적용 (text/options 컬럼은 컬럼명이 유효한 값일 수 있음)
@@ -1449,10 +1468,26 @@ export function useVoiceSession() {
       };
       // 응답 발화('확인'/새 값) 클립 시작 — announceField 패턴(TTS 이전 시작, barge-in 수록).
       armClipForCell(awaiting.row, awaiting.colId);
-      const pctPart = v.pctText ? ` ${v.pctText}%` : ''; // prev=0이면 % 구절 생략
+      // v0.9.0 발화 문구 분기(민구 요청): 변동률(pct) 트리거 → 기존 % 유지; 증가/감소(direction)
+      // 또는 둘 다(both) → 절대값 차이로 안내. 절대차는 부동소수 잔여(2.2000002)를 막기 위해 컬럼
+      // 소수자리수로 반올림한다(float=col.decimals||1, int=0). both는 방향 우선 = 절대값.
+      const decForDiff = col?.type === 'float' ? (col.decimals ?? 1) : 0;
+      const changeText =
+        v.trigger === 'pct'
+          ? (v.pctText ? `${v.pctText}%` : '')
+          : Math.abs(v.next - v.prev).toFixed(decForDiff);
+      const midPart = changeText ? ` ${changeText}` : ''; // prev=0(빈 %)이면 변화량 구절 생략
       const alertText =
-        `${formatForTts(parsed)}. 직전 조사보다${pctPart} ` +
+        `${formatForTts(parsed)}. 직전 조사보다${midPart} ` +
         `${v.direction === 'up' ? '증가' : '감소'}했습니다. 확인해주세요.`;
+      // 시각 팝업: 이전값→현재값과 변화량을 띄운다(발화만으론 스쳐 지나가 확인이 어렵다는 요청).
+      useSessionStore.getState().setAnomalyAlert({
+        colName: awaiting.name,
+        prev: String(v.prev),
+        next: formatForTts(parsed),
+        direction: v.direction,
+        changeText,
+      });
       useSessionStore.getState().setLastTts(alertText);
       await say(alertText);
       return; // advance 중단 — 해소는 handleFinal 상단의 trendConfirm 분기
@@ -1498,6 +1533,44 @@ export function useVoiceSession() {
     if (epochRef.current !== myEpoch) return;
     await advance();
   }, [advance, enterModifyMode, say, goNextRow, enterReentry, persistSession, evaluateTrend, archiveCellClip, armClipForCell]);
+
+  // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
+  const handleInterim = useCallback((text: string) => {
+    const now = Date.now();
+    // EOS 계측: 마지막 interim 도착 시각 기록 — handleFinal이 final.ts와의 차로 꼬리를 산출.
+    lastInterimRef.current = { text, at: now };
+
+    // 조기확정(빠른 인식) — 기본 OFF(실험). 브라우저 final(무음 종료감지)을 기다리지 않고
+    // interim 숫자가 안정되면 커밋해 체감 딜레이를 줄인다. 보수적으로 숫자 컬럼 + 명령어 아님 +
+    // TTS중 아님 + active 단계에서만. 절단 리스크가 있어 실기기 A/B 전까지 default off.
+    if (!useSettingsStore.getState().fastRecognition) return;
+    const awaiting = awaitingFieldRef.current;
+    if (!awaiting || awaiting.trendConfirm) return;
+    if (useSessionStore.getState().phase !== 'active') return;
+    if (ctrlRef.current?.isTtsMuted()) return; // TTS 중 barge-in은 final 경로가 처리
+    const t = text.trim();
+    if (!t || detectCommand(t)) return; // 명령어는 반드시 final로
+    const col = useSettingsStore.getState().columns.find((c) => c.id === awaiting.colId) || null;
+    if (!col || (col.type !== 'int' && col.type !== 'float')) return; // 숫자 컬럼만 조기확정
+    const parsed = parseValueForCol(col, t);
+    if (parsed === null) { earlyCommitStableRef.current = null; return; }
+    const stable = earlyCommitStableRef.current;
+    if (!stable || stable.value !== parsed) {
+      earlyCommitStableRef.current = { value: parsed, since: now };
+      return;
+    }
+    if (now - stable.since < EARLY_COMMIT_STABLE_MS) return;
+    // 안정 충족 → 조기확정. 이중 커밋 방지: 인식기 abort로 같은 발화의 in-flight final 폐기.
+    earlyCommitStableRef.current = null;
+    logger.log({
+      type: 'stt_early_commit', text: t, parsed,
+      sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+      extra: `stable=${EARLY_COMMIT_STABLE_MS}`,
+    });
+    ctrlRef.current?.restartRecognition();
+    // confidence 0 = "미보고" 센티넬 → 신뢰도 게이트 통과(interim엔 신뢰도 없음). 안정성으로 갈음.
+    void handleFinal(t, [t], 0);
+  }, [handleFinal]);
 
   // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async (label?: string) => {
@@ -1570,6 +1643,8 @@ export function useVoiceSession() {
     // Init audio recorder fire-and-forget — mic permission is independent of STT startup.
     // Awaiting getUserMedia can block indefinitely in headless/denied-permission environments.
     if (!recorderRef.current) recorderRef.current = new AudioRecorder();
+    // v0.9.0 — 초기 출력모드 반영(init 전에 speakerMode 세팅 → acquireStream이 echoCancellation 적용).
+    if (s.speakerOutput) void recorderRef.current.setOutputMode(true);
     // #4 active mic: once init() resolves, emit a follow-up session event carrying the granted
     // input device. Done async (not awaited) so STT startup is never blocked; emitted as its own
     // event so analysis can attribute STT accuracy to the real device per session.
@@ -1594,6 +1669,7 @@ export function useVoiceSession() {
 
     ctrlRef.current = new SpeechController({
       onFinal: handleFinal,
+      onInterim: handleInterim,
       onError: () => {},
     });
     setActiveController(ctrlRef.current);
@@ -1601,7 +1677,7 @@ export function useVoiceSession() {
 
     await announceField(vc[0]);
     return true;
-  }, [announceField, announceRowDiff, handleFinal, say]);
+  }, [announceField, announceRowDiff, handleFinal, handleInterim, say]);
 
   const stop = useCallback(async (announce = true) => {
     setActiveController(null);
@@ -1685,6 +1761,7 @@ export function useVoiceSession() {
     if (!ctrlRef.current) {
       ctrlRef.current = new SpeechController({
         onFinal: handleFinal,
+        onInterim: handleInterim,
         onError: () => {},
       });
       setActiveController(ctrlRef.current);
@@ -1693,16 +1770,24 @@ export function useVoiceSession() {
     // Recorder was disposed during pause — recreate for the resumed session.
     if (!recorderRef.current) {
       recorderRef.current = new AudioRecorder();
+      if (useSettingsStore.getState().speakerOutput) void recorderRef.current.setOutputMode(true);
       await recorderRef.current.init().catch(() => {});
     }
     const vc = voiceColsList();
     const cur = vc[sess.activeColIdx];
     await say('재시작.');
     if (cur) await announceField(cur);
-  }, [announceField, handleFinal, say]);
+  }, [announceField, handleFinal, handleInterim, say]);
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
   useEffect(() => { resumeRef.current = resume; }, [resume]);
+
+  // v0.9.0 — 입력탭 스피커/이어폰 토글: speakerOutput 변경 시 마이크를 새 echoCancellation으로 재취득.
+  // (세션 중 재취득은 짧은 인식 끊김을 유발할 수 있음 — IOS-5/AUDIO-ROUTE-1 실험.)
+  const speakerOutput = useSettingsStore((st) => st.speakerOutput);
+  useEffect(() => {
+    void recorderRef.current?.setOutputMode(speakerOutput);
+  }, [speakerOutput]);
 
   // D-2 (RACE-7): restore session id/label from the store on (re)mount. If the hook unmounted
   // mid-session (e.g. tab switch while paused) the local refs were lost, but the store kept the

@@ -12,6 +12,8 @@ import {
   resampleLinear,
   combineWithPreroll,
   findSpeechRange,
+  findSpeechSegments,
+  buildKeptRanges,
   applyAsymmetricPad,
   encodeWavMono,
   buildClipBlobs,
@@ -156,6 +158,52 @@ test.describe('buildClipBlobs — 트림 + 원본 보존 계약', () => {
     const r = buildClipBlobs(mono, RATE, false, original);
     expect(r.blob).toBe(original);
     expect(r.raw).toBeNull();
+  });
+});
+
+/** 두 발화 덩어리(선언 + 값)를 긴 무음으로 분리한 합성 PCM. */
+function synth2(silA: number, sp1: number, gap: number, sp2: number, silB: number, amp = 0.5): Float32Array {
+  const out = new Float32Array(silA + sp1 + gap + sp2 + silB);
+  for (let i = 0; i < sp1; i++) out[silA + i] = i % 2 === 0 ? amp : -amp;
+  const off = silA + sp1 + gap;
+  for (let i = 0; i < sp2; i++) out[off + i] = i % 2 === 0 ? amp : -amp;
+  return out;
+}
+
+test.describe('findSpeechSegments + buildKeptRanges (v0.9.0 CLIP-BLANK-1)', () => {
+  test('긴 무음으로 갈린 두 발화 → 2개 세그먼트', () => {
+    // 0.2s 무음 + 0.3s 발화 + 1.5s 긴 무음 + 0.3s 발화 + 0.2s 무음
+    const mono = synth2(3200, 4800, 24000, 4800, 3200);
+    const segs = findSpeechSegments(mono, RATE);
+    expect(segs.length).toBe(2);
+    expect(Math.abs(segs[0].start - 3200)).toBeLessThanOrEqual(320);
+    expect(Math.abs(segs[1].start - 32000)).toBeLessThanOrEqual(320);
+  });
+
+  test('짧은 갭(<150ms)으로 갈린 발화 → 1개 세그먼트(어절 내 정지 보존)', () => {
+    // 0.2s 무음 + 0.3s 발화 + 0.1s 짧은 무음 + 0.3s 발화 + 0.2s 무음 (gap 1600 < mergeGap 2400)
+    const mono = synth2(3200, 4800, 1600, 4800, 3200);
+    expect(findSpeechSegments(mono, RATE).length).toBe(1);
+  });
+
+  test('buildKeptRanges: 단일 세그먼트 = applyAsymmetricPad와 동일 범위', () => {
+    const ranges = buildKeptRanges([{ start: 8000, end: 12000 }], RATE, RATE * 2);
+    expect(ranges.length).toBe(1);
+    const pad = applyAsymmetricPad({ start: 8000, end: 12000 }, RATE, RATE * 2);
+    expect(ranges[0].start).toBe(pad.start);
+    expect(ranges[0].end).toBe(pad.end);
+  });
+
+  test('buildClipBlobs: 긴 내부 공백이 제거되어 전체 span보다 짧아진다', () => {
+    const original = new Blob([new Uint8Array(1000)], { type: 'audio/webm' });
+    const mono = synth2(3200, 4800, 24000, 4800, 3200); // span 40000, 내부 1.5s 공백
+    const r = buildClipBlobs(mono, RATE, false, original);
+    expect(r.blob).not.toBe(original);
+    expect(r.blob.type).toBe('audio/wav');
+    const samples = (r.blob.size - 44) / 2;
+    // 두 발화(각 0.3s) + 각 ±패딩만 남고 1.5s 공백 제거 → 단일범위 트림(≈39680)보다 크게 짧다.
+    expect(samples).toBeLessThan(30000);
+    expect(samples).toBeGreaterThan(8000); // 두 발화 + 패딩은 보존
   });
 });
 

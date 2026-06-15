@@ -295,8 +295,16 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
 
   // echo 대신 알림 TTS + advance 중단(여전히 횡경 대기).
   const tts1 = await getTtsLog(page);
-  expect(tts1.some((t) => t.includes('120.5. 직전 조사보다 20.5% 증가했습니다. 확인해주세요.'))).toBe(true);
+  // v0.9.0: 증가/감소(방향 trendRule) 트리거는 **절대값 차이**로 발화(120.5−100.0=20.5). %는 종경(pct)만.
+  expect(tts1.some((t) => t.includes('120.5. 직전 조사보다 20.5 증가했습니다. 확인해주세요.'))).toBe(true);
   expect(await getActiveChipName(page)).toContain('횡경');
+
+  // v0.9.0 시각 팝업: 이전값(100)→현재값(120.5)과 항목명을 화면에 표시.
+  const popup = page.locator('[data-testid="anomaly-alert"]');
+  await expect(popup).toBeVisible();
+  await expect(popup).toContainText('횡경');
+  await expect(popup).toContainText('100');
+  await expect(popup).toContainText('120.5');
 
   // "확인" → 커밋된 값 유지, 종경으로 진행.
   await fireStt(page, '확인', 500);
@@ -351,12 +359,12 @@ test('이상치 → 새 값 발화 → 재입력+재검증(재알림) → 통과
   await setupAndStart(page);
 
   await waitForActiveChip(page, '횡경');
-  await fireStt(page, '120.5', 500); // 알람 1차 (100.0 → 120.5, +20.5%)
-  expect((await getTtsLog(page)).some((t) => t.includes('120.5. 직전 조사보다 20.5% 증가했습니다'))).toBe(true);
+  await fireStt(page, '120.5', 500); // 알람 1차 (100.0 → 120.5, 절대차 +20.5)
+  expect((await getTtsLog(page)).some((t) => t.includes('120.5. 직전 조사보다 20.5 증가했습니다'))).toBe(true);
 
-  // 새 값(여전히 커짐) → 재입력(corrected) + 재알림 (+30.5% 증가).
+  // 새 값(여전히 커짐) → 재입력(corrected) + 재알림 (절대차 +30.5).
   await fireStt(page, '130.5', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('130.5. 직전 조사보다 30.5% 증가했습니다. 확인해주세요.'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('130.5. 직전 조사보다 30.5 증가했습니다. 확인해주세요.'))).toBe(true);
   expect(await getActiveChipName(page)).toContain('횡경'); // 여전히 advance 중단
 
   // 통과 값(80.5 < 100 — increase는 작아짐 미발화) → 알림 없이 수정 echo + 종경으로 진행.

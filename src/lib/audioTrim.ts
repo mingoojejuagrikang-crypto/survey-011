@@ -28,6 +28,9 @@ const REL_THRESHOLD = 0.08;         // 피크 대비 발화 판정 비율
 const ABS_FLOOR = 0.004;            // 절대 무음 바닥(노이즈 게이트)
 const TARGET_RATE = 16000;          // 다운샘플 목표 (음성 충분)
 const KEEP_RATIO = 0.95;            // 트림 후 길이가 원본의 이 비율 이상이면 효과 미미 → 트림 생략
+/** v0.9.0 CLIP-BLANK-1: 발화 세그먼트 사이 무음이 이보다 짧으면 같은 발화로 보고 합친다(어절 내
+ *  미세 정지). 이보다 긴 무음은 "긴 공백"으로 간주해 클립에서 제거한다(선언↔값 사이 긴 정지 등). */
+const MERGE_GAP_MS = 150;
 
 /** AudioRecorder의 PCM 링버퍼에서 추출한 프리롤 구간(mono). */
 export interface PrerollPcm {
@@ -122,6 +125,88 @@ export function findSpeechRange(
   return { start: startSample, end: endSample };
 }
 
+/** v0.9.0 CLIP-BLANK-1 — RMS 기반 **다중** 발화 세그먼트 검출. findSpeechRange가 [첫 발화, 마지막
+ *  발화] 단일 구간(내부 긴 무음 포함)을 돌려주던 것과 달리, 발화 덩어리들을 각각 분리해 돌려준다.
+ *  MERGE_GAP_MS보다 짧은 무음은 같은 세그먼트로 합쳐 어절 내 미세 정지로 인한 과분할을 막는다.
+ *  전체 무음/미검출이면 빈 배열. */
+export function findSpeechSegments(
+  mono: Float32Array,
+  sampleRate: number,
+): { start: number; end: number }[] {
+  const length = mono.length;
+  if (!length) return [];
+  let peak = 0;
+  for (let i = 0; i < length; i++) {
+    const a = Math.abs(mono[i]);
+    if (a > peak) peak = a;
+  }
+  if (peak < ABS_FLOOR) return [];
+
+  const thr = Math.max(ABS_FLOOR, peak * REL_THRESHOLD);
+  const win = Math.max(1, Math.floor((sampleRate * WIN_MS) / 1000));
+  const mergeGap = Math.floor((sampleRate * MERGE_GAP_MS) / 1000);
+  const segs: { start: number; end: number }[] = [];
+  let curStart = -1;
+  let curEnd = -1;
+  for (let i = 0; i < length; i += win) {
+    const end = Math.min(length, i + win);
+    let sum = 0;
+    for (let j = i; j < end; j++) sum += mono[j] * mono[j];
+    const rms = Math.sqrt(sum / (end - i));
+    if (rms >= thr) {
+      if (curStart < 0) {
+        curStart = i;
+        curEnd = end;
+      } else if (i - curEnd <= mergeGap) {
+        curEnd = end; // 짧은 갭 → 같은 발화로 이어붙임
+      } else {
+        segs.push({ start: curStart, end: curEnd }); // 긴 갭 → 세그먼트 분리
+        curStart = i;
+        curEnd = end;
+      }
+    }
+  }
+  if (curStart >= 0) segs.push({ start: curStart, end: curEnd });
+  return segs;
+}
+
+/** 각 세그먼트를 앞 PAD_FRONT / 뒤 PAD_BACK만큼 확장한 뒤, 겹치거나 맞닿는 범위는 합쳐서 "보존
+ *  범위" 목록을 만든다. 합쳐지지 않은 범위 사이의 긴 무음은 결과에서 빠진다(공백 제거). 단일
+ *  세그먼트면 applyAsymmetricPad와 동일한 단일 범위가 나온다(기존 동작 보존). */
+export function buildKeptRanges(
+  segments: { start: number; end: number }[],
+  sampleRate: number,
+  length: number,
+): { start: number; end: number }[] {
+  const front = Math.floor((sampleRate * PAD_FRONT_MS) / 1000);
+  const back = Math.floor((sampleRate * PAD_BACK_MS) / 1000);
+  const ranges: { start: number; end: number }[] = [];
+  for (const seg of segments) {
+    const start = Math.max(0, seg.start - front);
+    const end = Math.min(length, seg.end + back);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last.end) {
+      if (end > last.end) last.end = end; // 확장 후 겹침 → 합침(연속 보존, 갭 없음)
+    } else {
+      ranges.push({ start, end });
+    }
+  }
+  return ranges;
+}
+
+/** 보존 범위들의 실제 오디오를 순서대로 이어붙인 mono PCM. 범위 사이 무음은 제거된다. */
+function concatRanges(mono: Float32Array, ranges: { start: number; end: number }[]): Float32Array {
+  let total = 0;
+  for (const r of ranges) total += r.end - r.start;
+  const out = new Float32Array(total);
+  let pos = 0;
+  for (const r of ranges) {
+    out.set(mono.subarray(r.start, r.end), pos);
+    pos += r.end - r.start;
+  }
+  return out;
+}
+
 /** 비대칭 PAD 적용(앞 300ms / 뒤 180ms) + 경계 클램프. */
 export function applyAsymmetricPad(
   range: { start: number; end: number },
@@ -193,24 +278,31 @@ export function buildClipBlobs(
   hadPreroll: boolean,
   originalBlob: Blob,
 ): ProcessedClip {
-  const range = findSpeechRange(mono, sampleRate);
-  if (!range) {
+  // v0.9.0 CLIP-BLANK-1 — 다중 세그먼트 검출 + 내부 긴 공백 제거(선언·값은 각각 ±패딩으로 보존).
+  const segments = findSpeechSegments(mono, sampleRate);
+  if (segments.length === 0) {
     // 발화 미검출: 프리롤이 결합돼 있으면 결합 전체본을 저장본으로(프리롤 증거 보존),
     // 아니면 원본 그대로(현행 동작 유지).
     return hadPreroll
       ? { blob: encodeWavMono(mono, sampleRate, 0, mono.length), raw: null }
       : { blob: originalBlob, raw: null };
   }
-  const padded = applyAsymmetricPad(range, sampleRate, mono.length);
-  const noEffect = padded.end - padded.start >= mono.length * KEEP_RATIO;
+  const ranges = buildKeptRanges(segments, sampleRate, mono.length);
+  let keptSamples = 0;
+  for (const r of ranges) keptSamples += r.end - r.start;
+  const noEffect = keptSamples >= mono.length * KEEP_RATIO;
   if (noEffect) {
-    // 트림 효과 미미: 프리롤이 있으면 결합 전체본으로 재인코딩(프리롤 포함이 목적),
+    // 트림 효과 미미(거의 전부 발화): 프리롤이 있으면 결합 전체본으로 재인코딩(프리롤 포함이 목적),
     // 없으면 원본 유지.
     return hadPreroll
       ? { blob: encodeWavMono(mono, sampleRate, 0, mono.length), raw: null }
       : { blob: originalBlob, raw: null };
   }
-  const trimmed = encodeWavMono(mono, sampleRate, padded.start, padded.end);
+  // 단일 범위면 연속 인코딩(기존 동작과 바이트 동일). 다중이면 범위들을 이어붙여 내부 공백 제거.
+  const trimmed =
+    ranges.length === 1
+      ? encodeWavMono(mono, sampleRate, ranges[0].start, ranges[0].end)
+      : encodeWavMono(concatRanges(mono, ranges), sampleRate, 0, keptSamples);
   // 트림이 실제로 일어남 → 트림 전 전체본(프리롤 포함)을 raw로 보존.
   const raw = hadPreroll
     ? encodeWavMono(mono, sampleRate, 0, mono.length)

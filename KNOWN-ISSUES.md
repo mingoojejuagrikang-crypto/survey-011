@@ -57,6 +57,7 @@
 - **해결·회피:** 앞단의 무관한 한절 명사가 "백"과 발음이 유사한 단어("액", "개", "엑", "에봇" 등)이면 ambiguous 처리하여 재질문하거나 기대 범위 오차 임계(이상치) 검사 적용 필요. **v0.5.0 가드(부분):** 같은 계열의 "유실된 채 침묵 커밋" 경로 2종을 차단 — ① 유효 숫자 토큰 2개 이상이면 `null`(재질문), ② `정수 + 점 + 비숫자 잔여`(소수부가 비숫자로 오인식)도 `null`(재질문). 단 leading "백"이 통째로 비숫자 1토큰으로 오인식되는 원형 케이스는 여전히 커밋될 수 있음.
 - **출처:** `2026-06-05 세션` (실기기 로그 분석); `2026-06-10 실기기 로그` — **수정 경로 재발(소수부 유실형)**: `"111 점 에"`로 인식돼 소수부가 비숫자로 유실된 채 정수 `111`만 침묵 커밋됨; `2026-06-11 실기기 로그` — **v0.5.0 소수부 가드 작동 확인**: `"111 점 에"`·`"300 점 부다"` 둘 다 `stt_parse_failed:decimal_fraction_lost`로 **재질문**(침묵커밋 안 함) → 정상값 커밋. **단 점-없는 잔여형 잔존**: `"277 정체"`(row14, 277.7 의도)는 `점`이 없어 가드 밖 → 정수 `277` 커밋(사용자가 직후 수정으로 277.7 정정). 정수+무관 비숫자 토큰형은 미차단; `2026-06-12 분석`(06-11 v0.6.0 실기기 로그) — **점-없는 잔여형 재발 2건**: `"제17.7"`→`17.7` 침묵 커밋(의도 77.7, 선행 음절 유실)·`"현백 33.3"`→`33.3` 침묵 커밋(의도 333.3) — 둘 다 사용자가 수정 명령으로 즉시 정정(누적 4건, 빈도 상승 → v0.7.0 가드 승격 후보).
 - **현재 상태:** ✅수정됨(점-없는 잔여형 가드, **survey-011 v0.7.0 STT-C**) — 단일 숫자 + 무관 비숫자 잔여 토큰("제17.7", "현백 33.3")은 ambiguous(`null`) 처리해 재질문(`stt_parse_failed:extraneous_token`). 단위어·조사·기존 커밋 보장 어휘는 의도적으로 좁은 화이트리스트(`HARMLESS_RESIDUAL_TOKENS`, `src/lib/koreanNum.ts`)로 통과시켜 "당도 8" 류 정상 커밋은 유지. 침묵 커밋 3계열(multi_numeric·decimal_fraction_lost·extraneous_token) 모두 재질문으로 전환 — STT 오인식 자체는 잔존([STT-10] 화이트리스트 정밀도 관측). 회귀 `tests/koreanNum.spec.ts`.
+- **`2026-06-15 v0.8.0 실기기 로그`(decimal_fraction_lost 재발 ×5):** 소수점 뒤 숫자가 조사로 오인식되는 `decimal_fraction_lost`가 한 세션 5회(`"11 점 의"`·`"211 점에/점 의/점 에"`). **가드는 정상 작동**(전부 `stt_parse_failed`로 재질문, 침묵 커밋 0) — 즉 *데이터 유실은 없으나* 같은 소수 발화를 STT가 반복 실패해 사용자가 재발화하는 **마찰**이 빈발. STT 엔진(ko Web Speech) 한계라 코드 수정으로 근절 불가. 재질문 문구는 적정. 빈도 관측 지속(조기확정[딜레이] 토글과는 독립).
 
 ### [STT-7] 수정 명령 `"수정"`이 `"수변"` / `"수 벽"`으로 오인식되어 무시되거나 파싱 실패
 - **증상:** 수정하고 싶을 때 `"수정"`이라고 말했으나 STT가 `"수변"`으로 오인식하여 TTS가 켜져 있어 차단(`stt_blocked_tts_muted`)되거나, `"수 벽"`으로 오인식하여 파싱 실패(`stt_parse_failed`)되어 정정 진입이 안 됨.
@@ -85,6 +86,18 @@
 - **해결·회피:** 재질문은 안전한 쪽 실패(값 유실 없음). **다음 실기기 로그 분석에서 `extraneous_token`의 정밀도/재현율을 측정한 뒤** 화이트리스트 확장(또는 "단위어 prefix + 조사 suffix" 분해 매칭)을 결정한다 — 측정 전 확장 금지.
 - **출처:** `2026-06-12 v0.7.0` Codex 교차점검(watch-item); `2026-06-15 v0.7.0 실기기 로그` — **정밀도 측정 n=1: true positive**(`"우정 77.7"` row4 → `extraneous_token` 재질문 → 재발화로 정상 커밋, 정상 발화 오탐 아님). 융합 토큰("밀리요" 류)은 이번 세션 미발생. **화이트리스트 확장 보류 방침 유지**(샘플 더 필요).
 - **현재 상태:** ⚠️주시 (텔레메트리 관측 우선 — 필드 로그에서 `stt_parse_failed:extraneous_token` 빈도·오탐 수확)
+
+### [STT-11] 음성입력→TTS 출력 체감 딜레이 = 브라우저 무음 종료감지(EOS), 앱 처리는 ~1ms
+- **증상:** 민구 — "음성 입력 후 안내 음성까지 딜레이가 느껴진다, 줄여달라."
+- **진단(2026-06-15 v0.8.0 로그):** TTS 이벤트의 `ts`는 발화 *종료* 시점(durationMs 보정 필요). 보정하면 **STT 최종인식 → TTS 발화시작(앱 처리) = 중앙값 1ms / p90 2ms** — 앱 파이프라인(추세검사·클립정지·persist 포함)은 발화를 거의 막지 않는다. TTS 큐 지연(`startDelayMs`)도 중앙값 28ms. **체감 딜레이는 전적으로 브라우저 Web Speech API의 무음 종료감지(말 멈춤 → `isFinal`)**. iOS Safari 특성상 0.5~1.5s 추정이나 **현 로그엔 interim 타임스탬프가 없어 미측정.**
+- **해결·회피:** 앱 코드의 유일한 레버 = interim(중간) 안정화 기반 **조기확정**. v0.9.0: ① (무위험) `stt_eos_tail` 계측 — 마지막 interim → final 간격을 `stt` 이벤트에 동봉해 다음 로그에서 EOS 꼬리 정량화. ② (실험, **기본 OFF**) 설정탭 "빠른 인식" 토글 — interim 숫자가 `EARLY_COMMIT_STABLE_MS=400` 안정되면 final 대기 없이 커밋(`restartRecognition`으로 in-flight final abort → 이중 커밋 방지), `stt_early_commit` 계측. 절단(소수점 추가 전 커밋) 리스크가 있어 실기기 A/B 후 채택 결정.
+- **출처:** `2026-06-15 v0.8.0 실기기 로그` 분석(민구 요청).
+- **현재 상태:** 🔬계측+실험 (default off) — 다음 로그의 `stt_eos_tail`(EOS 꼬리)·토글 ON 시 `stt_early_commit` 절단/정정율로 가치 판단.
+
+### [STT-12] OpenDots 외장 마이크가 선택 가능해도 6세션 연속 내장 마이크만 잡힘 — **종결(이어폰 오작동)**
+- **증상:** `device.json`에 OpenDots ONE by Shokz가 audioinput으로 열거되나, `session.input_device`는 6세션 연속 `iPhone 마이크`(내장). 외장 마이크가 실제 입력으로 선택되지 않음.
+- **원인:** 앱은 `getUserMedia` 기본 장치를 쓰며 장치 선택 UI가 없다. OpenDots(골전도 이어폰) 마이크 자체가 iOS 입력 기본으로 승격되지 않거나 페어링/오작동. 6세션 연속 동일 → 기기/이어폰 측 문제로 판단.
+- **현재 상태:** ✅종결(민구 확인, 2026-06-16) — 이어폰(OpenDots) 마이크 오작동으로 확정. 앱 코드 조치 없음. (필요 시 향후 장치 선택 UI는 별도 기능 요청으로.)
 
 ---
 
@@ -193,6 +206,7 @@
 - **증상:** 사용자가 설정에서 스피커폰 모드를 켰는데도(소음 현장 대응) TTS 안내 음성이 스피커가 아니라 **이어피스(리시버)** 로 나가 잘 안 들림. iOS 18.7 / WebKit 26.5 실기기.
 - **원인(코드+플랫폼 추론):** 앱은 출력 라우팅을 전혀 제어하지 않는다(`setSinkId`/`sinkId`/`setAudioOutput` grep = NONE; `speakerphoneMode`는 `speech.ts:159`·`useVoiceSession.ts:955,1188`의 소프트웨어 half-duplex/STT 임계값 전용). 마이크는 `audioRecorder.ts:135-139`에서 `echoCancellation:true`로 열린다. iOS WebKit은 `echoCancellation:true`를 요청받으면 마이크를 **voice-processing 오디오 세션**(AVAudioSession 통신/voice-chat 모드)으로 열고, 이 모드에서 OS가 출력을 리시버로 라우팅한다. iOS Safari엔 출력을 강제할 Web API가 없다(`HTMLMediaElement.setSinkId` 미지원). → **OS/WebKit 레벨 제약, 앱 코드로 직접 해결 불가.**
 - **해결·회피(미확정 — 트레이드오프):** `echoCancellation:false`(또는 speakerphoneMode일 때만 false)로 열면 voice-processing 세션을 피해 스피커 출력이 유지될 *가능성*. 단 [CLIP-4]의 의도적 `echoCancellation:on`(빗소리 에코 되먹임 감소)과 [IOS-3] phantom 입력 위험과 충돌 → **블라인드 플립 금지, 측정 A/B 필요**(라우팅·에코·노이즈 오인식 3축 비교).
+- **v0.9.0 실험(A/B 빌드):** 민구 결정 — "일단 입력탭에 스피커/이어폰 토글을 넣어 실기기에서 측정". 입력탭 우상단 토글(`speakerOutput`, 기본 이어폰=현행). 스피커 선택 시 `audioRecorder.setOutputMode(true)`가 마이크 스트림을 **`echoCancellation:false`로 재취득**(`acquireStream`/`reacquire`)해 voice-processing 세션 회피를 시도한다. `speakerphoneMode`(소프트 half-duplex)와는 **독립**(혼동 금지). `audio_route_changed`/`audio_reacquired:ec=<bool>` 텔레메트리로 다음 로그에서 출력 dB·STT 오인식률을 A/B 측정. ⚠️ 미검증: iOS에서 실제 스피커 전환 여부(OS 의존, 안 바뀔 수도)·세션 중 재취득 시 0.3~0.5s 인식 끊김. 재취득 실패 시 stream=null로 남아 `clip_no_stream`(안전선).
 - **출처:** `2026-06-15 v0.7.0 실기기 로그` (민구 제보; 코드 firsthand 확인). 메커니즘 외부 출처 교차확인은 **미수행**(WebSearch 도구 부재 — 확인 필요).
 - **현재 상태:** ⚠️주시 (미확정 가설 — Vance A/B + Pax 외부확인 선결. `src/lib/audioRecorder.ts:135-139`)
 
@@ -269,6 +283,7 @@
 - **출처:** `2026-06-08 세션` (민구 제보 + 로그) → **survey-011 v0.4.2** 추가
 - **현재 상태:** ✅수정됨 (`src/lib/audioTrim.ts`, `src/lib/audioRecorder.ts` `stopClip` 통합; Chromium 실클립 검증 6998ms→1440ms, 128KB→46KB). ⚠️주시 — iOS Safari `decodeAudioData(webm/opus)` 작동은 다음 실기기 로그의 `clip_trimmed`로 사후 확인.
 - **v0.5.0 주석(프리롤 도입):** 2026-06-10 로그에서 0.32~0.60s 초단 클립 7건 관측 — barge-in 시 발화 **앞부분**이 녹음 시작 전에 잘린 정황(트림 과다가 아니라 수록 자체가 늦음). v0.5.0에서 **0.5s 프리롤**(AudioWorklet PCM 링버퍼, 실패 시 ScriptProcessor → 그것도 실패 시 프리롤 없이 현행 동작 + `clip_preroll_unavailable` 로그)을 클립 앞에 결합하고, 트림 PAD를 비대칭화(앞 300ms / 뒤 180ms). **트림 전 원본(프리롤 포함)도 `:raw` 키로 보존**(민구 결정)하고 로그 zip에 포함, `clip_duration`에 `prerollMs` 동봉. iOS 실기기 효과는 다음 로그에서 정량 확인. **v0.5.0 실기기 확인(2026-06-11):** `clip_preroll_ready:worklet:44100` + 44개 `clip_duration` 전부 `prerollMs:500`, 초단(0.32~0.60s) 클립 **0건**(06-10 7건→0건), `clip_trimmed` 39건·`:raw` 원본 보존 39건 정상. iOS Safari 프리롤·트림 경로 정상 작동 확정.
+- **[CLIP-BLANK-1] v0.9.0 — 발화 *사이* 긴 공백 잔존(내부 무음):** 2026-06-15 v0.8.0 실기기 후 민구 재제보(클립 공백 여전히 김). 원인: 기존 `findSpeechRange`가 **[첫 발화~마지막 발화] 단일 구간**만 돌려줘 그 *내부*의 긴 무음(예: 선언 후 한참 뜸 → 값)이 통째 보존됐다(앞뒤 무음만 잘림). v0.9.0: `audioTrim.findSpeechSegments`(다중 세그먼트, `MERGE_GAP_MS=150` 미만 갭은 한 발화로 병합) + `buildKeptRanges`(세그먼트별 비대칭 PAD 후 겹침 병합) + `concatRanges`(범위 사이 긴 무음 제거하고 이어붙임)으로 교체. 단일 세그먼트면 기존과 바이트 동일(회귀 없음), `KEEP_RATIO` no-effect·프리롤 폴백·`:raw` 보존 그대로. 회귀 `tests/audioTrim.spec.ts`(다중구간 갭압축 검증). ⚠️ 실기기 미검증: 선언+값 클립에서 공백만 제거되고 발화는 보존되는지, 첫 음절 유지.
 
 ### [CLIP-3] 세션 첫 클립이 빈 캡처(`clip_empty`)로 저장 실패 → broken pointer(재생버튼 끊김)
 - **증상:** 세션의 **맨 첫 음성 클립**이 빈 버퍼로 stop돼 저장 안 됨. sessions.json은 해당 셀(row1 횡경 c7) audioClip 포인터를 `sess_…:1:c7…`로 등록하지만 디스크에 파일이 없어 데이터탭 재생버튼이 끊김(404). 값(11.1)은 정상 커밋 — audit-trail 클립만 손실.

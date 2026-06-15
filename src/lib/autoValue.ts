@@ -1,7 +1,9 @@
 import type { Column } from '../types';
 
-/** Auto-cycling columns: seq, or options with selected.length > 1. */
-function isCycling(col: Column): boolean {
+/** Auto-cycling columns: seq, or options with selected.length > 1.
+ *  Exported (v0.9.0): settingsStore uses it to flip a column's 음성확인(ttsAnnounce) default to
+ *  '유' when an auto column *transitions* into a cycling kind (값이 행마다 바뀌므로 들려줘야 함). */
+export function isCycling(col: Column): boolean {
   if (col.input === 'voice') return false;
   if (col.auto.kind === 'seq') return true;
   if (col.auto.kind === 'options' && col.auto.selected.length > 1) return true;
