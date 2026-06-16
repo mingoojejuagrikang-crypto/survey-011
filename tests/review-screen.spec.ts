@@ -356,3 +356,122 @@ test('상태 — 미로그인 안내', async ({ page }) => {
   await expect(page.locator('[data-testid="review-state-signin"]')).toBeVisible();
   await expect(page.locator('[data-testid="review-state-signin"]')).toContainText('Google 로그인');
 });
+
+// ─── v0.10.0 재설계 — AND 필터 바 / 행 선택 / 보기 설정 / baseline N ───────────
+
+test('AND 필터 — 차원 칩 추가/제거로 후보가 교집합으로 좁아진다', async ({ page }) => {
+  await stubSheets(page);
+  await seedAndOpenReview(page);
+
+  // 기본: 필터 바 노출 + 칩 0, 후보 6.
+  await expect(page.locator('[data-testid="review-filterbar"]')).toBeVisible();
+  await expect(page.locator('[data-testid="review-filter-chip"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="review-sample"]')).toHaveCount(6);
+
+  // +필터 → 조사나무 컬럼 → 값 '1' 선택 → 후보 2(과실1·과실2)로 좁힘 + 칩 1개.
+  await page.locator('[data-testid="review-filter-add"]').click();
+  await expect(page.locator('[data-testid="review-filter-sheet"]')).toBeVisible();
+  await page.locator('[data-testid="review-filter-col-c6"]').click();
+  await page.locator('[data-testid="review-filter-value"]', { hasText: '1' }).first().click();
+
+  await expect(page.locator('[data-testid="review-filter-chip"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid="review-filter-chip"]')).toContainText('조사나무');
+  await expect(page.locator('[data-testid="review-sample"]')).toHaveCount(2);
+
+  // 칩 제거 → 다시 6 후보.
+  await page.locator('[data-testid="review-filter-chip"] button').click();
+  await expect(page.locator('[data-testid="review-filter-chip"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="review-sample"]')).toHaveCount(6);
+});
+
+test('회차 비교 — baseline 2회차 전으로 바꾸면 직전 셀 값이 바뀐다', async ({ page }) => {
+  await stubSheets(page);
+  await seedAndOpenReview(page);
+
+  // 기본 baseline=직전(05-20): 나무1·과실1 직전 120.0.
+  await expect(prevCell(page, '이원창 시험 1 1', 'c8')).toContainText('120.0');
+
+  // +필터 → 2회차 전 선택 → baseline=05-01 → 직전 셀 118.0.
+  await page.locator('[data-testid="review-filter-add"]').click();
+  await page.locator('[data-testid="review-baseline-2"]').click();
+  await page.locator('[data-testid="review-filter-sheet"] button[aria-label="닫기"]').click();
+
+  await expect(prevCell(page, '이원창 시험 1 1', 'c8')).toContainText('118.0');
+  // 회차 칩이 "2회차 전" 비교를 표기.
+  await expect(page.locator('[data-testid="review-filter-round"]')).toContainText('2회차 전');
+});
+
+test('행 선택 — 후보 중 일부 해제하면 표에 선택 행만 남는다', async ({ page }) => {
+  await stubSheets(page);
+  await seedAndOpenReview(page);
+
+  // 행 선택 패널 노출(후보 6 > 1), 기본 전부 표시.
+  await expect(page.locator('[data-testid="review-rowselector"]')).toBeVisible();
+  await expect(page.locator('[data-testid="review-sample"]')).toHaveCount(6);
+
+  // 해제 → 0행(빈 상태 카드), 표 숨김.
+  await page.locator('[data-testid="review-rows-none"]').click();
+  await expect(page.locator('[data-testid="review-state-norows"]')).toBeVisible();
+  await expect(page.locator('[data-testid="review-sample"]')).toHaveCount(0);
+
+  // 한 행만 체크 → 그 1행만 표에.
+  await page.locator('[data-testid="review-row-check"]').first().click();
+  await expect(page.locator('[data-testid="review-sample"]')).toHaveCount(1);
+
+  // 전체 → 다시 6.
+  await page.locator('[data-testid="review-rows-all"]').click();
+  await expect(page.locator('[data-testid="review-sample"]')).toHaveCount(6);
+});
+
+test('보기 설정 — 측정 항목을 끄면 표 측정 열이 사라진다', async ({ page }) => {
+  // 측정 2개(횡경 c8 + 종경 c9)로 — 하나를 꺼서 검증.
+  const cols = [
+    { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
+    { id: 'c3', name: '농가명', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' }, sampleKey: true },
+    { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 2 }, sampleKey: true },
+    { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+    { id: 'c9', name: '종경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+  ];
+  const headers = ['조사일자', '농가명', '조사나무', '횡경', '종경'];
+  const rounds = ['2026-05-20', '2026-06-05'];
+  const rows: string[][] = [];
+  rounds.forEach((date) => {
+    for (let t = 1; t <= 2; t++) rows.push([date, '이원창', String(t), `${10 + t}.0`, `${20 + t}.0`]);
+  });
+  await page.route('**://sheets.googleapis.com/**', async (route) => {
+    if (route.request().method() === 'GET') { await route.fulfill({ json: { values: [headers, ...rows] } }); return; }
+    await route.fulfill({ status: 404, body: 'x' });
+  });
+  await seedAndOpenReview(page, { settings: settingsPayload({ columns: cols }) });
+
+  const table = page.locator('[data-testid="review-table"]');
+  await expect(table).toContainText('횡경');
+  await expect(table).toContainText('종경');
+
+  // 보기 설정 펼치고 종경(c9) 측정 끄기 → 표에서 종경 사라짐, 횡경 유지.
+  await page.locator('[data-testid="review-viewpanel"] summary').click();
+  await page.locator('[data-testid="review-measure-c9"]').click();
+  await expect(table).toContainText('횡경');
+  await expect(table).not.toContainText('종경');
+});
+
+test('disambiguator — 그룹 차원을 끄면 라벨 충돌 시 키 자체를 라벨 열로 보여준다', async ({ page }) => {
+  await stubSheets(page);
+  await seedAndOpenReview(page);
+
+  const table = page.locator('[data-testid="review-table"]');
+  // 기본(rowDims=나무·과실): 6행 라벨 유일 → 키 폴백 없음('샘플' 헤더 미노출).
+  await expect(page.locator('[data-testid="review-sample"]')).toHaveCount(6);
+
+  // 보기 설정에서 '조사과실'(c7) 그룹을 끔 → rowDims=[조사나무] → 1,1 / 2,2 / 3,3 충돌 →
+  // 키 폴백('샘플' 헤더 + data-key 라벨)로 6행이 여전히 구분된다.
+  await page.locator('[data-testid="review-viewpanel"] summary').click();
+  await page.locator('[data-testid="review-group-c7"]').click();
+  await expect(table).toContainText('샘플');
+  await expect(page.locator('[data-testid="review-sample"]')).toHaveCount(6);
+  // 각 행이 자기 키 라벨을 그대로 보여줌(중복 없이 식별 가능).
+  await expect(table.getByText('이원창 시험 1 1')).toBeVisible();
+  await expect(table.getByText('이원창 시험 3 2')).toBeVisible();
+});
+
+
