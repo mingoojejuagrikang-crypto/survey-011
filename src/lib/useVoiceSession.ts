@@ -3,7 +3,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { recountSynced } from './sessionSync';
-import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, getLastParseFailReason } from './koreanNum';
+import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, getLastParseFailReason, getLastParseFailWhole } from './koreanNum';
 import { VOICE_COMMANDS } from './voiceCommands';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
@@ -40,6 +40,11 @@ interface AwaitingField {
    *  (기존 isModify 의미론으로 재커밋 → 재검증)을 기다리는 상태. 이때 isModify=true,
    *  previousValue=방금 커밋된 값으로 함께 무장된다. 커밋된 값 자체는 유효하게 저장돼 있다. */
   trendConfirm?: boolean;
+  /** v0.10.0 A1: 소수점 타깃 재질문 모드. STT가 소수부를 유실("111 점 에" → decimal_fraction_lost)했을
+   *  때, 파싱된 정수부("111")를 여기 담고 "소수점 아래만 다시 말씀해 주세요"로 재질문한다. 다음 발화가
+   *  소수 한 자리면 `${fractionWhole}.${digit}`로 합성해 커밋(전체 재발화 불필요). 값 추측(에→1)은
+   *  하지 않는다 — 같은 STT 문자열이 111.1·111.5 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정). */
+  fractionWhole?: string;
 }
 
 /** v0.9.0 빠른 인식(조기확정): interim 숫자가 이 시간(ms) 동안 같은 값으로 안정되면 final을
@@ -1225,7 +1230,10 @@ export function useVoiceSession() {
     // the lone-syllable homophone case REGARDLESS of noisyMode. Scope is deliberately narrow —
     // single alt, exactly one SINO syllable — so genuine numerals ("이백삼십삼") and arabic
     // single digits ("2") are untouched. Reuses the null→re-ask contract (no commit).
-    if (currentCol && (currentCol.type === 'int' || currentCol.type === 'float')) {
+    // v0.10.0 A1: 소수점 타깃 재질문 중(awaiting.fractionWhole)에는 이 게이트를 건너뛴다 — 사용자가
+    // "소수점 아래만" 명시적으로 한 자리(예: "오"=5)를 말하는 상황이라 단일 음절이 모호하지 않다.
+    // (정수부 컨텍스트가 이미 있어, 아래 fractionWhole 분기가 `111.5`로 합성한다.)
+    if (currentCol && (currentCol.type === 'int' || currentCol.type === 'float') && awaiting.fractionWhole == null) {
       if (alts.length <= 1 && isAmbiguousSingleSyllable(text)) {
         logger.log({ type: 'stt_rejected_ambiguous_syllable', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
         recorderRef.current?.startClip();
@@ -1245,11 +1253,35 @@ export function useVoiceSession() {
 
     // Plain value — with alts fallback on parse failure (item 11)
     const col = getColById(awaiting.colId);
-    let parsed = col ? parseValueForCol(col, text) : null;
+    let parsed: string | null = null;
+    // v0.10.0 A1 타깃 재질문 후속: 소수부만 기다리는 중이면(직전 발화가 decimal_fraction_lost) 이번
+    // 발화를 소수부로 합성 시도. 모드는 한 번만 적용하고 즉시 해제한다 — 합성 실패 시 아래 평소 파싱이
+    // 전체 발화로 처리하므로, 사용자가 "111.5" 전체를 다시 말한 경우도 그대로 커밋된다.
+    const fractionWhole = awaiting.fractionWhole;
+    if (fractionWhole != null) {
+      awaitingFieldRef.current = { ...awaiting, fractionWhole: undefined };
+      if (col) {
+        const frac = parseKoreanNumber(text);
+        // 소수 한 자리(0~9)만 말한 경우에만 정수부와 합성. 2자리 이상·소수점 포함은 전체 값을 다시
+        // 말한 것으로 보고 합성하지 않는다(아래 평소 파싱이 처리).
+        if (frac !== null && /^[0-9]$/.test(frac)) {
+          parsed = parseValueForCol(col, `${fractionWhole}.${frac}`);
+          if (parsed !== null) {
+            logger.log({ type: 'stt', extra: 'decimal_fraction_recovered', text: `${fractionWhole}.${frac}`, originalText: text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+          }
+        }
+      }
+    }
+    if (parsed === null) {
+      parsed = col ? parseValueForCol(col, text) : null;
+    }
     // v0.5.0 W4/W5: capture the parser's machine-readable fail reason from the PRIMARY
     // transcript (before the alts loop overwrites it) — tags stt_parse_failed below so the
     // next log analysis can split multi_numeric / decimal_fraction_lost re-asks from generic ones.
     const parseFailReason = parsed === null ? getLastParseFailReason() : null;
+    // v0.10.0 A1: decimal_fraction_lost 시 파싱된 정수부 — 타깃 재질문에 쓴다(PRIMARY 직후 캡처;
+    // alts 루프의 parseValueForCol이 _lastParseFailWhole을 덮어쓰기 전에).
+    const parseFailWhole = parsed === null ? getLastParseFailWhole() : null;
     if (parsed === null && alts.length > 1) {
       for (let ai = 1; ai < Math.min(alts.length, 3); ai++) {
         const alt = alts[ai];
@@ -1265,7 +1297,15 @@ export function useVoiceSession() {
     if (parsed === null) {
       logger.log({ type: 'stt_parse_failed', text, altsCount: alts.length, extra: parseFailReason ?? undefined, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
       recorderRef.current?.startClip(); // restart clip
-      await say(`${awaiting.name} 다시 말씀해 주세요.`);
+      // v0.10.0 A1: 소수 의도인데 소수부 유실("111 점 에") → 정수부를 유지하고 "소수점 아래만" 타깃
+      // 재질문(전체 재발화 회피). 값 추측(에→1)은 하지 않는다 — 같은 STT 문자열이 111.1·111.5
+      // 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정).
+      if (parseFailReason === 'decimal_fraction_lost' && parseFailWhole != null) {
+        awaitingFieldRef.current = { ...awaiting, fractionWhole: parseFailWhole };
+        await say(`${parseFailWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
+      } else {
+        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+      }
       return;
     }
 

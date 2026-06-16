@@ -154,6 +154,13 @@ export function getLastParseFailReason(): string | null {
   return _lastParseFailReason;
 }
 
+/** v0.10.0 A1: decimal_fraction_lost일 때(소수 의도인데 소수부 유실) 파싱된 정수부 문자열.
+ *  호출자가 "<정수부>점, 소수점 아래만 다시 말씀해 주세요" 타깃 재질문에 쓴다. 다른 실패 사유엔 null. */
+let _lastParseFailWhole: string | null = null;
+export function getLastParseFailWhole(): string | null {
+  return _lastParseFailWhole;
+}
+
 /** v0.7.0 STT-C: non-numeric residual tokens that legitimately accompany a spoken measurement
  *  and must NOT make a single-number utterance ambiguous. Deliberately tight — the documented
  *  leading-syllable mishears ([STT-6] 백→액/에봇/개/엑, 06-12 제/현백) are NOT here, so those
@@ -183,6 +190,7 @@ function isHarmlessResidual(tok: string): boolean {
  */
 export function parseKoreanNumber(raw: string, maxDecimals?: number): string | null {
   _lastParseFailReason = null;
+  _lastParseFailWhole = null;
   if (!raw) return null;
   const s = raw.replace(/[, 　]/g, ' ').trim();
   if (!s) return null;
@@ -252,7 +260,11 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       if (head && !/\d/.test(tail)) {
         const whole = parseKoreanInt(head);
         if (whole !== null && Number.isInteger(whole)) {
+          // v0.10.0 A1 (민구 결정: 타깃 재질문): "에→1" 같은 값 추측은 하지 않는다 — 같은
+          // "111 점 에"가 111.1(06-16)·111.5(06-10) 양쪽에서 나와 추측은 조용한 오커밋이 된다.
+          // 대신 정수부를 노출해 호출자(useVoiceSession)가 "소수점 아래만 다시"로 타깃 재질문하게 한다.
           _lastParseFailReason = 'decimal_fraction_lost';
+          _lastParseFailWhole = String(whole);
           return null;
         }
       }
