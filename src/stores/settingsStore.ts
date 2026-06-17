@@ -28,10 +28,6 @@ interface SettingsState {
    *  오인식되는 것을 막는다. ON이면 TTS 재생 중 음성입력(값·명령어 barge-in)을 차단하고 신뢰도
    *  임계를 상향(사실상 TTS 중 half-duplex). 기본 false. */
   speakerphoneMode: boolean;
-  /** v0.9.0 (IOS-5/AUDIO-ROUTE-1 실험) — 입력탭 출력 라우팅 토글. true=스피커 시도(마이크를
-   *  echoCancellation:false로 재취득 → iOS playAndRecord 리시버 고착 해제 시도), false=이어폰/기본
-   *  (echoCancellation:true). OS/기기 의존이라 실제 출력 전환은 미보장 — 실기기 A/B 측정용. */
-  speakerOutput: boolean;
   /** v0.9.0 (딜레이 단축 실험) — 빠른 인식. true면 interim(중간) 결과가 유효 숫자로 안정되면
    *  브라우저 final(무음 종료감지)을 기다리지 않고 조기 커밋한다. 미완성 숫자 절단 리스크가 있어
    *  기본 false(실기기 A/B용). */
@@ -147,7 +143,6 @@ export const useSettingsStore = create<SettingsState>()(
       sessionAutoLabel: null,
       noisyMode: false,
       speakerphoneMode: false,
-      speakerOutput: false,
       fastRecognition: false,
       preferredVoiceName: '',
       teamFolderId: null,
@@ -172,6 +167,13 @@ export const useSettingsStore = create<SettingsState>()(
           // "굳이 들을 필요 없다고 판단하면 수동으로 다시 무로"). non-cycling→cycling 진입에서만 발동.
           if (prev && !isCycling(prev) && isCycling(next)) {
             merged = { ...next, ttsAnnounce: true };
+          }
+          // v0.12.0 S1 — 대칭 down-transition(민구 명시 요구): cycling→non-cycling 전이 시 음성확인을
+          // 자동으로 '무'로 내린다(다값→단일값 ⇒ 음성확인 무). 전이(edge) 기반이라, 이미 단일값 상태에서
+          // 사용자가 수동으로 켠 ttsAnnounce는 건드리지 않고 cycling 해제 edge에서만 발동한다. 이 down-edge는
+          // up-transition의 "수동 보존" 주석을 의도적으로 덮어쓴다(민구 결정). up/down edge는 상호배타적.
+          if (prev && isCycling(prev) && !isCycling(next)) {
+            merged = { ...next, ttsAnnounce: false };
           }
           // v0.7.0 — input/type 변경 시 sampleKey 재유추 + 부적격 trendRule 제거(columnFlags 규칙).
           return {
@@ -205,12 +207,13 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'survey-011-settings-v3',
-      version: 6,
+      version: 7,
       migrate: (persisted: unknown, version: number) => {
         const s = persisted as Partial<SettingsState> & {
           columns?: unknown[];
           trendAlertEnabled?: unknown;
           reviewScope?: unknown;
+          speakerOutput?: unknown;
           trendRuleClearedV6?: boolean;
         };
         if (Array.isArray(s.columns)) {
@@ -226,7 +229,6 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
         if (typeof s.noisyMode !== 'boolean') s.noisyMode = false;
         if (typeof s.speakerphoneMode !== 'boolean') s.speakerphoneMode = false;
-        if (typeof s.speakerOutput !== 'boolean') s.speakerOutput = false;
         if (typeof s.fastRecognition !== 'boolean') s.fastRecognition = false;
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
@@ -282,6 +284,14 @@ export const useSettingsStore = create<SettingsState>()(
             });
           }
           s.trendRuleClearedV6 = true;
+        }
+
+        // ── v7 (v0.12.0 AREA1) — 입력탭 출력 라우팅 토글(speakerOutput) 폐기 ───────────────
+        // echoCancellation을 항상 ON으로 하드코딩하고 토글을 읽기전용 입력장치 CATEGORY 배지로
+        // 교체했다(IOS-5 후속). 인터페이스에서 필드를 제거했으므로 영속값을 무조건 삭제한다
+        // (다운그레이드 라운드트립 마커 불필요 — 필드 자체가 더는 존재하지 않음).
+        if (version < 7) {
+          delete s.speakerOutput;
         }
         return s as SettingsState;
       },

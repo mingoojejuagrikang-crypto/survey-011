@@ -1,3 +1,4 @@
+import JSZip from 'jszip';
 import type { Session } from '../types';
 
 /** Escape a single CSV field per RFC 4180. */
@@ -25,6 +26,30 @@ export function sessionsToCsv(sessions: Session[]): string {
     }
   }
   return '﻿' + lines.join('\r\n');
+}
+
+/** Sanitize a string for use as a filename: illegal path chars → '_'. */
+function sanitizeFilename(s: string): string {
+  return s.replace(/[\/\\:*?"<>|]/g, '_');
+}
+
+/** v0.12 — multi-session export: ONE CSV per session, bundled into a single ZIP.
+ *  Each session keeps its own schema via sessionsToCsv([session]) (BOM preserved — JSZip
+ *  encodes the leading ﻿ as the UTF-8 BOM). Per-session filename: sanitized
+ *  (label || id) + ISO export date; collisions deduped with a -1/-2/… counter. */
+export async function sessionsToCsvZip(sessions: Session[]): Promise<Blob> {
+  const zip = new JSZip();
+  const today = new Date().toISOString().slice(0, 10);
+  const used = new Set<string>();
+  for (const s of sessions) {
+    const base = sanitizeFilename(`${s.label || s.id}_${today}`);
+    let name = base;
+    let n = 1;
+    while (used.has(name)) name = `${base}-${n++}`;
+    used.add(name);
+    zip.file(`${name}.csv`, sessionsToCsv([s]));
+  }
+  return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
 }
 
 /** Trigger a browser download of the given CSV text. */

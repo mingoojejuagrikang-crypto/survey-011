@@ -58,6 +58,7 @@
 - **출처:** `2026-06-05 세션` (실기기 로그 분석); `2026-06-10 실기기 로그` — **수정 경로 재발(소수부 유실형)**: `"111 점 에"`로 인식돼 소수부가 비숫자로 유실된 채 정수 `111`만 침묵 커밋됨; `2026-06-11 실기기 로그` — **v0.5.0 소수부 가드 작동 확인**: `"111 점 에"`·`"300 점 부다"` 둘 다 `stt_parse_failed:decimal_fraction_lost`로 **재질문**(침묵커밋 안 함) → 정상값 커밋. **단 점-없는 잔여형 잔존**: `"277 정체"`(row14, 277.7 의도)는 `점`이 없어 가드 밖 → 정수 `277` 커밋(사용자가 직후 수정으로 277.7 정정). 정수+무관 비숫자 토큰형은 미차단; `2026-06-12 분석`(06-11 v0.6.0 실기기 로그) — **점-없는 잔여형 재발 2건**: `"제17.7"`→`17.7` 침묵 커밋(의도 77.7, 선행 음절 유실)·`"현백 33.3"`→`33.3` 침묵 커밋(의도 333.3) — 둘 다 사용자가 수정 명령으로 즉시 정정(누적 4건, 빈도 상승 → v0.7.0 가드 승격 후보).
 - **현재 상태:** ✅수정됨(점-없는 잔여형 가드, **survey-011 v0.7.0 STT-C**) — 단일 숫자 + 무관 비숫자 잔여 토큰("제17.7", "현백 33.3")은 ambiguous(`null`) 처리해 재질문(`stt_parse_failed:extraneous_token`). 단위어·조사·기존 커밋 보장 어휘는 의도적으로 좁은 화이트리스트(`HARMLESS_RESIDUAL_TOKENS`, `src/lib/koreanNum.ts`)로 통과시켜 "당도 8" 류 정상 커밋은 유지. 침묵 커밋 3계열(multi_numeric·decimal_fraction_lost·extraneous_token) 모두 재질문으로 전환 — STT 오인식 자체는 잔존([STT-10] 화이트리스트 정밀도 관측). 회귀 `tests/koreanNum.spec.ts`.
 - **`2026-06-15 v0.8.0 실기기 로그`(decimal_fraction_lost 재발 ×5):** 소수점 뒤 숫자가 조사로 오인식되는 `decimal_fraction_lost`가 한 세션 5회(`"11 점 의"`·`"211 점에/점 의/점 에"`). **가드는 정상 작동**(전부 `stt_parse_failed`로 재질문, 침묵 커밋 0) — 즉 *데이터 유실은 없으나* 같은 소수 발화를 STT가 반복 실패해 사용자가 재발화하는 **마찰**이 빈발. STT 엔진(ko Web Speech) 한계라 코드 수정으로 근절 불가. 재질문 문구는 적정. 빈도 관측 지속(조기확정[딜레이] 토글과는 독립).
+- **✅ `2026-06-17 v0.11.0 실기기 로그`(비 오는 비닐하우스 — 가드 스택 실전 소음 스트레스 통과):** 빗소리·잔향이 다량 유입된 실전 최악 소음에서 STT가 `"뮤직"`·`"보리 9.9"`·`"미래 11 편에"`·`"다시다 점 사"` 같은 명백한 환각 음절을 인식했으나 — **garbage 값 커밋 0건·환각 명령 0건·저신뢰(<0.5) 커밋 0건.** 모든 환각이 거부 레인(`stt_parse_failed`/`ambiguous_syllable`, L1:4·6 / L2:11)에 머물고, 명령 26건은 전부 정당한 `confirm`(median conf 0.98). multi_numeric·decimal_fraction_lost·extraneous_token 3계열 가드 + 신뢰도 게이트가 **현장 폭우에서 데이터 무결성 유지**를 입증. (향후 회귀 가시화용 확인된 양호 동작.)
 
 ### [STT-7] 수정 명령 `"수정"`이 `"수변"` / `"수 벽"`으로 오인식되어 무시되거나 파싱 실패
 - **증상:** 수정하고 싶을 때 `"수정"`이라고 말했으나 STT가 `"수변"`으로 오인식하여 TTS가 켜져 있어 차단(`stt_blocked_tts_muted`)되거나, `"수 벽"`으로 오인식하여 파싱 실패(`stt_parse_failed`)되어 정정 진입이 안 됨.
@@ -93,11 +94,13 @@
 - **해결·회피:** 앱 코드의 유일한 레버 = interim(중간) 안정화 기반 **조기확정**. v0.9.0: ① (무위험) `stt_eos_tail` 계측 — 마지막 interim → final 간격을 `stt` 이벤트에 동봉해 다음 로그에서 EOS 꼬리 정량화. ② (실험, **기본 OFF**) 설정탭 "빠른 인식" 토글 — interim 숫자가 `EARLY_COMMIT_STABLE_MS=400` 안정되면 final 대기 없이 커밋(`restartRecognition`으로 in-flight final abort → 이중 커밋 방지), `stt_early_commit` 계측. 절단(소수점 추가 전 커밋) 리스크가 있어 실기기 A/B 후 채택 결정.
 - **출처:** `2026-06-15 v0.8.0 실기기 로그` 분석(민구 요청).
 - **현재 상태:** 🔬계측+실험 (default off) — 다음 로그의 `stt_eos_tail`(EOS 꼬리)·토글 ON 시 `stt_early_commit` 절단/정정율로 가치 판단.
+- **`2026-06-17 v0.11.0 실기기 로그`(비 오는 비닐하우스, 재분류):** fastRecognition(빠른 인식) **ON**인데 `stt_early_commit` **0건**, eosTail median 1716(L1)/1810ms(L2). 처음엔 "조기확정 미배선" 의심했으나, **현 텔레메트리로는 '소음이 interim 안정화를 막아 조기확정 미발동'(정상)과 '미배선'을 구분 불가**(interim/early-commit 시도 이벤트 부재) → **instrumentation-gap으로 재분류**(behavior-bug 단정 금지). eosTail이 신뢰도와 무관하게 일률적으로 김(소음 분산 신호 아님 = 고정 EOS 타임아웃 정황). 단 `eosTailMs` 존재 자체가 interim 발화 증거라 iOS interim 미지원 가설은 약함. **v0.12.0 조치:** speakerphone near-miss(가드 통과·250~500ms band) msSinceTtsEnd를 기존 stt 이벤트에 동봉(계측) — 다음 현장 로그에서 EOS/가드 정량화. 조기확정 가치 판단은 fastRecognition ON 상태 현장 로그 누적 후.
 
-### [STT-12] OpenDots 외장 마이크가 선택 가능해도 6세션 연속 내장 마이크만 잡힘 — **종결(이어폰 오작동)**
+### [STT-12] OpenDots 외장 마이크가 선택 가능해도 6세션 연속 내장 마이크만 잡힘 — **종결→소음 성능저하로 완화**
 - **증상:** `device.json`에 OpenDots ONE by Shokz가 audioinput으로 열거되나, `session.input_device`는 6세션 연속 `iPhone 마이크`(내장). 외장 마이크가 실제 입력으로 선택되지 않음.
 - **원인:** 앱은 `getUserMedia` 기본 장치를 쓰며 장치 선택 UI가 없다. OpenDots(골전도 이어폰) 마이크 자체가 iOS 입력 기본으로 승격되지 않거나 페어링/오작동. 6세션 연속 동일 → 기기/이어폰 측 문제로 판단.
-- **현재 상태:** ✅종결(민구 확인, 2026-06-16) — 이어폰(OpenDots) 마이크 오작동으로 확정. 앱 코드 조치 없음. (필요 시 향후 장치 선택 UI는 별도 기능 요청으로.)
+- **현재 상태:** ✅종결(민구 확인, 2026-06-16) — 이어폰(OpenDots) 마이크 오작동으로 확정. 앱 코드 조치 없음.
+- **`2026-06-17 v0.11.0 로그`(완화):** Log2에서 OpenDots ONE이 **실제 입력 장치로 선택됨**(`session.input_device`=OpenDots) — "내장만 잡힘"과 대비. 단 비 오는 비닐하우스 소음에서 내장 마이크(L1)보다 **성능 저하**: `stt_parse_failed` L1:4 vs **L2:11(2.75×)**, 커밋 신뢰도 floor 0.820 vs 0.679. → "이어폰 오작동"이라기보다 **소음 환경 마이크 성능 저하**(완주는 함, 18행 43커밋). v0.12.0 입력장치 배지가 어떤 마이크로 듣는지 표시(🎧 블루투스 vs 📱 내장)해 사용자가 인지 가능. 소음 현장 내장 마이크 권장은 백로그(AUDIO-INPUT-1, n=1이라 2차 표본 후).
 
 ---
 
@@ -207,8 +210,9 @@
 - **원인(코드+플랫폼 추론):** 앱은 출력 라우팅을 전혀 제어하지 않는다(`setSinkId`/`sinkId`/`setAudioOutput` grep = NONE; `speakerphoneMode`는 `speech.ts:159`·`useVoiceSession.ts:955,1188`의 소프트웨어 half-duplex/STT 임계값 전용). 마이크는 `audioRecorder.ts:135-139`에서 `echoCancellation:true`로 열린다. iOS WebKit은 `echoCancellation:true`를 요청받으면 마이크를 **voice-processing 오디오 세션**(AVAudioSession 통신/voice-chat 모드)으로 열고, 이 모드에서 OS가 출력을 리시버로 라우팅한다. iOS Safari엔 출력을 강제할 Web API가 없다(`HTMLMediaElement.setSinkId` 미지원). → **OS/WebKit 레벨 제약, 앱 코드로 직접 해결 불가.**
 - **해결·회피(미확정 — 트레이드오프):** `echoCancellation:false`(또는 speakerphoneMode일 때만 false)로 열면 voice-processing 세션을 피해 스피커 출력이 유지될 *가능성*. 단 [CLIP-4]의 의도적 `echoCancellation:on`(빗소리 에코 되먹임 감소)과 [IOS-3] phantom 입력 위험과 충돌 → **블라인드 플립 금지, 측정 A/B 필요**(라우팅·에코·노이즈 오인식 3축 비교).
 - **v0.9.0 실험(A/B 빌드):** 민구 결정 — "일단 입력탭에 스피커/이어폰 토글을 넣어 실기기에서 측정". 입력탭 우상단 토글(`speakerOutput`, 기본 이어폰=현행). 스피커 선택 시 `audioRecorder.setOutputMode(true)`가 마이크 스트림을 **`echoCancellation:false`로 재취득**(`acquireStream`/`reacquire`)해 voice-processing 세션 회피를 시도한다. `speakerphoneMode`(소프트 half-duplex)와는 **독립**(혼동 금지). `audio_route_changed`/`audio_reacquired:ec=<bool>` 텔레메트리로 다음 로그에서 출력 dB·STT 오인식률을 A/B 측정. ⚠️ 미검증: iOS에서 실제 스피커 전환 여부(OS 의존, 안 바뀔 수도)·세션 중 재취득 시 0.3~0.5s 인식 끊김. 재취득 실패 시 stream=null로 남아 `clip_no_stream`(안전선).
-- **출처:** `2026-06-15 v0.7.0 실기기 로그` (민구 제보; 코드 firsthand 확인). 메커니즘 외부 출처 교차확인은 **미수행**(WebSearch 도구 부재 — 확인 필요).
-- **현재 상태:** ⚠️주시 (미확정 가설 — Vance A/B + Pax 외부확인 선결. `src/lib/audioRecorder.ts:135-139`)
+- **v0.12.0 종결(민구 결정, 2026-06-17):** `speakerOutput` 토글 + `setOutputMode`/`reacquire` **전부 삭제**. 근거 — ① v0.11.0 비 오는 비닐하우스 로그 Log2에서 토글을 실제 A/B(스피커↔이어피스, `audio_reacquired:ec=true/false`)했으나 출력 라우팅이 실제로 바뀐다는 증거 없음(iOS 미제공 재확인) + 토글이 "눌러도 글자만 바뀌고 작동 안 한다"는 민구 보고와 일치. ② `echoCancellation`은 이제 **항상 ON 고정**(이어피스 기본). 출력 강제는 PWA 불가 확정 → **AUDIO-ROUTE-1 네이티브 셸(Capacitor)** 경로로만 해결(B0 WKWebView STT 스파이크가 게이트, 본 항목 비범위). 입력탭 토글 자리는 **읽기전용 입력장치 CATEGORY 배지**(🎧 블루투스 / 📱 내장 마이크 / 🎧 유선)로 교체 — 출력이 아니라 어떤 마이크로 듣는지 표시. `speakerphoneMode`(소프트 half-duplex)+post-TTS 가드는 **독립이라 유지**. persist v6→7(speakerOutput 영속값 삭제).
+- **출처:** `2026-06-15 v0.7.0 실기기 로그` (민구 제보; 코드 firsthand 확인) → `2026-06-17 v0.11.0 로그`(A/B 무효과 + 민구 토글 제거 결정). 메커니즘 외부 출처 교차확인은 **미수행**(확인 필요).
+- **현재 상태:** ✅PWA 레벨 종결(토글 제거, echoCancellation 항상 ON) — 출력 강제는 AUDIO-ROUTE-1 네이티브 셸로 이관. `src/lib/audioRecorder.ts` acquireStream(echoCancellation:true 고정).
 
 ---
 

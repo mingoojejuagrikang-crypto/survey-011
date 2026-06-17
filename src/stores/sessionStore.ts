@@ -25,14 +25,24 @@ interface SessionState {
   valueBurst: { name: string; value: string; seq: number } | null;
   /** v0.9.0 — 이상치 알람 팝업. 알람 발동 시 이전값→현재값과 변화량을 화면에 띄운다(발화만으론
    *  스쳐 지나가 확인이 어렵다는 요청). '확인'/'유지'/새 값 입력 또는 다음 필드 진입 시 해제(null).
-   *  changeText = '9.9%'(변동률 트리거) 또는 절대차 '2.2'(증가/감소 트리거). */
+   *  changeText = '9.9%'(변동률 트리거) 또는 절대차 '2.2'(증가/감소 트리거).
+   *  v0.12.0 AREA2 V2 — 어떤 샘플·행을 보는지 식별할 수 있게 row(1-indexed) + sampleKey(샘플키
+   *  플래그 컬럼 합성, 없으면 undefined → 팝업은 '행 N'으로 폴백) + prevDate(직전 회차 ISO 날짜,
+   *  과거값이 어느 조사 회차의 것인지 표기)를 동봉한다. */
   anomalyAlert: {
     colName: string;
     prev: string;
     next: string;
     direction: 'up' | 'down';
     changeText: string;
+    row: number;
+    sampleKey?: string;
+    prevDate?: string;
   } | null;
+  /** v0.12.0 AREA2 V4 — '수정 값' 인디케이터. 수정 재안내(announceField isModify) 중 어떤 항목을
+   *  다시 말해야 하는지 화면에 파란 pill로 띄운다. 일반 안내로 진입하면 null로 해제. anomalyAlert가
+   *  떠 있을 땐 렌더하지 않는다(중앙 팝업과 겹침 방지 — VoiceScreen에서 상호배타 처리). */
+  modifyIndicator: { name: string; colId: string } | null;
   /** All row values, keyed by row index → col id → value */
   allRowValues: Record<number, Record<string, string>>;
   /** Row indices that have been fully completed */
@@ -51,6 +61,7 @@ interface SessionState {
   setLastTts: (v: string) => void;
   pushValueBurst: (name: string, value: string) => void;
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
+  setModifyIndicator: (m: SessionState['modifyIndicator']) => void;
   setActiveCol: (i: number) => void;
   setActiveRow: (r: number) => void;
   setRowValue: (row: number, colId: string, v: string) => void;
@@ -74,6 +85,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   lastTts: '',
   valueBurst: null,
   anomalyAlert: null,
+  modifyIndicator: null,
   allRowValues: {},
   completedRows: [],
   skippedRows: [],
@@ -88,6 +100,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   pushValueBurst: (name, value) =>
     set((s) => ({ valueBurst: { name, value, seq: (s.valueBurst?.seq ?? 0) + 1 } })),
   setAnomalyAlert: (anomalyAlert) => set({ anomalyAlert }),
+  setModifyIndicator: (modifyIndicator) => set({ modifyIndicator }),
   setActiveCol: (activeColIdx) => set({ activeColIdx }),
   setActiveRow: (activeRow) => set({ activeRow }),
 
@@ -139,6 +152,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       lastTts: '',
       valueBurst: null,
       anomalyAlert: null,
+      modifyIndicator: null,
       allRowValues: {},
       completedRows: [],
       skippedRows: [],

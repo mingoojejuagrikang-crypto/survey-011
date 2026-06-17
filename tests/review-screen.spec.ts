@@ -126,6 +126,10 @@ const latestCell = (page: Page, key: string, colId: string) =>
 const prevCell = (page: Page, key: string, colId: string) =>
   page.locator(`[data-key="${key}"] [data-testid="review-prev-${colId}"]`).first();
 
+// 비교 탭 v0.12 숨김 — 재구축 시 해제. TabBar에서 비교 탭 버튼이 빠져 seedAndOpenReview의
+// tab-review 클릭이 실패하므로 전체 스위트를 건너뛴다. 탭을 다시 노출하면 아래 .skip만 제거.
+test.describe.skip('비교(review) 탭 — v0.12 숨김 (재구축 시 해제)', () => {
+
 test('비교 표 — 공통 키·회차 축·샘플 행·직전/현재·증감/이상치·중복·미매핑·캡션·주차 라벨', async ({ page }) => {
   await stubSheets(page);
   await seedAndOpenReview(page);
@@ -473,5 +477,7 @@ test('disambiguator — 그룹 차원을 끄면 라벨 충돌 시 키 자체를 
   await expect(table.getByText('이원창 시험 1 1')).toBeVisible();
   await expect(table.getByText('이원창 시험 3 2')).toBeVisible();
 });
+
+}); // test.describe.skip — 비교(review) 탭 v0.12 숨김 (재구축 시 해제)
 
 

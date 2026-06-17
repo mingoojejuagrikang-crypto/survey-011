@@ -3,7 +3,8 @@
  * 잔향/리버브가 마이크로 새어 들어와 가짜 final(값·명령)로 수락되는 빈틈을 닫는다.
  *
  * 배경: `unmuteForTts()`가 TTS `onend` 즉시 `ttsMuted=false`로 풀기 때문에, 종료 직후의
- * 잔향이 곧장 통과할 수 있었다. 스피커 모드는 echoCancellation도 OFF라 잔향이 그대로 유입된다.
+ * 잔향이 곧장 통과할 수 있었다. echoCancellation은 이제 항상 ON(이어피스 기본)이지만, 스피커폰
+ * (소프트 half-duplex) 모드에선 스피커 잔향이 마이크로 새어 들어올 수 있어 여전히 이 가드가 필요하다.
  * 이어폰(기본) 모드는 barge-in을 유지해야 하므로 가드 비대상.
  *
  * 호출자(useVoiceSession.handleFinal)의 상태머신에서 판정만 분리한 순수 함수 — 클럭/타이머

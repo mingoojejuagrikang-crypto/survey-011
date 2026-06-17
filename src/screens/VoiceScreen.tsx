@@ -9,7 +9,7 @@ import { useWakeLock, lockPortrait } from '../lib/wakeLock';
 import { useVoiceSession } from '../lib/useVoiceSession';
 import { isSpeechSupported, speak } from '../lib/speech';
 import { PRIMARY_COMMANDS } from '../lib/voiceCommands';
-import { logger } from '../lib/logger';
+import { classifyInputDevice } from '../lib/inputDevice';
 import { AnomalyAlertPopup } from '../components/voice/AnomalyAlertPopup';
 import { CenterValueBurst } from '../components/voice/CenterValueBurst';
 import { CommandHelpPopup } from '../components/voice/CommandHelpPopup';
@@ -20,17 +20,21 @@ export function VoiceScreen() {
   const sess = useSessionStore();
   const voiceSession = useVoiceSession();
   const [confidence, setConfidence] = useState<number | null>(null);
+  // v0.12.0 AREA1 — 읽기전용 입력장치 CATEGORY 배지용 라벨. getActiveInputLabel은 init() 비동기
+  // resolve 후 채워지므로 confidence와 동일하게 폴링으로 동기화한다(안정 콜백 참조).
+  const [inputLabel, setInputLabel] = useState<string | null>(null);
 
   useWakeLock(sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused');
 
-  // Sync confidence display from voice session ref
+  // Sync confidence display + active input label from voice session refs
   useEffect(() => {
     if (sess.phase !== 'active') return;
     const interval = setInterval(() => {
       setConfidence(voiceSession.lastConfidenceRef.current);
+      setInputLabel(voiceSession.getActiveInputLabel());
     }, 300);
     return () => clearInterval(interval);
-  }, [sess.phase, voiceSession.lastConfidenceRef]);
+  }, [sess.phase, voiceSession.lastConfidenceRef, voiceSession.getActiveInputLabel]);
 
   const totalRows = s.tableGenerated ? computeTotalRows(s.columns) : 0;
   const voiceCols = s.columns.filter((c) => c.input === 'voice');
@@ -66,6 +70,7 @@ export function VoiceScreen() {
         completing={sess.phase === 'complete'}
         paused={sess.phase === 'paused'}
         confidence={confidence}
+        inputLabel={inputLabel}
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}
@@ -202,7 +207,7 @@ function SummaryRow({ label, value, unit, accent }: { label: string; value: numb
 
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
-  totalRows, columns, voiceCols, currentColId, completing, paused, confidence,
+  totalRows, columns, voiceCols, currentColId, completing, paused, confidence, inputLabel,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
 }: {
   totalRows: number;
@@ -212,6 +217,7 @@ function ActiveState({
   completing: boolean;
   paused: boolean;
   confidence: number | null;
+  inputLabel: string | null;
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
   onJumpToRow: (row: number) => void;
@@ -248,7 +254,7 @@ function ActiveState({
             <span style={{ fontSize: 14, color: T.textDim, marginLeft: 6 }}>행</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <OutputToggle />
+            <InputDeviceBadge label={inputLabel} />
             {confidence !== null && confidence > 0 && confidence < 1 && !paused && (
               <span
                 style={{
@@ -504,6 +510,11 @@ function ActiveState({
       <ActiveTtsSlider />
       {cmdHelpOpen && <CommandHelpPopup onClose={() => setCmdHelpOpen(false)} />}
       {sess.anomalyAlert && <AnomalyAlertPopup a={sess.anomalyAlert} />}
+      {/* v0.12.0 AREA2 V4 — '수정 값' 인디케이터. 중앙 이상치 팝업과 겹치지 않게 상호배타로만 렌더.
+          대상 셀 칩은 activeColIdx(모든 수정-재진입 경로가 setActiveCol로 지정)로 이미 하이라이트됨. */}
+      {sess.modifyIndicator && !sess.anomalyAlert && (
+        <ModifyIndicatorPill name={sess.modifyIndicator.name} />
+      )}
       {sess.valueBurst && !sess.anomalyAlert && (
         <CenterValueBurst
           key={sess.valueBurst.seq}
@@ -515,30 +526,54 @@ function ActiveState({
   );
 }
 
-/** v0.9.0 입력탭 스피커/이어폰 출력 토글(IOS-5/AUDIO-ROUTE-1 실험). OS 단계 변경 번거로움을 줄이려
- *  입력 중에도 전환. ON(스피커)이면 마이크를 echoCancellation:false로 재취득해 리시버 고착 해제를
- *  시도한다(실제 출력 전환은 OS 의존 — 실기기 A/B 측정용). settingsStore.speakerOutput가 SSOT. */
-function OutputToggle() {
-  const speakerOutput = useSettingsStore((s) => s.speakerOutput);
+/** v0.12.0 AREA2 V4 — 수정 재안내 중 어떤 항목을 다시 말해야 하는지 알리는 상단 중앙 pill.
+ *  중립 BLUE(T.blue) — 이상치(RED)와 톤을 구분(수정은 오류가 아니라 재입력 안내). 비대화형. */
+function ModifyIndicatorPill({ name }: { name: string }) {
   return (
-    <button
-      onClick={() => {
-        const next = !speakerOutput;
-        useSettingsStore.getState().set({ speakerOutput: next });
-        logger.log({ type: 'app', extra: `setting_changed:speakerOutput=${next}` });
-      }}
-      title={speakerOutput ? '스피커 출력(실험) — 탭하면 이어폰/기본' : '이어폰/기본 출력 — 탭하면 스피커(실험)'}
+    <div
       style={{
-        display: 'flex', alignItems: 'center', gap: 4,
-        padding: '4px 10px', borderRadius: 999,
-        border: `1px solid ${speakerOutput ? T.blue : T.lineStrong}`,
-        background: speakerOutput ? 'rgba(45,127,249,0.16)' : 'transparent',
-        color: speakerOutput ? T.blue : T.textDim,
-        fontSize: 11, fontWeight: 800, letterSpacing: -0.2, cursor: 'pointer',
+        position: 'fixed', top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
+        left: 0, right: 0, zIndex: 42,
+        display: 'flex', justifyContent: 'center', pointerEvents: 'none', padding: '0 16px',
       }}
     >
-      {speakerOutput ? '🔊 스피커' : '🎧 이어폰'}
-    </button>
+      <span
+        style={{
+          display: 'inline-flex', alignItems: 'center', maxWidth: '90vw',
+          padding: '7px 16px', borderRadius: 999,
+          background: 'rgba(41,121,255,0.16)', border: `1.5px solid ${T.blue}`,
+          color: T.blue, fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
+          boxShadow: `0 4px 16px ${T.blueGlow}`,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}
+      >
+        수정 값: {name}
+      </span>
+    </div>
+  );
+}
+
+/** v0.12.0 AREA1 — 읽기전용 입력장치 CATEGORY 배지(IOS-5 후속). 출력 라우팅 토글을 대체한다:
+ *  echoCancellation을 항상 ON으로 하드코딩했으므로 사용자가 바꿀 토글이 없고, 대신 getUserMedia가
+ *  실제로 잡은 마이크의 CATEGORY(내장/블루투스/유선)만 보여준다(민구 확정: raw 장치명 아님).
+ *  출력(스피커/이어피스)은 iOS가 Web에 노출하지 않으므로 표시하지 않는다. 비대화형(onClick 없음). */
+function InputDeviceBadge({ label }: { label: string | null }) {
+  const { icon, text } = classifyInputDevice(label);
+  return (
+    <span
+      title={`입력 마이크: ${text}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '4px 10px', borderRadius: 999,
+        border: `1px solid ${T.lineStrong}`,
+        background: 'transparent',
+        color: T.textDim,
+        fontSize: 11, fontWeight: 800, letterSpacing: -0.2,
+        whiteSpace: 'nowrap', userSelect: 'none',
+      }}
+    >
+      {icon} {text}
+    </span>
   );
 }
 

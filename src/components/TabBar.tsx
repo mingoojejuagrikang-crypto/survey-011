@@ -12,7 +12,8 @@ const tabs: { id: TabId; label: string; icon: (s?: number, c?: string) => JSX.El
   { id: 'settings', label: '설정', icon: I.settings },
   { id: 'voice', label: '입력', icon: I.mic },
   { id: 'data', label: '데이터', icon: I.data },
-  { id: 'review', label: '비교', icon: I.search },
+  // 비교 탭 v0.12 숨김 — 재구축 시 해제 (TabId 'review' 유니온·ReviewScreen·persist는 유지)
+  // { id: 'review', label: '비교', icon: I.search },
 ];
 
 export function TabBar({ tab, setTab }: Props) {

@@ -120,24 +120,20 @@ export class AudioRecorder {
   private activeInput: ActiveInputInfo | null = null;
   /** W6: 상시 PCM 링버퍼 캡처. null이면 프리롤 미지원(현행 동작). */
   private preroll: PrerollCapture | null = null;
-  /** v0.9.0 (IOS-5/AUDIO-ROUTE-1 실험) — 스피커 출력 모드. true면 마이크를 echoCancellation:false로
-   *  취득해 iOS playAndRecord의 리시버(이어피스) 고착 해제를 시도한다(출력 라우팅은 OS 의존이라 미보장).
-   *  setOutputMode()로 토글하면 스트림을 재취득한다. */
-  private speakerMode = false;
 
   /** The microphone actually in use for this recorder (null until init() succeeds). */
   getActiveInput(): ActiveInputInfo | null {
     return this.activeInput;
   }
 
-  /** getUserMedia 제약 — speakerMode에 따라 echoCancellation을 토글(v0.9.0 출력 라우팅 실험).
+  /** getUserMedia 제약 — echoCancellation은 항상 ON(이어피스 기본; TTS 에코 되먹임 억제).
    *  noiseSuppression/autoGainControl은 소음 현장 정책 유지. */
   private acquireStream(): Promise<MediaStream> {
     return navigator.mediaDevices.getUserMedia({
       audio: {
         noiseSuppression: true,
-        // 기본(이어폰): true — TTS 에코 되먹임 억제. 스피커 모드: false — 리시버 고착 해제 시도.
-        echoCancellation: !this.speakerMode,
+        // 항상 ON(이어피스 기본) — TTS 에코가 마이크로 되먹임되는 것을 억제.
+        echoCancellation: true,
         autoGainControl: false,
       },
       video: false,
@@ -148,7 +144,8 @@ export class AudioRecorder {
     if (this.stream) return true;
     try {
       // 소음 환경(비닐하우스 등) 대응: 브라우저 내장 DSP 활성화 — 추가 지연 없음(1초 제약 무관).
-      // echoCancellation은 TTS 에코가 마이크로 되먹임되는 것도 줄여줌(speakerMode 시 off — acquireStream).
+      // echoCancellation은 이제 항상 ON(이어피스 기본) — TTS 에코가 마이크로 되먹임되는 것도 줄여줌.
+      // 스피커폰(소프트 half-duplex) 모드의 잔향 누설은 post-TTS 가드가 별도로 처리한다(postTtsGuard).
       // autoGainControl은 소음 환경(빗소리 등)에서 무음 구간 게인을 키워 노이즈를 증폭할 수 있어 끔.
       this.stream = await this.acquireStream();
       // Capture which input device was actually granted (built-in vs external mic like Shokz).
@@ -450,52 +447,7 @@ export class AudioRecorder {
     });
   }
 
-  /** v0.9.0 (IOS-5/AUDIO-ROUTE-1 실험) — 출력 라우팅 토글. true=스피커 시도(EC off), false=이어폰/기본.
-   *  변경 시 마이크 스트림을 새 제약으로 재취득한다(세션 중 재취득은 0.3~0.5s 인식 끊김을 유발할 수
-   *  있고, iOS에선 실제 출력이 안 바뀔 수도 있다 — 실기기 A/B 측정용). */
-  async setOutputMode(speaker: boolean): Promise<void> {
-    if (this.speakerMode === speaker) return;
-    this.speakerMode = speaker;
-    logger.log({ type: 'app', extra: `audio_route_changed:${speaker ? 'speaker' : 'earpiece'}` });
-    if (!this.stream) return; // 아직 init 전 — init()이 speakerMode를 읽어 적용한다.
-    await this.reacquire();
-  }
-
-  /** 진행 클립 종료 + 프리롤·스트림 해제 후 새 echoCancellation 제약으로 재취득. */
-  private async reacquire(): Promise<void> {
-    const slot = this.active;
-    this.active = null;
-    if (slot && !slot.finalized) {
-      if (slot.delayedStopTimer) { clearTimeout(slot.delayedStopTimer); slot.delayedStopTimer = null; }
-      slot.finalized = true;
-      if (slot.stopTimer) { clearTimeout(slot.stopTimer); slot.stopTimer = null; }
-      try { if (slot.recorder.state !== 'inactive') slot.recorder.stop(); } catch { /* ignore */ }
-      slot.resolveStop?.(null);
-      slot.resolveStop = null;
-    }
-    this.teardownPreroll();
-    if (this.stream) {
-      for (const track of this.stream.getTracks()) track.stop();
-      this.stream = null;
-    }
-    try {
-      this.stream = await this.acquireStream();
-      try {
-        const track = this.stream.getAudioTracks()[0];
-        if (track) {
-          const settings = track.getSettings();
-          this.activeInput = { deviceId: settings.deviceId ?? '', label: track.label ?? '' };
-        }
-      } catch { /* getSettings 미지원 */ }
-      await this.initPrerollCapture();
-      logger.log({ type: 'app', extra: `audio_reacquired:ec=${!this.speakerMode}` });
-    } catch (e) {
-      // 재취득 실패 — stream null로 남아 startClip이 clip_no_stream을 남긴다(안전선).
-      logger.log({ type: 'error', extra: `audio_reacquire_failed:${String((e as Error)?.message ?? e)}` });
-    }
-  }
-
-  /** 프리롤 캡처 그래프 해제(stream stop 전에 — source가 stream을 참조). dispose/reacquire 공용. */
+  /** 프리롤 캡처 그래프 해제(stream stop 전에 — source가 stream을 참조). dispose()에서 호출. */
   private teardownPreroll(): void {
     const cap = this.preroll;
     this.preroll = null;

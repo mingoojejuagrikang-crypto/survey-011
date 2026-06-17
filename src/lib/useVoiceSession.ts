@@ -14,7 +14,7 @@ import { logger } from './logger';
 import { getCachedIndex, prefetchPastIndex, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { getAccessToken } from './googleAuth';
-import { evalPostTtsGuard } from './postTtsGuard';
+import { evalPostTtsGuard, POST_TTS_GUARD_MS } from './postTtsGuard';
 
 
 /** v0.6.0 CLIP-CMD — a captured '수정'/'정정' utterance whose save is deferred until the modify
@@ -455,6 +455,10 @@ export function useVoiceSession() {
       const row = useSessionStore.getState().activeRow;
       // v0.9.0 — 다음 필드로 진입하면 이전 이상치 알람 팝업은 해제(해소된 것으로 간주).
       useSessionStore.getState().setAnomalyAlert(null);
+      // v0.12.0 AREA2 V4 — 수정 재안내면 '수정 값' 인디케이터를 켜고, 일반 안내면 해제한다.
+      useSessionStore.getState().setModifyIndicator(
+        opts?.isModify ? { name: col.name, colId: col.id } : null,
+      );
       awaitingFieldRef.current = {
         row,
         colId: col.id,
@@ -949,6 +953,26 @@ export function useVoiceSession() {
     [logTrendSkip],
   );
 
+  /** v0.12.0 AREA2 V2 — 이상치 팝업에 곁들일 식별정보(샘플키 + 직전 회차 ISO 날짜)를 재계산한다.
+   *  evaluateTrend와 같은 캐시(getCachedIndex)·키 합성을 쓰되 TrendViolation 타입은 순수하게 유지
+   *  한다(trendCheck.ts 오염 금지 — 표시용 부가정보는 여기서 별도 산출). 캐시 없음·키 불완전이면
+   *  해당 필드를 undefined로 둔다(팝업이 '행 N' 폴백 + 날짜 라벨 생략으로 안전 처리). */
+  const getAnomalyAlertData = useCallback(
+    (row: number): { sampleKey?: string; prevDate?: string } => {
+      const s = useSettingsStore.getState();
+      const kc = keyColumns(s.columns);
+      if (kc.length === 0) return {};
+      const rowValues = composeRowValues(s.columns, row);
+      const sampleKey = buildSampleKey(kc, rowValues) ?? undefined;
+      if (!sampleKey) return {};
+      const index = getCachedIndex();
+      if (!index) return { sampleKey };
+      const today = sessionTodayRef.current || localTodayISO();
+      return { sampleKey, prevDate: previousRound(index, sampleKey, today) ?? undefined };
+    },
+    [],
+  );
+
   // ── final result handler ───────────────────────────────────
   const handleFinal = useCallback(async (textArg: string, alts: string[], confidence: number) => {
     // `text` is mutable so the redo-with-inline-value path (e.g. "다시 8.4") can rewrite the
@@ -1168,6 +1192,11 @@ export function useVoiceSession() {
     // 끝난 뒤 말하도록. 기본(이어폰) 모드는 barge-in 유지.
     // v0.11.0 post-TTS 가드: 스피커폰 모드는 TTS 재생 중(isTtsMuted)뿐 아니라 종료 직후 가드
     // 윈도우 동안의 잔향 유입도 폐기한다(가드 차단은 post_tts_guard로 별도 계측). 판정은 evalPostTtsGuard.
+    // v0.12.0 INSTR-1 near-miss 계측: 가드를 *통과*한(block:false) 스피커폰 입력 중 종료 직후 근접
+    // 밴드(POST_TTS_GUARD_MS ≤ msSinceTtsEnd < 500ms)에 든 것의 분포를 관측한다. 250ms 윈도우가
+    // 잔향을 충분히 막는지(혹은 넓혀야 하는지) 다음 필드 로그로 튜닝하려는 목적. 별도 이벤트를 만들지
+    // 않고 아래 stt 이벤트에 raw msSinceTtsEnd를 동봉한다(중복 로깅 방지).
+    let postTtsNearMissMs: number | null = null;
     {
       const muted = ctrlRef.current?.isTtsMuted() ?? false;
       const speakerphone = useSettingsStore.getState().speakerphoneMode;
@@ -1176,6 +1205,13 @@ export function useVoiceSession() {
       if (g.block) {
         logger.log({ type: 'stt_blocked_tts_muted', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, ...(g.viaGuard ? { extra: 'post_tts_guard', msSinceTtsEnd: Math.round(msSinceTtsEnd) } : {}) });
         return;
+      }
+      // 가드 통과 + 스피커폰 + 비뮤트 + 근접 밴드 → near-miss로 표시(아래 stt 이벤트에 동봉).
+      // 500ms 상한은 placeholder(다음 필드 로그로 조정). raw 값(반올림/버킷팅 없음)을 그대로 실어
+      // 분석가가 전체 분포를 보게 한다. msSinceTtsEnd가 +Infinity(콜드스타트)면 밴드 밖이라 미표시.
+      // muted 분기(이어폰 전용)에는 넣지 않는다 — speakerphone && !muted를 만족하지 못해 영영 안 돈다.
+      if (speakerphone && !muted && msSinceTtsEnd >= POST_TTS_GUARD_MS && msSinceTtsEnd < 500) {
+        postTtsNearMissMs = msSinceTtsEnd;
       }
       if (muted) {
         // 이어폰 모드 barge-in: 재생 중 들어온 값을 폐기하지 않고 TTS를 끊고 그대로 처리.
@@ -1202,6 +1238,7 @@ export function useVoiceSession() {
       confidence,
       alts,
       ...(eosTailMs != null ? { eosTailMs } : {}),
+      ...(postTtsNearMissMs != null ? { msSinceTtsEnd: postTtsNearMissMs } : {}),
     });
 
     // Item 12: 컬럼명 완전 일치 STT 거부 — 숫자/날짜 컬럼에만 적용 (text/options 컬럼은 컬럼명이 유효한 값일 수 있음)
@@ -1537,12 +1574,17 @@ export function useVoiceSession() {
         `${formatForTts(parsed)}. 직전 조사보다${midPart} ` +
         `${v.direction === 'up' ? '증가' : '감소'}했습니다. 확인해주세요.`;
       // 시각 팝업: 이전값→현재값과 변화량을 띄운다(발화만으론 스쳐 지나가 확인이 어렵다는 요청).
+      // v0.12.0 AREA2 V2 — 어떤 샘플·행/직전 회차의 비교인지 식별정보를 함께 싣는다(별도 재계산).
+      const alertExtra = getAnomalyAlertData(awaiting.row);
       useSessionStore.getState().setAnomalyAlert({
         colName: awaiting.name,
         prev: String(v.prev),
         next: formatForTts(parsed),
         direction: v.direction,
         changeText,
+        row: awaiting.row,
+        sampleKey: alertExtra.sampleKey,
+        prevDate: alertExtra.prevDate,
       });
       useSessionStore.getState().setLastTts(alertText);
       await say(alertText);
@@ -1588,7 +1630,7 @@ export function useVoiceSession() {
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
     await advance();
-  }, [advance, enterModifyMode, say, goNextRow, enterReentry, persistSession, evaluateTrend, archiveCellClip, armClipForCell]);
+  }, [advance, enterModifyMode, say, goNextRow, enterReentry, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell]);
 
   // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
   const handleInterim = useCallback((text: string) => {
@@ -1699,8 +1741,6 @@ export function useVoiceSession() {
     // Init audio recorder fire-and-forget — mic permission is independent of STT startup.
     // Awaiting getUserMedia can block indefinitely in headless/denied-permission environments.
     if (!recorderRef.current) recorderRef.current = new AudioRecorder();
-    // v0.9.0 — 초기 출력모드 반영(init 전에 speakerMode 세팅 → acquireStream이 echoCancellation 적용).
-    if (s.speakerOutput) void recorderRef.current.setOutputMode(true);
     // #4 active mic: once init() resolves, emit a follow-up session event carrying the granted
     // input device. Done async (not awaited) so STT startup is never blocked; emitted as its own
     // event so analysis can attribute STT accuracy to the real device per session.
@@ -1826,7 +1866,6 @@ export function useVoiceSession() {
     // Recorder was disposed during pause — recreate for the resumed session.
     if (!recorderRef.current) {
       recorderRef.current = new AudioRecorder();
-      if (useSettingsStore.getState().speakerOutput) void recorderRef.current.setOutputMode(true);
       await recorderRef.current.init().catch(() => {});
     }
     const vc = voiceColsList();
@@ -1838,12 +1877,13 @@ export function useVoiceSession() {
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
   useEffect(() => { resumeRef.current = resume; }, [resume]);
 
-  // v0.9.0 — 입력탭 스피커/이어폰 토글: speakerOutput 변경 시 마이크를 새 echoCancellation으로 재취득.
-  // (세션 중 재취득은 짧은 인식 끊김을 유발할 수 있음 — IOS-5/AUDIO-ROUTE-1 실험.)
-  const speakerOutput = useSettingsStore((st) => st.speakerOutput);
-  useEffect(() => {
-    void recorderRef.current?.setOutputMode(speakerOutput);
-  }, [speakerOutput]);
+  // v0.12.0 AREA1 — 입력탭 읽기전용 입력장치 CATEGORY 배지용. getUserMedia가 실제로 잡은 마이크
+  // 라벨을 노출(init() 비동기 resolve 후 채워짐). 안정 참조(useCallback []) — VoiceScreen이
+  // 폴링으로 읽어 classifyInputDevice로 CATEGORY를 표시한다.
+  const getActiveInputLabel = useCallback(
+    () => recorderRef.current?.getActiveInput()?.label ?? null,
+    [],
+  );
 
   // D-2 (RACE-7): restore session id/label from the store on (re)mount. If the hook unmounted
   // mid-session (e.g. tab switch while paused) the local refs were lost, but the store kept the
@@ -1886,7 +1926,7 @@ export function useVoiceSession() {
     // 다음 행 진행 시 persistSession에서 자연스럽게 반영됨.
   }, []);
 
-  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, goNextRow, pause, resume, commitTouchValue, lastConfidenceRef };
+  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, goNextRow, pause, resume, commitTouchValue, lastConfidenceRef, getActiveInputLabel };
 }
 
 // ─── helpers ─────────────────────────────────────────────────

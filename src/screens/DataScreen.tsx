@@ -6,7 +6,7 @@ import { useDataStore } from '../stores/dataStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { syncSelected, type SyncReport, type SyncFailure } from '../lib/sync';
 import { hasSyncState } from '../lib/sessionSync';
-import { downloadCsv, sessionsToCsv } from '../lib/csv';
+import { downloadCsv, sessionsToCsv, sessionsToCsvZip } from '../lib/csv';
 import { deleteSession as dbDeleteSession, saveSession, loadAudioClip, resetDb } from '../lib/db';
 import type { Column, Session } from '../types';
 import { exportLogZip, downloadZip } from '../lib/exportLog';
@@ -112,13 +112,22 @@ export function DataScreen() {
     }
     if (format === 'csv') {
       // CSV는 가벼우니 확인 없이 즉시 생성.
+      // 단일 세션 → 평문 .csv. 다중 세션 → 세션별 CSV 1개씩을 ZIP으로 묶음(병합 안 함, v0.12 D1)
+      // — 세션마다 컬럼 스키마가 달라 한 표로 합치면 열이 union되며 의미가 흐려지기 때문.
       const today = new Date().toISOString().slice(0, 10);
       setBusy('CSV 생성 중...');
       try {
-        const csv = sessionsToCsv(targets);
-        const filename = `survey_${today}.csv`;
-        downloadCsv(filename, csv);
-        setMsg(`✓ ${filename} 다운로드됨`);
+        if (targets.length > 1) {
+          const blob = await sessionsToCsvZip(targets);
+          const filename = `survey_${today}.zip`;
+          downloadZip(blob, filename);
+          setMsg(`✓ ${filename} 다운로드됨`);
+        } else {
+          const csv = sessionsToCsv(targets);
+          const filename = `survey_${today}.csv`;
+          downloadCsv(filename, csv);
+          setMsg(`✓ ${filename} 다운로드됨`);
+        }
       } catch (err) {
         setMsg('CSV 내보내기 실패: ' + (err as Error).message);
       } finally {
@@ -367,7 +376,7 @@ export function DataScreen() {
             cursor: sessions.length === 0 ? 'not-allowed' : 'pointer',
             opacity: sessions.length === 0 ? 0.6 : 1,
           }}
-          title="기기로 내보내기 (CSV / 로그 ZIP)"
+          title="기기로 내보내기 (CSV / 사용자 로그)"
         >
           {I.download(18, T.text)} 내보내기
         </button>
@@ -492,8 +501,8 @@ export function DataScreen() {
 
       {pendingZipIds && (
         <ConfirmModal
-          title="음성 로그 ZIP 내보내기"
-          body={`${pendingZipIds.length}개 세션의 음성 로그를 ZIP으로 압축합니다.\n용량이 크거나 시간이 걸릴 수 있어요.\n\n계속할까요?`}
+          title="사용자 로그 내보내기"
+          body={`${pendingZipIds.length}개 세션의 사용자 로그를 ZIP으로 압축합니다.\n용량이 크거나 시간이 걸릴 수 있어요.\n\n계속할까요?`}
           confirmLabel="압축"
           onCancel={() => setPendingZipIds(null)}
           onConfirm={() => {
@@ -831,7 +840,7 @@ function ExportModal({
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
               }}
             >
-              {I.download(16, selected.size === 0 ? T.textMute : T.text)} 로그 ZIP
+              {I.download(16, selected.size === 0 ? T.textMute : T.text)} 사용자 로그
             </button>
           </div>
           <button
