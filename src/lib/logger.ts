@@ -38,6 +38,10 @@ export interface LogEntry {
   /** v0.9.0 딜레이 계측: 마지막 interim → final까지의 간격(ms) = 브라우저 무음 종료감지(EOS) 꼬리.
    *  `stt` 이벤트에 동봉. 앱 처리는 ~1ms이므로 이 값이 사용자 체감 딜레이의 실제 병목 지표. */
   eosTailMs?: number;
+  /** v0.11.0 post-TTS 가드 계측: TTS 종료(onend) 이후 이 입력이 도착하기까지 경과(ms). 스피커폰
+   *  모드에서 `stt_blocked_tts_muted` + `extra:'post_tts_guard'`로 차단된 입력에만 동봉. 차기 로그가
+   *  "에코 잔향 차단 vs 정상 입력 오차단"을 분포로 보고 가드 윈도우를 튜닝하는 근거. */
+  msSinceTtsEnd?: number;
   // ── reach telemetry (additive; all optional, only set on specific events) ──
   /** Session-meta, attached to the `session` start/stop events. Lets multiple sessions be
    *  aggregated for real-field reach without changing existing `extra:'start'|'stop'` tags. */

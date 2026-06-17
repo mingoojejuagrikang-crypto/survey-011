@@ -14,6 +14,7 @@ import { logger } from './logger';
 import { getCachedIndex, prefetchPastIndex, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { getAccessToken } from './googleAuth';
+import { evalPostTtsGuard } from './postTtsGuard';
 
 
 /** v0.6.0 CLIP-CMD — a captured '수정'/'정정' utterance whose save is deferred until the modify
@@ -971,9 +972,15 @@ export function useVoiceSession() {
     // interim TTS 컷만 막으면 명령은 final에서 그대로 실행돼, modify 에코 TTS("수정 …")가 마이크로
     // 새어 들어와 가짜 modify를 자가발동할 수 있다. 안내가 끝난 뒤 명령하도록 폐기한다.
     // (resume은 위 paused 분기에서 처리되며 그땐 TTS가 재생 중이 아니므로 영향 없음.)
-    if (cmd && ctrlRef.current?.isTtsMuted() && useSettingsStore.getState().speakerphoneMode) {
-      logger.log({ type: 'stt_blocked_tts_muted', text, parsed: cmd, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
-      return;
+    // v0.11.0 post-TTS 가드: TTS 재생 중(isTtsMuted)뿐 아니라, 종료 직후 가드 윈도우 동안의
+    // 잔향 유입도 차단한다(가드 차단은 post_tts_guard로 별도 계측). 판정은 evalPostTtsGuard(순수).
+    if (cmd && useSettingsStore.getState().speakerphoneMode) {
+      const msSinceTtsEnd = ctrlRef.current?.msSinceTtsEnd() ?? Number.POSITIVE_INFINITY;
+      const g = evalPostTtsGuard({ muted: ctrlRef.current?.isTtsMuted() ?? false, speakerphone: true, msSinceTtsEnd });
+      if (g.block) {
+        logger.log({ type: 'stt_blocked_tts_muted', text, parsed: cmd, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, ...(g.viaGuard ? { extra: 'post_tts_guard', msSinceTtsEnd: Math.round(msSinceTtsEnd) } : {}) });
+        return;
+      }
     }
 
     // T-2 (low-confidence command bypassing the gate): voice COMMANDS used to dispatch with no
@@ -1157,16 +1164,25 @@ export function useVoiceSession() {
     // 한계: 값은 final 단계에서 컷되므로 STT 확정까지 ~1~2초 TTS가 더 재생될 수 있음(명령어의 interim 컷보다 느림).
     // 잔여 에코 위험(TTS 숫자의 마이크 되먹임)은 아래 신뢰도 게이트(0.65 / noisy 0.80)가 1차 방어.
     // v0.4.4: barge-in 발화도 클립에 담기도록 클립은 announceField에서 announce TTS 이전에 시작됨.
-    if (ctrlRef.current?.isTtsMuted()) {
-      // v0.4.5 Q2: 스피커폰 모드면 에코 방지를 위해 TTS 중 값 입력을 폐기(barge-in 끔) — TTS가
-      // 끝난 뒤 말하도록. 기본(이어폰) 모드는 barge-in 유지.
-      if (useSettingsStore.getState().speakerphoneMode) {
-        logger.log({ type: 'stt_blocked_tts_muted', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+    // v0.4.5 Q2: 스피커폰 모드면 에코 방지를 위해 TTS 중 값 입력을 폐기(barge-in 끔) — TTS가
+    // 끝난 뒤 말하도록. 기본(이어폰) 모드는 barge-in 유지.
+    // v0.11.0 post-TTS 가드: 스피커폰 모드는 TTS 재생 중(isTtsMuted)뿐 아니라 종료 직후 가드
+    // 윈도우 동안의 잔향 유입도 폐기한다(가드 차단은 post_tts_guard로 별도 계측). 판정은 evalPostTtsGuard.
+    {
+      const muted = ctrlRef.current?.isTtsMuted() ?? false;
+      const speakerphone = useSettingsStore.getState().speakerphoneMode;
+      const msSinceTtsEnd = ctrlRef.current?.msSinceTtsEnd() ?? Number.POSITIVE_INFINITY;
+      const g = evalPostTtsGuard({ muted, speakerphone, msSinceTtsEnd });
+      if (g.block) {
+        logger.log({ type: 'stt_blocked_tts_muted', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, ...(g.viaGuard ? { extra: 'post_tts_guard', msSinceTtsEnd: Math.round(msSinceTtsEnd) } : {}) });
         return;
       }
-      logger.log({ type: 'stt_barge_in', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
-      cancelTts();
-      epochRef.current++; // 진행 중인 advance/안내 체인 무효화
+      if (muted) {
+        // 이어폰 모드 barge-in: 재생 중 들어온 값을 폐기하지 않고 TTS를 끊고 그대로 처리.
+        logger.log({ type: 'stt_barge_in', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        cancelTts();
+        epochRef.current++; // 진행 중인 advance/안내 체인 무효화
+      }
     }
 
     // Log STT event
