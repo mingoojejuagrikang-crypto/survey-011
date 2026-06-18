@@ -12,7 +12,7 @@ test.use({ viewport: { width: 414, height: 896 } });
 async function injectSession(page: Page) {
   await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((res, rej) => {
-      const r = indexedDB.open('survey-011', 3);
+      const r = indexedDB.open('survey-011', 4);
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
       r.onblocked = () => rej(new Error('IDB open blocked'));

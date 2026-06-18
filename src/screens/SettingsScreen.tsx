@@ -809,6 +809,8 @@ export function SettingsScreen() {
   const [typeReview, setTypeReview] = useState<{ mismatches: TypeMismatch[]; checked: number } | null>(null);
   const [tablePreviewOpen, setTablePreviewOpen] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
+  // v0.14.0 F — 저장된 시트 목록을 기본 접힌 드롭다운으로(세로 풀리스트가 시트 多 시 화면 점유 과다).
+  const [savedSheetsOpen, setSavedSheetsOpen] = useState(false);
   const googleConfigured = isGoogleConfigured();
   const previewRowCount = computeTotalRows(s.columns);
   const pickerAvailable = s.googleConnected && !!getPickerApiKey();
@@ -1206,11 +1208,44 @@ export function SettingsScreen() {
 
             {/* v0.13.0 R1 — 저장된 시트 목록(파일명). 한 번 연결한 시트는 자동 저장되어, 토큰 만료로
                 연결이 풀려도 매번 공유링크를 다시 붙여넣지 않고 여기서 한 번에 다시 선택할 수 있다. */}
-            {s.savedSheets.length > 0 && (
+            {s.savedSheets.length > 0 && (() => {
+              const activeSheetId = parseSpreadsheetId(s.sheetUrl);
+              const activeName = s.savedSheets.find((x) => x.sheetId === activeSheetId)?.name ?? null;
+              return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <span style={{ fontSize: 12, color: T.textMute, fontWeight: 700, padding: '0 2px' }}>
-                  저장된 시트 ({s.savedSheets.length})
-                </span>
+                {/* v0.14.0 F — 기본 접힌 드롭다운 헤더. 접힌 상태로도 '사용 중' 시트명을 보여줘 식별
+                    가능하고, 탭하면 전체 목록(선택/삭제)이 펼쳐진다. 시트가 많아도 화면 점유 최소. */}
+                <button
+                  onClick={() => setSavedSheetsOpen((v) => !v)}
+                  aria-expanded={savedSheetsOpen}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
+                    background: T.inputBg, border: `1px solid ${T.line}`, borderRadius: 12,
+                    padding: '10px 12px', cursor: 'pointer', color: T.text, textAlign: 'left',
+                  }}
+                >
+                  <span style={{ fontSize: 13, fontWeight: 800, color: T.textDim, flexShrink: 0 }}>
+                    저장된 시트 ({s.savedSheets.length})
+                  </span>
+                  <span
+                    style={{
+                      flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700,
+                      color: activeName ? T.green : T.textMute, textAlign: 'right',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {activeName ?? (savedSheetsOpen ? '' : '탭하여 선택')}
+                  </span>
+                  <span
+                    style={{
+                      flexShrink: 0, display: 'inline-flex',
+                      transform: savedSheetsOpen ? 'rotate(180deg)' : 'none', transition: 'transform 150ms',
+                    }}
+                  >
+                    {I.chevDown(16, T.textMute)}
+                  </span>
+                </button>
+                {savedSheetsOpen && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {s.savedSheets.map((sheet) => {
                     const active = parseSpreadsheetId(s.sheetUrl) === sheet.sheetId;
@@ -1225,7 +1260,7 @@ export function SettingsScreen() {
                         }}
                       >
                         <button
-                          onClick={() => onSelectSavedSheet(sheet)}
+                          onClick={() => { setSavedSheetsOpen(false); void onSelectSavedSheet(sheet); }}
                           disabled={loading !== null}
                           title={sheet.url}
                           style={{
@@ -1266,8 +1301,10 @@ export function SettingsScreen() {
                     );
                   })}
                 </div>
+                )}
               </div>
-            )}
+              );
+            })()}
 
             {(s.availableSheets.length > 0 || s.sheetUrl) && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

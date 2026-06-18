@@ -2,7 +2,7 @@ import { openDB, type IDBPDatabase } from 'idb';
 import type { Session } from '../types';
 
 const DB_NAME = 'survey-011';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -26,6 +26,12 @@ function getDb() {
           // autoIncrement key + sessionId 인덱스로 reload 후에도 세션별 이벤트 조회 가능.
           const logs = db.createObjectStore('logEvents', { keyPath: 'id', autoIncrement: true });
           logs.createIndex('bySessionId', 'sessionId');
+        }
+        if (oldVersion < 4) {
+          // v0.14.0 C: 설정(스프레드시트 URL·컬럼·저장시트)의 내구 미러. iOS Safari가 일정시간
+          // 경과/강제종료 후 localStorage를 evict하면 시트 등록이 통째로 풀리던 문제(민구 보고)의
+          // 방어선 — localStorage가 비면 여기서 복원한다. 키=persist name, 값=JSON 문자열.
+          db.createObjectStore('kv');
         }
       },
       terminated() {
@@ -132,6 +138,35 @@ export async function deleteAudioClip(key: string): Promise<void> {
 export async function loadAllAudioClipKeys(): Promise<string[]> {
   const db = await getDb();
   return (await db.getAllKeys('audioClips')) as string[];
+}
+
+// ─── 설정 내구 미러 (v0.14.0 C — localStorage eviction 방어) ────────────────
+/** persist된 설정 JSON 문자열을 IDB 'kv' 스토어에 미러(write-through). best-effort —
+ *  IDB 불가/쿼터 초과여도 localStorage 경로는 그대로 동작하므로 조용히 무시한다. */
+export async function saveSettingsBackup(key: string, value: string): Promise<void> {
+  try {
+    const db = await getDb();
+    await db.put('kv', value, key);
+  } catch { /* IDB 불가 — localStorage가 1차 저장소이므로 무해 */ }
+}
+
+/** IDB 미러에서 설정 JSON 문자열을 읽는다(localStorage가 evict된 경우 복원용). 없으면 null. */
+export async function loadSettingsBackup(key: string): Promise<string | null> {
+  try {
+    const db = await getDb();
+    const v = await db.get('kv', key);
+    return typeof v === 'string' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** IDB 미러 삭제(설정 초기화 시). */
+export async function deleteSettingsBackup(key: string): Promise<void> {
+  try {
+    const db = await getDb();
+    await db.delete('kv', key);
+  } catch { /* ignore */ }
 }
 
 // ─── Log events (v5.2 Codex 4차 MEDIUM) ────────────────────────────────────

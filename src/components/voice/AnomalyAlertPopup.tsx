@@ -45,8 +45,8 @@ export function AnomalyAlertPopup({
     >
       <div
         style={{
-          maxWidth: 'min(560px, 94vw)', maxHeight: '88vh', overflowY: 'auto',
-          padding: '20px 28px', borderRadius: 18,
+          maxWidth: 'min(620px, 96vw)', maxHeight: '90vh', overflowY: 'auto',
+          padding: '24px 30px', borderRadius: 18,
           background: corrected ? 'rgba(18,34,22,0.96)' : 'rgba(34,18,18,0.96)',
           border: `2px solid ${accent}`,
           boxShadow: '0 10px 36px rgba(0,0,0,0.5)',

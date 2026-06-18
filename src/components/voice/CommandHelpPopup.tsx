@@ -16,7 +16,7 @@ export function CommandHelpPopup({ onClose }: { onClose: () => void }) {
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: '100%', maxWidth: 510, maxHeight: '80%', overflowY: 'auto',
+          width: '100%', maxWidth: 'min(600px, 96vw)', maxHeight: '90%', overflowY: 'auto',
           background: T.card, borderRadius: 30, border: `1px solid ${T.lineStrong}`,
           padding: '30px 27px',
         }}

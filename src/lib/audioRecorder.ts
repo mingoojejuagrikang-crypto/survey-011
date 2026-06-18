@@ -60,6 +60,9 @@ const POSTROLL_MS = 500;
 /** 링버퍼 보관량 / startClip 시 스냅샷할 프리롤 길이. */
 const RING_BUFFER_MS = 1500;
 const PREROLL_MS = 500;
+/** v0.14.0 B-1 — 스트림 재획득(recoverStream) 최소 간격. 연속 빈 클립/잦은 devicechange에 폭주
+ *  하지 않도록 쿨다운을 둔다(장치 토글은 초당 수회씩 일어나지 않음). */
+const RECOVER_COOLDOWN_MS = 3000;
 
 export interface ActiveInputInfo {
   deviceId: string;
@@ -128,6 +131,9 @@ export class AudioRecorder {
   private deviceChangeHandler: (() => void) | null = null;
   private listenedTrack: MediaStreamTrack | null = null;
   private trackChangeHandler: (() => void) | null = null;
+  /** v0.14.0 B-1/D — 스트림 재획득(recoverStream) 동시성/쿨다운 가드. */
+  private recovering = false;
+  private lastRecoverAt = 0;
 
   /** The microphone actually in use for this recorder (null until init() succeeds). */
   getActiveInput(): ActiveInputInfo | null {
@@ -170,18 +176,80 @@ export class AudioRecorder {
     } catch { /* best-effort — 갱신 실패 시 직전 라벨 유지 */ }
   }
 
+  /** v0.14.0 B-1/D — 장치 변경(devicechange / track ended·mute·unmute) 처리.
+   *  민구 현장 관찰: BT↔스피커폰 라우팅 변경 시 (1) 배지가 안 바뀌고(특히 speaker→BT 복귀),
+   *  (2) 이후 클립이 전부 빈 데이터로 죽는다(MediaRecorder 트랙 중단). 둘 다 "재-getUserMedia를
+   *  안 함([IOS-5])"이 근인이라, v0.14.0에서 정책을 제한적으로 반전한다:
+   *   - **녹음 중이면** 비파괴 라벨 갱신만(refreshActiveInputLabel) — 진행 중 클립 손실 방지.
+   *   - **유휴면**(필드 사이·일시정지 — 장치 토글의 대다수) 스트림을 재획득해 배지와 다음 클립
+   *     캡처를 실제 활성 장치로 정확히 맞춘다. 쿨다운으로 폭주를 막는다. */
+  private handleDeviceChange(): void {
+    const recording =
+      !!this.active && !this.active.finalized && this.active.recorder.state === 'recording';
+    if (recording) { void this.refreshActiveInputLabel(); return; }
+    void this.recoverStream('devicechange');
+  }
+
+  /** v0.14.0 B-1 — 스트림을 재획득해 죽은 레코더/스테일 입력장치를 되살린다(재-getUserMedia).
+   *  빈/극소 클립 감지(useVoiceSession) 또는 유휴 중 장치 변경 시 호출. 진행 중 active 슬롯은
+   *  이미 실패(빈 클립)했거나 유휴이므로 정리 후 새 스트림으로 교체한다. 쿨다운/동시성 가드로
+   *  연속 호출에 폭주하지 않는다. 성공/실패 모두 텔레메트리를 남긴다([REVIEW-1] 관측 대칭성). */
+  async recoverStream(reason: string): Promise<boolean> {
+    if (this.recovering) return false;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (now - this.lastRecoverAt < RECOVER_COOLDOWN_MS) return false;
+    this.recovering = true;
+    this.lastRecoverAt = now;
+    try {
+      // 기존 그래프 정리 — 리스너 먼저(track.stop의 'ended'가 핸들러 재진입 못 하게), 프리롤, 스트림.
+      this.detachDeviceListeners();
+      this.teardownPreroll();
+      const stale = this.active;
+      this.active = null;
+      if (stale && !stale.finalized) {
+        if (stale.delayedStopTimer) { clearTimeout(stale.delayedStopTimer); stale.delayedStopTimer = null; }
+        if (stale.stopTimer) { clearTimeout(stale.stopTimer); stale.stopTimer = null; }
+        stale.finalized = true;
+        try { if (stale.recorder.state !== 'inactive') stale.recorder.stop(); } catch { /* ignore */ }
+        stale.resolveStop?.(null);
+        stale.resolveStop = null;
+      }
+      if (this.stream) { for (const t of this.stream.getTracks()) t.stop(); this.stream = null; }
+      this.activeInput = null;
+      // 재획득
+      this.stream = await this.acquireStream();
+      try {
+        const track = this.stream.getAudioTracks()[0];
+        if (track) {
+          const settings = track.getSettings();
+          this.activeInput = { deviceId: settings.deviceId ?? '', label: track.label ?? '' };
+        }
+      } catch { /* getSettings 미지원 — activeInput은 다음 refresh에서 채움 */ }
+      this.attachDeviceListeners();
+      await this.initPrerollCapture();
+      logger.log({ type: 'clip', extra: `clip_recorder_recovered:${reason}:${this.activeInput?.label || 'default'}` });
+      return true;
+    } catch (e) {
+      this.stream = null;
+      logger.log({ type: 'error', extra: `clip_recorder_recover_failed:${reason}:${String((e as Error)?.message ?? e)}` });
+      return false;
+    } finally {
+      this.recovering = false;
+    }
+  }
+
   /** v0.13.0 R8 — devicechange + 활성 트랙 ended/mute/unmute 구독 등록(init 성공 직후 1회). */
   private attachDeviceListeners(): void {
     try {
       const md = navigator.mediaDevices;
       if (md?.addEventListener && !this.deviceChangeHandler) {
-        this.deviceChangeHandler = () => { void this.refreshActiveInputLabel(); };
+        this.deviceChangeHandler = () => { this.handleDeviceChange(); };
         md.addEventListener('devicechange', this.deviceChangeHandler);
       }
       const track = this.stream?.getAudioTracks()[0] ?? null;
       if (track && !this.trackChangeHandler) {
         this.listenedTrack = track;
-        this.trackChangeHandler = () => { void this.refreshActiveInputLabel(); };
+        this.trackChangeHandler = () => { this.handleDeviceChange(); };
         track.addEventListener('ended', this.trackChangeHandler);
         track.addEventListener('mute', this.trackChangeHandler);
         track.addEventListener('unmute', this.trackChangeHandler); // BT 재연결 등 회복도 반영

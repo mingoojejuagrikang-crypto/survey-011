@@ -193,7 +193,7 @@ async function getActiveRow(page: Page): Promise<number> {
 async function loadSessionsFromIDB(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 3);
+      const r = indexedDB.open('survey-011', 4);
       r.onsuccess = () => res(r.result);
       r.onerror = () => res(null);
     });
@@ -266,7 +266,7 @@ test('NAV-1 — "다음" 행 skip → 후속 행 완료 시 완료 행 복귀 �
   // 빈 행 안내 멘트가 마지막 TTS로 나갔는지 (lastTts는 ready 전환 후 사라질 수 있으므로 로그로 검증)
   const events = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 3);
+      const r = indexedDB.open('survey-011', 4);
       r.onsuccess = () => res(r.result);
       r.onerror = () => res(null);
     });
@@ -336,7 +336,7 @@ test('NAV-1 — "종료" 명령 시에도 skip된 빈 행 안내 1회', async ({
 
   const events = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 3);
+      const r = indexedDB.open('survey-011', 4);
       r.onsuccess = () => res(r.result);
       r.onerror = () => res(null);
     });

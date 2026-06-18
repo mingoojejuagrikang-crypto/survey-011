@@ -108,6 +108,7 @@
 - **해결·회피(v0.13.0 R8):** init 성공 직후 `devicechange` + 활성 트랙 `ended`/`mute`/`unmute`를 **구독**하고, 신호 수신 시 **비파괴 `enumerateDevices` 재읽기**로 `activeInput.label`을 갱신. 재-`getUserMedia`는 금지([IOS-5] 종결 정책 + 진행 중 클립 손실 회귀 방지) — 라벨만 다시 읽는다. 활성 장치가 목록에서 사라지거나 트랙이 `ended`면 라벨을 비워 `classifyInputDevice`가 자연히 '📱 내장'으로 폴백(BT 끊김→내장 표시). `dispose()`에서 리스너 해제(track.stop의 ended가 핸들러를 깨우지 않도록 stop 전에 detach). **주의(코드리뷰 R8):** `track.muted`는 '장치 분리'가 아니라 일시 인터럽션(통화/Siri/라우트 변경)이므로 라벨을 비우는 조건에서 **제외**한다(BT 연결 중 일시 mute에 '내장' 깜빡임 방지) — 진짜 분리는 `ended`+enumerate deviceId 부재로만 판정.
 - **출처:** `2026-06-18 세션`(민구 제보) → **survey-011 v0.13.0** 수정
 - **현재 상태:** ✅수정됨 (`src/lib/audioRecorder.ts` attach/detachDeviceListeners·refreshActiveInputLabel) — **iOS Safari PWA에서 active getUserMedia 중 `devicechange`/track `ended` 실제 발화 여부는 device 확인 필요**(미발화여도 no-op이라 회귀는 없음).
+- **⚠️ 후속(v0.14.0 D):** v0.13.0 후 민구 보고 — BT→스피커폰→BT 재전환 시 **2번째 BT 복귀가 배지에 반영 안 됨**(비대칭). 비파괴 enumerate는 같은 deviceId/라벨이면 변화를 못 잡는 한계. v0.14.0에서 `handleDeviceChange`가 **유휴 중(녹음 아님) 장치변경 시 스트림 재획득**(recoverStream)으로 실제 활성 장치를 다시 잡아 배지를 갱신([CLIP-LOSS-1]와 동일 경로). 녹음 중엔 비파괴 라벨 갱신 유지(클립 보호). 비대칭 원인은 실기기 재검증 필요.
 
 ---
 
@@ -476,6 +477,36 @@
 - **해결·회피(v0.13.0 R1):** ① 마운트 effect에 **강등 분기** — 토큰 없으면 `googleConnected:false`로 내려 '재로그인 필요'를 정직하게 노출. ② **저장 시트 목록(savedSheets)** — 연결 성공 시 파일명(`fetchSpreadsheetMeta`의 properties.title)으로 자동 등록(sheetId dedupe), localStorage 영속(persist v7→**v8**). 매번 붙여넣지 않고 목록에서 탭 1회로 재선택. ③ **재로그인 후 자동 재연결** — `onGoogleClick` 성공 시 직전 `sheetUrl`이 있으면 `onUrlConfirmWithUrl(prevUrl)` 자동 호출(재붙여넣기 불필요). 토큰 만료 중 저장목록 선택 시엔 sheetUrl·availableSheets·sheetTab을 함께 비워 'active 배지'와 탭 셀렉터 불일치를 방지(코드리뷰 R1). **한계:** refresh token 부재(설계, [AUTH-4])라 토큰 만료 시 **재로그인 1회는 여전히 필요** — savedSheets는 붙여넣기 수고만 제거. (savedSheets도 localStorage라 진짜 eviction이면 함께 사라지나, 민구 증상은 토큰 만료로 확정돼 해당 없음.)
 - **출처:** `2026-06-18 세션`(민구 제보 + 즉시-새로고침 판별) → **survey-011 v0.13.0** 수정
 - **현재 상태:** ✅수정됨 (`src/screens/SettingsScreen.tsx` 강등 분기·자동 재연결·저장목록 UI, `src/stores/settingsStore.ts` savedSheets/persist v8, `src/types.ts` SavedSheet) — 실기기 토큰 만료→강등→재로그인→자동재연결 흐름 device 확인 필요. silent token refresh(prompt:none)는 백로그.
+- **⚠️ 후속 정정([AUTH-8] 참조, v0.14.0):** 위에서 "eviction은 해당 없음"으로 단정했으나, v0.13.0 실기기 후 민구 추가 제보 — **강제종료뿐 아니라 "일정시간 경과 후 로그인 + URL 등록이 함께" 풀림**. 토큰 강등 코드(`SettingsScreen.tsx:826`)는 sheetUrl을 안 지우므로(확인) URL 동반 소실은 토큰 만료로 설명 불가 → 토큰(별도 localStorage 키 `gs10_google_token`)과 설정(`survey-011-settings-v3`)이 **동시에** 사라지는 = localStorage eviction 정황. [AUTH-8]에서 IDB 미러 + breadcrumb로 대응.
+
+### [AUTH-8] 강제종료/시간경과 후 시트 등록 전체 초기화 — localStorage eviction (추정→계측)
+- **증상(민구 제보, v0.13.0 후속):** 앱(사파리) 강제종료 시, 그리고 **일정시간 경과 후에도** 로그인과 스프레드시트 URL 등록이 함께 풀린다([AUTH-7] 토큰 만료와 별개 — URL까지 동반 소실).
+- **원인(추정, 계측으로 확정 예정):** 토큰·설정 모두 localStorage 저장 → iOS Safari가 ITP(비설치 탭 7일 캡) 또는 저장압박으로 키를 evict하면 한꺼번에 초기화. zustand persist는 무엇을 저장하는지는 정상(partialize 없음, 전체 저장) — 문제는 저장소 내구성. v0.13.0 로그엔 강제종료→재실행 사이클·설정 하이드레이션 계측이 없어 직접 증명 불가였음.
+- **해결·회피(v0.14.0 C):** ① **IDB 내구 미러** — `settingsStore` persist에 커스텀 storage 어댑터(`mirroredStorage`)를 달아 localStorage 1차(동기·기존 동작 보존) + IDB 'kv' 스토어(`db.ts` v3→**v4**) write-through. getItem에서 localStorage가 비면 IDB에서 복원(+`settings_restored_from_idb` 로그). ② **하이드레이션 breadcrumb** — boot 시 `settings_hydrated:url=Y/N,cols=N,saved=N,token=Y/N`(`onRehydrateStorage`)로 다음 테스트에서 eviction 여부·복원 작동을 판별. **한계:** 비설치 Safari는 ITP 7일 캡이 IDB에도 적용 — **홈화면 설치(standalone) PWA가 가장 강한 내구**(7일 캡 면제). 미설치면 IDB도 evict될 수 있어, 설치 권장이 근본 대비책.
+- **출처:** `2026-06-18 세션`(민구 추가 제보) → **survey-011 v0.14.0** 대응. 다음 강제종료/시간경과 실기기 로그의 `settings_hydrated`/`settings_restored_from_idb`로 확정.
+- **현재 상태:** ⚠️주시 (`src/stores/settingsStore.ts` mirroredStorage+breadcrumb, `src/lib/db.ts` kv 스토어) — eviction 진위·standalone 설치 여부 device 확인 필요.
+
+### [CLIP-LOSS-1] 입력장치 변경(BT↔스피커폰)이 MediaRecorder를 죽여 이후 클립 연속 소실
+- **증상:** 한 세션 중반부터 음성 클립이 연속으로 통째 소실(값 인식·시트 기록은 정상, 클립만 없음). v0.13.0 로그 세션 `8409` row 11~18(18개 연속) 트림·raw 모두 부재.
+- **원인(로그+민구 현장 관찰):** error 이벤트 `clip_empty`→`clip_too_small:5`/`clip_cmd_empty:null` 반복 = MediaRecorder가 5바이트 빈 청크만 생성(레코더 dead). 초기 행은 `clip_stop_resolved:30000~50000`바이트로 건강 → 중간에 오디오그래프가 죽음. 민구: 입력장치(스피커폰/블루투스) 변경 의심. 앱은 자기 speakerphone 토글만 로깅하고 **OS 라우팅 변경(BT 분리/재연결)은 미로깅** → iOS에서 라우팅 변경이 활성 트랙을 끊으면 MediaRecorder가 빈 데이터만 뱉는데, 앱은 **재-getUserMedia를 안 해([IOS-5])** 복구 못 함 → 이후 전 클립 사망.
+- **해결·회피(v0.14.0 B-1):** `audioRecorder.recoverStream(reason)` 신설 — 빈/극소 클립 감지(`useVoiceSession` clip_empty/clip_too_small 분기) 또는 유휴 중 devicechange 시 스트림을 **재획득**(re-getUserMedia + 프리롤·리스너 재구성). 쿨다운 `RECOVER_COOLDOWN_MS=3000`으로 폭주 방지. 녹음 중 devicechange는 비파괴 라벨 갱신만(진행 클립 보호), 유휴면 전체 재획득(`handleDeviceChange`). 텔레메트리 `clip_recorder_recovered:<reason>:<label>` / `clip_recorder_recover_failed`. **D 배지 staleness와 동일 원인·동일 수정 경로.**
+- **주의:** [IOS-5]는 "재-getUserMedia 금지(진행 클립 손실 회귀 방지)"였으나, 본 버그(연속 소실)가 더 큰 손실이라 v0.14.0에서 **제한적 반전**(유휴/실패 시에만 재획득, 녹음 중엔 비파괴). 실기기에서 의도적 BT↔스피커폰 전환으로 검증 필요.
+- **출처:** `2026-06-18 v0.13.0 실기기 로그`(세션 8409 연속 clip_empty/too_small) + 민구 현장 관찰 → **survey-011 v0.14.0** 대응.
+- **현재 상태:** ⚠️주시 (`src/lib/audioRecorder.ts` recoverStream/handleDeviceChange, `src/lib/useVoiceSession.ts` 트리거) — 실기기 장치전환 검증 필요.
+
+### [TREND-RETRY-1] 이상치 알람 미작동 — 과거 인덱스 로드 1회 실패 후 세션 내내 재시도 없음
+- **증상:** 이상치 알람을 설정(감소+변동률)하고 값을 입력해도 어느 값에도 알람이 안 뜸.
+- **원인(로그 확정):** v0.13.0 로그 `past_index_ready` **0건** + `past_index_skip:Load failed` 2건(두 세션 모두 start 직후 ~27ms). 모든 commit이 `trend_skip:no_index`. **인증·연결은 정상**(같은 세션 `syncedRows:18 synced` — 시트 쓰기 성공) → prefetch가 너무 일찍 발사돼 `fetchAllRowsUnbounded`가 iOS Safari transient "Load failed"로 던졌고, `loadPastIndex` 실패는 캐시 안 되지만 **아무도 다시 안 부름**(prefetch 1회 + `evaluateTrend`는 `getCachedIndex`만 읽음) → 세션 내내 인덱스 없음. (토큰/re-auth와 무관 — [AUTH-7]과 별개.)
+- **해결·회피(v0.14.0 A):** `pastValues.ensurePastIndex()` — 반복 호출 안전한 백오프 재시도(0.6→4.0s, 최대 5회, 캐시/in-flight/예약 중 no-op). `prefetchPastIndex`가 이를 호출하고, `evaluateTrend`도 캐시 미스마다 nudge → 입력 이어가는 동안 인덱스가 살아남. `resetPastIndexRetries()`로 세션 시작 시 카운터 리셋. 비교 키는 현행 샘플키(`inferSampleKey`=auto·비date = 농가명·라벨·처리·조사나무·조사과실)로, 민구 멘탈모델("음성값 외 항목 조합")과 일치 — 변경 없음. 인덱스 복구 시 [ALERT-1/AREA2 V2] 직전 조사일(`prevDate`) 표시도 함께 살아남(이미 구현됨, no_index로 안 떴을 뿐).
+- **출처:** `2026-06-18 v0.13.0 실기기 로그`(past_index_ready 0건) → **survey-011 v0.14.0** 수정.
+- **현재 상태:** ⚠️주시 (`src/lib/pastValues.ts` ensurePastIndex/resetPastIndexRetries, `src/lib/useVoiceSession.ts` nudge+reset) — 실기기에서 `past_index_ready` 출현·알람 작동 확인 필요.
+
+### [CLIP-TRIM-1] 트림이 값 구간을 잘라 재생 시 값 안 들림 — 단, 실패의 대부분은 캡처 문제
+- **증상:** 기록된 음성 클립 재생 시 정상 값 청취 불가(편집 오류).
+- **원인(전사 분석 확정):** v0.13.0 클립 91개를 ffmpeg+whisper로 전사·대조 → OK 35%, SILENT/환각 25%, MISMATCH 20%, NO_CLIP 20%. **실패의 ~45%(SILENT+NO_CLIP)는 캡처 문제**(값이 raw에도 없음 = [CLIP-LOSS-1] 계열, whisper가 무음에 "고맙습니다"/"오케이" 환각). 트림 자체 결함은 일부 — `audioTrim.findSpeechSegments`가 peak=max(|sample|) 기준이라 초반 transient(클릭/팝/TTS잔향)가 peak를 올리면 실제 발화가 thr 미만으로 묻혀 엉뚱한(무음) 구간만 보존.
+- **해결·회피(v0.14.0 B-2):** ① `robustPeak` — 기준 피크를 max 대신 상위 97백분위(transient 둔감). ② **과소 트림 floor** — 트림 결과가 `MIN_KEPT_MS=600` 미만이고 원본은 그 이상이면 트림 포기(전체본 유지) → 값 잘림 방지. **검증:** 실제 raw 73개에 신규 로직 재적용+재전사 → OLD 44%→NEW 45%, **회귀 0·구제 1**(무회귀 안전, 트림은 2차 문제 확인). **지배적 수정은 [CLIP-LOSS-1] 캡처 신뢰성.**
+- **출처:** `2026-06-18 v0.13.0 클립 전사 분석`(/tmp/clip_analysis.json) → **survey-011 v0.14.0**.
+- **현재 상태:** ✅수정됨(무회귀 검증) (`src/lib/audioTrim.ts` robustPeak/MIN_KEPT_MS) — 캡처 회복(B-1)과 함께 실기기에서 청취 개선 확인 필요.
 
 ---
 

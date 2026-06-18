@@ -228,6 +228,16 @@ interface CacheEntry {
 let cached: CacheEntry | null = null;
 let inflight: { fp: string; promise: Promise<PastIndex | null> } | null = null;
 
+// v0.14.0 A — 전송 실패(iOS Safari transient "Load failed") 자가 복구용 백오프 재시도 상태.
+// 실기기 로그(v0.13.0)에서 세션 start 직후(~27ms) prefetch가 "Load failed"로 한 번 실패하면
+// 세션 내내 past_index_ready가 0건이었다(토큰·연결은 정상 — 같은 세션 시트 쓰기는 성공). 원인은
+// "한 번 실패 후 아무도 다시 부르지 않음"(prefetch 1회 + evaluateTrend는 getCachedIndex만 읽음).
+// loadPastIndex는 실패를 캐시하지 않으므로 재호출하면 다시 시도된다 — ensurePastIndex가 반복
+// 호출에 안전하게 자가 제한된 백오프 재시도를 건다.
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryAttempts = 0;
+const MAX_RETRIES = 5;
+
 interface LoadContext {
   fp: string;
   spreadsheetId: string | null;
@@ -302,7 +312,39 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
   return promise;
 }
 
-/** fire-and-forget 프리페치 — 세션 start() 등에서 호출(B4). 실패해도 아무 것도 던지지 않는다. */
+/** 재시도 가치 판단: 시트·탭·토큰이 모두 있는데 인덱스가 없으면 네트워크/HTTP 실패였다는 뜻 →
+ *  재시도 가치 있음. 미설정/미로그인이면 재시도 무의미(조용히 멈춤). */
+function shouldRetryLoad(): boolean {
+  const ctx = loadContext();
+  return !!ctx.spreadsheetId && !!ctx.sheetTab && !!getAccessToken();
+}
+
+/**
+ * v0.14.0 A — 반복 호출에 안전한 인덱스 로더. 캐시 히트/in-flight/재시도 예약 중이면 no-op.
+ * 로드가 실패(null)했고 재시도 가치가 있으며 횟수 미초과면 지수 백오프(0.6→1.2→2.4→4.0s)로
+ * 자동 재시도한다. evaluateTrend가 캐시 미스마다 호출해도 자가 제한되어 폭주하지 않는다.
+ */
+export function ensurePastIndex(): void {
+  if (getCachedIndex()) return;
+  if (inflight) return;
+  if (retryTimer != null) return;
+  void loadPastIndex().then((idx) => {
+    if (idx) { retryAttempts = 0; return; } // 성공 → 캐시됨
+    if (!shouldRetryLoad() || retryAttempts >= MAX_RETRIES) return;
+    const delay = Math.min(4000, 600 * 2 ** retryAttempts);
+    retryAttempts++;
+    retryTimer = setTimeout(() => { retryTimer = null; ensurePastIndex(); }, delay);
+  });
+}
+
+/** 세션 시작 시 재시도 카운터/타이머 리셋 — 이전 세션이 오프라인으로 소진했어도 새 세션은 다시
+ *  시도한다. 유효 캐시는 보존(무효화는 TTL/지문으로 getCachedIndex가 담당). */
+export function resetPastIndexRetries(): void {
+  retryAttempts = 0;
+  if (retryTimer != null) { clearTimeout(retryTimer); retryTimer = null; }
+}
+
+/** fire-and-forget 프리페치 — 세션 start() 등에서 호출(B4). v0.14.0: 백오프 재시도 포함. */
 export function prefetchPastIndex(): void {
-  void loadPastIndex();
+  ensurePastIndex();
 }

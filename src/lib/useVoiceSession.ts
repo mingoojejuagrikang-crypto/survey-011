@@ -11,7 +11,7 @@ import type { Column, Session, SessionRow } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip } from './db';
 import { AudioRecorder } from './audioRecorder';
 import { logger } from './logger';
-import { getCachedIndex, prefetchPastIndex, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
+import { getCachedIndex, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { getAccessToken } from './googleAuth';
 import { evalPostTtsGuard, POST_TTS_GUARD_MS } from './postTtsGuard';
@@ -934,7 +934,9 @@ export function useVoiceSession() {
       const hasRule = rule === 'increase' || rule === 'decrease' || col?.pctThreshold != null;
       if (!col || !hasRule) return null;
       const index = getCachedIndex();
-      if (!index) { logTrendSkip('no_index', row, colId); return null; } // 오프라인/프리페치 실패/TTL 만료
+      // v0.14.0 A — 캐시 미스 시 백오프 재시도를 nudge(자가 제한). prefetch가 transient "Load
+      // failed"로 실패해도 이후 행 입력마다 재시도되어 세션 중반부터 이상치 알람이 살아난다.
+      if (!index) { ensurePastIndex(); logTrendSkip('no_index', row, colId); return null; } // 오프라인/프리페치 실패/TTL 만료
       const kc = keyColumns(s.columns);
       if (kc.length === 0) { logTrendSkip('no_key_cols', row, colId); return null; } // 기능 비활성 케이스
       // 현재 행의 전체 값(자동·고정·음성) — persistSession과 같은 composeRowValues 합성.
@@ -1494,11 +1496,16 @@ export function useVoiceSession() {
         logger.log({ type: 'clip', extra: `clip_stop_resolved:${clipBlob ? clipBlob.size : 'null'}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
         if (!clipBlob) {
           logger.log({ type: 'error', extra: 'clip_empty', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+          // v0.14.0 B-1 — 빈 클립 = 장치 라우팅 변경으로 트랙이 죽어 MediaRecorder가 빈 데이터만
+          // 내는 신호. 스트림을 재획득해 이후 클립을 되살린다(쿨다운 가드 — 폭주 방지). 실기기 로그
+          // (v0.13.0 세션 8409)에서 row 11부터 18까지 전부 죽었던 연속 소실의 차단책.
+          void recorderRef.current?.recoverStream('clip_empty');
           await resolveFailedCapture(savePromiseSelf);
           return;
         }
         if (clipBlob.size <= 200) {
           logger.log({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+          void recorderRef.current?.recoverStream('clip_too_small');
           await resolveFailedCapture(savePromiseSelf);
           return;
         }
@@ -1739,7 +1746,7 @@ export function useVoiceSession() {
     const anyAnomalyRule = s.columns.some(
       (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
     );
-    if (anyAnomalyRule && getAccessToken()) prefetchPastIndex();
+    if (anyAnomalyRule && getAccessToken()) { resetPastIndexRetries(); prefetchPastIndex(); }
     logger.setSessionId(sessionIdRef.current);
     // #1 reach telemetry: attach session-meta alongside the existing `extra:'start'` tag.
     // `extra` is preserved so any analysis keying on it keeps working; new fields are additive.

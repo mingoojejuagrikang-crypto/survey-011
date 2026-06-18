@@ -26,6 +26,15 @@ export const PAD_BACK_MS = 180;     // 발화 구간 뒤 여유
 const WIN_MS = 20;                  // RMS 분석 윈도우
 const REL_THRESHOLD = 0.08;         // 피크 대비 발화 판정 비율
 const ABS_FLOOR = 0.004;            // 절대 무음 바닥(노이즈 게이트)
+/** v0.14.0 B-2: 발화 판정 임계의 기준 피크를 max(|sample|) 대신 상위 백분위로 잡는다. 초반의 짧은
+ *  transient(클릭/팝/TTS 잔향)가 단일 샘플 최대치를 끌어올려 thr를 부풀리면, 정작 더 조용한 실제
+ *  발화가 thr 미만으로 묻혀 엉뚱한(무음) 구간만 보존되던 문제(v0.13.0 클립 다수가 값 미수록)를
+ *  완화한다. 백분위 피크는 소수의 이상 샘플에 둔감하다. */
+const PEAK_PERCENTILE = 0.97;
+/** v0.14.0 B-2: 트림 결과가 이보다 짧으면 검출이 값 구간을 놓쳤다고 보고 트림을 포기(전체본 유지).
+ *  값 발화("삼십삼점삼" 등)는 보통 0.8s 이상 — 0.6s 미만 클립은 값이 잘렸을 가능성이 높다.
+ *  raw가 따로 보존되더라도 사용자가 실제 재생하는 것은 blob이므로, blob을 안전한 전체본으로 둔다. */
+const MIN_KEPT_MS = 600;
 const TARGET_RATE = 16000;          // 다운샘플 목표 (음성 충분)
 const KEEP_RATIO = 0.95;            // 트림 후 길이가 원본의 이 비율 이상이면 효과 미미 → 트림 생략
 /** v0.9.0 CLIP-BLANK-1: 발화 세그먼트 사이 무음이 이보다 짧으면 같은 발화로 보고 합친다(어절 내
@@ -97,6 +106,22 @@ export function combineWithPreroll(
   return { mono: out, prerollSamples: pre.length };
 }
 
+/** v0.14.0 B-2 — transient에 둔감한 기준 피크(상위 PEAK_PERCENTILE 백분위의 |sample|).
+ *  max(|sample|)는 단일 클릭에 끌려가 thr를 부풀리지만, 백분위 피크는 소수 이상치에 강건하다.
+ *  비용 절감 위해 최대 ~20k개로 균일 서브샘플 후 정렬(클립당 수 ms, 정확도 충분). */
+export function robustPeak(mono: Float32Array): number {
+  const n = mono.length;
+  if (!n) return 0;
+  const MAX_SAMPLES = 20000;
+  const stride = Math.max(1, Math.floor(n / MAX_SAMPLES));
+  const mags: number[] = [];
+  for (let i = 0; i < n; i += stride) mags.push(Math.abs(mono[i]));
+  if (mags.length === 0) return 0;
+  mags.sort((a, b) => a - b);
+  const idx = Math.min(mags.length - 1, Math.floor(mags.length * PEAK_PERCENTILE));
+  return mags[idx];
+}
+
 /** RMS 기반 발화 구간 검출. 미검출/전체 무음이면 null. */
 export function findSpeechRange(
   mono: Float32Array,
@@ -104,11 +129,7 @@ export function findSpeechRange(
 ): { start: number; end: number } | null {
   const length = mono.length;
   if (!length) return null;
-  let peak = 0;
-  for (let i = 0; i < length; i++) {
-    const a = Math.abs(mono[i]);
-    if (a > peak) peak = a;
-  }
+  const peak = robustPeak(mono);
   if (peak < ABS_FLOOR) return null; // 사실상 전체 무음
 
   const thr = Math.max(ABS_FLOOR, peak * REL_THRESHOLD);
@@ -139,11 +160,7 @@ export function findSpeechSegments(
 ): { start: number; end: number }[] {
   const length = mono.length;
   if (!length) return [];
-  let peak = 0;
-  for (let i = 0; i < length; i++) {
-    const a = Math.abs(mono[i]);
-    if (a > peak) peak = a;
-  }
+  const peak = robustPeak(mono); // v0.14.0 B-2: transient 둔감 백분위 피크
   if (peak < ABS_FLOOR) return [];
 
   const thr = Math.max(ABS_FLOOR, peak * REL_THRESHOLD);
@@ -311,9 +328,15 @@ export function buildClipBlobs(
   let keptSamples = 0;
   for (const r of ranges) keptSamples += r.end - r.start;
   const noEffect = keptSamples >= mono.length * KEEP_RATIO;
-  if (noEffect) {
-    // 트림 효과 미미(거의 전부 발화): 프리롤이 있으면 결합 전체본으로 재인코딩(프리롤 포함이 목적),
-    // 없으면 원본 유지.
+  // v0.14.0 B-2 — 트림본이 MIN_KEPT_MS보다 짧으면 검출이 값 구간을 놓쳤다고 보고 트림을 포기한다
+  // (전체본 유지). 단, 원본 자체가 그보다 짧으면(아주 짧은 발화) 트림해도 그 길이라 폴백 무의미 →
+  // 정상 트림. 즉 "원본은 충분히 긴데 트림 결과만 과도하게 짧은" 경우만 값 잘림으로 보고 막는다.
+  const keptMs = (keptSamples / sampleRate) * 1000;
+  const monoMs = (mono.length / sampleRate) * 1000;
+  const overTrimmed = keptMs < MIN_KEPT_MS && monoMs >= MIN_KEPT_MS;
+  if (noEffect || overTrimmed) {
+    // 트림 효과 미미(거의 전부 발화) 또는 과도 축소(값 잘림 의심): 프리롤이 있으면 결합 전체본으로
+    // 재인코딩(프리롤 포함이 목적), 없으면 원본 유지.
     return hadPreroll
       ? { blob: encodeWavMono(mono, sampleRate, 0, mono.length), raw: null }
       : { blob: originalBlob, raw: null };

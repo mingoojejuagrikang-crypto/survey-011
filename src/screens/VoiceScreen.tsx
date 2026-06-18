@@ -526,29 +526,41 @@ function ActiveState({
   );
 }
 
-/** v0.12.0 AREA2 V4 — 수정 재안내 중 어떤 항목을 다시 말해야 하는지 알리는 상단 중앙 pill.
- *  중립 BLUE(T.blue) — 이상치(RED)와 톤을 구분(수정은 오류가 아니라 재입력 안내). 비대화형. */
+/** v0.12.0 AREA2 V4 — 수정 재안내 중 어떤 항목을 다시 말해야 하는지 알리는 안내.
+ *  v0.14.0 E(민구 요청) — 모든 알람/안내를 화면 중앙·최대 크기로 통일. 기존 상단 작은 pill을
+ *  이상치 팝업과 같은 중앙 대형 카드로 교체(톤은 BLUE로 구분 — 수정은 오류가 아니라 재입력 안내).
+ *  비대화형(pointerEvents:none) — 입력 흐름을 막지 않는다. */
 function ModifyIndicatorPill({ name }: { name: string }) {
   return (
     <div
       style={{
-        position: 'fixed', top: 'calc(env(safe-area-inset-top, 0px) + 12px)',
-        left: 0, right: 0, zIndex: 42,
-        display: 'flex', justifyContent: 'center', pointerEvents: 'none', padding: '0 16px',
+        position: 'fixed', inset: 0, zIndex: 42,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        pointerEvents: 'none', padding: '16px',
       }}
     >
-      <span
+      <div
         style={{
-          display: 'inline-flex', alignItems: 'center', maxWidth: '90vw',
-          padding: '7px 16px', borderRadius: 999,
-          background: 'rgba(41,121,255,0.16)', border: `1.5px solid ${T.blue}`,
-          color: T.blue, fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
-          boxShadow: `0 4px 16px ${T.blueGlow}`,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          maxWidth: 'min(560px, 94vw)', maxHeight: '88vh', overflowY: 'auto',
+          padding: '20px 28px', borderRadius: 18,
+          background: 'rgba(18,26,40,0.96)', border: `2px solid ${T.blue}`,
+          boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
+          display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center',
         }}
       >
-        수정 값: {name}
-      </span>
+        <span style={{ fontSize: 18, fontWeight: 800, color: T.blue, letterSpacing: -0.2 }}>
+          수정 — 다시 말해주세요
+        </span>
+        <span
+          style={{
+            fontSize: 'clamp(34px, 9vw, 52px)', fontWeight: 900, color: T.text,
+            letterSpacing: -0.5, textAlign: 'center', maxWidth: '100%',
+            wordBreak: 'keep-all', lineHeight: 1.15,
+          }}
+        >
+          {name}
+        </span>
+      </div>
     </div>
   );
 }

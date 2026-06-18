@@ -12,7 +12,7 @@ test.setTimeout(60_000);
 
 const BASE = 'http://localhost:5175';
 const DB_NAME = 'survey-011';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 // ─── Mock STT / TTS init script ──────────────────────────────────────────────
 
@@ -149,6 +149,7 @@ async function injectSessionAndReload(page: Page, sessionData: object) {
           const logs = db.createObjectStore('logEvents', { keyPath: 'id', autoIncrement: true });
           logs.createIndex('bySessionId', 'sessionId');
         }
+        if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv'); // v0.14.0 C
       };
     });
   }, { dbName: DB_NAME, dbVersion: DB_VERSION, session: sessionData });

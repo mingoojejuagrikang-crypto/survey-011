@@ -1,9 +1,42 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
 import type { Column, SheetConfig, SavedSheet, LegacyInputMode } from '../types';
 import type { ReviewFilter } from '../lib/reviewQuery';
 import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
 import { isCycling } from '../lib/autoValue';
+import { saveSettingsBackup, loadSettingsBackup, deleteSettingsBackup } from '../lib/db';
+import { logger } from '../lib/logger';
+
+/**
+ * v0.14.0 C — localStorage + IDB 내구 미러 스토리지. iOS Safari는 일정시간 경과(ITP)나 강제종료
+ * 후 localStorage를 evict해 시트 등록(URL·컬럼·저장시트)이 통째로 풀리는 문제가 보고됐다(민구).
+ * localStorage를 1차(동기·기존 동작 보존)로 쓰되 모든 쓰기를 IDB('kv')에 미러하고, getItem에서
+ * localStorage가 비어 있으면 IDB에서 복원한다. localStorage 히트 시 동기 반환 → 정상 경로의
+ * 하이드레이션 레이스 표면은 늘리지 않는다(IDB 폴백은 evict된 경우에만 비동기로 탄다).
+ */
+const mirroredStorage: StateStorage = {
+  getItem: (name) => {
+    let local: string | null = null;
+    try { local = localStorage.getItem(name); } catch { /* private mode 등 */ }
+    if (local != null) return local; // 정상 경로: 동기 반환
+    // localStorage 비었음 — evict됐을 수 있으니 IDB 미러에서 복원 시도(비동기).
+    return loadSettingsBackup(name).then((fromIdb) => {
+      if (fromIdb != null) {
+        try { localStorage.setItem(name, fromIdb); } catch { /* ignore */ }
+        logger.log({ type: 'app', extra: 'settings_restored_from_idb' });
+      }
+      return fromIdb;
+    });
+  },
+  setItem: (name, value) => {
+    try { localStorage.setItem(name, value); } catch { /* ignore */ }
+    void saveSettingsBackup(name, value); // write-through 미러(best-effort)
+  },
+  removeItem: (name) => {
+    try { localStorage.removeItem(name); } catch { /* ignore */ }
+    void deleteSettingsBackup(name);
+  },
+};
 
 interface SettingsState {
   googleConnected: boolean;
@@ -225,6 +258,23 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'survey-011-settings-v3',
       version: 8,
+      // v0.14.0 C — localStorage + IDB 내구 미러(eviction 방어).
+      storage: createJSONStorage(() => mirroredStorage),
+      // v0.14.0 C — 하이드레이션 breadcrumb. 다음 강제종료/시간경과 테스트 로그에서 시트 등록이
+      // 살아있었는지(eviction 여부)와 IDB 복원이 작동했는지 판별할 계측. token은 별도 키라 함께 본다.
+      onRehydrateStorage: () => (state) => {
+        try {
+          const hasUrl = !!(state?.sheetUrl && state.sheetUrl.trim());
+          const cols = state?.columns?.length ?? 0;
+          const saved = state?.savedSheets?.length ?? 0;
+          let token = false;
+          try { token = !!localStorage.getItem('gs10_google_token'); } catch { /* ignore */ }
+          logger.log({
+            type: 'app',
+            extra: `settings_hydrated:url=${hasUrl ? 'Y' : 'N'},cols=${cols},saved=${saved},token=${token ? 'Y' : 'N'}`,
+          });
+        } catch { /* best-effort 계측 */ }
+      },
       migrate: (persisted: unknown, version: number) => {
         const s = persisted as Partial<SettingsState> & {
           columns?: unknown[];
