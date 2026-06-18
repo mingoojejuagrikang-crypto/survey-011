@@ -5,7 +5,8 @@
  * review-screen 패턴) + v5 설정 시드(settings-migration/review-screen 페이로드 형태).
  *
  * 검증:
- *   1. 위반 값 커밋 → echo 대신 알림 TTS("{값}. 직전 조사보다 n% 작아졌습니다. 확인해주세요.")
+ *   1. 위반 값 커밋 → echo 대신 알림 TTS("이상치 알림. {값}. 직전 조사보다 n% 작아졌습니다.")
+ *      (v0.13.0 R7: 앞에 '이상치 알림' 접두 + 끝 '확인해주세요' 제거 — self-confirm 환각 방지)
  *      + advance 중단, '확인' → 값 유지·진행 (trend_alert_fired/confirmed 로깅)
  *   2. 위반 → 새 값 발화 → 재입력(trend_alert_corrected) + 재검증(재위반 시 재알림) →
  *      통과 값이면 정상 echo·진행; IDB 최종값 = 마지막 발화
@@ -296,7 +297,7 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   // echo 대신 알림 TTS + advance 중단(여전히 횡경 대기).
   const tts1 = await getTtsLog(page);
   // v0.9.0: 증가/감소(방향 trendRule) 트리거는 **절대값 차이**로 발화(120.5−100.0=20.5). %는 종경(pct)만.
-  expect(tts1.some((t) => t.includes('120.5. 직전 조사보다 20.5 증가했습니다. 확인해주세요.'))).toBe(true);
+  expect(tts1.some((t) => t.includes('이상치 알림. 120.5. 직전 조사보다 20.5 증가했습니다.'))).toBe(true);
   expect(await getActiveChipName(page)).toContain('횡경');
 
   // v0.9.0 시각 팝업: 이전값(100)→현재값(120.5)과 항목명을 화면에 표시.
@@ -336,7 +337,7 @@ test('% 변동률 단독 알람 — 종경 pctThreshold 15, 방향 무관 발화
 
   // 종경: 직전 50.0 → 60.5 = +21.0% (>= 15%) → % 단독 알람(증가했습니다).
   await fireStt(page, '60.5', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('60.5. 직전 조사보다 21.0% 증가했습니다. 확인해주세요.'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('이상치 알림. 60.5. 직전 조사보다 21.0% 증가했습니다.'))).toBe(true);
   expect(await getActiveChipName(page)).toContain('종경'); // advance 중단
 
   await fireStt(page, '확인', 500);
@@ -347,7 +348,7 @@ test('% 변동률 단독 알람 — 종경 pctThreshold 15, 방향 무관 발화
   await fireStt(page, '80.5', 500);
   await waitForActiveChip(page, '종경');
   await fireStt(page, '40.0', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('40. 직전 조사보다 27.3% 감소했습니다. 확인해주세요.'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('이상치 알림. 40. 직전 조사보다 27.3% 감소했습니다.'))).toBe(true);
   await fireStt(page, '확인', 500);
 
   const events = await getTrendEvents(page);
@@ -360,11 +361,14 @@ test('이상치 → 새 값 발화 → 재입력+재검증(재알림) → 통과
 
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '120.5', 500); // 알람 1차 (100.0 → 120.5, 절대차 +20.5)
-  expect((await getTtsLog(page)).some((t) => t.includes('120.5. 직전 조사보다 20.5 증가했습니다'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('이상치 알림. 120.5. 직전 조사보다 20.5 증가했습니다'))).toBe(true);
+  // v0.13.0 시각검증: 빨강(pending) 팝업 + R3 hero 라벨 캡처(414px). 비단언 — 레이아웃 확인용.
+  await expect(page.locator('[data-testid="anomaly-alert"][data-status="pending"]')).toBeVisible();
+  await page.screenshot({ path: 'test-results/v013-anomaly-red.png' });
 
   // 새 값(여전히 커짐) → 재입력(corrected) + 재알림 (절대차 +30.5).
   await fireStt(page, '130.5', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('130.5. 직전 조사보다 30.5 증가했습니다. 확인해주세요.'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('이상치 알림. 130.5. 직전 조사보다 30.5 증가했습니다.'))).toBe(true);
   expect(await getActiveChipName(page)).toContain('횡경'); // 여전히 advance 중단
 
   // 통과 값(80.5 < 100 — increase는 작아짐 미발화) → 알림 없이 수정 echo + 종경으로 진행.
@@ -426,4 +430,17 @@ test('fetch 실패(500) → 알림 없이 조용히 진행 + trend_skip:no_index
   const events = await getTrendEvents(page);
   expect(events.filter((e) => e.extra === 'trend_alert_fired')).toHaveLength(0);
   expect(events.filter((e) => e.extra === 'trend_skip:no_index')).toHaveLength(1);
+});
+
+// v0.13.0 R2 시각검증: 이상치(빨강) → 정상값 정정 → corrected(초록) 팝업 캡처(414px). 비단언.
+// corrected 팝업은 echo TTS 동안만 노출되고 advance로 닫히므로, data-status='corrected'를 폴링으로
+// 잡아 그 순간 스크린샷한다. mock TTS는 onend 즉발이라 짧으나 toBeVisible 폴링이 그 창을 잡는다.
+test('[시각] 정정 완료 초록 팝업 캡처', async ({ page }) => {
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '120.5', 300); // 빨강 알람
+  await fireStt(page, '80.5', 0);    // 정상값 정정 → corrected(초록) 전환 직후 즉시 캡처 시도
+  const green = page.locator('[data-testid="anomaly-alert"][data-status="corrected"]');
+  await expect(green).toBeVisible({ timeout: 2000 });
+  await page.screenshot({ path: 'test-results/v013-anomaly-green.png' });
 });

@@ -120,10 +120,93 @@ export class AudioRecorder {
   private activeInput: ActiveInputInfo | null = null;
   /** W6: 상시 PCM 링버퍼 캡처. null이면 프리롤 미지원(현행 동작). */
   private preroll: PrerollCapture | null = null;
+  /** v0.13.0 R8 — 입력장치 변경(예: 음성입력 중 블루투스 해제)을 라이브로 배지에 반영하기 위한
+   *  구독 핸들/대상 트랙. 라벨은 init()에서 1회만 캡처되던 frozen 값이라(민구 보고: 음성입력 중
+   *  OS에서 BT를 끊어도 배지가 안 바뀜), devicechange/track ended·mute 신호 시 비파괴
+   *  enumerateDevices로 activeInput.label을 갱신한다. 재-getUserMedia는 하지 않는다([IOS-5] 종결
+   *  정책 + 진행 중 클립 손실 회귀 방지). dispose에서 반드시 해제(리스너 누수·좀비 콜백 방지). */
+  private deviceChangeHandler: (() => void) | null = null;
+  private listenedTrack: MediaStreamTrack | null = null;
+  private trackChangeHandler: (() => void) | null = null;
 
   /** The microphone actually in use for this recorder (null until init() succeeds). */
   getActiveInput(): ActiveInputInfo | null {
     return this.activeInput;
+  }
+
+  /** v0.13.0 R8 — 활성 입력장치 라벨을 비파괴로 다시 읽어 activeInput을 갱신한다.
+   *  - 활성 트랙이 ended(트랙 종료=장치 분리)면 라벨을 비워 classifyInputDevice가 '내장'으로 폴백.
+   *  - 트랙이 살아있으면 enumerateDevices로 현재 deviceId 존재 여부를 확인해 사라졌으면 내장 폴백,
+   *    있으면 최신 라벨(트랙 라벨 우선)로 갱신. 모든 단계 best-effort(권한 전 빈 라벨 등 무해).
+   *  주의: track.muted는 '장치 분리'가 아니라 UA가 일시적으로 미디어 전달을 멈춘 상태(통화/Siri
+   *  인터럽션, 라우트 변경 등)다. muted를 분리로 처리하면 BT/유선 연결 중 일시 mute에도 배지가
+   *  '내장'으로 깜빡인다. 진짜 분리는 'ended' 또는 enumerate의 deviceId 부재로 잡으므로 muted는 보지
+   *  않는다(unmute 리스너는 일시 mute 회복 시 라벨 재확인용으로 그대로 둔다). */
+  private async refreshActiveInputLabel(): Promise<void> {
+    if (!this.activeInput) return;
+    try {
+      const track = this.stream?.getAudioTracks()[0] ?? null;
+      if (!track || track.readyState === 'ended') {
+        this.activeInput = { ...this.activeInput, label: '' };
+        return;
+      }
+      const id = this.activeInput.deviceId;
+      const enumerate = navigator.mediaDevices?.enumerateDevices?.bind(navigator.mediaDevices);
+      if (enumerate) {
+        const inputs = (await enumerate()).filter((d) => d.kind === 'audioinput');
+        const match = id ? inputs.find((d) => d.deviceId === id) : undefined;
+        if (id && !match) {
+          // 활성 장치가 목록에서 사라짐 → 끊김으로 간주, 내장 폴백.
+          this.activeInput = { ...this.activeInput, label: '' };
+          return;
+        }
+        if (match?.label) {
+          this.activeInput = { ...this.activeInput, label: match.label };
+          return;
+        }
+      }
+      // 트랙이 살아있고 라벨이 있으면 트랙 라벨을 신뢰(가장 정확).
+      if (track.label) this.activeInput = { ...this.activeInput, label: track.label };
+    } catch { /* best-effort — 갱신 실패 시 직전 라벨 유지 */ }
+  }
+
+  /** v0.13.0 R8 — devicechange + 활성 트랙 ended/mute/unmute 구독 등록(init 성공 직후 1회). */
+  private attachDeviceListeners(): void {
+    try {
+      const md = navigator.mediaDevices;
+      if (md?.addEventListener && !this.deviceChangeHandler) {
+        this.deviceChangeHandler = () => { void this.refreshActiveInputLabel(); };
+        md.addEventListener('devicechange', this.deviceChangeHandler);
+      }
+      const track = this.stream?.getAudioTracks()[0] ?? null;
+      if (track && !this.trackChangeHandler) {
+        this.listenedTrack = track;
+        this.trackChangeHandler = () => { void this.refreshActiveInputLabel(); };
+        track.addEventListener('ended', this.trackChangeHandler);
+        track.addEventListener('mute', this.trackChangeHandler);
+        track.addEventListener('unmute', this.trackChangeHandler); // BT 재연결 등 회복도 반영
+      }
+    } catch { /* best-effort */ }
+  }
+
+  /** v0.13.0 R8 — 구독 해제(dispose). track.stop()의 'ended'가 핸들러를 깨우지 않도록 먼저 호출. */
+  private detachDeviceListeners(): void {
+    try {
+      const md = navigator.mediaDevices;
+      if (md?.removeEventListener && this.deviceChangeHandler) {
+        md.removeEventListener('devicechange', this.deviceChangeHandler);
+      }
+    } catch { /* ignore */ }
+    this.deviceChangeHandler = null;
+    if (this.listenedTrack && this.trackChangeHandler) {
+      try {
+        this.listenedTrack.removeEventListener('ended', this.trackChangeHandler);
+        this.listenedTrack.removeEventListener('mute', this.trackChangeHandler);
+        this.listenedTrack.removeEventListener('unmute', this.trackChangeHandler);
+      } catch { /* ignore */ }
+    }
+    this.listenedTrack = null;
+    this.trackChangeHandler = null;
   }
 
   /** getUserMedia 제약 — echoCancellation은 항상 ON(이어피스 기본; TTS 에코 되먹임 억제).
@@ -161,6 +244,9 @@ export class AudioRecorder {
           };
         }
       } catch { /* getSettings unsupported — leave activeInput null */ }
+
+      // v0.13.0 R8 — 입력장치 변경(BT 해제 등)을 배지에 라이브 반영하기 위한 구독 등록.
+      this.attachDeviceListeners();
 
       // W6: 프리롤 캡처는 best-effort — 어떤 실패도 init 성공(현행 녹음 동작)을 막지 않는다.
       await this.initPrerollCapture();
@@ -463,6 +549,8 @@ export class AudioRecorder {
   }
 
   dispose(): void {
+    // v0.13.0 R8 — 입력장치 구독 먼저 해제(아래 track.stop()의 'ended'가 핸들러를 깨우지 않도록).
+    this.detachDeviceListeners();
     // Resolve any pending stopClip first so awaiters don't hang.
     const slot = this.active;
     this.active = null;

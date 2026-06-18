@@ -102,6 +102,13 @@
 - **현재 상태:** ✅종결(민구 확인, 2026-06-16) — 이어폰(OpenDots) 마이크 오작동으로 확정. 앱 코드 조치 없음.
 - **`2026-06-17 v0.11.0 로그`(완화):** Log2에서 OpenDots ONE이 **실제 입력 장치로 선택됨**(`session.input_device`=OpenDots) — "내장만 잡힘"과 대비. 단 비 오는 비닐하우스 소음에서 내장 마이크(L1)보다 **성능 저하**: `stt_parse_failed` L1:4 vs **L2:11(2.75×)**, 커밋 신뢰도 floor 0.820 vs 0.679. → "이어폰 오작동"이라기보다 **소음 환경 마이크 성능 저하**(완주는 함, 18행 43커밋). v0.12.0 입력장치 배지가 어떤 마이크로 듣는지 표시(🎧 블루투스 vs 📱 내장)해 사용자가 인지 가능. 소음 현장 내장 마이크 권장은 백로그(AUDIO-INPUT-1, n=1이라 2차 표본 후).
 
+### [AUDIO-INPUT-2] 입력장치 배지가 음성입력 중 장치 변경(블루투스 해제 등)을 반영 못 함 — frozen 라벨
+- **증상(민구 제보):** "음성 입력 시작 전엔 배지에 입력 기기가 반영되는데, 입력 중 OS에서 블루투스를 끊으면 상단 배지가 그대로 멈춰 있다."
+- **원인(코드 추적 확정):** 배지 라벨은 `init()` 시 `getUserMedia` 트랙의 `track.label`을 1회 스냅샷한 **불변값**(`audioRecorder.ts` `activeInput`)이었다. `VoiceScreen`의 300ms 폴링은 그 frozen 필드를 반복해서 다시 읽을 뿐이고, `navigator.mediaDevices` `devicechange`/트랙 `ended`·`mute` 구독이 전무했다. 라벨이 새로 잡히는 유일한 순간은 새 `AudioRecorder` init(=start/resume)뿐 → "시작 전/재개 시엔 반영, active 중 변경은 미반영"이라는 증상과 정확히 일치.
+- **해결·회피(v0.13.0 R8):** init 성공 직후 `devicechange` + 활성 트랙 `ended`/`mute`/`unmute`를 **구독**하고, 신호 수신 시 **비파괴 `enumerateDevices` 재읽기**로 `activeInput.label`을 갱신. 재-`getUserMedia`는 금지([IOS-5] 종결 정책 + 진행 중 클립 손실 회귀 방지) — 라벨만 다시 읽는다. 활성 장치가 목록에서 사라지거나 트랙이 `ended`면 라벨을 비워 `classifyInputDevice`가 자연히 '📱 내장'으로 폴백(BT 끊김→내장 표시). `dispose()`에서 리스너 해제(track.stop의 ended가 핸들러를 깨우지 않도록 stop 전에 detach). **주의(코드리뷰 R8):** `track.muted`는 '장치 분리'가 아니라 일시 인터럽션(통화/Siri/라우트 변경)이므로 라벨을 비우는 조건에서 **제외**한다(BT 연결 중 일시 mute에 '내장' 깜빡임 방지) — 진짜 분리는 `ended`+enumerate deviceId 부재로만 판정.
+- **출처:** `2026-06-18 세션`(민구 제보) → **survey-011 v0.13.0** 수정
+- **현재 상태:** ✅수정됨 (`src/lib/audioRecorder.ts` attach/detachDeviceListeners·refreshActiveInputLabel) — **iOS Safari PWA에서 active getUserMedia 중 `devicechange`/track `ended` 실제 발화 여부는 device 확인 필요**(미발화여도 no-op이라 회귀는 없음).
+
 ---
 
 ## ② 클립 · IndexedDB 영속화 (최대 광맥)
@@ -198,6 +205,13 @@
 - **출처:** `debug-log`(2026-04-20), `growth-survey-010@a954e05`(muteForTts), `growth-survey-010@4c4aa60`(mute 타이밍 갭), `growth-survey-010@dcaafea`(TTS 중 명령 수락)
 - **현재 상태:** ✅수정됨 (`src/lib/speech.ts` muteForTts 경로)
 
+### [IOS-6] 이상치 알람 TTS가 "확인해주세요"로 끝나 self-confirm 환각 위험 + 알람 중 barge-in 미작동(계측 대기)
+- **증상(민구 제보):** 스피커폰/이어폰 모두 일반 안내 중 barge-in(끼어들기 발화)은 어느 정도 되는데, **이상치 알람 중에는 barge-in이 정상 작동 안 하는 느낌**.
+- **원인(코드 추적):** ① 알람 TTS가 literally **"…확인해주세요."로 끝남**(`useVoiceSession.ts` alertText). `detectCommand`는 startsWith 매칭이라 `detectCommand("확인해주세요")==='confirm'` → 스피커폰에서 이 TTS가 마이크로 새어 들어가면 **알람이 스스로 confirm되어 닫히는** self-confirm 환각([IOS-3]의 알람판). 현 post-TTS 가드는 이를 막는 보호 역할도 겸함. ② 알람 TTS가 길어(추정 3~4s) post-TTS 가드 윈도우(재생중 전체 + 종료후 250ms)가 알람 발화 거의 전 구간을 덮어, 스피커폰에서 알람 도중 '확인'/'유지'/새값이 `stt_blocked_tts_muted`로 폐기 → "barge-in 안 됨" 체감. ③ trendConfirm 응답은 `handleInterim` early-return이라 조기확정을 못 받고 풀 EOS 꼬리(~1.7s)를 먹어 지연 가중. ④ 이어폰 알람 barge-in 비정상은 코드상 명확한 차단 지점 특정 실패 — needs-real-device-data.
+- **해결·회피(v0.13.0 R7, 민구 결정):** alertText를 **"이상치 알림. {값}. 직전 조사보다 {N} 증가/감소했습니다."**로 — 끝의 "확인해주세요" 제거(self-confirm 환각 원인 제거), 앞에 "이상치 알림" 접두(화면 안 보는 현장 식별). **barge-in 가드 자체는 변경하지 않음** — v0.11.0 비 오는 비닐하우스에서 가드 스택이 환각 0건 유지([STT-6])한 성과를 후퇴시키지 않기 위함. 가드 단축은 실기기 near-miss 분포 확인 후 별도 판단(측정 우선 원칙).
+- **출처:** `2026-06-18 세션`(민구 제보 + 결정) → **survey-011 v0.13.0** (TTS 재구성). barge-in 가드 튜닝은 미적용(계측 대기).
+- **현재 상태:** ⚠️주시·계측대기 — TTS 문구는 ✅수정(self-confirm 구조적 제거). 알람 중 barge-in 실측은 **다음 현장 테스트 필요**: 스피커폰 ON + 알람 도중 의도적 발화 → `trend_alert_fired`→`stt_blocked_tts_muted`(suppression) vs `trend_alert_confirmed` 작은 msSinceTtsEnd(self-dismiss) 시퀀스로 판별. 이어폰 알람 barge-in 비정상도 동일 로그로 원인 특정 필요.
+
 ### [IOS-4] SpeechSynthesisUtterance.voice에 plain object 할당 시 TypeError
 - **증상:** `utterance.voice`에 plain object를 넣으면 TypeError(특히 mock/테스트 환경).
 - **원인:** `voice`는 실제 `SpeechSynthesisVoice` 인스턴스만 허용.
@@ -231,6 +245,13 @@
 - **해결·회피:** 행 전환 시 `awaitingFieldRef.current = null` 삽입. 값 저장 후 즉시 `awaitingFieldRef=null`(F001).
 - **출처:** `growth-survey-010@0eaa59a`, `growth-survey-010@2ed62a5`(F001)
 - **현재 상태:** ✅수정됨 (`src/lib/useVoiceSession.ts` awaitingFieldRef 가드)
+
+### [ALERT-1] 이상치 정정 재측정 시 팝업과 echo TTS 불일치 — 정정 경로가 팝업을 갱신 안 함
+- **증상(민구 제보):** 이상치 알람 팝업 뒤 재측정값을 음성입력하면, **인식 TTS가 말하는 값과 팝업에 보이는 값이 불일치**. 또 재측정이 정상으로 판명돼도 팝업이 초록 전환·즉시 반영 없이 그냥 사라짐.
+- **원인(코드 추적 확정):** trendConfirm 상태에서 새 값이 값-커밋 경로로 폴스루(`useVoiceSession.ts:1365~`)할 때, 화면의 `anomalyAlert` 스토어 상태를 **갱신하거나 닫는 호출이 없었다**. 팝업 해소는 (a) '확인'/'유지' 명령 분기와 (b) advance→announceField의 `setAnomalyAlert(null)` 두 곳뿐 → '새 값 정정' 경로엔 누락. 결과: 옛 이상치 next 값이 팝업에 남은 채 echo TTS("수정 …")만 새 값을 말해 시각/청각이 갈림. 팝업도 단일 빨강 상태만 가져 '정상 복귀=초록'을 표현할 데이터모델이 없었다.
+- **해결·회피(v0.13.0 R2):** `anomalyAlert`에 `status('pending'|'corrected')` 필드 추가. 정정 재측정이 위반 분기를 안 타고(=정상) trendConfirm일 때 `setAnomalyAlert({...cur, next:정정값, status:'corrected'})`로 **즉시 갱신** → 팝업이 빨강→초록 전환 + 정정값 즉시 반영(echo TTS와 일치). 닫힘은 기존대로 advance→announceField가 담당(echo 발화 동안 초록 노출). 재이상치면 기존 빨강 경로(status:'pending') 유지. `AnomalyAlertPopup`은 status undefined일 때 빨강(회귀 없음).
+- **출처:** `2026-06-18 세션`(민구 제보) → **survey-011 v0.13.0** 수정
+- **현재 상태:** ✅수정됨 (`src/lib/useVoiceSession.ts` trendConfirm corrected 갱신, `src/components/voice/AnomalyAlertPopup.tsx` corrected 초록 렌더, `src/stores/sessionStore.ts` status 필드; 회귀 `tests/trend-alert.spec.ts`)
 
 ### [RACE-3] cascade 정정 중 stop/크래시 시 원본 측정값 유실 (4회 반복 수정)
 - **증상:** cascade 수정 진행 중 사용자가 stop하거나 앱이 크래시/리로드되면 정정 전 **원본 행 데이터가 사라짐**.
@@ -446,6 +467,15 @@
 - **해결·회피:** GIS 스크립트 + 토큰 클라이언트를 **사전 로드**(`warmupGoogleAuth()`를 SettingsScreen 마운트에서 호출). `signIn()`은 토큰 클라이언트를 한 번만 생성하고 **클릭 제스처 내에서 동기적으로** `requestAccessToken()` 호출. cold 케이스(워밍업 미완료)만 기존처럼 로드 후 호출(2번째 클릭에서 fast-path). `error_callback`의 `popup_failed_to_open`/`popup_closed`는 사용자 친화 메시지로 매핑.
 - **출처:** `2026-06-05 세션`(피드백) → **survey-011 v0.4.1** 수정
 - **현재 상태:** ✅수정됨 (`src/lib/googleAuth.ts` `warmupGoogleAuth`/동기 `requestAccessToken`, `src/screens/SettingsScreen.tsx` 마운트 워밍업) — 실기기 OAuth 팝업은 device 확인 필요.
+
+---
+
+### [AUTH-7] "스프레드시트 링크가 풀린다" — 실체는 OAuth 토큰 만료([AUTH-4])를 UI가 '연결됨'으로 거짓 표시
+- **증상(민구 제보):** 앱 업데이트·새로고침·강제종료 뒤 스프레드시트 연결이 풀려, 매번 Drive에서 공유링크를 복사해 다시 붙여넣어야 함.
+- **원인(코드 추적 확정):** 진짜 원인은 localStorage 소실(eviction)이 **아님**. 민구 확인 — "**연결 직후 새로고침은 안 풀리고 한참 뒤에만** 풀린다"(시간 의존=토큰 만료, eviction이면 즉시 새로고침에도 풀려야 함). 암시적 OAuth 토큰은 refresh token이 없어 약 1시간이면 만료([AUTH-4], `googleAuth.ts:89` expires_at<now+60s면 null)인데, `googleConnected`는 zustand persist로 통째 저장돼 true로 재하이드레이트된다. 마운트 effect(`SettingsScreen.tsx`)는 토큰 있으면 true로 **승격만** 하고 토큰 소실 시 false로 **강등하는 경로가 없었다** → UI는 '연결됨 · 이메일'을 거짓 표시하지만 `getAccessToken()`=null이라 모든 시트 읽기/쓰기(`sheets.ts:29 authFetch`)가 실패. 사용자는 '풀렸다'고 느끼고 URL 재붙여넣기를 시도하나 그것도 authFetch라 토큰 없이는 실패.
+- **해결·회피(v0.13.0 R1):** ① 마운트 effect에 **강등 분기** — 토큰 없으면 `googleConnected:false`로 내려 '재로그인 필요'를 정직하게 노출. ② **저장 시트 목록(savedSheets)** — 연결 성공 시 파일명(`fetchSpreadsheetMeta`의 properties.title)으로 자동 등록(sheetId dedupe), localStorage 영속(persist v7→**v8**). 매번 붙여넣지 않고 목록에서 탭 1회로 재선택. ③ **재로그인 후 자동 재연결** — `onGoogleClick` 성공 시 직전 `sheetUrl`이 있으면 `onUrlConfirmWithUrl(prevUrl)` 자동 호출(재붙여넣기 불필요). 토큰 만료 중 저장목록 선택 시엔 sheetUrl·availableSheets·sheetTab을 함께 비워 'active 배지'와 탭 셀렉터 불일치를 방지(코드리뷰 R1). **한계:** refresh token 부재(설계, [AUTH-4])라 토큰 만료 시 **재로그인 1회는 여전히 필요** — savedSheets는 붙여넣기 수고만 제거. (savedSheets도 localStorage라 진짜 eviction이면 함께 사라지나, 민구 증상은 토큰 만료로 확정돼 해당 없음.)
+- **출처:** `2026-06-18 세션`(민구 제보 + 즉시-새로고침 판별) → **survey-011 v0.13.0** 수정
+- **현재 상태:** ✅수정됨 (`src/screens/SettingsScreen.tsx` 강등 분기·자동 재연결·저장목록 UI, `src/stores/settingsStore.ts` savedSheets/persist v8, `src/types.ts` SavedSheet) — 실기기 토큰 만료→강등→재로그인→자동재연결 흐름 device 확인 필요. silent token refresh(prompt:none)는 백로그.
 
 ---
 

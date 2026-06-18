@@ -817,10 +817,18 @@ export function SettingsScreen() {
     const t = getStoredToken();
     if (t && !s.googleConnected) {
       s.set({ googleConnected: true, userEmail: getCurrentEmail() });
+    } else if (!t && s.googleConnected) {
+      // v0.13.0 R1 — 토큰 만료/소실 시 googleConnected를 강등한다. 토큰은 ~1시간이면 만료되는데
+      // (refresh token 없음, [AUTH-4]) googleConnected는 통째로 persist되어 true로 재하이드레이트
+      // 됐다. 그래서 UI는 '연결됨'이라 거짓 표시하지만 모든 시트 읽기/쓰기는 토큰 없음으로 실패 →
+      // 사용자가 '연결이 풀렸다'고 느끼고 매번 URL을 다시 붙여넣던 혼란의 근본. 정직하게 강등해
+      // '재로그인 필요'를 노출하고, 재로그인 후엔 저장 URL을 자동 재연결(아래 onGoogleClick)한다.
+      s.set({ googleConnected: false });
     }
     // S-1: preload GIS + token client so the first 로그인 click opens the popup in one shot
     // (avoids the "popup_failed_to_open" that required a second click).
     void warmupGoogleAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onGoogleClick = async () => {
@@ -838,6 +846,10 @@ export function SettingsScreen() {
       setLoading('Google 로그인 중...');
       const { email } = await googleSignIn();
       s.set({ googleConnected: true, userEmail: email });
+      // v0.13.0 R1 — 재로그인 직후, 직전에 쓰던 시트(sheetUrl)가 있으면 자동 재연결한다(사용자가
+      // 매번 Drive에서 공유링크를 다시 붙여넣지 않도록). 토큰이 막 갱신됐으므로 authFetch가 성공한다.
+      const prevUrl = useSettingsStore.getState().sheetUrl.trim();
+      if (prevUrl) await onUrlConfirmWithUrl(prevUrl);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -952,6 +964,24 @@ export function SettingsScreen() {
     }
   };
 
+  /** v0.13.0 R1 — 저장 목록에서 시트를 선택하면 활성 시트로 전환(URL 세팅 후 메타 재조회). 토큰이
+   *  만료됐으면 onUrlConfirmWithUrl 내부 authFetch가 실패하므로, 그 경우 재로그인을 안내한다. */
+  const onSelectSavedSheet = async (entry: { url: string }) => {
+    setError(null);
+    if (!s.googleConnected || !getAccessToken()) {
+      // 연결이 풀린(토큰 만료) 상태 — URL만 세팅해 두고 재로그인을 유도한다(재로그인 후 자동 재연결).
+      // availableSheets/sheetTab도 함께 비워, 저장목록의 'active 배지'(새 시트)와 아래 탭 셀렉터(직전
+      // 시트의 탭 목록)가 어긋나지 않게 한다 — onUrlConfirmWithUrl의 선(先)리셋과 동일 처리.
+      s.set({ sheetUrl: entry.url, availableSheets: [], sheetTab: '' });
+      setConfirmedUrl('');
+      setError('연결이 만료되었습니다. Google 로그인을 다시 하면 이 시트로 자동 연결됩니다.');
+      return;
+    }
+    s.set({ sheetUrl: entry.url });
+    setConfirmedUrl('');
+    await onUrlConfirmWithUrl(entry.url);
+  };
+
   const onUrlConfirmWithUrl = async (url: string) => {
     const id = parseSpreadsheetId(url);
     if (!id) { setError('스프레드시트 URL 형식이 올바르지 않습니다.'); return; }
@@ -963,6 +993,9 @@ export function SettingsScreen() {
       s.set({ availableSheets: tabs, sheetTab: tabs[0] || '' });
       if (tabs[0]) await loadHeaders(id, tabs[0]);
       setConfirmedUrl(url);
+      // v0.13.0 R1 — 연결에 성공한 시트를 '파일명'(meta.title)으로 저장 목록에 자동 등록한다(민구
+      // 요청). sheetId 기준 dedupe(saveSheet) — 같은 시트 재연결 시 최근 사용으로 갱신만 된다.
+      s.saveSheet({ name: meta.title || url, url, sheetId: id, addedAt: Date.now() });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1168,6 +1201,71 @@ export function SettingsScreen() {
                     </button>
                   );
                 })()}
+              </div>
+            )}
+
+            {/* v0.13.0 R1 — 저장된 시트 목록(파일명). 한 번 연결한 시트는 자동 저장되어, 토큰 만료로
+                연결이 풀려도 매번 공유링크를 다시 붙여넣지 않고 여기서 한 번에 다시 선택할 수 있다. */}
+            {s.savedSheets.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ fontSize: 12, color: T.textMute, fontWeight: 700, padding: '0 2px' }}>
+                  저장된 시트 ({s.savedSheets.length})
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {s.savedSheets.map((sheet) => {
+                    const active = parseSpreadsheetId(s.sheetUrl) === sheet.sheetId;
+                    return (
+                      <div
+                        key={sheet.sheetId}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          background: active ? 'rgba(0,200,83,0.10)' : T.inputBg,
+                          border: `1px solid ${active ? 'rgba(0,200,83,0.4)' : T.line}`,
+                          borderRadius: 12, padding: '8px 10px', minWidth: 0,
+                        }}
+                      >
+                        <button
+                          onClick={() => onSelectSavedSheet(sheet)}
+                          disabled={loading !== null}
+                          title={sheet.url}
+                          style={{
+                            flex: 1, minWidth: 0, textAlign: 'left',
+                            background: 'transparent', border: 'none', cursor: loading ? 'wait' : 'pointer',
+                            display: 'flex', alignItems: 'center', gap: 8, color: T.text, padding: 0,
+                          }}
+                        >
+                          <span style={{ flexShrink: 0, color: active ? T.green : T.textMute }}>
+                            {active ? I.check(16, T.green) : I.link(16, T.textMute)}
+                          </span>
+                          <span
+                            style={{
+                              flex: 1, minWidth: 0, fontSize: 14, fontWeight: 700,
+                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                            }}
+                          >
+                            {sheet.name}
+                          </span>
+                          {active && (
+                            <span style={{ flexShrink: 0, fontSize: 11, color: T.green, fontWeight: 700 }}>
+                              사용 중
+                            </span>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => s.removeSavedSheet(sheet.sheetId)}
+                          title="목록에서 삭제"
+                          style={{
+                            flexShrink: 0, width: 30, height: 30, borderRadius: 8,
+                            background: 'transparent', border: 'none', color: T.textMute,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}
+                        >
+                          {I.trash(15, T.textMute)}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 

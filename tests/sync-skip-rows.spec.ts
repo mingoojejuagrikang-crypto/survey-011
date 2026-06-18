@@ -179,7 +179,8 @@ test('업로드된 행 수정 → dirty → 재동기화 시 같은 sheetRow를 
   await runSync(page); // 1차: append
   calls.length = 0;
 
-  // 데이터탭에서 1행 횡경 셀 수정: 카드 펼치고 셀 탭 → 입력 → Enter
+  // 데이터탭에서 1행 횡경 셀 수정: 카드 탭 → 상세 모달 → 셀 탭 → 입력 → Enter → 모달 닫기
+  // (v0.13.0 R5: 세션 상세가 인라인 확장에서 모달로 바뀜 — 액션바를 쓰려면 모달을 닫아야 한다.)
   await page.locator('text=2026-06-11').first().click();
   await page.waitForTimeout(300);
   const cell = page.locator('button:has-text("35.1")').first();
@@ -188,6 +189,8 @@ test('업로드된 행 수정 → dirty → 재동기화 시 같은 sheetRow를 
   await input.fill('99.9');
   await input.press('Enter');
   await page.waitForTimeout(300);
+  await page.locator('[data-testid="session-detail-close"]').click();
+  await page.waitForTimeout(200);
 
   // dirty 마크 확인
   const dirty = await readSession(page) as { rows: { index: number; syncState?: string }[] };
@@ -215,7 +218,7 @@ test('update 404 → sheetRow 초기화 후 append 폴백 + sync_row_mismatch', 
   await runSync(page); // append
   calls.length = 0;
 
-  // 1행 수정 → dirty
+  // 1행 수정 → dirty (v0.13.0 R5: 상세 모달 — 셀 수정 후 모달 닫고 액션바 사용)
   await page.locator('text=2026-06-11').first().click();
   await page.waitForTimeout(300);
   await page.locator('button:has-text("35.1")').first().click();
@@ -223,6 +226,8 @@ test('update 404 → sheetRow 초기화 후 append 폴백 + sync_row_mismatch', 
   await input.fill('77.7');
   await input.press('Enter');
   await page.waitForTimeout(300);
+  await page.locator('[data-testid="session-detail-close"]').click();
+  await page.waitForTimeout(200);
 
   // 재동기화: PUT 404 → 다음 sync에서 append. 첫 sync는 PUT만 시도(폴백 안내), sheetRow 초기화.
   await runSync(page);

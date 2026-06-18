@@ -30,17 +30,21 @@ async function entryNames(blob: Blob): Promise<string[]> {
   return Object.keys(zip.files).sort();
 }
 
+// ZIP 엔트리 파일명은 세션 날짜가 아니라 *내보내는 날(오늘)* 을 쓴다(csv.ts: new Date()). 테스트가
+// 특정 날짜에 묶이지 않도록 동일 방식으로 today를 계산한다(과거 2026-06-17 하드코딩 → 날짜 의존 결함).
+const TODAY = new Date().toISOString().slice(0, 10);
+
 test('다중 세션 → 세션마다 CSV 1개씩 ZIP', async () => {
   const sessions = [mkSession('s1', 'A구역', COLS_A), mkSession('s2', 'B구역', COLS_B)];
   const blob = await sessionsToCsvZip(sessions);
   const names = await entryNames(blob);
   expect(names).toHaveLength(2);
-  expect(names).toContain('A구역_2026-06-17.csv');
-  expect(names).toContain('B구역_2026-06-17.csv');
+  expect(names).toContain(`A구역_${TODAY}.csv`);
+  expect(names).toContain(`B구역_${TODAY}.csv`);
 
   // 각 엔트리는 자기 세션만 담는다(병합 안 함) + BOM 보존.
   const zip = await JSZip.loadAsync(await blob.arrayBuffer());
-  const a = await zip.file('A구역_2026-06-17.csv')!.async('string');
+  const a = await zip.file(`A구역_${TODAY}.csv`)!.async('string');
   expect(a.startsWith('﻿')).toBe(true);
   expect(a).toContain('횡경');
   expect(a).not.toContain('종경'); // B 세션 컬럼이 섞이지 않음
@@ -50,19 +54,19 @@ test('라벨 충돌 → -n 카운터로 분리', async () => {
   const sessions = [mkSession('s1', '같은이름', COLS_A), mkSession('s2', '같은이름', COLS_B)];
   const names = await entryNames(await sessionsToCsvZip(sessions));
   expect(names).toHaveLength(2);
-  expect(names).toContain('같은이름_2026-06-17.csv');
-  expect(names).toContain('같은이름_2026-06-17-1.csv');
+  expect(names).toContain(`같은이름_${TODAY}.csv`);
+  expect(names).toContain(`같은이름_${TODAY}-1.csv`);
 });
 
 test('라벨 없으면 id 폴백 + 경로 불법문자 치환', async () => {
   const sessions = [mkSession('s/x:1', undefined, COLS_A)];
   const names = await entryNames(await sessionsToCsvZip(sessions));
-  expect(names[0]).toBe('s_x_1_2026-06-17.csv'); // / 와 : → _
+  expect(names[0]).toBe(`s_x_1_${TODAY}.csv`); // / 와 : → _
 });
 
 test('단일 세션은 평문 sessionsToCsv와 동일 내용', async () => {
   const s = mkSession('solo', '단독', COLS_A);
   const zip = await JSZip.loadAsync(await (await sessionsToCsvZip([s])).arrayBuffer());
-  const inZip = await zip.file('단독_2026-06-17.csv')!.async('string');
+  const inZip = await zip.file(`단독_${TODAY}.csv`)!.async('string');
   expect(inZip).toBe(sessionsToCsv([s])); // ZIP 내 엔트리 == 평문 CSV
 });

@@ -6,7 +6,7 @@ import { useDataStore } from '../stores/dataStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { syncSelected, type SyncReport, type SyncFailure } from '../lib/sync';
 import { hasSyncState } from '../lib/sessionSync';
-import { downloadCsv, sessionsToCsv, sessionsToCsvZip } from '../lib/csv';
+import { downloadCsv, csvToBlob, downloadBlob, sessionsToCsv, sessionsToCsvZip } from '../lib/csv';
 import { deleteSession as dbDeleteSession, saveSession, loadAudioClip, resetDb } from '../lib/db';
 import type { Column, Session } from '../types';
 import { exportLogZip, downloadZip } from '../lib/exportLog';
@@ -79,6 +79,11 @@ export function DataScreen() {
   // 용량/지연이 커질 수 있어 2개 이상일 때 확인 단계를 거친다. CSV는 가벼우니 확인 없이 즉시 진행.
   const [pendingZipIds, setPendingZipIds] = useState<string[] | null>(null);
   const [recoverModalOpen, setRecoverModalOpen] = useState(false);
+  // v0.13.0 R5 — 상세 모달 대상. expandedSessionId가 SSOT, 여기선 그 세션 객체를 파생만 한다.
+  const detailSession = sessions.find((s) => s.id === expandedSessionId) ?? null;
+  // v0.13.0 R6 — 내보내기 결과(완료 팝업용). 작은 줄 배너(msg) 대신 큰 모달로 띄우고, 보관한 Blob으로
+  // 클릭 시 공유시트/재다운로드를 제공한다. 모달을 닫을 때 null로 비워 Blob 참조를 해제(메모리 회수).
+  const [exportResult, setExportResult] = useState<ExportResult | null>(null);
 
   const lastSelectedIdsRef = useRef<string[]>([]);
 
@@ -89,11 +94,13 @@ export function DataScreen() {
   // 압축 중 busy='로그 압축 중...' 표시 — 액션바 내보내기 버튼이 busy일 때 비활성화되어 중복 클릭 차단.
   const runZipExport = useCallback(async (ids: string[]) => {
     setBusy('로그 압축 중...');
+    setMsg(null); // v0.13.0 R6 — 성공 시 완료 팝업만 띄우므로, 직전 실패/동기화 배너를 먼저 지운다.
     try {
       const blob = await exportLogZip(ids);
       const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
       downloadZip(blob, filename);
-      setMsg(`✓ ${filename} 다운로드됨`);
+      // v0.13.0 R6 — 작은 줄 배너(setMsg) 대신 큰 완료 팝업 + 보관 Blob으로 공유/재다운로드.
+      setExportResult({ blob, filename, kind: 'zip' });
     } catch (err) {
       setMsg('로그 다운로드 실패: ' + (err as Error).message);
     } finally {
@@ -116,17 +123,20 @@ export function DataScreen() {
       // — 세션마다 컬럼 스키마가 달라 한 표로 합치면 열이 union되며 의미가 흐려지기 때문.
       const today = new Date().toISOString().slice(0, 10);
       setBusy('CSV 생성 중...');
+      setMsg(null); // v0.13.0 R6 — 성공 시 완료 팝업만 띄우므로, 직전 실패/동기화 배너를 먼저 지운다.
       try {
         if (targets.length > 1) {
           const blob = await sessionsToCsvZip(targets);
           const filename = `survey_${today}.zip`;
           downloadZip(blob, filename);
-          setMsg(`✓ ${filename} 다운로드됨`);
+          // v0.13.0 R6 — 완료 팝업 + 보관 Blob(공유/재다운로드). kind는 묶음 CSV라도 컨테이너가 zip.
+          setExportResult({ blob, filename, kind: 'zip' });
         } else {
           const csv = sessionsToCsv(targets);
           const filename = `survey_${today}.csv`;
+          const blob = csvToBlob(csv);
           downloadCsv(filename, csv);
-          setMsg(`✓ ${filename} 다운로드됨`);
+          setExportResult({ blob, filename, kind: 'csv' });
         }
       } catch (err) {
         setMsg('CSV 내보내기 실패: ' + (err as Error).message);
@@ -510,6 +520,24 @@ export function DataScreen() {
             setPendingZipIds(null);
             void runZipExport(ids);
           }}
+        />
+      )}
+
+      {/* v0.13.0 R5 — 세션 상세 모달. expandedSessionId가 어떤 상세가 열렸는지의 SSOT(새 상태 불필요).
+          삭제로 세션이 사라지면 find가 undefined → 자동으로 안 뜸(removeSession이 expandedSessionId도 정리). */}
+      {detailSession && (
+        <SessionDetailModal
+          session={detailSession}
+          onClose={() => toggleExpand(detailSession.id)}
+          onCellSave={(rowIndex, colId, value) => handleCellSave(detailSession.id, rowIndex, colId, value)}
+        />
+      )}
+
+      {/* v0.13.0 R6 — 내보내기 완료 큰 팝업(작은 줄 배너 대신). 클릭 시 공유시트/재다운로드. */}
+      {exportResult && (
+        <ExportDoneModal
+          result={exportResult}
+          onClose={() => setExportResult(null)}
         />
       )}
 
@@ -1299,6 +1327,131 @@ function Checkbox({ checked }: { checked: boolean }) {
   );
 }
 
+// ─── export done modal (v0.13.0 R6) ──────────────────────────
+/** 내보내기 결과 — 완료 팝업이 보관해 클릭 시 공유/재다운로드에 재사용한다. */
+interface ExportResult {
+  blob: Blob;
+  filename: string;
+  kind: 'csv' | 'zip';
+}
+
+/** 내보내기 완료를 작은 줄 배너 대신 큰 중앙 팝업으로 안내(민구 시인성 요청). 클릭 동작:
+ *  - '파일 열기/공유': Web Share API Level 2(navigator.share({files})). iOS 스탠드얼론 PWA에서
+ *    공유 시트(파일에 저장 / Numbers·엑셀로 열기 / 메일)를 띄운다. PWA는 다운로드 파일을 직접
+ *    '실행'할 수 없어(보안 경계), '공유시트로 다른 앱에 넘기기'가 실질적 '파일 열기'다. canShare로
+ *    지원 확인될 때만 노출, 미지원이면 숨김.
+ *  - '다시 다운로드': 보관 Blob을 같은 방식으로 재다운로드(모든 환경 신뢰 폴백).
+ *  닫으면 Blob 참조 해제(메모리 회수 — 큰 ZIP이 모달 동안만 메모리에 핀). */
+function ExportDoneModal({ result, onClose }: { result: ExportResult; onClose: () => void }) {
+  const [shareError, setShareError] = useState<string | null>(null);
+  const mime = result.kind === 'csv' ? 'text/csv' : 'application/zip';
+  // canShare 파일 지원 가드(미지원 브라우저는 share 버튼 숨김).
+  const canShareFile = (() => {
+    try {
+      const nav = navigator as Navigator & { canShare?: (d?: ShareData) => boolean };
+      if (!nav.share || !nav.canShare) return false;
+      const f = new File([result.blob], result.filename, { type: mime });
+      return nav.canShare({ files: [f] });
+    } catch { return false; }
+  })();
+
+  const doShare = async () => {
+    setShareError(null);
+    try {
+      const file = new File([result.blob], result.filename, { type: mime });
+      await (navigator as Navigator & { share: (d: ShareData) => Promise<void> }).share({
+        files: [file],
+        title: result.filename,
+      });
+    } catch (e) {
+      // 사용자가 공유 시트를 취소(AbortError)한 건 오류가 아니므로 무시.
+      if ((e as Error)?.name !== 'AbortError') {
+        setShareError('공유를 열 수 없습니다. 다시 다운로드를 사용하세요.');
+      }
+    }
+  };
+
+  // 보관 Blob을 그대로 재다운로드(downloadBlob은 mime 무관 범용 다운로더 — csv/zip 공용).
+  const doRedownload = () => { downloadBlob(result.blob, result.filename); };
+
+  return (
+    <Backdrop onClose={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 380, padding: 24,
+          display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div
+          style={{
+            width: 56, height: 56, borderRadius: 999,
+            background: 'rgba(0,200,83,0.14)', border: `2px solid ${T.green}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          {I.check(28, T.green)}
+        </div>
+        <div style={{ fontSize: 19, fontWeight: 800, color: T.text }}>내보내기 완료</div>
+        <div
+          style={{
+            fontSize: 14, color: T.textDim, textAlign: 'center', lineHeight: 1.5,
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            wordBreak: 'break-all', overflowWrap: 'anywhere',
+          }}
+        >
+          {result.filename}
+        </div>
+        <div style={{ fontSize: 12.5, color: T.textMute, textAlign: 'center', lineHeight: 1.5 }}>
+          기기에 저장되었습니다.{canShareFile ? ' 다른 앱(엑셀·파일·메일)으로 열려면 아래 공유를 누르세요.' : ''}
+        </div>
+        {shareError && (
+          <div style={{ fontSize: 12.5, color: T.red, textAlign: 'center' }}>{shareError}</div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', marginTop: 2 }}>
+          {canShareFile && (
+            <button
+              onClick={doShare}
+              style={{
+                width: '100%', height: 50, borderRadius: 14, border: 'none',
+                background: T.blue, color: '#fff', fontSize: 15, fontWeight: 800,
+                letterSpacing: -0.2, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                boxShadow: `0 4px 14px ${T.blueGlow}`,
+              }}
+            >
+              {I.share(18, '#fff')} 파일 열기 / 공유
+            </button>
+          )}
+          <button
+            onClick={doRedownload}
+            style={{
+              width: '100%', height: 50, borderRadius: 14,
+              border: `1px solid ${T.lineStrong}`, background: 'transparent',
+              color: T.text, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            }}
+          >
+            {I.download(18, T.text)} 다시 다운로드
+          </button>
+          <button
+            onClick={onClose}
+            style={{
+              width: '100%', height: 46, borderRadius: 14,
+              border: 'none', background: 'transparent',
+              color: T.textDim, fontSize: 14, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </Backdrop>
+  );
+}
+
 // ─── confirm modal ────────────────────────────────────────────
 function ConfirmModal({
   title, body, confirmLabel = '확인', danger, onCancel, onConfirm,
@@ -1472,14 +1625,10 @@ function SessionCard({
             {syncIcon}
             <span style={{ fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>{syncLabel}</span>
           </div>
-          <div
-            style={{
-              color: T.textDim,
-              transform: expanded ? 'rotate(90deg)' : 'none',
-              transition: 'transform 180ms',
-            }}
-          >
-            {I.chevron(18, T.textDim)}
+          {/* v0.13.0 R5 — 상세는 인라인 확장이 아니라 팝업으로 연다. chevron은 '열기' 어포던스로
+              유지(회전 애니메이션 제거 — 더는 펼침/접힘이 아님). */}
+          <div style={{ color: expanded ? T.blue : T.textDim }}>
+            {I.chevron(18, expanded ? T.blue : T.textDim)}
           </div>
         </button>
         <button
@@ -1496,17 +1645,96 @@ function SessionCard({
           {I.trash(18, T.red)}
         </button>
       </div>
-      {expanded && <FullRowTable session={session} onCellSave={onCellSave} />}
     </div>
+  );
+}
+
+// ─── session detail modal (v0.13.0 R5) ───────────────────────
+/** 세션 상세를 인라인 확장 대신 넓은 센터 모달로 띄운다(민구 요청). 세션이 늘어날 때 인라인 펼침이
+ *  리스트 흐름을 잠식해 데이터 화면이 줄어들던 문제 해소. 멀티컬럼 가로스크롤 표라 기존 좁은 모달
+ *  (max 360) 대신 near-fullscreen 센터 패널(min(720px,96vw)/90vh)을 쓴다. 표 자체는 FullRowTable
+ *  재사용(maxHeight를 모달용으로 키움). 닫을 때 재생 중 클립 정지. */
+function SessionDetailModal({
+  session, onClose, onCellSave,
+}: {
+  session: Session;
+  onClose: () => void;
+  onCellSave: (rowIndex: number, colId: string, value: string) => void;
+}) {
+  const close = () => { clipPlayer.stop(); onClose(); };
+  return (
+    <Backdrop onClose={close}>
+      <div
+        data-testid="session-detail-modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 'min(720px, 96vw)', maxHeight: '90vh',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)', overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '16px 18px', borderBottom: `1px solid ${T.line}`, flexShrink: 0,
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 17, fontWeight: 800, color: T.text, letterSpacing: -0.2,
+                fontFamily: 'JetBrains Mono, ui-monospace, monospace', whiteSpace: 'nowrap',
+              }}
+            >
+              {session.date}
+            </div>
+            {session.label && (
+              <div style={{ fontSize: 13, color: T.textMute, marginTop: 2 }}>{session.label}</div>
+            )}
+          </div>
+          <div style={{ flex: 1 }} />
+          <div
+            style={{
+              display: 'flex', alignItems: 'baseline', gap: 4,
+              padding: '6px 12px', borderRadius: 10, background: 'rgba(255,255,255,0.04)',
+            }}
+          >
+            <span style={{ fontSize: 18, fontWeight: 800, color: T.text, fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>
+              {session.completedRows}
+            </span>
+            <span style={{ fontSize: 13, color: T.textMute, fontWeight: 600 }}>행</span>
+          </div>
+          <button
+            onClick={close}
+            title="닫기"
+            data-testid="session-detail-close"
+            style={{
+              flexShrink: 0, width: 40, height: 40, borderRadius: 12,
+              border: `1px solid ${T.lineStrong}`, background: 'transparent',
+              color: T.textDim, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            {I.close(18, T.textDim)}
+          </button>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <FullRowTable session={session} onCellSave={onCellSave} tableMaxHeight="calc(90vh - 150px)" />
+        </div>
+      </div>
+    </Backdrop>
   );
 }
 
 // ─── full editable table ─────────────────────────────────────
 function FullRowTable({
-  session, onCellSave,
+  session, onCellSave, tableMaxHeight = 360,
 }: {
   session: Session;
   onCellSave: (rowIndex: number, colId: string, value: string) => void;
+  /** v0.13.0 R5 — 상세 모달에서는 표를 더 크게(예: 'calc(90vh - 150px)'). 기본은 인라인 시절 360. */
+  tableMaxHeight?: number | string;
 }) {
   const cols = session.columns;
   const rows = session.rows;
@@ -1516,15 +1744,15 @@ function FullRowTable({
   return (
     <div
       style={{
-        borderTop: `1px solid ${T.line}`,
         padding: 10,
         background: 'rgba(255,255,255,0.015)',
         animation: 'fade-up 200ms ease-out',
+        flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
       }}
     >
       <div
         style={{
-          maxHeight: 360, overflow: 'auto',
+          maxHeight: tableMaxHeight, overflow: 'auto',
           WebkitOverflowScrolling: 'touch',
           border: `1px solid ${T.line}`, borderRadius: 8,
         }}
@@ -1828,7 +2056,14 @@ function EditableCell({
           {hasClip && (
             <button
               onClick={(e) => { e.stopPropagation(); if (audioClipKey) clipPlayer.toggle(audioClipKey); }}
-              title={clipState === 'playing' ? '정지' : clipState === 'queued' ? '대기 중 (탭하면 취소)' : '음성 재생'}
+              // v0.13.0 R4 — 클립이 부자연/판독불가여도 어떤 값을 말한 클립인지 화면으로 확정할 수 있게
+              // 재생 버튼 title에 인식값을 함께 노출(셀 텍스트는 옆에 이미 보이나, 재생 어포던스에도 명시).
+              title={
+                clipState === 'playing' ? '정지'
+                : clipState === 'queued' ? '대기 중 (탭하면 취소)'
+                : value ? `음성 재생: ${value}` : '음성 재생'
+              }
+              aria-label={value ? `음성 재생: ${value}` : '음성 재생'}
               style={{
                 flexShrink: 0,
                 width: 28, padding: '0 4px',

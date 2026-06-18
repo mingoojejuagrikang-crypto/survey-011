@@ -636,24 +636,25 @@ test('[데이터] 세션 카드 — 표시/펼침/삭제 흐름', async ({ page 
   const hasUnsynced = bodyText.includes('미업로드');
   console.log(`✓ 3행 표시: ${has3Rows ? '✓' : '✗'}, 미업로드: ${hasUnsynced ? '✓' : '✗'}`);
 
-  // 카드 펼치기 (헤더 클릭)
+  // 카드 탭 → 세션 상세 모달 열림 (v0.13.0 R5: 인라인 확장 → 모달)
   await dateLabel.click();
   await page.waitForTimeout(400);
+  await expect(page.locator('[data-testid="session-detail-modal"]')).toBeVisible({ timeout: 2000 });
 
-  // 행 데이터 테이블 표시 확인
+  // 모달 안 행 데이터 테이블 표시 확인
   const val351 = page.locator('text=35.1').first();
   const expanded = await val351.isVisible({ timeout: 2000 }).catch(() => false);
-  console.log(`✓ 카드 펼침 후 "35.1" 값 표시: ${expanded ? '✓' : '✗'}`);
+  console.log(`✓ 상세 모달 "35.1" 값 표시: ${expanded ? '✓' : '✗'}`);
 
   const val385 = page.locator('text=38.5').first();
   const expanded2 = await val385.isVisible({ timeout: 1000 }).catch(() => false);
-  console.log(`✓ 카드 펼침 후 "38.5" 값 표시: ${expanded2 ? '✓' : '✗'}`);
+  console.log(`✓ 상세 모달 "38.5" 값 표시: ${expanded2 ? '✓' : '✗'}`);
 
-  // 카드 다시 접기
-  await dateLabel.click();
+  // 모달 닫기 → 값 숨겨짐 (이전엔 카드 재클릭 접기 — 이제 모달이 카드를 덮으므로 닫기 버튼 사용)
+  await page.locator('[data-testid="session-detail-close"]').click();
   await page.waitForTimeout(300);
   const collapsed = await val351.isVisible().catch(() => false);
-  console.log(`✓ 카드 접힘 후 값 숨겨짐: ${!collapsed ? '✓' : '✗'}`);
+  console.log(`✓ 모달 닫힘 후 값 숨겨짐: ${!collapsed ? '✓' : '✗'}`);
 
   // 삭제 버튼 탐색 (style 속성 또는 SVG 아이콘)
   let deleteModalFound = false;

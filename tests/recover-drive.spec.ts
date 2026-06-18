@@ -180,9 +180,10 @@ test('W8 — 로그인 상태: 모달 목록 조회 → 선택 복구, 클립 ro
   expect(clips.keys).toEqual(['drv-s1:1:c8']);
 
   // 카드 펼쳐 재생 버튼 확인 — 행 2의 클립은 IDB에 없음 → 눌러도 깨지지 않아야 함
+  // v0.13.0 R5: 인라인 확장 → 상세 모달 / R4: 재생 버튼 title '음성 재생: <값>'으로 변경 → 접두 매칭
   await page.locator('text=2026-06-09').first().click();
   await page.waitForTimeout(400);
-  const playButtons = page.locator('button[title="음성 재생"]');
+  const playButtons = page.locator('button[title^="음성 재생"]');
   expect(await playButtons.count()).toBe(2);
   await playButtons.nth(1).click();
   await page.waitForTimeout(600);

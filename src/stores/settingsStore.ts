@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Column, SheetConfig, LegacyInputMode } from '../types';
+import type { Column, SheetConfig, SavedSheet, LegacyInputMode } from '../types';
 import type { ReviewFilter } from '../lib/reviewQuery';
 import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
 import { isCycling } from '../lib/autoValue';
@@ -12,6 +12,9 @@ interface SettingsState {
   sheetUrl: string;
   sheetTab: string;
   availableSheets: string[];
+  /** v0.13.0 R1 — 저장된 스프레드시트 목록(파일명 기반, 최근 사용 순). localStorage에 영속(같은
+   *  persist 키). 토큰 만료로 연결이 풀려도 목록은 남아, 재로그인 후 한 번에 다시 선택할 수 있다. */
+  savedSheets: SavedSheet[];
   manualMode: boolean;
   columns: Column[];
   tableGenerated: boolean;
@@ -60,11 +63,16 @@ interface SettingsState {
   /** 표시 행(샘플키) 목록. null = 후보 전체. 필터/회차 변경으로 후보가 바뀌면 호출자가 null 리셋. */
   reviewSelectedRows: string[] | null;
 
-  set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns'>>) => void;
+  set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns' | 'saveSheet' | 'removeSavedSheet'>>) => void;
   updateColumn: (id: string, next: Column) => void;
   addColumn: () => void;
   removeColumn: (id: string) => void;
   reorderColumns: (fromIdx: number, toIdx: number) => void;
+  /** v0.13.0 R1 — 시트를 저장 목록에 추가/갱신(sheetId 기준 dedupe — 있으면 name/url/addedAt 갱신
+   *  후 최상단으로, 없으면 unshift). 연결 성공 시 자동 호출 + 사용자가 명시 저장할 때도 사용. */
+  saveSheet: (entry: SavedSheet) => void;
+  /** v0.13.0 R1 — 저장 목록에서 제거(sheetId 기준). */
+  removeSavedSheet: (sheetId: string) => void;
 }
 
 const MOCK_COLUMNS: Column[] = [
@@ -133,6 +141,7 @@ export const useSettingsStore = create<SettingsState>()(
       sheetUrl: '',
       sheetTab: '',
       availableSheets: [],
+      savedSheets: [],
       manualMode: false,
       // 신규 설치 기본 컬럼에도 샘플키 유추값을 미리 부여(prev===next → undefined일 때만 유추).
       columns: MOCK_COLUMNS.map((c) => reconcileColumnFlags(c, c)),
@@ -204,10 +213,18 @@ export const useSettingsStore = create<SettingsState>()(
           copy.splice(toIdx, 0, moved);
           return { columns: copy };
         }),
+      saveSheet: (entry) =>
+        set((state) => {
+          if (!entry.sheetId) return state; // id 없으면 dedupe 불가 — 저장하지 않음
+          const rest = state.savedSheets.filter((x) => x.sheetId !== entry.sheetId);
+          return { savedSheets: [entry, ...rest] }; // 최근 사용을 최상단으로
+        }),
+      removeSavedSheet: (sheetId) =>
+        set((state) => ({ savedSheets: state.savedSheets.filter((x) => x.sheetId !== sheetId) })),
     }),
     {
       name: 'survey-011-settings-v3',
-      version: 7,
+      version: 8,
       migrate: (persisted: unknown, version: number) => {
         const s = persisted as Partial<SettingsState> & {
           columns?: unknown[];
@@ -215,6 +232,7 @@ export const useSettingsStore = create<SettingsState>()(
           reviewScope?: unknown;
           speakerOutput?: unknown;
           trendRuleClearedV6?: boolean;
+          savedSheets?: unknown;
         };
         if (Array.isArray(s.columns)) {
           // 기존 컬럼 전부에 샘플키 유추 기본값 부여(사용자가 이미 토글한 boolean은 보존:
@@ -292,6 +310,23 @@ export const useSettingsStore = create<SettingsState>()(
         // (다운그레이드 라운드트립 마커 불필요 — 필드 자체가 더는 존재하지 않음).
         if (version < 7) {
           delete s.speakerOutput;
+        }
+
+        // ── v8 (v0.13.0 R1) — 저장된 시트 목록(savedSheets) 도입 ───────────────────────────
+        // 구버전 영속본엔 없으므로 안전 기본값 []로. 손상(배열 아님/항목 형태 불일치)도 []로 치유.
+        if (
+          !Array.isArray(s.savedSheets) ||
+          !s.savedSheets.every(
+            (x) =>
+              x !== null &&
+              typeof x === 'object' &&
+              typeof (x as SavedSheet).name === 'string' &&
+              typeof (x as SavedSheet).url === 'string' &&
+              typeof (x as SavedSheet).sheetId === 'string' &&
+              typeof (x as SavedSheet).addedAt === 'number',
+          )
+        ) {
+          s.savedSheets = [];
         }
         return s as SettingsState;
       },

@@ -50,7 +50,10 @@ async function buildLegacyZip(): Promise<Buffer> {
   return zip.generateAsync({ type: 'nodebuffer' });
 }
 
-const NOW = Date.parse('2026-06-11T12:00:00Z');
+// 기간 필터("최근 7일/30일")는 앱이 *실제 현재 시각* 기준으로 판정하므로, zip modifiedTime도 실제
+// 현재 기준 상대값이어야 한다. 과거엔 고정 날짜(2026-06-11)라 시간이 흐르면 2~3일 전 zip이 실제론
+// 9~10일 전이 되어 7일 필터에서 전부 빠지는 날짜 의존 결함이 있었다 → Date.now() 상대 주입으로 수정.
+const NOW = Date.now();
 const ISO = (daysAgo: number) => new Date(NOW - daysAgo * 86400_000).toISOString();
 
 /** Drive stub. zip-recent(2일 전, 세션 2개) + zip-old(20일 전, 세션 1개) + zip-legacy(3일 전). */

@@ -123,6 +123,16 @@ export const I: Record<string, IconFn> = {
       <line x1="18" y1="6" x2="6" y2="18" />
     </svg>
   ),
+  // v0.13.0 R6 — 내보내기 완료 팝업의 '파일 열기/공유'(Web Share API) 버튼 아이콘.
+  share: (s = 16, c = 'currentColor') => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <line x1="8.6" y1="13.5" x2="15.4" y2="17.5" />
+      <line x1="15.4" y1="6.5" x2="8.6" y2="10.5" />
+    </svg>
+  ),
   pause: (s = 16, c = 'currentColor') => (
     <svg width={s} height={s} viewBox="0 0 24 24" fill={c}>
       <rect x="6" y="4" width="4" height="16" rx="1" />

@@ -504,27 +504,27 @@ test('[데이터-12] 세션 카드 접기 — 재클릭 시 데이터 숨겨짐'
     return;
   }
 
-  // 펼치기
+  // 카드 탭 → 상세 모달 (v0.13.0 R5: 인라인 확장 → 모달)
   await card.click();
   await page.waitForTimeout(400);
 
   const bodyAfterOpen = await page.evaluate(() => document.body.innerText);
   const openedHasData = bodyAfterOpen.includes('34.5') || bodyAfterOpen.includes('34');
 
-  // 접기
-  await card.click();
+  // 모달 닫기 → 데이터 숨겨짐 (이전엔 카드 재클릭 접기 — 이제 닫기 버튼으로 닫는다)
+  await page.locator('[data-testid="session-detail-close"]').click();
   await page.waitForTimeout(400);
 
   const bodyAfterClose = await page.evaluate(() => document.body.innerText);
   const closedHasData = bodyAfterClose.includes('34.5');
 
   if (openedHasData && !closedHasData) {
-    console.log('✓ 세션 카드 접기 — 행 데이터 숨겨짐 확인');
+    console.log('✓ 세션 상세 모달 닫기 — 행 데이터 숨겨짐 확인');
   } else if (!openedHasData) {
-    console.log('ℹ 펼치기에서 34.5 없었음 — 토글 확인 불가, 스킵');
+    console.log('ℹ 모달에서 34.5 없었음 — 토글 확인 불가, 스킵');
   } else {
     // 일부 앱에서는 항상 노출되거나 애니메이션 중일 수 있음
-    console.log('ℹ 카드 접기 후에도 데이터 보임 — 구현 방식 확인 필요');
+    console.log('ℹ 모달 닫은 후에도 데이터 보임 — 구현 방식 확인 필요');
   }
 });
 

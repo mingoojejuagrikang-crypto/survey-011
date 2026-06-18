@@ -52,9 +52,13 @@ export async function sessionsToCsvZip(sessions: Session[]): Promise<Blob> {
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
 }
 
-/** Trigger a browser download of the given CSV text. */
-export function downloadCsv(filename: string, csv: string) {
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+/** v0.13.0 R6 — CSV 텍스트를 Blob으로(완료 팝업이 보관해 공유/재다운로드에 재사용). */
+export function csvToBlob(csv: string): Blob {
+  return new Blob([csv], { type: 'text/csv;charset=utf-8' });
+}
+
+/** v0.13.0 R6 — mime 무관 범용 Blob 다운로더(csv/zip 공용 — 완료 팝업 '다시 다운로드'). */
+export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -63,4 +67,9 @@ export function downloadCsv(filename: string, csv: string) {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Trigger a browser download of the given CSV text. */
+export function downloadCsv(filename: string, csv: string) {
+  downloadBlob(csvToBlob(csv), filename);
 }

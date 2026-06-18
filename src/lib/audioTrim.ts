@@ -31,6 +31,10 @@ const KEEP_RATIO = 0.95;            // 트림 후 길이가 원본의 이 비율
 /** v0.9.0 CLIP-BLANK-1: 발화 세그먼트 사이 무음이 이보다 짧으면 같은 발화로 보고 합친다(어절 내
  *  미세 정지). 이보다 긴 무음은 "긴 공백"으로 간주해 클립에서 제거한다(선언↔값 사이 긴 정지 등). */
 const MERGE_GAP_MS = 150;
+/** v0.13.0 R4: 다중 보존 범위를 이어붙일 때 각 내부 경계에 적용하는 선형 페이드 길이(ms). 보존 범위
+ *  직결 자리의 진폭 불연속(클릭/팝)이 "부자연" 체감의 1차 원인이라, 짧은 램프로 이음새를 부드럽게
+ *  한다. 단일 범위(트림 효과 미미·단일 발화)는 concatRanges를 타지 않아 바이트 불변이 보존된다. */
+const SPLICE_FADE_MS = 3;
 
 /** AudioRecorder의 PCM 링버퍼에서 추출한 프리롤 구간(mono). */
 export interface PrerollPcm {
@@ -194,15 +198,31 @@ export function buildKeptRanges(
   return ranges;
 }
 
-/** 보존 범위들의 실제 오디오를 순서대로 이어붙인 mono PCM. 범위 사이 무음은 제거된다. */
-function concatRanges(mono: Float32Array, ranges: { start: number; end: number }[]): Float32Array {
+/** 보존 범위들의 실제 오디오를 순서대로 이어붙인 mono PCM. 범위 사이 무음은 제거된다.
+ *  v0.13.0 R4 — 각 내부 경계(이전 범위 끝/다음 범위 시작)에 짧은 선형 페이드를 적용해 직결 자리의
+ *  진폭 불연속(클릭/팝)을 부드럽게 한다. 페이드 길이는 구간 절반을 넘지 않게 클램프(짧은 구간 보호). */
+function concatRanges(
+  mono: Float32Array,
+  ranges: { start: number; end: number }[],
+  sampleRate: number,
+): Float32Array {
   let total = 0;
   for (const r of ranges) total += r.end - r.start;
   const out = new Float32Array(total);
+  const ramp = Math.max(1, Math.floor((sampleRate * SPLICE_FADE_MS) / 1000));
   let pos = 0;
-  for (const r of ranges) {
+  for (let ri = 0; ri < ranges.length; ri++) {
+    const r = ranges[ri];
+    const len = r.end - r.start;
     out.set(mono.subarray(r.start, r.end), pos);
-    pos += r.end - r.start;
+    const fade = Math.min(ramp, len >> 1);
+    if (fade > 0) {
+      // 들어오는 구간 시작 페이드인(첫 범위 제외 — 클립 맨 앞은 원형 유지).
+      if (ri > 0) for (let i = 0; i < fade; i++) out[pos + i] *= i / fade;
+      // 나가는 구간 끝 페이드아웃(마지막 범위 제외 — 클립 맨 끝은 원형 유지).
+      if (ri < ranges.length - 1) for (let i = 0; i < fade; i++) out[pos + len - 1 - i] *= i / fade;
+    }
+    pos += len;
   }
   return out;
 }
@@ -302,7 +322,7 @@ export function buildClipBlobs(
   const trimmed =
     ranges.length === 1
       ? encodeWavMono(mono, sampleRate, ranges[0].start, ranges[0].end)
-      : encodeWavMono(concatRanges(mono, ranges), sampleRate, 0, keptSamples);
+      : encodeWavMono(concatRanges(mono, ranges, sampleRate), sampleRate, 0, keptSamples);
   // 트림이 실제로 일어남 → 트림 전 전체본(프리롤 포함)을 raw로 보존.
   const raw = hadPreroll
     ? encodeWavMono(mono, sampleRate, 0, mono.length)

@@ -85,7 +85,12 @@ export const useDataStore = create<DataState>((set) => ({
       return { sessions: copy };
     }),
   removeSession: (id) =>
-    set((state) => ({ sessions: state.sessions.filter((s) => s.id !== id) })),
+    set((state) => ({
+      sessions: state.sessions.filter((s) => s.id !== id),
+      // v0.13.0 R5 — 상세 모달이 이 세션을 가리키고 있었다면 닫는다(루트에서 sessions.find로
+      // 모달 대상을 잡으므로, 삭제 후 expandedSessionId가 남으면 find가 undefined가 됨).
+      expandedSessionId: state.expandedSessionId === id ? null : state.expandedSessionId,
+    })),
   toggleExpand: (id) =>
     set((state) => ({ expandedSessionId: state.expandedSessionId === id ? null : id })),
   markSynced: (id, count) =>

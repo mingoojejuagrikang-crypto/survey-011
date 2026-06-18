@@ -7,7 +7,13 @@ import { T } from '../../tokens';
  *   - V2: 어떤 샘플·행을 보는지(`샘플: <키>` 또는 `행 N` 폴백)와, 직전 값이 어느 조사 회차의
  *     것인지(`직전 (YYYY-MM-DD)` ISO 날짜 라벨 — prevDate 있을 때만)를 표시. 샘플키가 길어도
  *     박스를 넘지 않게 word-break.
- *   - V3: 색을 RED로 통일(증가=amber 분기 제거). 방향은 '증가/감소' 텍스트로만 전달. */
+ *   - V3: 색을 RED로 통일(증가=amber 분기 제거). 방향은 '증가/감소' 텍스트로만 전달.
+ *  v0.13.0:
+ *   - R3(민구 요청): hero 현재값(가장 큰 숫자) 바로 위에 측정 항목명을 라벨로 붙인다. 정수값(예 120)이
+ *     화면 최대 요소일 때 상단 헤더와 시선이 떨어져 '어느 항목 값인가'가 즉시 안 보이던 문제 해소.
+ *     직전값/현재값을 '라벨 + 값' 2단 대칭 구조로 만든다.
+ *   - R2(민구 요청): status='corrected'면 톤을 GREEN으로 바꾸고 헤더를 '정상 복귀'로, 현재값을 정정값
+ *     으로 즉시 반영한다(정정 재측정이 정상으로 판명된 경우). 빨강(이상치)↔초록(정정완료) 구분. */
 export function AnomalyAlertPopup({
   a,
 }: {
@@ -20,14 +26,17 @@ export function AnomalyAlertPopup({
     row: number;
     sampleKey?: string;
     prevDate?: string;
+    status?: 'pending' | 'corrected';
   };
 }) {
   const up = a.direction === 'up';
-  // V3 — 톤 RED 통일(이전: up ? T.red : T.amber). 방향은 아래 증가/감소 텍스트로만 전달.
-  const accent = T.red;
+  const corrected = a.status === 'corrected';
+  // R2 — corrected(정정 후 정상)면 GREEN, 그 외(이상치 대기)는 RED 통일(V3).
+  const accent = corrected ? T.green : T.red;
   return (
     <div
       data-testid="anomaly-alert"
+      data-status={corrected ? 'corrected' : 'pending'}
       aria-live="assertive"
       style={{
         position: 'fixed', inset: 0, zIndex: 45,
@@ -38,15 +47,18 @@ export function AnomalyAlertPopup({
         style={{
           maxWidth: 'min(560px, 94vw)', maxHeight: '88vh', overflowY: 'auto',
           padding: '20px 28px', borderRadius: 18,
-          background: 'rgba(34,18,18,0.96)', border: `2px solid ${accent}`,
+          background: corrected ? 'rgba(18,34,22,0.96)' : 'rgba(34,18,18,0.96)',
+          border: `2px solid ${accent}`,
           boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
           display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 20, fontWeight: 800, color: T.text }}>{a.colName} 이상치</span>
+          <span style={{ fontSize: 20, fontWeight: 800, color: T.text }}>
+            {a.colName} {corrected ? '정상 복귀' : '이상치'}
+          </span>
           <span style={{ fontSize: 19, fontWeight: 800, color: accent }}>
-            {a.changeText ? `${a.changeText} ` : ''}{up ? '증가' : '감소'}
+            {corrected ? '정상' : `${a.changeText ? `${a.changeText} ` : ''}${up ? '증가' : '감소'}`}
           </span>
         </div>
         {/* V2 — 어떤 샘플/행을 보는지. 샘플키 미상이면 '행 N' 폴백. 긴 키도 박스 안에서 줄바꿈. */}
@@ -77,11 +89,25 @@ export function AnomalyAlertPopup({
             <span style={{ fontSize: 30, fontWeight: 800, color: T.textDim }}>{a.prev}</span>
           </div>
           <span style={{ fontSize: 24, color: T.textMute, paddingBottom: 4 }}>→</span>
-          <span style={{ fontSize: 'clamp(40px, 11vw, 60px)', fontWeight: 900, color: T.text, letterSpacing: -0.5 }}>
-            {a.next}
-          </span>
+          {/* R3 — hero 현재값 위에 항목명 라벨(accent색)을 붙여 정수값도 어느 항목인지 즉시 식별. */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+            <span
+              style={{
+                fontSize: 13, fontWeight: 800, color: accent, letterSpacing: -0.2,
+                fontFamily: 'system-ui, sans-serif', maxWidth: 'min(280px, 60vw)',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}
+            >
+              {a.colName}
+            </span>
+            <span style={{ fontSize: 'clamp(40px, 11vw, 60px)', fontWeight: 900, color: T.text, letterSpacing: -0.5 }}>
+              {a.next}
+            </span>
+          </div>
         </div>
-        <div style={{ fontSize: 15, color: T.textDim, fontWeight: 600 }}>'확인' 또는 새 값으로 정정</div>
+        <div style={{ fontSize: 15, color: corrected ? T.green : T.textDim, fontWeight: 600 }}>
+          {corrected ? '✓ 정정되었습니다' : "'확인' 또는 새 값으로 정정"}
+        </div>
       </div>
     </div>
   );

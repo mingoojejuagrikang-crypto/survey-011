@@ -38,6 +38,10 @@ interface SessionState {
     row: number;
     sampleKey?: string;
     prevDate?: string;
+    /** v0.13.0 R2 — 팝업 상태. 'pending'(또는 미지정)=이상치(빨강), 'corrected'=정정 재측정이
+     *  정상으로 판명(초록). 정정 응답이 정상이면 같은 알람 객체의 next를 정정값으로 갱신하고
+     *  status='corrected'로만 바꿔, 옛 이상치 값이 남아 echo TTS와 어긋나던 불일치를 없앤다. */
+    status?: 'pending' | 'corrected';
   } | null;
   /** v0.12.0 AREA2 V4 — '수정 값' 인디케이터. 수정 재안내(announceField isModify) 중 어떤 항목을
    *  다시 말해야 하는지 화면에 파란 pill로 띄운다. 일반 안내로 진입하면 null로 해제. anomalyAlert가

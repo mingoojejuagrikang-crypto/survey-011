@@ -1570,9 +1570,14 @@ export function useVoiceSession() {
           ? (v.pctText ? `${v.pctText}%` : '')
           : Math.abs(v.next - v.prev).toFixed(decForDiff);
       const midPart = changeText ? ` ${changeText}` : ''; // prev=0(빈 %)이면 변화량 구절 생략
+      // v0.13.0 R7(민구 결정): 끝의 '확인해주세요'를 제거하고 앞에 '이상치 알림'을 붙인다.
+      //  - '확인해주세요'는 detectCommand가 'confirm'으로 매칭(startsWith '확인')해, 스피커폰에서 이
+      //    TTS가 마이크로 새어들어가 알람이 스스로 닫히는 self-confirm 환각([IOS-3] 알람판)의 원인.
+      //  - '이상치 알림' 접두로 화면을 안 보는 현장에서도 무엇인지 즉시 안다(팝업이 시각 안내 담당).
+      //  - barge-in 가드 자체는 변경하지 않는다(STT-6 소음방어 보존 — 실기기 로그 후 별도 판단).
       const alertText =
-        `${formatForTts(parsed)}. 직전 조사보다${midPart} ` +
-        `${v.direction === 'up' ? '증가' : '감소'}했습니다. 확인해주세요.`;
+        `이상치 알림. ${formatForTts(parsed)}. 직전 조사보다${midPart} ` +
+        `${v.direction === 'up' ? '증가' : '감소'}했습니다.`;
       // 시각 팝업: 이전값→현재값과 변화량을 띄운다(발화만으론 스쳐 지나가 확인이 어렵다는 요청).
       // v0.12.0 AREA2 V2 — 어떤 샘플·행/직전 회차의 비교인지 식별정보를 함께 싣는다(별도 재계산).
       const alertExtra = getAnomalyAlertData(awaiting.row);
@@ -1585,10 +1590,28 @@ export function useVoiceSession() {
         row: awaiting.row,
         sampleKey: alertExtra.sampleKey,
         prevDate: alertExtra.prevDate,
+        status: 'pending', // v0.13.0 R2 — 이상치(빨강) 상태. 정정 정상 시 'corrected'(초록)로 갱신.
       });
       useSessionStore.getState().setLastTts(alertText);
       await say(alertText);
       return; // advance 중단 — 해소는 handleFinal 상단의 trendConfirm 분기
+    }
+
+    // ── v0.13.0 R2(민구 요청): 추세 알림에 새 값으로 응답한 정정이 '정상'으로 판명된 경우 ──
+    // (위 trendViolation 분기를 타지 않고 여기 도달 = 정정값이 정상 범위.) 화면에 떠 있던 빨강 이상치
+    // 팝업을 초록(corrected)으로 전환하고 next를 정정값으로 즉시 반영한다. 이전엔 이 경로에서 팝업을
+    // 전혀 갱신하지 않아 옛 이상치 값이 남은 채 echo TTS("수정 …")만 새 값을 말해 시각/청각이 어긋났다.
+    // 팝업 닫힘은 기존대로 advance()→announceField의 setAnomalyAlert(null)이 담당하므로, echo TTS가
+    // 발화되는 동안 초록 팝업이 노출된다(별도 타이머 없이 '초록 전환 + 즉시 반영' 성립).
+    if (awaiting.trendConfirm) {
+      const cur = useSessionStore.getState().anomalyAlert;
+      if (cur) {
+        useSessionStore.getState().setAnomalyAlert({
+          ...cur,
+          next: formatForTts(parsed),
+          status: 'corrected',
+        });
+      }
     }
 
     const echoText = awaiting.isModify

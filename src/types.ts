@@ -42,6 +42,21 @@ export interface SheetConfig {
   availableSheets: string[];
 }
 
+/** v0.13.0 R1 — 사용자가 자주 쓰는 스프레드시트를 '파일명'으로 저장해 두는 항목(민구 요청).
+ *  OAuth 토큰은 ~1시간이면 만료되는데(refresh token 없음, [AUTH-4]) 토큰이 만료되면 연결이 풀린
+ *  것처럼 보여, 매번 Drive에서 공유링크를 복사해 다시 붙여넣는 수고가 반복됐다. 저장 목록에서 한 번에
+ *  다시 선택할 수 있게 한다(재로그인은 토큰 만료 시 1회 필요 — 설계 한계). sheetId로 중복을 가린다. */
+export interface SavedSheet {
+  /** 스프레드시트 파일명(properties.title). 사용자가 목록에서 식별하는 라벨. */
+  name: string;
+  /** 원본 공유 URL(선택 시 그대로 재연결에 사용). */
+  url: string;
+  /** parseSpreadsheetId(url) — 중복 판정 및 안정 식별자. */
+  sheetId: string;
+  /** 마지막으로 저장/사용한 시각(ms) — 최근 사용 순 정렬용. */
+  addedAt: number;
+}
+
 export interface AppSettings {
   googleConnected: boolean;
   userEmail: string | null;
