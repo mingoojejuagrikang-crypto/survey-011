@@ -267,12 +267,9 @@ function ActiveState({
                 {Math.round(confidence * 100)}%
               </span>
             )}
-            {paused ? (
-              <>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: T.amber }} />
-                <span style={{ fontSize: 12, color: T.amber, fontWeight: 700, letterSpacing: 0.7 }}>PAUSE</span>
-              </>
-            ) : (
+            {/* v0.15.0 A5 — 상단 작은 'PAUSE' 표시 제거. 일시정지 상태는 화면 중앙 대형 카드
+                (PausedCard)로만 안내한다(다른 알람/안내와 톤·크기 통일). 녹음 중에만 REC 점등. */}
+            {!paused && (
               <>
                 <div
                   style={{
@@ -515,14 +512,65 @@ function ActiveState({
       {sess.modifyIndicator && !sess.anomalyAlert && (
         <ModifyIndicatorPill name={sess.modifyIndicator.name} />
       )}
-      {sess.valueBurst && !sess.anomalyAlert && (
+      {sess.valueBurst && !sess.anomalyAlert && !paused && (
         <CenterValueBurst
           key={sess.valueBurst.seq}
           name={sess.valueBurst.name}
           value={sess.valueBurst.value}
         />
       )}
+      {/* v0.15.0 A5 — 일시정지 중앙 대형 카드. 다른 중앙 안내(이상치/수정/버스트)보다 위(z-index)에
+          두고, paused일 때 그것들을 가린다(상호배타). 후속 음성명령('재시작'/'종료')을 함께 안내. */}
+      {paused && <PausedCard />}
     </>
+  );
+}
+
+/** v0.15.0 A5 — 일시정지 상태를 화면 중앙·대형 카드로 안내한다. 기존 상단 작은 'PAUSE' 표시를 대체.
+ *  톤은 AMBER(일시정지=주의/대기, 이상치 RED·수정 BLUE와 구분). 그 아래 후속 음성명령('재시작'으로
+ *  재개 / '종료'로 저장)을 안내해, 화면을 보지 않아도/봐도 다음 행동을 알 수 있게 한다.
+ *  비대화형(pointerEvents:none) — 하단 마이크/버튼 탭으로도 재개·종료 가능. */
+function PausedCard() {
+  return (
+    <div
+      data-testid="paused-card"
+      aria-live="polite"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 46,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        pointerEvents: 'none', padding: '16px',
+      }}
+    >
+      <div
+        style={{
+          maxWidth: 'min(560px, 94vw)', maxHeight: '88vh', overflowY: 'auto',
+          padding: '24px 30px', borderRadius: 18,
+          background: 'rgba(40,32,12,0.96)', border: `2px solid ${T.amber}`,
+          boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
+          display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 22, color: T.amber }} aria-hidden>⏸</span>
+          <span
+            style={{
+              fontSize: 'clamp(30px, 8vw, 44px)', fontWeight: 900, color: T.text,
+              letterSpacing: -0.5, lineHeight: 1.1, wordBreak: 'keep-all',
+            }}
+          >
+            일시정지
+          </span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+          <span style={{ fontSize: 16, color: T.textDim, fontWeight: 600, textAlign: 'center', lineHeight: 1.5 }}>
+            <b style={{ color: T.amber }}>"재시작"</b> 이라고 말하면 이어서 진행
+          </span>
+          <span style={{ fontSize: 16, color: T.textDim, fontWeight: 600, textAlign: 'center', lineHeight: 1.5 }}>
+            <b style={{ color: T.amber }}>"종료"</b> 라고 말하면 저장하고 끝냅니다
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 

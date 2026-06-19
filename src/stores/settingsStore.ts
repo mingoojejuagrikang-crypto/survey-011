@@ -60,10 +60,6 @@ interface SettingsState {
   sessionAutoLabel: string | null;
   /** Noisy environment mode — raises STT confidence threshold + rejects single-char results. */
   noisyMode: boolean;
-  /** v0.4.5 Q2: 스피커폰(에코 방지) 모드 — 이어폰 없이 스피커로 쓸 때 TTS 자기 음성이 STT로
-   *  오인식되는 것을 막는다. ON이면 TTS 재생 중 음성입력(값·명령어 barge-in)을 차단하고 신뢰도
-   *  임계를 상향(사실상 TTS 중 half-duplex). 기본 false. */
-  speakerphoneMode: boolean;
   /** v0.9.0 (딜레이 단축 실험) — 빠른 인식. true면 interim(중간) 결과가 유효 숫자로 안정되면
    *  브라우저 final(무음 종료감지)을 기다리지 않고 조기 커밋한다. 미완성 숫자 절단 리스크가 있어
    *  기본 false(실기기 A/B용). */
@@ -184,7 +180,6 @@ export const useSettingsStore = create<SettingsState>()(
       sessionLabelColId: null,
       sessionAutoLabel: null,
       noisyMode: false,
-      speakerphoneMode: false,
       fastRecognition: false,
       preferredVoiceName: '',
       teamFolderId: null,
@@ -257,7 +252,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'survey-011-settings-v3',
-      version: 8,
+      version: 9,
       // v0.14.0 C — localStorage + IDB 내구 미러(eviction 방어).
       storage: createJSONStorage(() => mirroredStorage),
       // v0.14.0 C — 하이드레이션 breadcrumb. 다음 강제종료/시간경과 테스트 로그에서 시트 등록이
@@ -281,6 +276,7 @@ export const useSettingsStore = create<SettingsState>()(
           trendAlertEnabled?: unknown;
           reviewScope?: unknown;
           speakerOutput?: unknown;
+          speakerphoneMode?: unknown;
           trendRuleClearedV6?: boolean;
           savedSheets?: unknown;
         };
@@ -296,7 +292,6 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.sessionLabelColId !== 'string' && s.sessionLabelColId !== null) s.sessionLabelColId = null;
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
         if (typeof s.noisyMode !== 'boolean') s.noisyMode = false;
-        if (typeof s.speakerphoneMode !== 'boolean') s.speakerphoneMode = false;
         if (typeof s.fastRecognition !== 'boolean') s.fastRecognition = false;
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
@@ -378,6 +373,15 @@ export const useSettingsStore = create<SettingsState>()(
         ) {
           s.savedSheets = [];
         }
+
+        // ── v9 (v0.15.0 A6) — 스피커폰(소프트 half-duplex) 모드 폐기 ───────────────────────────
+        // speakerphoneMode 토글 + 그것으로 게이트되던 가드(TTS-중 명령차단·post-TTS 잔향 폐기·신뢰도
+        // 상향)를 전부 삭제했다(민구 결정 + Trace: 회귀신호 0). 인터페이스에서 필드를 없앴으므로
+        // 잔존 영속값을 무조건 삭제한다(다운그레이드 마커 불필요 — 필드 자체가 더는 존재하지 않음).
+        if (version < 9) {
+          delete s.speakerphoneMode;
+        }
+
         return s as SettingsState;
       },
     },

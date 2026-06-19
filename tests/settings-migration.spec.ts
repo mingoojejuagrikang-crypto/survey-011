@@ -5,7 +5,8 @@
  * v0.12.0 AREA1: v6→v7 — speakerOutput(출력 라우팅 토글) 폐기. 순수 추가 마이그(필드 삭제만),
  *   v6 의미는 보존.
  * v0.13.0 R1: v7→v8 — savedSheets(저장 시트 목록) 도입. 구버전 누락/손상은 []로 치유(순수 추가).
- *   따라서 마이그레이션 후 최신 버전은 8 — 아래 version 단언은 8을 기대한다.
+ * v0.15.0 A6: v8→v9 — speakerphoneMode(스피커폰 모드) 폐기. 잔존 영속값 삭제만(순수 추가).
+ *   따라서 마이그레이션 후 최신 버전은 9 — 아래 version 단언은 9를 기대한다.
  * v0.8.0 WS1: v5→v6 — "추세 검증" → "이상치 알람" 전환.
  *   - 전역 마스터 토글 trendAlertEnabled 삭제(이상치 알람은 컬럼별 규칙 유무로 활성).
  *   - 컬럼별 trendRule을 off로 초기화(의미 반전이라 기존 값은 사용자 의도와 반대 — 클리어).
@@ -74,7 +75,7 @@ async function bootWith(page: Page, payload: unknown) {
 test('v4→v6 migrate — 샘플키 자동 유추 + junk 정규화 + 최신 버전', async ({ page }) => {
   await bootWith(page, V4_PAYLOAD);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(8);
+  await expect.poll(async () => (await readStore(page)).version).toBe(9);
   const stored = await readStore(page);
 
   // 샘플키 유추 규칙: auto && !date → true. junk 'yes'(c3)는 boolean 아니라 유추 적용.
@@ -121,7 +122,7 @@ const V5_PAYLOAD = {
 test('v5→v6 migrate — trendAlertEnabled 삭제 + trendRule 초기화 + pctThreshold 정규화', async ({ page }) => {
   await bootWith(page, V5_PAYLOAD);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(8);
+  await expect.poll(async () => (await readStore(page)).version).toBe(9);
   const stored = await readStore(page);
 
   // 전역 마스터 토글 제거.
@@ -149,7 +150,7 @@ test('v5→v6 migrate idempotent — 이미 v6면 사용자가 새 의미로 설
   };
   await bootWith(page, v6Payload);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(8);
+  await expect.poll(async () => (await readStore(page)).version).toBe(9);
   const stored = await readStore(page);
   // v6 이상은 새 의미 — trendRule/pctThreshold 보존.
   expect(colById(stored, 'c8').trendRule).toBe('increase');
@@ -171,7 +172,7 @@ test('다운그레이드 라운드트립 방어 — v5로 재기록돼도 마커
   };
   await bootWith(page, downgradedPayload);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(8);
+  await expect.poll(async () => (await readStore(page)).version).toBe(9);
   const stored = await readStore(page);
   // 마커가 있으므로 재클리어하지 않고 사용자가 v6에서 설정한 값 보존.
   expect(colById(stored, 'c8').trendRule).toBe('increase');

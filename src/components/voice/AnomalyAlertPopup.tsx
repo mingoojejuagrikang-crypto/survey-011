@@ -55,7 +55,7 @@ export function AnomalyAlertPopup({
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 20, fontWeight: 800, color: T.text }}>
-            {a.colName} {corrected ? '정상 복귀' : '이상치'}
+            {a.colName} {corrected ? '정상 복귀' : '추세 알림'}
           </span>
           <span style={{ fontSize: 19, fontWeight: 800, color: accent }}>
             {corrected ? '정상' : `${a.changeText ? `${a.changeText} ` : ''}${up ? '증가' : '감소'}`}

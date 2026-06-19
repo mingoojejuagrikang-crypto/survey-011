@@ -296,7 +296,7 @@ export class AudioRecorder {
     try {
       // 소음 환경(비닐하우스 등) 대응: 브라우저 내장 DSP 활성화 — 추가 지연 없음(1초 제약 무관).
       // echoCancellation은 이제 항상 ON(이어피스 기본) — TTS 에코가 마이크로 되먹임되는 것도 줄여줌.
-      // 스피커폰(소프트 half-duplex) 모드의 잔향 누설은 post-TTS 가드가 별도로 처리한다(postTtsGuard).
+      // (v0.15.0 A6: 스피커폰 소프트 half-duplex 모드 및 post-TTS 가드는 삭제됨 — 이어폰 barge-in 기본.)
       // autoGainControl은 소음 환경(빗소리 등)에서 무음 구간 게인을 키워 노이즈를 증폭할 수 있어 끔.
       this.stream = await this.acquireStream();
       // Capture which input device was actually granted (built-in vs external mic like Shokz).

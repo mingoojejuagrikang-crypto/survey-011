@@ -156,14 +156,14 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
             onClick={() => onChange({ ...col, auto: { kind: 'fixed', value: '' } })}
             style={linkButton}
           >
-            고정값
+            단일값
           </button>
         </div>
       );
     }
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, color: T.textMute }}>고정값</span>
+        <span style={{ fontSize: 13, color: T.textMute }}>단일값</span>
         <MiniInput
           value={col.auto.kind === 'fixed' ? col.auto.value : ''}
           placeholder="값"
@@ -229,7 +229,7 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
   if (col.type === 'text' || col.type === 'name') {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
-        <span style={{ fontSize: 13, color: T.textMute }}>고정값</span>
+        <span style={{ fontSize: 13, color: T.textMute }}>단일값</span>
         <input
           type="text"
           value={col.auto.kind === 'fixed' ? col.auto.value : ''}
@@ -529,7 +529,7 @@ function ColumnCard({
         {isTrendEligible(col) && (
           <>
             <SegmentToggle
-              label="이상치 알람"
+              label="추세 알람"
               testId={`trend-rule-${col.id}`}
               value={col.trendRule ?? 'off'}
               options={[
@@ -543,7 +543,7 @@ function ColumnCard({
             />
             {/* v0.8.0 — 증가/감소 = "이상치로 볼 변화 방향"(삭제된 전역 토글 설명을 컬럼 카드로 이전). */}
             <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4, paddingLeft: 2 }}>
-              직전 조사보다 그 방향으로 변하면 이상치로 알립니다.
+              직전 조사보다 그 방향으로 변하면 추세 알림을 띄웁니다.
               증가=커지면 · 감소=작아지면. 변동률 %를 적으면 방향과 무관하게 그만큼 변할 때도 알립니다.
             </div>
             {/* v0.8.0 — 변동률 % 임계값(방향 무관). 빈 값=undefined(off), 값 입력 시에만 활성. */}
@@ -1527,45 +1527,8 @@ export function SettingsScreen() {
               비닐하우스·기계 소음 환경에서 음성 인식 정확도를 높입니다 (낮은 신뢰도 결과 거부).
             </div>
 
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                gap: 10, marginTop: 10,
-              }}
-            >
-              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
-                스피커폰 모드
-              </div>
-              <button
-                onClick={() => {
-                  const next = !s.speakerphoneMode;
-                  s.set({ speakerphoneMode: next });
-                  // v0.5.0 W7(T-19): 설정 변경 계측 (barge-in/에코 분석의 전제 컨텍스트).
-                  logger.log({ type: 'app', extra: `setting_changed:speakerphoneMode=${next}` });
-                }}
-                style={{
-                  width: 60, height: 32, borderRadius: 16,
-                  background: s.speakerphoneMode ? T.blue : '#2A2D32',
-                  border: 'none', cursor: 'pointer',
-                  position: 'relative',
-                }}
-                title="이어폰 없이 스피커로 쓸 때, 안내 음성 중 입력을 차단해 에코 오인식을 막습니다"
-              >
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 4, left: s.speakerphoneMode ? 32 : 4,
-                    width: 24, height: 24, borderRadius: 12,
-                    background: '#fff',
-                    transition: 'left 150ms ease',
-                  }}
-                />
-              </button>
-            </div>
-            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
-              이어폰 없이 스피커로 사용할 때 켜세요. 안내 음성이 나오는 동안에는 음성 입력을 받지 않아,
-              기기 음성이 사용자 음성으로 잘못 인식되는 것을 막습니다 (안내가 끝난 뒤 말씀하세요).
-            </div>
+            {/* v0.15.0 A6 — 스피커폰 모드 토글 삭제(민구 요청 + Trace 회귀신호 0). 모드로 게이트되던
+                가드(TTS-중 명령차단·post-TTS 잔향 폐기·신뢰도 상향)도 함께 제거 — 이어폰 barge-in 기본. */}
 
             {/* v0.9.0 — 빠른 인식(조기확정) 실험 토글. 기본 OFF(미완성 숫자 절단 리스크). */}
             <div

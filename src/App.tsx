@@ -36,6 +36,13 @@ export default function App() {
         flexDirection: 'column',
         background: T.bg,
         color: T.text,
+        // v0.15.0 A1 — standalone(홈화면 설치) safe-area 침범 방지. 브라우저 크롬이 없는
+        // standalone에서 콘텐츠가 상태바·노치를 침범하던 문제. 상단/좌우만 셸에서 흡수하고,
+        // 하단은 탭바가 max(28px, env(...))로 별도 처리한다(이중 패딩 방지). 일반 Safari 탭에선
+        // env(...)가 0이라 무영향. 가로 inset은 노치 가로방향 안전마진(앱은 portrait 고정이지만 방어).
+        paddingTop: 'env(safe-area-inset-top, 0px)',
+        paddingLeft: 'env(safe-area-inset-left, 0px)',
+        paddingRight: 'env(safe-area-inset-right, 0px)',
       }
     : {
         width: DEVICE.width,

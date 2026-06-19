@@ -12,6 +12,8 @@
  * (http://localhost:5173 and https://<github>.github.io).
  */
 
+import { logger } from './logger';
+
 const GIS_SRC = 'https://accounts.google.com/gsi/client';
 const SCOPE = [
   'https://www.googleapis.com/auth/spreadsheets',
@@ -121,7 +123,41 @@ let tokenClient: { requestAccessToken: (opts?: { prompt?: string }) => void } | 
 let pending: {
   resolve: (v: { email: string; token: string }) => void;
   reject: (e: Error) => void;
+  settled: boolean;
+  startedAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
 } | null = null;
+
+// A7: standalone PWA에서 GIS tokenClient 콜백이 미발화하면 signIn() promise가 영구 hang →
+// "Google 로그인 중…"에 고착. 모듈 싱글톤(tokenClient/pending)이라 reload 없는 standalone에선
+// 프로세스 kill(재부팅)만이 해소였다. 타임아웃으로 reject + 싱글톤 리셋해 재시도를 가능케 한다.
+const SIGNIN_TIMEOUT_MS = 15_000;
+
+// 마지막 sign-in 시작 시각. pending이 (타임아웃으로) 비워진 뒤 지각 콜백이 도착해도 실제 소요ms를
+// 산출해 auth_token_settled에 싣기 위함 — standalone 콜백 wedge가 "영구 미발화"인지 "지각 발화"인지
+// 다음 실기기 로그로 판별하는 핵심 신호.
+let lastSignInStartedAt = 0;
+
+/** pending을 단 한 번만 settle하는 게이트. 콜백/타임아웃/error_callback 어느 경로든 여기로 모인다.
+ *  settled 가드로 늦게 도착한 콜백을 안전하게 무시하고, 타이머를 정리한다. */
+function settlePending(outcome:
+  | { ok: true; value: { email: string; token: string } }
+  | { ok: false; error: Error }): void {
+  const p = pending;
+  if (!p || p.settled) return;
+  p.settled = true;
+  if (p.timer) { clearTimeout(p.timer); p.timer = null; }
+  pending = null;
+  if (outcome.ok) p.resolve(outcome.value);
+  else p.reject(outcome.error);
+}
+
+/** 타임아웃으로 고착이 검출되면, 늦게라도 콜백이 와도 재시도가 가능하도록 tokenClient 싱글톤을 버린다.
+ *  다음 signIn()이 ensureTokenClient로 새 클라이언트를 만든다(콜백 wedge 해소). */
+function resetTokenClient(): void {
+  tokenClient = null;
+  logger.log({ type: 'app', extra: 'auth_tokenclient_reset' });
+}
 
 /** Create the GIS token client once (idempotent). Returns false if GIS isn't ready yet. */
 function ensureTokenClient(): boolean {
@@ -133,28 +169,27 @@ function ensureTokenClient(): boolean {
     client_id: clientId,
     scope: SCOPE,
     callback: async (resp) => {
-      const p = pending;
-      pending = null;
-      if (!p) return;
+      // A7 계측: 콜백 도착 + 소요ms. standalone에서 이 이벤트가 안 보이면 콜백 wedge가 확정된다.
+      // lastSignInStartedAt 기준이라 pending이 타임아웃으로 비워진 뒤 온 지각 콜백도 실제 소요를 싣는다.
+      const settledMs = lastSignInStartedAt ? Date.now() - lastSignInStartedAt : -1;
+      const late = !pending || pending.settled; // pending이 없거나 이미 settle됐으면 지각 콜백
+      logger.log({ type: 'app', extra: `auth_token_settled:ms=${settledMs},late=${late}` });
       if (!resp.access_token) {
-        p.reject(new Error('No access token received'));
+        settlePending({ ok: false, error: new Error('No access token received') });
         return;
       }
       const expires_at = Date.now() + (resp.expires_in || 3600) * 1000;
       try {
         const email = await fetchEmail(resp.access_token);
         storeToken({ access_token: resp.access_token, expires_at, email });
-        p.resolve({ email, token: resp.access_token });
+        settlePending({ ok: true, value: { email, token: resp.access_token } });
       } catch {
         // Even if email lookup fails, we still have a usable token.
         storeToken({ access_token: resp.access_token, expires_at });
-        p.resolve({ email: '연결됨', token: resp.access_token });
+        settlePending({ ok: true, value: { email: '연결됨', token: resp.access_token } });
       }
     },
     error_callback: (err) => {
-      const p = pending;
-      pending = null;
-      if (!p) return;
       // popup_failed_to_open: browser blocked the popup (lost gesture / blocker). With warm-up
       // this should not occur; surface a clear, actionable message if it ever does.
       const msg = err.type === 'popup_failed_to_open'
@@ -162,7 +197,8 @@ function ensureTokenClient(): boolean {
         : err.type === 'popup_closed'
         ? '로그인 창이 닫혔습니다. 다시 시도해 주세요.'
         : (err.type || 'OAuth error');
-      p.reject(new Error(msg));
+      logger.log({ type: 'app', extra: `auth_signin_error:${err.type || 'unknown'}` });
+      settlePending({ ok: false, error: new Error(msg) });
     },
   });
   return true;
@@ -195,7 +231,22 @@ export function signIn(): Promise<{ email: string; token: string }> {
       reject(new Error('이미 로그인 진행 중입니다.'));
       return;
     }
-    pending = { resolve, reject };
+    const startedAt = Date.now();
+    lastSignInStartedAt = startedAt;
+    logger.log({ type: 'app', extra: 'auth_signin_start' });
+    // A7: 콜백 wedge 검출 타임아웃. 발화되면 pending을 reject하고 tokenClient 싱글톤을 버려
+    // 다음 시도가 새 클라이언트로 가능하게 한다(고착 해소). settlePending의 settled 가드가
+    // 늦게 도착한 콜백을 안전하게 무시한다.
+    const timer = setTimeout(() => {
+      if (!pending || pending.settled) return;
+      logger.log({ type: 'app', extra: `auth_signin_timeout:ms=${SIGNIN_TIMEOUT_MS}` });
+      resetTokenClient();
+      settlePending({
+        ok: false,
+        error: new Error('로그인 응답이 지연되어 취소되었습니다. 다시 시도해 주세요.'),
+      });
+    }, SIGNIN_TIMEOUT_MS);
+    pending = { resolve, reject, settled: false, startedAt, timer };
     // Fast path: client already warmed up → open the popup synchronously within the gesture.
     if (ensureTokenClient()) {
       tokenClient!.requestAccessToken({ prompt: '' });
@@ -208,13 +259,11 @@ export function signIn(): Promise<{ email: string; token: string }> {
         if (ensureTokenClient()) {
           tokenClient!.requestAccessToken({ prompt: '' });
         } else {
-          pending = null;
-          reject(new Error('Google Identity Services unavailable'));
+          settlePending({ ok: false, error: new Error('Google Identity Services unavailable') });
         }
       })
       .catch((e) => {
-        pending = null;
-        reject(e instanceof Error ? e : new Error(String(e)));
+        settlePending({ ok: false, error: e instanceof Error ? e : new Error(String(e)) });
       });
   });
 }

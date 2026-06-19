@@ -94,6 +94,7 @@
 - **해결·회피:** 앱 코드의 유일한 레버 = interim(중간) 안정화 기반 **조기확정**. v0.9.0: ① (무위험) `stt_eos_tail` 계측 — 마지막 interim → final 간격을 `stt` 이벤트에 동봉해 다음 로그에서 EOS 꼬리 정량화. ② (실험, **기본 OFF**) 설정탭 "빠른 인식" 토글 — interim 숫자가 `EARLY_COMMIT_STABLE_MS=400` 안정되면 final 대기 없이 커밋(`restartRecognition`으로 in-flight final abort → 이중 커밋 방지), `stt_early_commit` 계측. 절단(소수점 추가 전 커밋) 리스크가 있어 실기기 A/B 후 채택 결정.
 - **출처:** `2026-06-15 v0.8.0 실기기 로그` 분석(민구 요청).
 - **현재 상태:** 🔬계측+실험 (default off) — 다음 로그의 `stt_eos_tail`(EOS 꼬리)·토글 ON 시 `stt_early_commit` 절단/정정율로 가치 판단.
+- **`2026-06-19 v0.14.0 실기기 로그`(빠른인식 존치 판단):** fastRecognition ON인데 `stt_early_commit` **0건**, eosTail median ~1.7–1.9s(마찰 실재하나 조기확정 한 번도 안 걸림). 현 계측으론 'wired-but-never-fired(소음이 interim 안정화 차단=정상) vs 미배선(버그)' 구분 불가 → 민구 결정 **옵션 유지(기본 OFF, 제거 안 함) + 계측 1회**. **v0.15.0 A8 계측 추가:** early-commit **시도** 가시화(`stt_early_commit extra:'attempt:armed:<v>' / 'attempt:reset:new_interim/parse_null/final_first' / 'attempt:cancel:tts_muted'`) — 상태 전이 시에만 기록(폭주 방지), fastRecognition OFF면 무발화. 다음 fastRecognition ON 현장 로그에서 `attempt:armed` 출현=배선 확정(미발동은 소음 탓 정상), `attempt` 0건=미배선 의심. 그 결과로 존치/수정/제거 확정.
 - **`2026-06-17 v0.11.0 실기기 로그`(비 오는 비닐하우스, 재분류):** fastRecognition(빠른 인식) **ON**인데 `stt_early_commit` **0건**, eosTail median 1716(L1)/1810ms(L2). 처음엔 "조기확정 미배선" 의심했으나, **현 텔레메트리로는 '소음이 interim 안정화를 막아 조기확정 미발동'(정상)과 '미배선'을 구분 불가**(interim/early-commit 시도 이벤트 부재) → **instrumentation-gap으로 재분류**(behavior-bug 단정 금지). eosTail이 신뢰도와 무관하게 일률적으로 김(소음 분산 신호 아님 = 고정 EOS 타임아웃 정황). 단 `eosTailMs` 존재 자체가 interim 발화 증거라 iOS interim 미지원 가설은 약함. **v0.12.0 조치:** speakerphone near-miss(가드 통과·250~500ms band) msSinceTtsEnd를 기존 stt 이벤트에 동봉(계측) — 다음 현장 로그에서 EOS/가드 정량화. 조기확정 가치 판단은 fastRecognition ON 상태 현장 로그 누적 후.
 
 ### [STT-12] OpenDots 외장 마이크가 선택 가능해도 6세션 연속 내장 마이크만 잡힘 — **종결→소음 성능저하로 완화**
@@ -211,7 +212,8 @@
 - **원인(코드 추적):** ① 알람 TTS가 literally **"…확인해주세요."로 끝남**(`useVoiceSession.ts` alertText). `detectCommand`는 startsWith 매칭이라 `detectCommand("확인해주세요")==='confirm'` → 스피커폰에서 이 TTS가 마이크로 새어 들어가면 **알람이 스스로 confirm되어 닫히는** self-confirm 환각([IOS-3]의 알람판). 현 post-TTS 가드는 이를 막는 보호 역할도 겸함. ② 알람 TTS가 길어(추정 3~4s) post-TTS 가드 윈도우(재생중 전체 + 종료후 250ms)가 알람 발화 거의 전 구간을 덮어, 스피커폰에서 알람 도중 '확인'/'유지'/새값이 `stt_blocked_tts_muted`로 폐기 → "barge-in 안 됨" 체감. ③ trendConfirm 응답은 `handleInterim` early-return이라 조기확정을 못 받고 풀 EOS 꼬리(~1.7s)를 먹어 지연 가중. ④ 이어폰 알람 barge-in 비정상은 코드상 명확한 차단 지점 특정 실패 — needs-real-device-data.
 - **해결·회피(v0.13.0 R7, 민구 결정):** alertText를 **"이상치 알림. {값}. 직전 조사보다 {N} 증가/감소했습니다."**로 — 끝의 "확인해주세요" 제거(self-confirm 환각 원인 제거), 앞에 "이상치 알림" 접두(화면 안 보는 현장 식별). **barge-in 가드 자체는 변경하지 않음** — v0.11.0 비 오는 비닐하우스에서 가드 스택이 환각 0건 유지([STT-6])한 성과를 후퇴시키지 않기 위함. 가드 단축은 실기기 near-miss 분포 확인 후 별도 판단(측정 우선 원칙).
 - **출처:** `2026-06-18 세션`(민구 제보 + 결정) → **survey-011 v0.13.0** (TTS 재구성). barge-in 가드 튜닝은 미적용(계측 대기).
-- **현재 상태:** ⚠️주시·계측대기 — TTS 문구는 ✅수정(self-confirm 구조적 제거). 알람 중 barge-in 실측은 **다음 현장 테스트 필요**: 스피커폰 ON + 알람 도중 의도적 발화 → `trend_alert_fired`→`stt_blocked_tts_muted`(suppression) vs `trend_alert_confirmed` 작은 msSinceTtsEnd(self-dismiss) 시퀀스로 판별. 이어폰 알람 barge-in 비정상도 동일 로그로 원인 특정 필요.
+- **⚙️ 후속(v0.15.0 A6 — 스피커폰 모드 + post-TTS 가드 제거):** 민구가 "스피커폰 모드 ON 시 바지인 안 됨"을 불편으로 지목 + Trace v0.14.0 로그분석(`stt_blocked_tts_muted` 전체 **1건뿐**, 입력실패 실체는 `rejected_low_confidence` 7건·모드무관)으로 **스피커폰 모드 자체와 post-TTS 가드(`postTtsGuard.ts`)·TTS중 명령차단을 제거**(`speakerphoneMode` 삭제, settings persist v8→9). 즉 barge-in을 막던 주 가드가 사라져 알람 중 barge-in이 기본 동작으로 열림. self-confirm 환각 위험은 v0.13.0 alertText 재구성("확인해주세요" 제거)으로 **이미 구조적 차단**되어 가드 없이도 방어됨. 알람 TTS 문구도 v0.15.0에서 "추세 알림"으로(명칭 통일).
+- **현재 상태:** ⚠️주시 — TTS 문구 ✅(self-confirm 구조적 제거), 가드 제거로 barge-in 기본 개방. **다음 현장 테스트 필요:** 알람 도중 의도적 발화가 정상 끼어드는지 + self-confirm 환각(알람이 스스로 닫힘) 재발 0 확인. 가드 부재가 소음 환경 오인식을 늘리는지도 관측(이전 가드 스택의 [STT-6] 환각 0 성과 대비).
 
 ### [IOS-4] SpeechSynthesisUtterance.voice에 plain object 할당 시 TypeError
 - **증상:** `utterance.voice`에 plain object를 넣으면 TypeError(특히 mock/테스트 환경).
@@ -485,6 +487,14 @@
 - **해결·회피(v0.14.0 C):** ① **IDB 내구 미러** — `settingsStore` persist에 커스텀 storage 어댑터(`mirroredStorage`)를 달아 localStorage 1차(동기·기존 동작 보존) + IDB 'kv' 스토어(`db.ts` v3→**v4**) write-through. getItem에서 localStorage가 비면 IDB에서 복원(+`settings_restored_from_idb` 로그). ② **하이드레이션 breadcrumb** — boot 시 `settings_hydrated:url=Y/N,cols=N,saved=N,token=Y/N`(`onRehydrateStorage`)로 다음 테스트에서 eviction 여부·복원 작동을 판별. **한계:** 비설치 Safari는 ITP 7일 캡이 IDB에도 적용 — **홈화면 설치(standalone) PWA가 가장 강한 내구**(7일 캡 면제). 미설치면 IDB도 evict될 수 있어, 설치 권장이 근본 대비책.
 - **출처:** `2026-06-18 세션`(민구 추가 제보) → **survey-011 v0.14.0** 대응. 다음 강제종료/시간경과 실기기 로그의 `settings_hydrated`/`settings_restored_from_idb`로 확정.
 - **현재 상태:** ⚠️주시 (`src/stores/settingsStore.ts` mirroredStorage+breadcrumb, `src/lib/db.ts` kv 스토어) — eviction 진위·standalone 설치 여부 device 확인 필요.
+- **✅ 후속(`2026-06-19 v0.14.0 실기기 로그`):** boot `settings_hydrated`가 11:07~13:54 구간 전부 `token=Y,url=Y`(Y→N flip 없음) → **이 윈도우에선 eviction 미재발**(IDB 미러 내구 보유). 단 민구는 "홈화면 설치형에서 시간경과 후 로그인 풀림"을 보고 — eviction 자체는 별 윈도우에서 재발 가능(장기경과 표본 필요). **재로그인 불가('로그인 중…' 멈춤)는 eviction이 아니라 별개 레이어 = 신규 [AUTH-9]**(GIS 콜백 wedge)로 분리.
+
+### [AUTH-9] eviction 후 재로그인 시 "Google 로그인 중…" 영구 멈춤 — GIS tokenClient 콜백 wedge (standalone PWA)
+- **증상(민구 제보, v0.14.0 실기기):** 아이폰 홈화면 설치형(standalone)에서 시간경과 후 구글 로그인이 풀린 뒤([AUTH-8] eviction, 저장된 시트는 유지), **재로그인을 누르면 "Google 로그인 중…" 문구가 뜬 채 진행이 멈춰 로그인 불가**. **아이폰 재부팅 후에야** 로그인 완료.
+- **원인(Trace 로그분석 + 코드 추적 확정):** `onGoogleClick`(`SettingsScreen.tsx:847`)이 `await googleSignIn()`만 기다리는데, `googleSignIn()`(`googleAuth.ts:135-166`)은 GIS `tokenClient`의 **콜백으로만 settle**된다. standalone PWA에서 그 콜백이 미발화하면 promise가 **영구 hang** → `onGoogleClick`의 `finally{ setLoading(null) }`이 안 돌아 "로그인 중…"에 고착. `tokenClient`/`pending`이 **module-level 싱글톤**이라 reload 없는 standalone에선 **프로세스 kill(재부팅)만이 해소** = 증상 정확 일치. (eviction[AUTH-8]과 **별개 레이어** — eviction은 IDB 미러로 방어, 본 항목은 콜백 wedge.)
+- **해결·회피(v0.15.0 A7):** ① `signIn()`에 **15s 타임아웃**(`SIGNIN_TIMEOUT_MS`) — 미발화 시 reject + `resetTokenClient()`로 `tokenClient` 싱글톤 폐기(재시도 시 새 클라이언트 생성, 재부팅 불필요). ② `settlePending()` 단일 settle 게이트(`settled` 가드) — 늦게 온 콜백 안전 무시. ③ `onGoogleClick` `finally`로 로딩해제 항상 보장. ④ **인증 계측 5종**(`auth_signin_start`/`auth_token_settled:ms=,late=`/`auth_signin_timeout:ms=15000`/`auth_tokenclient_reset`/`auth_signin_error:<type>`) — `late=true`로 standalone 콜백이 '영구 미발화'인지 '지각 발화'인지 다음 로그로 판별.
+- **출처:** `2026-06-19 v0.14.0 실기기 로그`(민구 제보 + Trace 분석) → **survey-011 v0.15.0** 수정.
+- **현재 상태:** ⚠️주시 (`src/lib/googleAuth.ts` settlePending/resetTokenClient/타임아웃·계측, `src/screens/SettingsScreen.tsx` onGoogleClick) — 다음 실기기에서 ① 타임아웃 후 재시도가 **재부팅 없이** 성공하는지 ② `auth_token_settled` 부재(영구 wedge)/`late=true`(지각) 여부 device 확인 필요. **이론적 race:** 타임아웃 reset 후 옛 클라이언트 지각 콜백이 새 pending을 settle할 가능성(낮음, `late` 플래그로 관측).
 
 ### [CLIP-LOSS-1] 입력장치 변경(BT↔스피커폰)이 MediaRecorder를 죽여 이후 클립 연속 소실
 - **증상:** 한 세션 중반부터 음성 클립이 연속으로 통째 소실(값 인식·시트 기록은 정상, 클립만 없음). v0.13.0 로그 세션 `8409` row 11~18(18개 연속) 트림·raw 모두 부재.
@@ -492,14 +502,16 @@
 - **해결·회피(v0.14.0 B-1):** `audioRecorder.recoverStream(reason)` 신설 — 빈/극소 클립 감지(`useVoiceSession` clip_empty/clip_too_small 분기) 또는 유휴 중 devicechange 시 스트림을 **재획득**(re-getUserMedia + 프리롤·리스너 재구성). 쿨다운 `RECOVER_COOLDOWN_MS=3000`으로 폭주 방지. 녹음 중 devicechange는 비파괴 라벨 갱신만(진행 클립 보호), 유휴면 전체 재획득(`handleDeviceChange`). 텔레메트리 `clip_recorder_recovered:<reason>:<label>` / `clip_recorder_recover_failed`. **D 배지 staleness와 동일 원인·동일 수정 경로.**
 - **주의:** [IOS-5]는 "재-getUserMedia 금지(진행 클립 손실 회귀 방지)"였으나, 본 버그(연속 소실)가 더 큰 손실이라 v0.14.0에서 **제한적 반전**(유휴/실패 시에만 재획득, 녹음 중엔 비파괴). 실기기에서 의도적 BT↔스피커폰 전환으로 검증 필요.
 - **출처:** `2026-06-18 v0.13.0 실기기 로그`(세션 8409 연속 clip_empty/too_small) + 민구 현장 관찰 → **survey-011 v0.14.0** 대응.
-- **현재 상태:** ⚠️주시 (`src/lib/audioRecorder.ts` recoverStream/handleDeviceChange, `src/lib/useVoiceSession.ts` 트리거) — 실기기 장치전환 검증 필요.
+- **✅ 대폭 완화(`2026-06-19 v0.14.0 실기기 로그`):** `clip_recorder_recovered` 발화 확인 — v0.13.0 **18연속 소실 → 실제 소실 1건**(강남호 row1 c7, 직후 회복)으로 급감. recoverStream 작동 확정. ⚠️ 양승보 세션 "클립이상" 비고 행(rows4/6/9)은 **파일이 전부 건강(28~71KB) = 소실 아님** → 트림/재생 품질 의심([CLIP-TRIM-1] 계열, 별도 청취검증 후보). 민구 보고 "스피커폰 입력 중 일부 소실"과 정합(잔여 1건). 단 이번 3세션은 전부 내장마이크라 BT↔스피커폰 **실제 라우팅 전환** 표본은 부족 — 다음 테스트에서 의도적 전환 검증 지속.
+- **현재 상태:** ⚠️주시(완화) (`src/lib/audioRecorder.ts` recoverStream/handleDeviceChange, `src/lib/useVoiceSession.ts` 트리거; 2026-06-19 18→1건 급감) — BT 실제전환 표본 추가 필요.
 
 ### [TREND-RETRY-1] 이상치 알람 미작동 — 과거 인덱스 로드 1회 실패 후 세션 내내 재시도 없음
 - **증상:** 이상치 알람을 설정(감소+변동률)하고 값을 입력해도 어느 값에도 알람이 안 뜸.
 - **원인(로그 확정):** v0.13.0 로그 `past_index_ready` **0건** + `past_index_skip:Load failed` 2건(두 세션 모두 start 직후 ~27ms). 모든 commit이 `trend_skip:no_index`. **인증·연결은 정상**(같은 세션 `syncedRows:18 synced` — 시트 쓰기 성공) → prefetch가 너무 일찍 발사돼 `fetchAllRowsUnbounded`가 iOS Safari transient "Load failed"로 던졌고, `loadPastIndex` 실패는 캐시 안 되지만 **아무도 다시 안 부름**(prefetch 1회 + `evaluateTrend`는 `getCachedIndex`만 읽음) → 세션 내내 인덱스 없음. (토큰/re-auth와 무관 — [AUTH-7]과 별개.)
 - **해결·회피(v0.14.0 A):** `pastValues.ensurePastIndex()` — 반복 호출 안전한 백오프 재시도(0.6→4.0s, 최대 5회, 캐시/in-flight/예약 중 no-op). `prefetchPastIndex`가 이를 호출하고, `evaluateTrend`도 캐시 미스마다 nudge → 입력 이어가는 동안 인덱스가 살아남. `resetPastIndexRetries()`로 세션 시작 시 카운터 리셋. 비교 키는 현행 샘플키(`inferSampleKey`=auto·비date = 농가명·라벨·처리·조사나무·조사과실)로, 민구 멘탈모델("음성값 외 항목 조합")과 일치 — 변경 없음. 인덱스 복구 시 [ALERT-1/AREA2 V2] 직전 조사일(`prevDate`) 표시도 함께 살아남(이미 구현됨, no_index로 안 떴을 뿐).
 - **출처:** `2026-06-18 v0.13.0 실기기 로그`(past_index_ready 0건) → **survey-011 v0.14.0** 수정.
-- **현재 상태:** ⚠️주시 (`src/lib/pastValues.ts` ensurePastIndex/resetPastIndexRetries, `src/lib/useVoiceSession.ts` nudge+reset) — 실기기에서 `past_index_ready` 출현·알람 작동 확인 필요.
+- **✅ 종결(`2026-06-19 v0.14.0 실기기 로그`, 3세션):** `past_index_ready` **6회**(v0.13.0 0회 대비), `trend_alert_fired` 45 / confirmed 20 / corrected 25, payload에 `previousValue` 포함. 한 세션은 start 직후 `trend_skip:no_index` 후 ~2초 만에 `past_index_ready`로 **백오프 재시도 복구** 확인 — 세션 내내 알람 정상 작동. 민구 현장 보고 "이상치·변동률 알람 모두 작동"과 일치. 직전 조사일(prevDate) 팝업 표시만 시각 잔여(경미).
+- **현재 상태:** ✅수정됨·실기기 확정 (`src/lib/pastValues.ts` ensurePastIndex/resetPastIndexRetries, `src/lib/useVoiceSession.ts` nudge+reset; 2026-06-19 로그 past_index_ready 6회 작동확인).
 
 ### [CLIP-TRIM-1] 트림이 값 구간을 잘라 재생 시 값 안 들림 — 단, 실패의 대부분은 캡처 문제
 - **증상:** 기록된 음성 클립 재생 시 정상 값 청취 불가(편집 오류).

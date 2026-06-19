@@ -14,7 +14,7 @@ import { logger } from './logger';
 import { getCachedIndex, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { getAccessToken } from './googleAuth';
-import { evalPostTtsGuard, POST_TTS_GUARD_MS } from './postTtsGuard';
+import { ensureUniqueSessionLabel } from './sessionLabel';
 
 
 /** v0.6.0 CLIP-CMD — a captured '수정'/'정정' utterance whose save is deferred until the modify
@@ -984,30 +984,26 @@ export function useVoiceSession() {
     if (!awaiting) return;
     const cmd = detectCommand(text);
 
-    // While paused, only handle the 'resume' command; ignore everything else.
+    // While paused, accept only 'resume' and 'end' (v0.15.0 A5); ignore everything else.
+    // resume = 멈춘 입력 재개. end = 멈춘 채로 입력 종료·저장(일시정지 카드가 '재시작'/'종료' 둘 다
+    // 안내하므로 음성 '종료'도 paused에서 작동해야 한다 — 민구 요청).
     if (useSessionStore.getState().phase === 'paused') {
       if (cmd === 'resume') {
         epochRef.current++;
         cancelTts();
         await resumeRef.current();
+      } else if (cmd === 'end') {
+        epochRef.current++;
+        cancelTts();
+        await stop(true);
       }
       return;
     }
 
-    // v0.4.5 Q2: 스피커폰 모드에서는 TTS 재생 중 '명령어 실행'도 차단한다(true half-duplex).
-    // interim TTS 컷만 막으면 명령은 final에서 그대로 실행돼, modify 에코 TTS("수정 …")가 마이크로
-    // 새어 들어와 가짜 modify를 자가발동할 수 있다. 안내가 끝난 뒤 명령하도록 폐기한다.
-    // (resume은 위 paused 분기에서 처리되며 그땐 TTS가 재생 중이 아니므로 영향 없음.)
-    // v0.11.0 post-TTS 가드: TTS 재생 중(isTtsMuted)뿐 아니라, 종료 직후 가드 윈도우 동안의
-    // 잔향 유입도 차단한다(가드 차단은 post_tts_guard로 별도 계측). 판정은 evalPostTtsGuard(순수).
-    if (cmd && useSettingsStore.getState().speakerphoneMode) {
-      const msSinceTtsEnd = ctrlRef.current?.msSinceTtsEnd() ?? Number.POSITIVE_INFINITY;
-      const g = evalPostTtsGuard({ muted: ctrlRef.current?.isTtsMuted() ?? false, speakerphone: true, msSinceTtsEnd });
-      if (g.block) {
-        logger.log({ type: 'stt_blocked_tts_muted', text, parsed: cmd, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, ...(g.viaGuard ? { extra: 'post_tts_guard', msSinceTtsEnd: Math.round(msSinceTtsEnd) } : {}) });
-        return;
-      }
-    }
+    // v0.15.0 A6 — 스피커폰 모드 삭제. 모드로 게이트되던 TTS-중 명령차단(post-TTS 가드)을 함께
+    // 제거했다(민구: 모드 ON시 barge-in 안 됨을 불편으로 지목 + Trace: 가드 1회만 발화, 제거 안전).
+    // self-confirm 환각 위험은 v0.13.0 alertText "확인해주세요" 제거로 이미 구조적 해소됨. 이어폰
+    // 기본 경로의 barge-in(명령 즉시 실행)은 원래대로 유지된다.
 
     // T-2 (low-confidence command bypassing the gate): voice COMMANDS used to dispatch with no
     // confidence check at all (the value gate at minConfidence ran only AFTER the command branch).
@@ -1190,33 +1186,14 @@ export function useVoiceSession() {
     // 한계: 값은 final 단계에서 컷되므로 STT 확정까지 ~1~2초 TTS가 더 재생될 수 있음(명령어의 interim 컷보다 느림).
     // 잔여 에코 위험(TTS 숫자의 마이크 되먹임)은 아래 신뢰도 게이트(0.65 / noisy 0.80)가 1차 방어.
     // v0.4.4: barge-in 발화도 클립에 담기도록 클립은 announceField에서 announce TTS 이전에 시작됨.
-    // v0.4.5 Q2: 스피커폰 모드면 에코 방지를 위해 TTS 중 값 입력을 폐기(barge-in 끔) — TTS가
-    // 끝난 뒤 말하도록. 기본(이어폰) 모드는 barge-in 유지.
-    // v0.11.0 post-TTS 가드: 스피커폰 모드는 TTS 재생 중(isTtsMuted)뿐 아니라 종료 직후 가드
-    // 윈도우 동안의 잔향 유입도 폐기한다(가드 차단은 post_tts_guard로 별도 계측). 판정은 evalPostTtsGuard.
-    // v0.12.0 INSTR-1 near-miss 계측: 가드를 *통과*한(block:false) 스피커폰 입력 중 종료 직후 근접
-    // 밴드(POST_TTS_GUARD_MS ≤ msSinceTtsEnd < 500ms)에 든 것의 분포를 관측한다. 250ms 윈도우가
-    // 잔향을 충분히 막는지(혹은 넓혀야 하는지) 다음 필드 로그로 튜닝하려는 목적. 별도 이벤트를 만들지
-    // 않고 아래 stt 이벤트에 raw msSinceTtsEnd를 동봉한다(중복 로깅 방지).
-    let postTtsNearMissMs: number | null = null;
+    // v0.15.0 A6 — 스피커폰 모드 삭제. 모드로 게이트되던 값-경로 post-TTS 가드(종료 직후 잔향 폐기)와
+    // 그 near-miss 계측을 제거했다. 이제 기본(이어폰) barge-in 동작만 남는다: TTS 재생 중(muted) 값이
+    // 들어오면 폐기하지 않고 TTS를 끊고 그대로 처리한다. 잔여 에코 위험은 아래 신뢰도 게이트(0.65 /
+    // noisy 0.80)가 1차 방어. (self-confirm 환각은 v0.13.0 alertText 재구성으로 이미 구조적 해소.)
     {
       const muted = ctrlRef.current?.isTtsMuted() ?? false;
-      const speakerphone = useSettingsStore.getState().speakerphoneMode;
-      const msSinceTtsEnd = ctrlRef.current?.msSinceTtsEnd() ?? Number.POSITIVE_INFINITY;
-      const g = evalPostTtsGuard({ muted, speakerphone, msSinceTtsEnd });
-      if (g.block) {
-        logger.log({ type: 'stt_blocked_tts_muted', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, ...(g.viaGuard ? { extra: 'post_tts_guard', msSinceTtsEnd: Math.round(msSinceTtsEnd) } : {}) });
-        return;
-      }
-      // 가드 통과 + 스피커폰 + 비뮤트 + 근접 밴드 → near-miss로 표시(아래 stt 이벤트에 동봉).
-      // 500ms 상한은 placeholder(다음 필드 로그로 조정). raw 값(반올림/버킷팅 없음)을 그대로 실어
-      // 분석가가 전체 분포를 보게 한다. msSinceTtsEnd가 +Infinity(콜드스타트)면 밴드 밖이라 미표시.
-      // muted 분기(이어폰 전용)에는 넣지 않는다 — speakerphone && !muted를 만족하지 못해 영영 안 돈다.
-      if (speakerphone && !muted && msSinceTtsEnd >= POST_TTS_GUARD_MS && msSinceTtsEnd < 500) {
-        postTtsNearMissMs = msSinceTtsEnd;
-      }
       if (muted) {
-        // 이어폰 모드 barge-in: 재생 중 들어온 값을 폐기하지 않고 TTS를 끊고 그대로 처리.
+        // 이어폰 barge-in: 재생 중 들어온 값을 폐기하지 않고 TTS를 끊고 그대로 처리.
         logger.log({ type: 'stt_barge_in', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
         cancelTts();
         epochRef.current++; // 진행 중인 advance/안내 체인 무효화
@@ -1229,7 +1206,14 @@ export function useVoiceSession() {
     // 앱 처리는 ~1ms이므로 사용자 체감 딜레이의 실제 병목. 조기확정 시엔 ≈0으로 찍힌다.
     const eosTailMs = lastInterimRef.current ? Math.max(0, Date.now() - lastInterimRef.current.at) : null;
     lastInterimRef.current = null;
-    earlyCommitStableRef.current = null;
+    // A8 계측: final이 안정화 후보보다 먼저 도착해 조기확정이 무산된 케이스. 후보가 무장돼 있었을
+    // 때만 기록(매 final 폭주 방지). early-commit 자체 경로면 이미 ref가 비어 있어 여기선 안 찍힌다.
+    if (earlyCommitStableRef.current) {
+      logger.log({ type: 'stt_early_commit', sessionId: sessionIdRef.current,
+        row: awaiting.row, colId: awaiting.colId,
+        extra: `attempt:reset:final_first:${earlyCommitStableRef.current.value}` });
+      earlyCommitStableRef.current = null;
+    }
     logger.log({
       type: 'stt',
       sessionId: sessionIdRef.current,
@@ -1240,7 +1224,6 @@ export function useVoiceSession() {
       confidence,
       alts,
       ...(eosTailMs != null ? { eosTailMs } : {}),
-      ...(postTtsNearMissMs != null ? { msSinceTtsEnd: postTtsNearMissMs } : {}),
     });
 
     // Item 12: 컬럼명 완전 일치 STT 거부 — 숫자/날짜 컬럼에만 적용 (text/options 컬럼은 컬럼명이 유효한 값일 수 있음)
@@ -1266,8 +1249,9 @@ export function useVoiceSession() {
 
     const settingsNow = useSettingsStore.getState();
     const noisyMode = settingsNow.noisyMode;
-    // v0.4.5 Q2: 스피커폰 모드도 신뢰도 임계를 상향(에코 오인식 방지).
-    const minConfidence = noisyMode || settingsNow.speakerphoneMode ? 0.80 : 0.65;
+    // v0.15.0 A6 — 스피커폰 모드 삭제. 모드로 게이트되던 신뢰도 상향(0.80)을 제거. 소음 모드만
+    // 임계를 올린다(0.80), 기본은 0.65.
+    const minConfidence = noisyMode ? 0.80 : 0.65;
 
     // Input-3: 소음 환경 모드 — 1글자 이하 결과 거부
     if (noisyMode && text.replace(/\s/g, '').length <= 1) {
@@ -1368,7 +1352,15 @@ export function useVoiceSession() {
     const sess = useSessionStore.getState();
     sess.setRowValue(awaiting.row, awaiting.colId, parsed);
     sess.setRecognized(parsed);
-    sess.pushValueBurst(awaiting.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
+    // v0.15.0 A4 — 이상치→정정→정상 흐름 중복 팝업 억제. 추세 알림에 새 값으로 응답한 정정 커밋
+    // (trendConfirm)은 아래에서 anomalyAlert 팝업을 초록(corrected)으로 전환해 이미 같은 값을 크게
+    // 보여준다. 그 뒤 advance→announceField가 팝업을 닫으면(setAnomalyAlert(null)), VoiceScreen의
+    // `valueBurst && !anomalyAlert` 조건이 참이 되며 같은 값이 CenterValueBurst로 한 번 더 떠
+    // "정상 입력 내용이 한 번 더 팝업"되던 중복(민구 제보)이 발생한다. 정정-출처 커밋에선 burst를
+    // 건너뛰어 중앙 팝업이 1회(초록 corrected)만 뜨게 한다. 일반(비-정정) 커밋의 burst는 그대로 유지.
+    if (!awaiting.trendConfirm) {
+      sess.pushValueBurst(awaiting.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
+    }
     awaitingFieldRef.current = null;
 
     // v0.7.0 B4: 추세 알림에 새 값으로 응답한 재커밋 — 정정 기록(오알림률 분모) + 이전 값 발화
@@ -1582,8 +1574,11 @@ export function useVoiceSession() {
       //    TTS가 마이크로 새어들어가 알람이 스스로 닫히는 self-confirm 환각([IOS-3] 알람판)의 원인.
       //  - '이상치 알림' 접두로 화면을 안 보는 현장에서도 무엇인지 즉시 안다(팝업이 시각 안내 담당).
       //  - barge-in 가드 자체는 변경하지 않는다(STT-6 소음방어 보존 — 실기기 로그 후 별도 판단).
+      // v0.15.0 A2(민구 요청): 사용자 표시 라벨을 "이상치"→"추세"로 통일. 발화 접두도 함께 맞춘다
+      // (UI 라벨 일관성). self-confirm 환각 제거(끝의 "확인해주세요" 제거)는 v0.13.0 R7 그대로 유지
+      // — 접두 단어 변경은 detectCommand 매칭/가드 구조와 무관하다.
       const alertText =
-        `이상치 알림. ${formatForTts(parsed)}. 직전 조사보다${midPart} ` +
+        `추세 알림. ${formatForTts(parsed)}. 직전 조사보다${midPart} ` +
         `${v.direction === 'up' ? '증가' : '감소'}했습니다.`;
       // 시각 팝업: 이전값→현재값과 변화량을 띄운다(발화만으론 스쳐 지나가 확인이 어렵다는 요청).
       // v0.12.0 AREA2 V2 — 어떤 샘플·행/직전 회차의 비교인지 식별정보를 함께 싣는다(별도 재계산).
@@ -1672,18 +1667,36 @@ export function useVoiceSession() {
     // interim 숫자가 안정되면 커밋해 체감 딜레이를 줄인다. 보수적으로 숫자 컬럼 + 명령어 아님 +
     // TTS중 아님 + active 단계에서만. 절단 리스크가 있어 실기기 A/B 전까지 default off.
     if (!useSettingsStore.getState().fastRecognition) return;
+    // A8 계측: fastRecognition ON인데 현장 로그에서 stt_early_commit 0건 — '소음이 interim 안정화를
+    // 막아 미발동(정상)'인지 '미배선(버그)'인지 현 계측으론 구분 불가. 아래 stt_early_commit_attempt
+    // 로 안정화 시도 진입·리셋 사유를 가시화한다. 동작은 변경하지 않는다(가시성만 추가). OFF면 위
+    // early-return으로 무발화(오버헤드 0). 로그 폭주를 막기 위해 전이(transition) 시에만 찍는다.
+    const logAttempt = (extra: string) =>
+      logger.log({ type: 'stt_early_commit', sessionId: sessionIdRef.current,
+        row: awaitingFieldRef.current?.row, colId: awaitingFieldRef.current?.colId,
+        extra: `attempt:${extra}` });
     const awaiting = awaitingFieldRef.current;
     if (!awaiting || awaiting.trendConfirm) return;
     if (useSessionStore.getState().phase !== 'active') return;
-    if (ctrlRef.current?.isTtsMuted()) return; // TTS 중 barge-in은 final 경로가 처리
+    if (ctrlRef.current?.isTtsMuted()) {
+      // TTS 중 barge-in은 final 경로가 처리 — 안정화 후보가 무장돼 있었다면 무산 사유를 기록.
+      if (earlyCommitStableRef.current) { logAttempt('cancel:tts_muted'); earlyCommitStableRef.current = null; }
+      return;
+    }
     const t = text.trim();
     if (!t || detectCommand(t)) return; // 명령어는 반드시 final로
     const col = useSettingsStore.getState().columns.find((c) => c.id === awaiting.colId) || null;
     if (!col || (col.type !== 'int' && col.type !== 'float')) return; // 숫자 컬럼만 조기확정
     const parsed = parseValueForCol(col, t);
-    if (parsed === null) { earlyCommitStableRef.current = null; return; }
+    if (parsed === null) {
+      // interim이 더 이상 숫자로 파싱 안 됨 → 안정화 타이머 리셋(후보가 있었을 때만 기록).
+      if (earlyCommitStableRef.current) { logAttempt('reset:parse_null'); earlyCommitStableRef.current = null; }
+      return;
+    }
     const stable = earlyCommitStableRef.current;
     if (!stable || stable.value !== parsed) {
+      // 새 후보 무장(첫 진입) 또는 후보값 변경(새 interim 도착으로 안정화 타이머 리셋).
+      logAttempt(stable ? `reset:new_interim:${stable.value}->${parsed}` : `armed:${parsed}`);
       earlyCommitStableRef.current = { value: parsed, since: now };
       return;
     }
@@ -1713,7 +1726,13 @@ export function useVoiceSession() {
 
     const startTs = Date.now();
     sessionIdRef.current = `sess_${startTs}`;
-    sessionLabelRef.current = label?.trim() || undefined;
+    // v0.15.0 A3 — 같은 날 자동 세션명 중복 방지. 라벨 생성 출처(설정탭 sessionAutoLabel / 입력탭
+    // buildAutoLabel)와 무관하게, 세션 생성 시점에 기존 세션 라벨과 충돌하면 `-2`,`-3`… 순번을 붙여
+    // 고유화한다(데이터탭에서 같은 날 세션 구분). 라벨이 비면(undefined) 손대지 않는다.
+    const baseLabel = label?.trim();
+    sessionLabelRef.current = baseLabel
+      ? ensureUniqueSessionLabel(baseLabel, useDataStore.getState().sessions.map((x) => x.label))
+      : undefined;
     sess.resetAll();
     // D-2 (RACE-7): persist session id/startedAt in the store so an in-app unmount during pause
     // can't lose them. MUST run AFTER resetAll() — resetAll clears sessionId/startedAt too.

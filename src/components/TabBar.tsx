@@ -20,8 +20,12 @@ export function TabBar({ tab, setTab }: Props) {
   return (
     <div
       style={{
-        height: 88,
-        paddingBottom: 28,
+        // v0.15.0 A1 — 하단 홈인디케이터 safe-area. 기존 28px는 디자인 클리어런스(홈인디케이터
+        // 가정값)였고 standalone 노치 기기에선 실제 inset이 더 클 수 있어 max()로 둘 중 큰 값을 쓴다.
+        // env(...)는 일반 Safari 탭에서 0이라 28px가 그대로 유지된다(무회귀). minHeight로 바꿔 inset이
+        // 28을 넘으면 바가 자라 내부 아이콘/라벨이 잘리지 않게 한다.
+        minHeight: 88,
+        paddingBottom: 'max(28px, env(safe-area-inset-bottom, 0px))',
         paddingTop: 4,
         background: 'rgba(14,15,17,0.92)',
         backdropFilter: 'blur(20px) saturate(160%)',
