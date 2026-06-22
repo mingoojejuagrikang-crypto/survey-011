@@ -1335,14 +1335,24 @@ export function useVoiceSession() {
     }
     if (parsed === null) {
       logger.log({ type: 'stt_parse_failed', text, altsCount: alts.length, extra: parseFailReason ?? undefined, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
-      recorderRef.current?.startClip(); // restart clip
       // v0.10.0 A1: 소수 의도인데 소수부 유실("111 점 에") → 정수부를 유지하고 "소수점 아래만" 타깃
       // 재질문(전체 재발화 회피). 값 추측(에→1)은 하지 않는다 — 같은 STT 문자열이 111.1·111.5
       // 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정).
       if (parseFailReason === 'decimal_fraction_lost' && parseFailWhole != null) {
+        // [CLIP-DECIMAL-FRAG-1] v0.16.0 — 소수 재질문은 부분(조각) 발화("구")만 유도하므로, 다른
+        // 재질문(multi_numeric·extraneous_token 등 전체 재발화 유도)과 달리 클립을 재시작하면 직전의
+        // 원본 전체발화("이십구 점 부") 버퍼가 폐기돼 커밋 클립에 조각만 남는다(시트값은 정상·클립
+        // audit만 유실). 그래서 이 분기에서만 startClip()을 생략한다 — 활성 슬롯이 재질문 TTS·조각
+        // 발화를 거쳐 계속 녹음하다가 commit 지점 stopClip()에서 단일 연속 녹음으로 stop된다.
+        // audioTrim.findSpeechSegments가 원본·조각을 (긴 무음 gap ≫ MERGE_GAP_MS로) 두 세그먼트로
+        // 나누고 concatRanges가 사이 무음을 제거해 이어붙이므로(CLIP-BLANK-1 경로·기검증), 저장
+        // 클립이 전체값으로 재생/전사된다. 별도 cross-restart webm concat이 없어 iOS decodeAudioData
+        // (webm/opus) 위험(CLIP-2 ⚠️주시)을 구조적으로 피한다. `:raw`도 재시작이 없어 1회만 보존됨.
+        logger.log({ type: 'clip', extra: 'clip_decimal_kept', sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
         awaitingFieldRef.current = { ...awaiting, fractionWhole: parseFailWhole };
         await say(`${parseFailWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
       } else {
+        recorderRef.current?.startClip(); // restart clip (전체 재발화 유도 분기 — 새 클립이 옳다)
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
       }
       return;

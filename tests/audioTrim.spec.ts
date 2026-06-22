@@ -205,6 +205,32 @@ test.describe('findSpeechSegments + buildKeptRanges (v0.9.0 CLIP-BLANK-1)', () =
     expect(samples).toBeLessThan(30000);
     expect(samples).toBeGreaterThan(8000); // 두 발화 + 패딩은 보존
   });
+
+  // [CLIP-DECIMAL-FRAG-1] v0.16.0 — 소수 재질문에서 startClip 재시작을 생략하면, 원본 전체발화
+  // ("이십구 점 부")와 재질문 TTS 뒤의 조각 발화("구")가 한 연속 녹음에 담긴다. 그 사이는 긴 무음
+  // (TTS·사용자 반응 갭 ≫ MERGE_GAP_MS)이므로 findSpeechSegments가 두 세그먼트로 나누고 concat이
+  // 사이 무음만 제거해 둘 다 보존한다 — 저장 클립이 전체값 audit를 담는다는 로직을 명시적으로 표지.
+  // (cross-restart webm concat이 아니라 단일 녹음 디코드라 iOS decodeAudioData webm/opus 위험을 회피.)
+  test('decimal-frag: 원본 발화 + 긴 재질문 갭 + 조각 발화 → 두 세그먼트 모두 보존', () => {
+    const original = new Blob([new Uint8Array(1000)], { type: 'audio/webm' });
+    // 0.2s 무음 + 0.6s 원본("이십구 점 부") + 2.0s 재질문 TTS/반응 갭 + 0.3s 조각("구") + 0.2s 무음
+    const ORIG = 9600;   // 0.6s
+    const FRAG = 4800;   // 0.3s
+    const mono = synth2(3200, ORIG, 32000, FRAG, 3200);
+    const segs = findSpeechSegments(mono, RATE);
+    expect(segs.length, '원본과 조각이 두 세그먼트로 분리되지 않음').toBe(2);
+    const r = buildClipBlobs(mono, RATE, false, original);
+    expect(r.blob).not.toBe(original);
+    const samples = (r.blob.size - 44) / 2;
+    // 두 발화(0.6s + 0.3s = 0.9s = 14400) + 각 ±패딩이 보존되고 2.0s 갭은 제거된다 →
+    // 원본 단독 길이(트림 시 ≈ 0.6s+패딩)보다 분명히 길다(= 조각만이 아니라 원본도 들어있음).
+    const origAlone = ORIG + (RATE * PAD_FRONT_MS) / 1000 + (RATE * PAD_BACK_MS) / 1000; // ≈ 17280
+    const fragAlone = FRAG + (RATE * PAD_FRONT_MS) / 1000 + (RATE * PAD_BACK_MS) / 1000; // ≈ 12480
+    expect(samples, '원본 발화가 유실되고 조각만 남음').toBeGreaterThan(fragAlone + 2 * 320);
+    expect(samples, '두 발화 합 + 패딩이 보존되지 않음').toBeGreaterThan(origAlone);
+    // 갭(2.0s=32000)이 제거됐으므로 전체 span(53600)보다 크게 짧다.
+    expect(samples).toBeLessThan(mono.length - 20000);
+  });
 });
 
 test.describe('encodeWavMono — WAV 헤더/크기 계약', () => {

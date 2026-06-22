@@ -26,3 +26,6 @@ GEMINI.md
 
 # AI 로그 수확 헬퍼(서비스계정 사용, 팀 운영 도구) — 로컬 전용
 scripts/fetch-latest-growth-log.sh
+
+# 디자인 핸드오프(claude.ai/design 산출물) — 로컬 전용, 앱 커밋 제외
+design-sync/
