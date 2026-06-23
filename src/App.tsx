@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { TabBar, type TabId } from './components/TabBar';
+import { UpdateBanner } from './components/UpdateBanner';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { VoiceScreen } from './screens/VoiceScreen';
 import { DataScreen } from './screens/DataScreen';
@@ -59,6 +60,8 @@ export default function App() {
 
   return (
     <div style={phoneStyle}>
+      {/* v0.18.0 1f — 비강제 "새 버전" 배너(상단 고정, 모든 탭 공통). 새 SW waiting 시에만 노출. */}
+      <UpdateBanner />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {tab === 'settings' && <SettingsScreen />}
         {tab === 'voice' && <VoiceScreen />}

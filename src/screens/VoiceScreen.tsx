@@ -4,14 +4,13 @@ import { I } from '../components/icons';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
-import { computeTotalRows, nestedAutoValue, computeRowFromAutoChange } from '../lib/autoValue';
+import { computeTotalRows, nestedAutoValue, computeRowFromAutoChange, buildCyclingValues } from '../lib/autoValue';
 import { useWakeLock, lockPortrait } from '../lib/wakeLock';
 import { useVoiceSession } from '../lib/useVoiceSession';
 import { isSpeechSupported, speak } from '../lib/speech';
 import { PRIMARY_COMMANDS } from '../lib/voiceCommands';
-import { classifyInputDevice } from '../lib/inputDevice';
+import { getSampleLabelParts, type AnnounceLabelPart } from '../lib/announceColumns';
 import { AnomalyAlertPopup } from '../components/voice/AnomalyAlertPopup';
-import { CenterValueBurst } from '../components/voice/CenterValueBurst';
 import { CommandHelpPopup } from '../components/voice/CommandHelpPopup';
 import type { Column } from '../types';
 
@@ -20,21 +19,19 @@ export function VoiceScreen() {
   const sess = useSessionStore();
   const voiceSession = useVoiceSession();
   const [confidence, setConfidence] = useState<number | null>(null);
-  // v0.12.0 AREA1 — 읽기전용 입력장치 CATEGORY 배지용 라벨. getActiveInputLabel은 init() 비동기
-  // resolve 후 채워지므로 confidence와 동일하게 폴링으로 동기화한다(안정 콜백 참조).
-  const [inputLabel, setInputLabel] = useState<string | null>(null);
 
   useWakeLock(sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused');
 
-  // Sync confidence display + active input label from voice session refs
+  // Sync confidence display from voice session refs.
+  // v0.18.0 — 입력기기 배지 표시 제거(민구 결정). getActiveInputLabel 폴링도 함께 제거.
+  // hook의 getActiveInputLabel/복구 로직(audioRecorder.ts)은 불가침이라 그대로 둔다 — 표시만 삭제.
   useEffect(() => {
     if (sess.phase !== 'active') return;
     const interval = setInterval(() => {
       setConfidence(voiceSession.lastConfidenceRef.current);
-      setInputLabel(voiceSession.getActiveInputLabel());
     }, 300);
     return () => clearInterval(interval);
-  }, [sess.phase, voiceSession.lastConfidenceRef, voiceSession.getActiveInputLabel]);
+  }, [sess.phase, voiceSession.lastConfidenceRef]);
 
   const totalRows = s.tableGenerated ? computeTotalRows(s.columns) : 0;
   const voiceCols = s.columns.filter((c) => c.input === 'voice');
@@ -70,7 +67,6 @@ export function VoiceScreen() {
         completing={sess.phase === 'complete'}
         paused={sess.phase === 'paused'}
         confidence={confidence}
-        inputLabel={inputLabel}
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}
@@ -219,7 +215,7 @@ type HeroEvent = 'listening' | 'confirm' | 'complete';
 
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
-  totalRows, columns, voiceCols, currentColId, completing, paused, confidence, inputLabel,
+  totalRows, columns, voiceCols, currentColId, completing, paused, confidence,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
 }: {
   totalRows: number;
@@ -229,7 +225,6 @@ function ActiveState({
   completing: boolean;
   paused: boolean;
   confidence: number | null;
-  inputLabel: string | null;
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
   onJumpToRow: (row: number) => void;
@@ -255,6 +250,16 @@ function ActiveState({
     : currentValue
     ? 'confirm'
     : 'listening';
+
+  // ── v0.18.0 1b — 범용 샘플 식별 라벨 파트. announceColumns.ts의 순수 셀렉터로 산출(읽기 전용,
+  //    컬럼명 하드코딩 없음). 현 행/직전 행의 auto값을 buildCyclingValues로 view에서 파생하고,
+  //    순차변화(changed) 파트는 hero에서 굵게/액센트로 강조한다. 첫 행(row 1)은 prevValues=null로
+  //    넘겨 getSampleLabelParts가 "전부 변화"로 보지 않게 한다(buildCyclingValues(…,0) 호출 금지).
+  const sampleLabelParts = useMemo<AnnounceLabelPart[]>(() => {
+    const curValues = buildCyclingValues(columns, row);
+    const prevValues = row > 1 ? buildCyclingValues(columns, row - 1) : null;
+    return getSampleLabelParts(columns, curValues, prevValues);
+  }, [columns, row]);
 
   // 직전값 캡처 — store에 prevValue가 없으므로 view 레이어 ref로 정정 직전의 값을 기억한다.
   //   매 렌더에서 필드별 "마지막 비어있지 않은 값"을 추적해 둔다(재프롬프트가 셀을 ''로 비우기
@@ -295,7 +300,7 @@ function ActiveState({
             <span style={{ fontSize: 14, color: T.textDim, marginLeft: 6 }}>행</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <InputDeviceBadge label={inputLabel} />
+            {/* v0.18.0 — 입력기기 배지 표시 제거(민구 결정). 복구 로직은 audioRecorder.ts에 보존. */}
             {confidence !== null && confidence > 0 && confidence < 1 && !paused && (
               <span
                 style={{
@@ -417,6 +422,7 @@ function ActiveState({
             event={heroEvent}
             col={currentCol}
             value={currentValue}
+            sampleParts={sampleLabelParts}
           />
         )}
 
@@ -567,16 +573,10 @@ function ActiveState({
           newValue={modCurrent}
         />
       )}
-      {/* v0.17.0 A-hero — CenterValueBurst는 hero/pill이 중앙 거대값을 점유하지 않을 때만 띄운다.
-          confirm hero(거대 값)·정정 pill이 같은 값을 중앙에 이미 크게 보여주므로, 그때 burst를 함께
-          렌더하면 동일 값이 이중으로 겹친다(이중상). 그 구간엔 burst를 생략해 중복을 없앤다. */}
-      {sess.valueBurst && !sess.anomalyAlert && !paused && !sess.modifyIndicator && heroEvent !== 'confirm' && (
-        <CenterValueBurst
-          key={sess.valueBurst.seq}
-          name={sess.valueBurst.name}
-          value={sess.valueBurst.value}
-        />
-      )}
+      {/* v0.18.0 1c — CenterValueBurst('항목:값' 팝업) 완전 제거. 인식값은 hero(거대 값)·
+          ModifyIndicatorPill(정정)·AnomalyAlertPopup(이상치)로만 노출돼 중복 표시를 없앤다.
+          store의 valueBurst 필드/pushValueBurst 호출(useVoiceSession.ts)은 zero-diff 가드상
+          무수정 — write-only dead state로 남되 어디에도 렌더되지 않는다. */}
       {/* v0.15.0 A5 — 일시정지 중앙 대형 카드. 다른 중앙 안내(이상치/수정/버스트)보다 위(z-index)에
           두고, paused일 때 그것들을 가린다(상호배타). 후속 음성명령('재시작'/'종료')을 함께 안내. */}
       {paused && <PausedCard />}
@@ -708,29 +708,6 @@ function ModifyIndicatorPill({ name, prevValue, newValue }: { name: string; prev
   );
 }
 
-/** v0.12.0 AREA1 — 읽기전용 입력장치 CATEGORY 배지(IOS-5 후속). 출력 라우팅 토글을 대체한다:
- *  echoCancellation을 항상 ON으로 하드코딩했으므로 사용자가 바꿀 토글이 없고, 대신 getUserMedia가
- *  실제로 잡은 마이크의 CATEGORY(내장/블루투스/유선)만 보여준다(민구 확정: raw 장치명 아님).
- *  출력(스피커/이어피스)은 iOS가 Web에 노출하지 않으므로 표시하지 않는다. 비대화형(onClick 없음). */
-function InputDeviceBadge({ label }: { label: string | null }) {
-  const { icon, text } = classifyInputDevice(label);
-  return (
-    <span
-      title={`입력 마이크: ${text}`}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
-        padding: '4px 10px', borderRadius: 999,
-        border: `1px solid ${T.lineStrong}`,
-        background: 'transparent',
-        color: T.textDim,
-        fontSize: 11, fontWeight: 800, letterSpacing: -0.2,
-        whiteSpace: 'nowrap', userSelect: 'none',
-      }}
-    >
-      {icon} {text}
-    </span>
-  );
-}
 
 function ActiveTtsSlider() {
   const s = useSettingsStore();
@@ -775,101 +752,153 @@ function ActiveTtsSlider() {
   );
 }
 
-// ─── A-hero (v0.17.0) — 한 번에 한 값, 거대 mono. ─────────────────
+// ─── A-hero (v0.17.0 → v0.18.0 패널화) — 한 번에 한 값, 거대 mono, 반투명 패널. ──
+/** v0.18.0 1a — 상태색 패널 톤. 다른 중앙 팝업(AnomalyAlertPopup/ModifyIndicatorPill/
+ *  PausedCard, `rgba(...,0.94~0.96)` + 2px border)과 시각 일관. 의미색은 현행 유지:
+ *  listening/confirm/complete = 초록 계열(확정 톤). 패널/반투명 배경만 강화해 원거리에서
+ *  "글자만 덩그러니" 뜨던 hero를 영역으로 분리한다. */
+const HERO_PANEL = {
+  // listening도 confirm/complete와 같은 초록 계열 패널(현행 의미색 — 입력탭 hero는 확정 흐름).
+  bg: 'rgba(10,28,18,0.94)',
+  border: T.green,
+} as const;
+
 /** 입력 탭의 시각 중심(방향 A). 현재 필드의 이벤트 상태를 거대 숫자/안내로 표시한다.
  *  값/이벤트는 전부 store에서 파생된 props로만 들어온다(플로우 로직 무수정).
+ *  - 패널 상단: 범용 샘플 식별 라벨(sampleParts, 순차변화 파트는 굵게/액센트).
  *  - listening: 필드명 + "측정값을 말씀해 주세요" + 깜빡이는 점 3개(blink).
  *  - confirm:   필드명+타입배지 → 거대 값(mono, 길이별 150/104/50) → "✓ 정상".
  *  - complete:  ✓ + "행 입력 완료".
  *  정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(직전값 취소선→새값). */
 function VoiceHero({
-  event, col, value,
+  event, col, value, sampleParts,
 }: {
   event: HeroEvent;
   col: Column;
   value: string;
+  sampleParts: AnnounceLabelPart[];
 }) {
-  const accent = event === 'listening' ? T.blue : T.green; // confirm/complete = green
-
-  if (event === 'complete') {
-    return (
-      <div
-        aria-live="polite"
-        style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-          textAlign: 'center', minWidth: 0, width: '100%',
-        }}
-      >
-        <span style={{ fontSize: 'clamp(48px, 16vw, 72px)', lineHeight: 1, color: T.green }} aria-hidden>✓</span>
-        <span style={{ fontSize: 24, fontWeight: 800, color: T.text, letterSpacing: -0.4 }}>행 입력 완료</span>
-        <span style={{ fontSize: 14, color: T.textDim, fontWeight: 500 }}>다음 행으로 이동합니다…</span>
-      </div>
-    );
-  }
+  // confirm/complete = green(확정), listening = green 패널 + 거대 값 전 안내. 상태 라벨 색만 분기.
+  const statusAccent = T.green;
 
   return (
     <div
       aria-live="polite"
       style={{
+        // v0.18.0 1a — 반투명 패널: 다른 팝업과 동일한 frame + 2px 상태색 border + shadow.
+        maxWidth: 'min(560px, 94vw)', width: '100%',
+        padding: '18px 24px', borderRadius: 18,
+        background: HERO_PANEL.bg,
+        border: `2px solid ${HERO_PANEL.border}`,
+        boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-        textAlign: 'center', minWidth: 0, width: '100%',
+        textAlign: 'center', minWidth: 0,
       }}
     >
-      {/* 필드명 + 타입배지 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%', minWidth: 0 }}>
-        <span
-          style={{
-            fontSize: 'clamp(18px, 5vw, 22px)', fontWeight: 800,
-            color: event === 'listening' ? T.blue : T.textDim,
-            letterSpacing: -0.3, whiteSpace: 'nowrap', overflow: 'hidden',
-            textOverflow: 'ellipsis', maxWidth: '70vw',
-          }}
-        >
-          {col.name}
-        </span>
-        <TypeBadge type={col.type} />
-      </div>
+      {/* v0.18.0 1b — 범용 샘플 식별 라벨 헤더. announceColumns 셀렉터 산출 파트를 그대로 표시.
+          changed(순차변화) 파트는 굵게+초록 액센트로 강조해, 멀리서도 "지금 어느 샘플"인지 식별. */}
+      {sampleParts.length > 0 && (
+        <SampleLabelHeader parts={sampleParts} />
+      )}
 
-      {event === 'listening' ? (
+      {event === 'complete' ? (
         <>
-          <span style={{ fontSize: 'clamp(16px, 4.4vw, 19px)', color: T.textDim, fontWeight: 500 }}>
-            측정값을 말씀해 주세요
-          </span>
-          <div style={{ display: 'flex', gap: 10, marginTop: 4 }} aria-hidden>
-            {[0, 1, 2].map((i) => (
-              <span
-                key={i}
-                style={{
-                  width: 12, height: 12, borderRadius: '50%', background: T.blue,
-                  animation: `blink 1.2s ease-in-out ${i * 0.2}s infinite`,
-                }}
-              />
-            ))}
-          </div>
+          <span style={{ fontSize: 'clamp(48px, 16vw, 72px)', lineHeight: 1, color: T.green }} aria-hidden>✓</span>
+          <span style={{ fontSize: 24, fontWeight: 800, color: T.text, letterSpacing: -0.4 }}>행 입력 완료</span>
+          <span style={{ fontSize: 14, color: T.textDim, fontWeight: 500 }}>다음 행으로 이동합니다…</span>
         </>
       ) : (
         <>
-          {/* confirm: 거대 값 */}
-          <span
-            key={value}
-            style={{
-              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-              fontSize: heroFontSize(value),
-              fontWeight: 800, lineHeight: 1,
-              color: T.text,
-              letterSpacing: -2,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '94vw',
-              animation: 'chip-pop 320ms ease-out',
-            }}
-          >
-            {value || '—'}
-          </span>
-          {/* 상태 라벨 */}
-          <span style={{ fontSize: 'clamp(15px, 4.4vw, 19px)', fontWeight: 800, color: accent, letterSpacing: -0.2 }}>
-            ✓ 정상
-          </span>
+          {/* 측정 항목명 + 타입배지 (샘플 라벨과 위계 구분 — 항목명이 더 큼) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%', minWidth: 0 }}>
+            <span
+              style={{
+                fontSize: 'clamp(18px, 5vw, 22px)', fontWeight: 800,
+                color: T.text,
+                letterSpacing: -0.3, whiteSpace: 'nowrap', overflow: 'hidden',
+                textOverflow: 'ellipsis', maxWidth: '70vw',
+              }}
+            >
+              {col.name}
+            </span>
+            <TypeBadge type={col.type} />
+          </div>
+
+          {event === 'listening' ? (
+            <>
+              <span style={{ fontSize: 'clamp(16px, 4.4vw, 19px)', color: T.textDim, fontWeight: 500 }}>
+                측정값을 말씀해 주세요
+              </span>
+              <div style={{ display: 'flex', gap: 10, marginTop: 4 }} aria-hidden>
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    style={{
+                      width: 12, height: 12, borderRadius: '50%', background: T.green,
+                      animation: `blink 1.2s ease-in-out ${i * 0.2}s infinite`,
+                    }}
+                  />
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              {/* confirm: 거대 값 */}
+              <span
+                key={value}
+                style={{
+                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                  fontSize: heroFontSize(value),
+                  fontWeight: 800, lineHeight: 1,
+                  color: T.text,
+                  letterSpacing: -2,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '88vw',
+                  animation: 'chip-pop 320ms ease-out',
+                }}
+              >
+                {value || '—'}
+              </span>
+              {/* 상태 라벨 */}
+              <span style={{ fontSize: 'clamp(15px, 4.4vw, 19px)', fontWeight: 800, color: statusAccent, letterSpacing: -0.2 }}>
+                ✓ 정상
+              </span>
+            </>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+/** v0.18.0 1b — 범용 샘플 식별 라벨 헤더. announceColumns의 파트를 ` · ` 구분으로 나열한다.
+ *  순차변화(changed=true) 파트는 굵게+초록 액센트로 강조(= announceRowDiff가 호명하는 부분).
+ *  컬럼명 하드코딩 없음. 측정 항목명보다 작게(위계 구분), 원거리 가독되게 충분히 크게. */
+function SampleLabelHeader({ parts }: { parts: AnnounceLabelPart[] }) {
+  return (
+    <div
+      style={{
+        display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'center',
+        gap: '2px 4px', maxWidth: '100%',
+        paddingBottom: 8, marginBottom: 2,
+        borderBottom: `1px solid rgba(0,200,83,0.22)`,
+      }}
+    >
+      {parts.map((p, i) => (
+        <span key={p.col.id} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+          {i > 0 && <span style={{ fontSize: 14, color: T.textMute, fontWeight: 600 }} aria-hidden>·</span>}
+          <span
+            style={{
+              fontSize: p.changed ? 'clamp(15px, 4.4vw, 18px)' : 'clamp(14px, 4vw, 16px)',
+              fontWeight: p.changed ? 800 : 600,
+              color: p.changed ? T.green : T.textDim,
+              letterSpacing: -0.2,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {p.col.name} {p.value}
+          </span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -1042,9 +1071,6 @@ function ColumnChip({
           </span>
         </span>
       )}
-
-      {/* I-3: the recognition burst now renders as a screen-centered overlay (CenterValueBurst in
-          ActiveState) showing "항목 : 값" — larger and not clipped by the chip's transform. */}
     </div>
   );
 }

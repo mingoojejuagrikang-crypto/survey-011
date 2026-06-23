@@ -61,10 +61,11 @@ export function AnomalyAlertPopup({
             {corrected ? '정상' : `${a.changeText ? `${a.changeText} ` : ''}${up ? '증가' : '감소'}`}
           </span>
         </div>
-        {/* V2 — 어떤 샘플/행을 보는지. 샘플키 미상이면 '행 N' 폴백. 긴 키도 박스 안에서 줄바꿈. */}
+        {/* V2 — 어떤 샘플/행을 보는지. 샘플키 미상이면 '행 N' 폴백. 긴 키도 박스 안에서 줄바꿈.
+            v0.18.0 1d — 원거리 가독: 샘플 식별 줄을 키우고 대비 보강(textDim→text). */}
         <div
           style={{
-            fontSize: 14, color: T.textDim, fontWeight: 600, textAlign: 'center',
+            fontSize: 'clamp(15px, 4.4vw, 17px)', color: T.text, fontWeight: 700, textAlign: 'center',
             lineHeight: 1.4, maxWidth: '100%', wordBreak: 'break-all', overflowWrap: 'anywhere',
           }}
         >
@@ -80,15 +81,16 @@ export function AnomalyAlertPopup({
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
             <span
               style={{
-                fontSize: 12, fontWeight: 700, color: T.textMute, letterSpacing: -0.2,
+                fontSize: 13, fontWeight: 700, color: T.textDim, letterSpacing: -0.2,
                 fontFamily: 'system-ui, sans-serif',
               }}
             >
               직전{a.prevDate ? ` (${a.prevDate})` : ''}
             </span>
-            <span style={{ fontSize: 30, fontWeight: 800, color: T.textDim }}>{a.prev}</span>
+            {/* v0.18.0 1d — 직전값 대비 보강(textDim→text 인접 대비 위해 크기 유지·굵게). */}
+            <span style={{ fontSize: 'clamp(30px, 8vw, 36px)', fontWeight: 800, color: T.textDim }}>{a.prev}</span>
           </div>
-          <span style={{ fontSize: 24, color: T.textMute, paddingBottom: 4 }}>→</span>
+          <span style={{ fontSize: 26, color: T.textDim, paddingBottom: 4 }}>→</span>
           {/* R3 — hero 현재값 위에 항목명 라벨(accent색)을 붙여 정수값도 어느 항목인지 즉시 식별. */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
             <span

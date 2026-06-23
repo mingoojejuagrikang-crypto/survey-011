@@ -18,7 +18,12 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // v0.18.0 1f — 비강제(프롬프트) 업데이트. autoUpdate의 silent 강제 리로드를 제거하고
+      // main.tsx의 registerSW(onNeedRefresh/onRegisteredSW)로 수동 등록한다. injectRegister:null로
+      // 플러그인 자동 주입을 끄고(이중 등록 방지) main에서 한 번만 등록한다. iOS standalone에서
+      // 새 버전을 silent 리로드 없이 "새 버전" 배너로 안내(현장 음성 측정 중 강제 리로드 금지).
+      registerType: 'prompt',
+      injectRegister: null,
       includeAssets: ['icon.svg', 'icon-192.svg', 'icon-512.svg', 'maskable-icon-512.svg'],
       manifest: {
         name: 'survey-011',

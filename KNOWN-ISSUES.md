@@ -109,6 +109,7 @@
 - **해결·회피(v0.13.0 R8):** init 성공 직후 `devicechange` + 활성 트랙 `ended`/`mute`/`unmute`를 **구독**하고, 신호 수신 시 **비파괴 `enumerateDevices` 재읽기**로 `activeInput.label`을 갱신. 재-`getUserMedia`는 금지([IOS-5] 종결 정책 + 진행 중 클립 손실 회귀 방지) — 라벨만 다시 읽는다. 활성 장치가 목록에서 사라지거나 트랙이 `ended`면 라벨을 비워 `classifyInputDevice`가 자연히 '📱 내장'으로 폴백(BT 끊김→내장 표시). `dispose()`에서 리스너 해제(track.stop의 ended가 핸들러를 깨우지 않도록 stop 전에 detach). **주의(코드리뷰 R8):** `track.muted`는 '장치 분리'가 아니라 일시 인터럽션(통화/Siri/라우트 변경)이므로 라벨을 비우는 조건에서 **제외**한다(BT 연결 중 일시 mute에 '내장' 깜빡임 방지) — 진짜 분리는 `ended`+enumerate deviceId 부재로만 판정.
 - **출처:** `2026-06-18 세션`(민구 제보) → **survey-011 v0.13.0** 수정
 - **현재 상태:** ✅수정됨 (`src/lib/audioRecorder.ts` attach/detachDeviceListeners·refreshActiveInputLabel) — **iOS Safari PWA에서 active getUserMedia 중 `devicechange`/track `ended` 실제 발화 여부는 device 확인 필요**(미발화여도 no-op이라 회귀는 없음).
+- **⚙️ 후속(v0.18.0, 배지 표시 삭제 — 민구 결정):** 수차례 수정에도 입력장치 배지가 현장에서 정상 동작 안 함(비대칭 미반영 등) → **시각 배지만 제거**. `VoiceScreen.tsx`의 `InputDeviceBadge` 컴포넌트·렌더·`getActiveInputLabel` 폴링 제거. **복구 로직은 불가침으로 보존** — `audioRecorder.ts`의 `recoverStream`/`attachDeviceListeners`/`handleDeviceChange`/`refreshActiveInputLabel`·`getActiveInputLabel` 메서드는 그대로 둠(CLIP-LOSS-1 클립 복구가 의존). `src/lib/inputDevice.ts`/`classifyInputDevice`는 `tests/inputDevice.spec.ts`가 참조하므로 **삭제하지 않음**(미참조 조건 미충족). 즉 "어떤 마이크로 듣는지" 표시는 사라졌지만 BT↔내장 전환 시 클립 복구 동작은 유지.
 - **⚠️ 후속(v0.14.0 D):** v0.13.0 후 민구 보고 — BT→스피커폰→BT 재전환 시 **2번째 BT 복귀가 배지에 반영 안 됨**(비대칭). 비파괴 enumerate는 같은 deviceId/라벨이면 변화를 못 잡는 한계. v0.14.0에서 `handleDeviceChange`가 **유휴 중(녹음 아님) 장치변경 시 스트림 재획득**(recoverStream)으로 실제 활성 장치를 다시 잡아 배지를 갱신([CLIP-LOSS-1]와 동일 경로). 녹음 중엔 비파괴 라벨 갱신 유지(클립 보호). 비대칭 원인은 실기기 재검증 필요.
 
 ---
@@ -423,6 +424,9 @@
 - **해결·회피:** 서비스 워커 배포 시 업데이트 감지 이벤트를 UI에 팝업("새로운 버전이 있습니다. 새로고침하여 적용하세요")으로 띄우고 사용자가 인지하도록 가이드.
 - **출처:** `2026-06-08 세션` (실기기 로그 분석)
 - **현재 상태:** ✅수정됨 (5086 로그 분석 결과 v0.4.2 업데이트 및 실기기 정상 구동 완료 확인)
+- **⚠️ 재발(v0.17.0 실기기, 민구 제보):** 홈 화면 **설치형(standalone)** 사용 시 새 버전 배포해도 반영 안 됨 — `vite.config.ts` `registerType:'autoUpdate'`는 iOS standalone에서 완전 종료·재실행 전엔 새 SW를 silent 리로드로만 반영하는데, 현장에선 그 리로드가 안 걸림.
+- **해결·회피(v0.18.0 1f, 비강제 프롬프트):** `registerType:'prompt'` + `injectRegister:null`로 전환하고 `src/lib/pwaUpdate.ts`에서 `virtual:pwa-register`의 `registerSW({onNeedRefresh,onRegisteredSW})`를 `main.tsx`에서 **수동 1회** 등록(이중 등록 방지). ① 능동 체크 = standalone 실행 + `visibilitychange`(포그라운드) 시 `registration.update()`. ② 비강제 배너(`src/components/UpdateBanner.tsx`, App 상단 고정) = 새 SW waiting 시에만 노출, 탭 시 `updateSW(true)`(skipWaiting+1회 리로드). ③ Settings footer에 현재 버전 + "업데이트 확인/새로고침" 버튼(`UpdateControl`). **음성 측정 중 강제 리로드 금지** — 적용은 사용자 탭 시점에만. 진행 세션은 v0.4.4 증분 persist로 영속화돼 리로드해도 유실 없음. **autoUpdate의 silent 강제 리로드 제거가 핵심 변경.**
+- **미검증(실기기 대기):** iOS standalone에서 (a) 새 버전 배포 후 실행/포그라운드 시 배너 실제 노출, (b) `registration.update()`가 새 SW를 실제 탐지하는지 — 다음 실기기 세션에서 이전→신 버전 전환 실증 필요.
 
 
 ---
