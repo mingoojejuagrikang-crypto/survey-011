@@ -65,6 +65,35 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
 }
 
+/** v0.19.0 W6 — 세션별 개별 zip 생성. 시트 sync 성공 세션들을 **세션당 1개 zip**으로 분리해
+ *  각각 업로드할 수 있게 한다(기존: 성공 세션 전체를 통합 1 zip). 각 zip은 `exportLogZip([oneId])`를
+ *  그대로 재사용하므로 sessions.json은 단일 세션, clips/도 그 세션 것만 담기며 `__app__` 수명주기
+ *  이벤트는 항상 동봉된다(exportLogZip 계약). 복구(recoverFromDrive)는 zip마다 sessions.json의
+ *  sessions 배열을 순회하므로 N개 단일세션 zip을 그대로 열거·dedupe한다 — 호환.
+ *
+ *  파일명은 수확 컨벤션 prefix `growth-log_<date>`를 보존하고 세션 식별자 + 타임스탬프를 덧붙여
+ *  rclone 수확/SOP-003과 호환되며 세션 간 충돌하지 않는다:
+ *    `growth-log_<YYYY-MM-DD>_<sessionId>_<ts>.zip`
+ *  sessionId의 `:` 등 파일명 부적합 문자는 `_`로 정규화한다(현 sessionId는 `sess_<ts>` 형태라
+ *  보통 영숫자/underscore지만 방어적으로 처리). */
+export interface SessionZip {
+  sessionId: string;
+  blob: Blob;
+  filename: string;
+}
+
+export async function exportLogZipsPerSession(sessionIds: string[]): Promise<SessionZip[]> {
+  const date = new Date().toISOString().slice(0, 10);
+  const out: SessionZip[] = [];
+  for (const id of sessionIds) {
+    const blob = await exportLogZip([id]);
+    const safeId = id.replace(/[^A-Za-z0-9_-]/g, '_');
+    const filename = `growth-log_${date}_${safeId}_${Date.now()}.zip`;
+    out.push({ sessionId: id, blob, filename });
+  }
+  return out;
+}
+
 export function downloadZip(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

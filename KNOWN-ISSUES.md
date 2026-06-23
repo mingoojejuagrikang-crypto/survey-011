@@ -36,6 +36,7 @@
 - **해결·회피:** `KNOWN_NOISE` 정규식 필터로 해당 단어 거부 + 거부 시 `setRecognized('')`로 다른 거부 경로와 UX 일관성 유지. 소음 모드 토글(임계값 0.65→0.80, 1글자 거부)도 도입.
 - **출처:** `growth-survey-010@2ed62a5`(F010 노이즈 필터), `growth-survey-010@dcaafea`(소음 모드), `growth-survey-010@79cbf2c`(거부 UX 일관성)
 - **현재 상태:** ✅수정됨 (`src/lib/useVoiceSession.ts` `KNOWN_NOISE`)
+- **⚠️ 후속(v0.19.0, 소음 환경 모드 제거 — 민구 결정):** 민구 판단(TTS가 인식값을 되읽어 줘 오인식 즉시 식별·소음모드가 오히려 입력 방해) → `noisyMode` 토글·필드·STT 소비처 전부 제거. **부작용:** STT 거부 임계값이 항상 `0.65`로 통일(소음모드의 0.80 상향 + 1글자 거부 방어선 소멸). `KNOWN_NOISE` 필터 + lone-syllable 동음이의 가드(noisyMode 독립)는 **보존**. **주시:** 다음 *실소음(비닐하우스·우천)* 로그에서 garbage-commit/환각단어 커밋률을 관측 — 0.65 통일로 환각 커밋이 늘면 재검토(합성 자가테스트론 노출 불가, 실소음 로그 필요).
 
 ### [STT-4] 컬럼명과 같은 STT 값 거부가 text/options 컬럼까지 차단
 - **증상:** STT 값이 컬럼명과 일치하면 거부하는 가드가 text/options(자유서술·선택) 컬럼에서도 발동해 정당한 입력을 막음.
@@ -111,6 +112,7 @@
 - **현재 상태:** ✅수정됨 (`src/lib/audioRecorder.ts` attach/detachDeviceListeners·refreshActiveInputLabel) — **iOS Safari PWA에서 active getUserMedia 중 `devicechange`/track `ended` 실제 발화 여부는 device 확인 필요**(미발화여도 no-op이라 회귀는 없음).
 - **⚙️ 후속(v0.18.0, 배지 표시 삭제 — 민구 결정):** 수차례 수정에도 입력장치 배지가 현장에서 정상 동작 안 함(비대칭 미반영 등) → **시각 배지만 제거**. `VoiceScreen.tsx`의 `InputDeviceBadge` 컴포넌트·렌더·`getActiveInputLabel` 폴링 제거. **복구 로직은 불가침으로 보존** — `audioRecorder.ts`의 `recoverStream`/`attachDeviceListeners`/`handleDeviceChange`/`refreshActiveInputLabel`·`getActiveInputLabel` 메서드는 그대로 둠(CLIP-LOSS-1 클립 복구가 의존). `src/lib/inputDevice.ts`/`classifyInputDevice`는 `tests/inputDevice.spec.ts`가 참조하므로 **삭제하지 않음**(미참조 조건 미충족). 즉 "어떤 마이크로 듣는지" 표시는 사라졌지만 BT↔내장 전환 시 클립 복구 동작은 유지.
 - **⚠️ 후속(v0.14.0 D):** v0.13.0 후 민구 보고 — BT→스피커폰→BT 재전환 시 **2번째 BT 복귀가 배지에 반영 안 됨**(비대칭). 비파괴 enumerate는 같은 deviceId/라벨이면 변화를 못 잡는 한계. v0.14.0에서 `handleDeviceChange`가 **유휴 중(녹음 아님) 장치변경 시 스트림 재획득**(recoverStream)으로 실제 활성 장치를 다시 잡아 배지를 갱신([CLIP-LOSS-1]와 동일 경로). 녹음 중엔 비파괴 라벨 갱신 유지(클립 보호). 비대칭 원인은 실기기 재검증 필요.
+- **⚙️ 후속(v0.19.0 W7, 입력장치 실시간 로깅 — 민구 요청):** v0.18.0 로그가 **BT·스피커폰을 실제로 썼는데도 두 세션 모두 "iPhone 마이크"**로만 기록(B-1 갭) → 분석 시 입력 경로 식별 불가. 라벨이 실제 변할 때만(`old !== new`) `audioRecorder.ts`가 `session`/`input_device_changed:<reason>:<oldCat>→<newCat>` 이벤트 방출(refreshActiveInputLabel·recoverStream 전이점, `classifyInputDevice` 카테고리 동봉). 신규 이벤트 타입은 안 만들어 **log-replay 호환**. **한계(명시):** iOS는 STT(Web Speech)가 자체 오디오 캡처라 클립 레코더(getUserMedia)의 `track.label`이 STT 실제 경로와 다를 수 있어, **BT 연결돼도 "내장"으로 찍힐 수 있음** — 계측 신호는 늘지만 BT/내장 완전 구분은 [IOS-5]/AUDIO-ROUTE-1(네이티브 셸) 영역. **실기기 검증:** 세션 중 BT↔스피커폰 전환 시 이벤트 출현 여부 + device.json `audioInputDevices` 열거 대조.
 
 ---
 
@@ -182,6 +184,14 @@
 - **출처:** `2026-06-05 세션`(피드백) → **survey-011 v0.4.0** 수정
 - **현재 상태:** ✅수정됨 (`src/App.tsx`, `src/lib/hydrate.ts`, `src/stores/dataStore.ts` `hydrationError`, `src/screens/DataScreen.tsx` `LoadErrorState`; 회귀 `tests/correction-flow.spec.ts` "D-2 — fresh start→종료→reload …")
 - **교훈:** 또 빈 catch였다. **모든 로드/영속화 실패는 로깅하고, "빈 목록"과 "로드 실패"를 UI에서 반드시 구분**하라. "데이터 없음"이 진짜 없음을 의미하지 않는다 — 삼켜진 것일 수 있다.
+
+### [STORE-1] 앱 업데이트 시 savedSheets(저장 시트 목록)가 비워짐 — async IDB 복원 완료 전 빈 setItem이 미러를 덮음
+- **증상(민구 제보, 2026-06-23):** "홈 설치형(설치 앱 아이콘)에서 **앱 업데이트 시에만** 저장된 구글 스프레드시트 링크 목록이 사라진다. 평상시 실행은 유지된다."
+- **원인(코드 추적):** persist 스토리지가 `mirroredStorage`(localStorage 1차 + IDB 미러, `settingsStore.ts`). 업데이트 부팅 시 localStorage가 evict되면 `getItem`이 **비동기 IDB 복원 Promise**를 반환하는데, 복원이 끝나기 **전** 부팅 초기 `set()`(인증/컬럼 reconcile 등)이 기본값 `savedSheets:[]`를 직렬화해 `setItem` write-through가 **IDB 미러를 빈 배열로 덮어** 영구 소실. (migrate의 savedSheets 검증 블록은 버그 아님 — 빈 배열 `.every()`는 vacuously true라 강제 초기화 안 함.)
+- **해결·회피(v0.19.0 W2):** ① **하이드레이션 게이트** — `hydrationComplete` 플래그 전엔 `setItem`의 IDB write-through 보류(localStorage 1차 쓰기는 유지=동기 동작 보존). `onRehydrateStorage`에서 1회 해제(세 부팅 경로 공통, 기존 `settings_hydrated` breadcrumb와 동일 위치). ② **전용 IDB 레코드**(`db.ts` `saveSheetsRecord`/`loadSheetsRecord`, key `__saved_sheets__`) — saveSheet/removeSavedSheet에서만 써서 bulk write-through에 안 덮임. 부팅 시 settings savedSheets가 비면 이 레코드(+sheetUrl)로 결정론적 복원(`saved_sheets_restored_from_record:N` 계측). ③ persist `version` 9→10. 재현 테스트 `tests/settings-migration.spec.ts`(전용 레코드 복원 red→green 입증).
+- **출처:** `2026-06-23 세션`(민구 제보) → **survey-011 v0.19.0** 수정
+- **현재 상태:** ✅수정됨(전용 레코드 복원은 단위테스트 입증, 하이드레이션 게이트는 코드추적 정확·레이스 비결정성으로 단위 미커버) — **iOS 실기기 검증 대기.**
+- **⚠️ 미검증 전제(다음 세션 분기):** 수정은 "iOS PWA 업데이트 시 **IndexedDB는 살아남고 localStorage만 evict된다**"를 가정. 만약 다음 실기기 업데이트에서 **여전히** 목록이 사라지면 IDB도 함께 비워지는 더 강한 제약 → **대비책: 재로그인 후 Drive에서 최근 사용 시트 목록 재발견(시트는 사용자 Drive에 있으므로 저장소 독립 복원)**. (token은 별도 키라 업데이트 시 여전히 만료 → 재로그인 후 살아남은 목록에서 1-탭 재연결, 설계 의도와 일치.)
 
 ---
 

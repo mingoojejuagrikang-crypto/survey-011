@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { T, TYPE_LABELS, TYPE_COLORS } from '../tokens';
 import { I } from '../components/icons';
-import { ScreenHeader } from '../components/ScreenHeader';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { computeTotalRows, nestedAutoValue, computeRowFromAutoChange, buildCyclingValues } from '../lib/autoValue';
@@ -117,7 +116,9 @@ function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ScreenHeader title="음성 입력" sub={ttsHint || undefined} />
+      {/* v0.19.0 W1 — 상단 큰 탭 타이틀("음성 입력") 제거(하단 TabBar 하이라이트와 중복).
+          단 ttsHint(기능 안내: 미지원 브라우저 / 테이블 미생성)는 삭제하지 않고 본문 상단
+          경고 배너로 이전한다 — 순수 탭 이름만 사라지고 기능 안내는 보존. */}
       <div
         style={{
           flex: 1, display: 'flex', flexDirection: 'column',
@@ -125,6 +126,20 @@ function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => 
           padding: '0 24px', gap: 28,
         }}
       >
+        {ttsHint && (
+          <div
+            role="alert"
+            style={{
+              width: '100%', maxWidth: 320,
+              padding: '12px 16px', borderRadius: 12,
+              background: 'rgba(255,179,0,0.10)', border: `1px solid ${T.amber}`,
+              color: T.amber, fontSize: 15, fontWeight: 600,
+              lineHeight: 1.5, letterSpacing: -0.1, textAlign: 'center',
+            }}
+          >
+            {ttsHint}
+          </div>
+        )}
         <div style={{ position: 'relative' }}>
           <div
             style={{
@@ -279,10 +294,32 @@ function ActiveState({
     if (v && c.id !== modCol) lastNonEmptyRef.current[c.id] = v;
   }
 
+  // ── v0.19.0 W5 — 칩 그리드를 3줄 캡(내부 스크롤)으로 고정하면 활성 컬럼이 스크롤 밖으로 나갈 수
+  //    있다("지금 어디" 표시 상실). 활성 칩을 ref로 잡아 currentColId/row 변경 시 가시영역으로
+  //    스크롤한다(block:nearest — 위/아래 인접 칩만 살짝, 화면 점프 없음).
+  const activeChipRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    activeChipRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [currentColId, row]);
+
   return (
-    <>
-      {/* Top: row indicator + progress */}
-      <div style={{ padding: '10px 18px 4px', flexShrink: 0 }}>
+    // ── v0.19.0 W5 — ActiveState를 단일 CSS grid 루트로 재설계. 4개 독립 구역을 gridTemplateRows로
+    //    고정해 한 구역의 높이 변화가 다른 구역을 밀지 않게 한다:
+    //      1) auto  — 상단 상태바(행번호/진행/신뢰도)
+    //      2) <캡>  — 칩 스크롤영역(내부 overflowY:auto, 약 3줄 높이 고정 → 칩 무제한 성장[버그A] 차단)
+    //      3) 1fr   — 중앙 흡수영역: VoiceHero + TTS 에코까지 모든 가변/조건부 내용을 여기에 모은다.
+    //                  hero가 팝업 표시로 숨겨져도 이 구역만 리플로우 → 아래 컨트롤바는 안 밀림(버그B)
+    //      4) auto  — 하단 컨트롤바: 이전/다음·마이크·종료·도움말·속도(한자리 고정)
+    //    fixed 오버레이(이상치/수정/일시정지/명령어)는 grid track을 만들지 않으므로 자식으로 둬도 무영향.
+    <div
+      style={{
+        flex: 1, minHeight: 0,
+        display: 'grid',
+        gridTemplateRows: 'auto auto 1fr auto',
+      }}
+    >
+      {/* 1) Top: row indicator + progress */}
+      <div style={{ padding: '10px 18px 4px' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <div
             style={{
@@ -346,16 +383,19 @@ function ActiveState({
         </div>
       </div>
 
-      {/* Chip grid */}
+      {/* 2) Chip grid — v0.19.0 W5: 약 3줄 캡 + 내부 스크롤. 칩이 늘어도 이 구역 높이는 고정이라
+          아래 hero/컨트롤바를 밀지 않는다(버그A 차단). 활성 칩은 scrollIntoView로 항상 가시. */}
       <div
         style={{
+          maxHeight: 168,
+          overflowY: 'auto',
+          WebkitOverflowScrolling: 'touch',
           padding: '10px 12px',
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
           gap: 8,
           borderTop: `1px solid ${T.line}`,
           borderBottom: `1px solid ${T.line}`,
-          flexShrink: 0,
           alignContent: 'flex-start',
         }}
       >
@@ -372,6 +412,7 @@ function ActiveState({
           return (
             <ColumnChip
               key={c.id}
+              containerRef={isActive ? activeChipRef : undefined}
               col={c}
               value={value}
               isActive={isActive}
@@ -404,19 +445,21 @@ function ActiveState({
         })}
       </div>
 
-      {/* Center: 값 중심(Hero) + row-nav + mic pause toggle + end button */}
+      {/* 3) 1fr 흡수영역 — VoiceHero + TTS 에코. 모든 가변/조건부 내용을 여기에 모은다.
+          hero가 팝업(이상치/수정/일시정지) 표시로 숨겨지면 이 구역만 비워지고, 아래 컨트롤바(row4)는
+          grid track이 고정이라 움직이지 않는다(버그B 해소). overflow:hidden으로 hero가 길어도
+          이 구역 밖으로 새지 않게(아래 컨트롤바 보호). */}
       <div
         style={{
-          flex: 1, position: 'relative',
+          minHeight: 0, overflow: 'hidden',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          padding: '0 20px', minHeight: 0, gap: 18,
+          padding: '12px 20px 6px', gap: 12,
         }}
       >
         {/* v0.17.0 A-hero — 한 번에 한 값을 거대 mono로 중앙 표시. listening/confirm/complete
-            이벤트별 톤(정정은 ModifyIndicatorPill이 직전값→새값으로 담당). 칩 그리드는 위에서
-            컴팩트 진행 레일로 유지(터치/auto 편집·재녹음 핸들러 보존). 정정·이상치·일시정지 카드가
-            뜨면 중복을 피해 hero는 숨긴다. */}
+            이벤트별 톤(정정은 ModifyIndicatorPill이 직전값→새값으로 담당). 정정·이상치·일시정지
+            카드가 뜨면 중복을 피해 hero는 숨긴다. */}
         {!paused && currentCol && !sess.modifyIndicator && !sess.anomalyAlert && (
           <VoiceHero
             event={heroEvent}
@@ -426,14 +469,37 @@ function ActiveState({
           />
         )}
 
-        {/* I-2: 행 이동 (버튼 — 음성 "이전"/"다음"과 동일 동작) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {/* TTS 에코(마지막 안내 음성) — 흡수영역 하단. minHeight로 빈 줄이어도 높이 보존(점프 방지). */}
+        <div
+          style={{
+            width: '100%', maxWidth: 'min(560px, 94vw)', textAlign: 'center',
+            fontSize: 15, color: T.textDim, fontWeight: 500,
+            fontStyle: 'italic', letterSpacing: -0.1, minHeight: 20,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}
+        >
+          {sess.lastTts}
+        </div>
+      </div>
+
+      {/* 4) 하단 컨트롤바 — 한자리 고정. 이전/다음·마이크·종료·명령어 칩·도움말·속도 슬라이더.
+          내용이 고정이라 row3(흡수영역)의 변화와 무관하게 Y가 불변(버그B의 '메뉴 이동' 해소). */}
+      <div
+        style={{
+          borderTop: `1px solid ${T.line}`,
+          background: 'rgba(255,255,255,0.015)',
+          display: 'flex', flexDirection: 'column', gap: 8,
+          padding: '8px 16px 8px',
+        }}
+      >
+        {/* 행 이동 + 마이크(일시정지) + 종료 한 줄 */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
           <button
             onClick={onPrevRow}
             disabled={paused}
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
-              padding: '7px 14px', borderRadius: 999,
+              padding: '9px 14px', borderRadius: 999, minHeight: 44,
               border: `1px solid ${T.lineStrong}`, background: T.card,
               color: paused ? T.textMute : T.textDim, fontSize: 14, fontWeight: 700,
               cursor: paused ? 'default' : 'pointer', opacity: paused ? 0.5 : 1,
@@ -442,32 +508,13 @@ function ActiveState({
           >
             ◀ 이전
           </button>
-          <button
-            onClick={onNextRow}
-            disabled={paused}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 4,
-              padding: '7px 14px', borderRadius: 999,
-              border: `1px solid ${T.lineStrong}`, background: T.card,
-              color: paused ? T.textMute : T.textDim, fontSize: 14, fontWeight: 700,
-              cursor: paused ? 'default' : 'pointer', opacity: paused ? 0.5 : 1,
-            }}
-            title="다음 행으로 이동"
-          >
-            다음 ▶
-          </button>
-        </div>
-        <div
-          style={{
-            display: 'flex', alignItems: 'center', gap: 16,
-          }}
-        >
+
           {/* Pause toggle (large mic) */}
           <button
             onClick={onTogglePause}
             style={{
-              position: 'relative', width: 76, height: 76, borderRadius: '50%',
-              border: 'none', cursor: 'pointer', padding: 0,
+              position: 'relative', width: 72, height: 72, borderRadius: '50%',
+              border: 'none', cursor: 'pointer', padding: 0, flexShrink: 0,
               background: paused
                 ? `radial-gradient(circle at 30% 30%, #3A3E45, #2A2D32 60%, #1A1C1F)`
                 : `radial-gradient(circle at 30% 30%, #5a9bff, ${T.blue} 60%, #1755c9)`,
@@ -496,7 +543,7 @@ function ActiveState({
           <button
             onClick={onEnd}
             style={{
-              width: 76, height: 76, borderRadius: '50%',
+              width: 72, height: 72, borderRadius: '50%', flexShrink: 0,
               border: `2px solid ${T.lineStrong}`,
               background: 'rgba(255,82,82,0.08)',
               color: T.red,
@@ -509,28 +556,27 @@ function ActiveState({
             {I.stop(22, T.red)}
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4 }}>종료</span>
           </button>
-        </div>
-      </div>
 
-      {/* TTS echo */}
-      <div
-        style={{
-          padding: '6px 16px 4px',
-          borderTop: `1px solid ${T.line}`,
-          display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0,
-        }}
-      >
-        <div
-          style={{
-            fontSize: 15, color: T.textDim, fontWeight: 500,
-            fontStyle: 'italic', letterSpacing: -0.1, minHeight: 20,
-          }}
-        >
-          {sess.lastTts}
+          <button
+            onClick={onNextRow}
+            disabled={paused}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '9px 14px', borderRadius: 999, minHeight: 44,
+              border: `1px solid ${T.lineStrong}`, background: T.card,
+              color: paused ? T.textMute : T.textDim, fontSize: 14, fontWeight: 700,
+              cursor: paused ? 'default' : 'pointer', opacity: paused ? 0.5 : 1,
+            }}
+            title="다음 행으로 이동"
+          >
+            다음 ▶
+          </button>
         </div>
+
+        {/* 명령어 칩 + 전체 도움말 */}
         <div
           style={{
-            display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
+            display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 6,
             fontSize: 12, color: T.textMute,
           }}
         >
@@ -560,8 +606,11 @@ function ActiveState({
             ？ 명령어
           </button>
         </div>
+
+        <ActiveTtsSlider />
       </div>
-      <ActiveTtsSlider />
+
+      {/* Fixed 오버레이들 — position:fixed라 grid track을 만들지 않는다(구역 높이에 무영향). */}
       {cmdHelpOpen && <CommandHelpPopup onClose={() => setCmdHelpOpen(false)} />}
       {sess.anomalyAlert && <AnomalyAlertPopup a={sess.anomalyAlert} />}
       {/* v0.12.0 AREA2 V4 — '수정 값' 인디케이터. 중앙 이상치 팝업과 겹치지 않게 상호배타로만 렌더.
@@ -580,7 +629,7 @@ function ActiveState({
       {/* v0.15.0 A5 — 일시정지 중앙 대형 카드. 다른 중앙 안내(이상치/수정/버스트)보다 위(z-index)에
           두고, paused일 때 그것들을 가린다(상호배타). 후속 음성명령('재시작'/'종료')을 함께 안내. */}
       {paused && <PausedCard />}
-    </>
+    </div>
   );
 }
 
@@ -921,7 +970,7 @@ function TypeBadge({ type }: { type: Column['type'] }) {
 
 // ─── chip with optional inline edit ────────────────────────────
 function ColumnChip({
-  col, value, isActive, isDone, isEditing, onActivate, onCommit, onCancel,
+  col, value, isActive, isDone, isEditing, onActivate, onCommit, onCancel, containerRef,
 }: {
   col: Column;
   value: string;
@@ -931,6 +980,8 @@ function ColumnChip({
   onActivate: () => void;
   onCommit: (v: string) => void;
   onCancel: () => void;
+  // v0.19.0 W5 — 활성 칩에만 전달되어 칩 스크롤영역에서 scrollIntoView 대상이 된다.
+  containerRef?: Ref<HTMLDivElement>;
 }) {
   const [local, setLocal] = useState(value);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -973,6 +1024,7 @@ function ColumnChip({
 
   return (
     <div
+      ref={containerRef}
       onClick={() => { if (clickable && !isEditing) onActivate(); }}
       style={{
         display: 'flex', alignItems: 'center', gap: 6,

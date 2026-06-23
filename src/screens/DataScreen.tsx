@@ -9,7 +9,7 @@ import { hasSyncState } from '../lib/sessionSync';
 import { downloadCsv, csvToBlob, downloadBlob, sessionsToCsv, sessionsToCsvZip } from '../lib/csv';
 import { deleteSession as dbDeleteSession, saveSession, loadAudioClip, resetDb } from '../lib/db';
 import type { Column, Session } from '../types';
-import { exportLogZip, downloadZip } from '../lib/exportLog';
+import { exportLogZip, exportLogZipsPerSession, downloadZip } from '../lib/exportLog';
 import { uploadLogToBothDrives, LOG_FOLDER_ID } from '../lib/driveUpload';
 import { hydrateSessions } from '../lib/hydrate';
 import { getAccessToken } from '../lib/googleAuth';
@@ -185,31 +185,49 @@ export function DataScreen() {
       // v0.10.1 Codex HIGH 수정: 관리자 폴더 설정 시 admin 업로드도 성공해야 backupOk → autoDelete 차단.
       if (report.successIds.length > 0) {
         try {
-          const blob = await exportLogZip(report.successIds);
-          const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
-          const dual = await uploadLogToBothDrives(blob, filename);
-          // backupOk: 본인 Drive 필수 + 관리자 폴더 설정 시 admin Drive도 필수
-          backupOk = !!dual.userDriveId && (!dual.adminConfigured || !!dual.adminDriveId);
-          // v0.5.0 W7(T-19): 업로드 결과 계측 — 다음 로그 분석에서 zip이 Drive에 실제로 올라갔는지,
-          // 어느 목적지가 실패했는지 정량 확인. (text=파일명, parsed=대상 세션 id 목록)
-          logger.log({
-            type: 'app',
-            extra: dual.errors.length === 0
-              ? 'drive_upload:ok'
-              : `drive_upload:partial:${dual.errors.map((e) => e.split(':')[0]).join(',')}`,
-            text: filename,
-            parsed: report.successIds.join(','),
-          });
-          const parts: string[] = [];
-          if (dual.userDriveId) parts.push('본인 Drive');
-          if (dual.adminDriveId) parts.push('관리자 Drive');
+          // v0.19.0 W6 — 세션별 개별 zip 업로드(기존: 성공 세션 전체 통합 1 zip → 1회 업로드).
+          // 세션당 1 zip을 생성해 각각 본인+관리자 Drive에 올린다. 파일명은 수확 prefix
+          // `growth-log_<date>` 보존 + 세션 식별자 포함(rclone/SOP-003·복구 파싱 호환).
+          const zips = await exportLogZipsPerSession(report.successIds);
+          const anyUser = new Set<string>();   // 업로드 성공한 목적지 라벨 집계(메시지용)
+          const anyAdmin = new Set<string>();
+          const failedDests = new Set<string>();
+          // 데이터 유실 방지 불변식: autoDelete는 backupOk일 때만 삭제하므로, **모든** 세션이
+          // 완전 백업(본인 Drive 필수 + 관리자 설정 시 admin도 필수)됐을 때만 backupOk=true.
+          // 한 세션이라도 실패하면 false → 자동삭제 보류(부분 성공으로 삭제하지 않음).
+          let allOk = true;
+          for (const z of zips) {
+            try {
+              const dual = await uploadLogToBothDrives(z.blob, z.filename);
+              const sessionOk = !!dual.userDriveId && (!dual.adminConfigured || !!dual.adminDriveId);
+              if (!sessionOk) allOk = false;
+              if (dual.userDriveId) anyUser.add('본인 Drive');
+              if (dual.adminDriveId) anyAdmin.add('관리자 Drive');
+              for (const e of dual.errors) failedDests.add(e.split(':')[0]);
+              // 세션별 업로드 결과 계측 — 어느 세션 zip이 어느 목적지에서 실패했는지 정량 확인.
+              logger.log({
+                type: 'app',
+                extra: dual.errors.length === 0
+                  ? 'drive_upload:ok'
+                  : `drive_upload:partial:${dual.errors.map((e) => e.split(':')[0]).join(',')}`,
+                text: z.filename,
+                parsed: z.sessionId,
+              });
+            } catch (err) {
+              allOk = false;
+              failedDests.add('exception');
+              logger.log({ type: 'app', extra: `drive_upload:failed:${z.sessionId}:${String((err as Error)?.message ?? err)}` });
+              console.warn('Drive 로그 업로드 실패(세션)', z.sessionId, err);
+            }
+          }
+          backupOk = allOk;
+          const parts = [...anyUser, ...anyAdmin];
           if (parts.length > 0) {
             setMsg((m) => (m ? `${m} · 로그 ${parts.join('+')} 백업` : `✓ 로그 ${parts.join('+')} 백업`));
           }
-          if (dual.errors.length > 0) {
-            const failedDests = dual.errors.map((e) => e.split(':')[0]).join(', ');
-            setMsg((m) => `${m ?? ''} · ⚠️ 백업 실패: ${failedDests}`);
-            console.warn('Drive 로그 부분 실패', dual.errors);
+          if (failedDests.size > 0) {
+            setMsg((m) => `${m ?? ''} · ⚠️ 백업 실패: ${[...failedDests].join(', ')}`);
+            console.warn('Drive 로그 부분 실패', [...failedDests]);
           }
         } catch (err) {
           logger.log({ type: 'app', extra: `drive_upload:failed:${String((err as Error)?.message ?? err)}` });
@@ -327,7 +345,7 @@ export function DataScreen() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ScreenHeader title="데이터" sub={`${sessions.length}개 세션`} />
+      <ScreenHeader sub={`${sessions.length}개 세션`} />
 
       {/* Action bar */}
       <div style={{ padding: '0 16px 10px', display: 'flex', gap: 8, flexShrink: 0 }}>

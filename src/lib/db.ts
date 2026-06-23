@@ -169,6 +169,44 @@ export async function deleteSettingsBackup(key: string): Promise<void> {
   } catch { /* ignore */ }
 }
 
+// ─── 시트 등록 전용 내구 레코드 (v0.19.0 W2 — 업데이트/evict 무관 복원 경로) ──────
+/** v0.19.0 W2 — savedSheets(저장 시트 목록)·연결 시트 URL·토큰 표식을 settings persist와 **별개**
+ *  IDB 'kv' 레코드로도 미러한다. 홈 설치형 앱 업데이트 부팅 시 localStorage가 evict되면 settings
+ *  persist의 IDB 미러가 하이드레이션 레이스로 빈 배열에 덮일 위험이 있었다(W2 근본원인). 이 전용
+ *  레코드는 saveSheet/removeSavedSheet에서만 쓰여 bulk write-through(전체 settings 직렬화)에
+ *  절대 덮이지 않으므로, 버전 마이그레이션·evict와 무관하게 시트 목록을 결정론적으로 복원한다.
+ *  키는 settings persist name과 충돌하지 않도록 `__saved_sheets__` 접두를 쓴다. */
+const SHEETS_RECORD_KEY = '__saved_sheets__';
+
+export interface SheetsRecord {
+  /** 저장된 스프레드시트 링크 목록(SavedSheet[]의 JSON 직렬화 형태). */
+  savedSheets: unknown[];
+  /** 마지막으로 연결됐던 시트 URL(부팅 시 settings가 비면 함께 복원 후보). */
+  sheetUrl?: string;
+  /** 최종 갱신 시각(epoch ms) — 디버깅/관측용. */
+  updatedAt: number;
+}
+
+export async function saveSheetsRecord(rec: SheetsRecord): Promise<void> {
+  try {
+    const db = await getDb();
+    await db.put('kv', rec, SHEETS_RECORD_KEY);
+  } catch { /* IDB 불가 — settings persist가 1차 경로이므로 무해 */ }
+}
+
+export async function loadSheetsRecord(): Promise<SheetsRecord | null> {
+  try {
+    const db = await getDb();
+    const v = await db.get('kv', SHEETS_RECORD_KEY);
+    if (v && typeof v === 'object' && Array.isArray((v as SheetsRecord).savedSheets)) {
+      return v as SheetsRecord;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Log events (v5.2 Codex 4차 MEDIUM) ────────────────────────────────────
 export interface PersistedLogEntry {
   id?: number;

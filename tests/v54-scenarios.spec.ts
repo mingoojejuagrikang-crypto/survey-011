@@ -123,10 +123,11 @@ async function generateTable(page: Page) {
   if (!(await generateBtn.isVisible().catch(() => false))) return;
   await generateBtn.click();
   await page.waitForTimeout(400);
-  const confirmBtn = page.locator('text=확인').last();
+  // v0.19.0 W3 — 클릭 즉시 생성이 아니라 '최종 설정값 확인' 게이트가 열린다. "생성"으로 확정.
+  const confirmBtn = page.locator('button', { hasText: '생성' }).last();
   if (await confirmBtn.isVisible().catch(() => false)) {
     await confirmBtn.click();
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(300);
   }
 }
 

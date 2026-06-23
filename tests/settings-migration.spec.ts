@@ -6,7 +6,11 @@
  *   v6 의미는 보존.
  * v0.13.0 R1: v7→v8 — savedSheets(저장 시트 목록) 도입. 구버전 누락/손상은 []로 치유(순수 추가).
  * v0.15.0 A6: v8→v9 — speakerphoneMode(스피커폰 모드) 폐기. 잔존 영속값 삭제만(순수 추가).
- *   따라서 마이그레이션 후 최신 버전은 9 — 아래 version 단언은 9를 기대한다.
+ * v0.19.0 W4: v9→v10 — noisyMode(소음 환경 모드) 폐기. 잔존 영속값 삭제만(순수 추가).
+ *   따라서 마이그레이션 후 최신 버전은 10 — 아래 version 단언은 10을 기대한다.
+ * v0.19.0 W2: 업데이트/evict로 savedSheets가 소실되지 않음 — ① 구버전(version<10) 유효 savedSheets는
+ *   migrate 후 보존 ② 전용 IDB 레코드(__saved_sheets__)에 savedSheets가 있고 settings persist가
+ *   비었으면 하이드레이션 후 복원.
  * v0.8.0 WS1: v5→v6 — "추세 검증" → "이상치 알람" 전환.
  *   - 전역 마스터 토글 trendAlertEnabled 삭제(이상치 알람은 컬럼별 규칙 유무로 활성).
  *   - 컬럼별 trendRule을 off로 초기화(의미 반전이라 기존 값은 사용자 의도와 반대 — 클리어).
@@ -75,7 +79,7 @@ async function bootWith(page: Page, payload: unknown) {
 test('v4→v6 migrate — 샘플키 자동 유추 + junk 정규화 + 최신 버전', async ({ page }) => {
   await bootWith(page, V4_PAYLOAD);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(9);
+  await expect.poll(async () => (await readStore(page)).version).toBe(10);
   const stored = await readStore(page);
 
   // 샘플키 유추 규칙: auto && !date → true. junk 'yes'(c3)는 boolean 아니라 유추 적용.
@@ -122,7 +126,7 @@ const V5_PAYLOAD = {
 test('v5→v6 migrate — trendAlertEnabled 삭제 + trendRule 초기화 + pctThreshold 정규화', async ({ page }) => {
   await bootWith(page, V5_PAYLOAD);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(9);
+  await expect.poll(async () => (await readStore(page)).version).toBe(10);
   const stored = await readStore(page);
 
   // 전역 마스터 토글 제거.
@@ -150,7 +154,7 @@ test('v5→v6 migrate idempotent — 이미 v6면 사용자가 새 의미로 설
   };
   await bootWith(page, v6Payload);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(9);
+  await expect.poll(async () => (await readStore(page)).version).toBe(10);
   const stored = await readStore(page);
   // v6 이상은 새 의미 — trendRule/pctThreshold 보존.
   expect(colById(stored, 'c8').trendRule).toBe('increase');
@@ -172,7 +176,7 @@ test('다운그레이드 라운드트립 방어 — v5로 재기록돼도 마커
   };
   await bootWith(page, downgradedPayload);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(9);
+  await expect.poll(async () => (await readStore(page)).version).toBe(10);
   const stored = await readStore(page);
   // 마커가 있으므로 재클리어하지 않고 사용자가 v6에서 설정한 값 보존.
   expect(colById(stored, 'c8').trendRule).toBe('increase');
@@ -228,4 +232,79 @@ test('% 임계값 빈 값 → undefined, 부적격 전환 시 trendRule·pctThre
   const c8 = colById(await readStore(page), 'c8');
   expect(c8.trendRule).toBeUndefined();
   expect(c8.pctThreshold).toBeUndefined();
+});
+
+// ─── v0.19.0 W2 — savedSheets 생존(앱 업데이트/evict 무관) ─────────────────────
+
+const VALID_SHEETS = [
+  { name: '이원창 농장', url: 'https://docs.google.com/spreadsheets/d/SHEET_A', sheetId: 'SHEET_A', addedAt: 1_700_000_000_000 },
+  { name: '시험구 B', url: 'https://docs.google.com/spreadsheets/d/SHEET_B', sheetId: 'SHEET_B', addedAt: 1_700_000_100_000 },
+];
+
+/** ① 구버전(version<10) 영속본에 유효 savedSheets가 있으면 migrate 후 보존(순수 추가 마이그가
+ *  유효 배열을 절대 떨어뜨리지 않는다). */
+test('W2 ① v8→v10 migrate — 유효 savedSheets 보존', async ({ page }) => {
+  const payload = {
+    state: { ...V4_PAYLOAD.state, savedSheets: VALID_SHEETS },
+    version: 8,
+  };
+  await bootWith(page, payload);
+
+  await expect.poll(async () => (await readStore(page)).version).toBe(10);
+  const stored = await readStore(page);
+  const saved = stored.state.savedSheets as Array<{ sheetId: string }>;
+  expect(saved.map((s) => s.sheetId)).toEqual(['SHEET_A', 'SHEET_B']);
+});
+
+/** ② 전용 IDB 레코드 복원(결정론적, 레이스 타이밍 없음): settings persist의 savedSheets는 비었지만
+ *  전용 IDB 레코드 __saved_sheets__에 유효 savedSheets가 있으면 하이드레이션 후 복원된다. 이 레코드는
+ *  saveSheet/removeSavedSheet만 쓰므로 bulk write-through(전체 settings 직렬화)에 절대 덮이지 않는
+ *  버전 마이그/evict 무관 복원 경로다(W2 근본원인 = bulk write-through clobber의 회피 백본). */
+test('W2 ② 전용 IDB 레코드에서 savedSheets 복원 (settings persist는 비어있음)', async ({ page }) => {
+  // settings persist는 savedSheets:[]인 상태로 부팅하되, 전용 레코드를 미리 IDB에 심는다.
+  await page.addInitScript(
+    ({ key, rec }) => {
+      // settings persist 시드(savedSheets 비어있음 — 업데이트로 풀린 상태 모사).
+      const persisted = {
+        state: {
+          googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+          availableSheets: [], savedSheets: [], manualMode: false, columns: [], tableGenerated: false,
+          totalRows: 50, ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: null,
+          fastRecognition: false, preferredVoiceName: '', teamFolderId: null, userLogFolderId: null,
+          roundDateColId: null, reviewFilters: [], reviewTargetRound: null, reviewBaselineBack: 1,
+          reviewGroupCols: null, reviewMeasureCols: null, reviewSelectedRows: null,
+        },
+        version: 10,
+      };
+      if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(persisted));
+      // 전용 IDB 레코드 __saved_sheets__를 'kv' 스토어에 직접 심는다(앱 db.ts와 동일 스키마).
+      const open = indexedDB.open('survey-011', 4);
+      open.onupgradeneeded = () => {
+        const db = open.result;
+        if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+      };
+      open.onsuccess = () => {
+        try {
+          const db = open.result;
+          const tx = db.transaction('kv', 'readwrite');
+          tx.objectStore('kv').put({ savedSheets: rec, sheetUrl: '', updatedAt: Date.now() }, '__saved_sheets__');
+        } catch { /* ignore */ }
+      };
+    },
+    { key: STORE_KEY, rec: VALID_SHEETS },
+  );
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+
+  // 하이드레이션 후 onRehydrateStorage의 비동기 복원이 settings store에 savedSheets를 채운다.
+  await expect.poll(async () => {
+    const saved = await page.evaluate((key) => {
+      const raw = JSON.parse(localStorage.getItem(key) ?? 'null');
+      return (raw?.state?.savedSheets ?? []).length;
+    }, STORE_KEY);
+    return saved;
+  }, { timeout: 10_000 }).toBe(2);
+
+  const stored = await readStore(page);
+  const saved = stored.state.savedSheets as Array<{ sheetId: string }>;
+  expect(saved.map((s) => s.sheetId).sort()).toEqual(['SHEET_A', 'SHEET_B']);
 });

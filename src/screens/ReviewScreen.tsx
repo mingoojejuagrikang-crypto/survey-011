@@ -165,7 +165,6 @@ export function ReviewScreen() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <ScreenHeader
-        title="비교"
         sub="baseline→target 변화"
         right={
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>

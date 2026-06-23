@@ -16,6 +16,7 @@
 
 import { logger } from './logger';
 import { processClip, type PrerollPcm } from './audioTrim';
+import { classifyInputDevice } from './inputDevice';
 
 interface ClipSlot {
   recorder: MediaRecorder;
@@ -150,10 +151,12 @@ export class AudioRecorder {
    *  않는다(unmute 리스너는 일시 mute 회복 시 라벨 재확인용으로 그대로 둔다). */
   private async refreshActiveInputLabel(): Promise<void> {
     if (!this.activeInput) return;
+    const prevLabel = this.activeInput.label;
     try {
       const track = this.stream?.getAudioTracks()[0] ?? null;
       if (!track || track.readyState === 'ended') {
         this.activeInput = { ...this.activeInput, label: '' };
+        this.emitInputDeviceChanged(prevLabel, '', 'refresh:track_ended');
         return;
       }
       const id = this.activeInput.deviceId;
@@ -164,16 +167,46 @@ export class AudioRecorder {
         if (id && !match) {
           // 활성 장치가 목록에서 사라짐 → 끊김으로 간주, 내장 폴백.
           this.activeInput = { ...this.activeInput, label: '' };
+          this.emitInputDeviceChanged(prevLabel, '', 'refresh:device_gone');
           return;
         }
         if (match?.label) {
           this.activeInput = { ...this.activeInput, label: match.label };
+          this.emitInputDeviceChanged(prevLabel, match.label, 'refresh:enumerate');
           return;
         }
       }
       // 트랙이 살아있고 라벨이 있으면 트랙 라벨을 신뢰(가장 정확).
-      if (track.label) this.activeInput = { ...this.activeInput, label: track.label };
+      if (track.label) {
+        this.activeInput = { ...this.activeInput, label: track.label };
+        this.emitInputDeviceChanged(prevLabel, track.label, 'refresh:track_label');
+      }
     } catch { /* best-effort — 갱신 실패 시 직전 라벨 유지 */ }
+  }
+
+  /** v0.19.0 W7 — 입력장치 라벨이 실제로 바뀐 순간에만(old !== new) logger 이벤트를 방출한다.
+   *  B-1 텔레메트리 갭(세션 시작/종료 meta만 기록 → 세션 중 route 변화 불가시) 보강. 분석이
+   *  "어떤 입력 경로로 들었는지"를 세션 중 변화까지 식별할 수 있게 한다. classifyInputDevice로
+   *  CATEGORY(내장/블루투스/유선)도 함께 싣는다. 기존 `session` 타입에 `extra`로 실어 LogEntry
+   *  union·로그 파서(log-replay 등)를 건드리지 않는다(신규 이벤트 타입 무첨가 — 기존 로그 호환).
+   *
+   *  ⚠️ 솔직한 한계(iOS PWA): STT(Web Speech)는 자체 오디오 캡처라, 여기서 읽는 클립 레코더의
+   *  getUserMedia track.label이 STT의 실제 입력 경로와 다를 수 있다. BT가 연결돼 있어도 getUserMedia가
+   *  내장 default를 잡아 "iPhone 마이크"로 찍힐 수 있다(v0.18.0 로그가 그 증거 — BT/스피커폰을 실제로
+   *  썼는데 두 세션 모두 내장으로 기록). route-change 계측은 신호를 늘리지만 iOS는 BT/내장을 완전
+   *  구분 못 할 수 있다(AUDIO-ROUTE-1 네이티브 셸 영역, 본 계측 비범위). 그래도 enumerate/route-change
+   *  신호는 다음 분석에 가치가 있다. */
+  private emitInputDeviceChanged(oldLabel: string, newLabel: string, reason: string): void {
+    if (oldLabel === newLabel) return;
+    try {
+      const oldCat = classifyInputDevice(oldLabel).text;
+      const newCat = classifyInputDevice(newLabel).text;
+      logger.log({
+        type: 'session',
+        extra: `input_device_changed:${reason}:${oldCat}→${newCat}`,
+        text: `${oldLabel || '(빈)'}→${newLabel || '(빈)'}`,
+      });
+    } catch { /* best-effort 계측 */ }
   }
 
   /** v0.14.0 B-1/D — 장치 변경(devicechange / track ended·mute·unmute) 처리.
@@ -200,6 +233,8 @@ export class AudioRecorder {
     if (now - this.lastRecoverAt < RECOVER_COOLDOWN_MS) return false;
     this.recovering = true;
     this.lastRecoverAt = now;
+    // v0.19.0 W7 — 재획득 전 라벨을 기억해 재획득 후 실제 변화가 있으면 route-change 이벤트를 방출.
+    const prevLabel = this.activeInput?.label ?? '';
     try {
       // 기존 그래프 정리 — 리스너 먼저(track.stop의 'ended'가 핸들러 재진입 못 하게), 프리롤, 스트림.
       this.detachDeviceListeners();
@@ -228,6 +263,8 @@ export class AudioRecorder {
       this.attachDeviceListeners();
       await this.initPrerollCapture();
       logger.log({ type: 'clip', extra: `clip_recorder_recovered:${reason}:${this.activeInput?.label || 'default'}` });
+      // v0.19.0 W7 — 재획득으로 입력 경로가 실제로 바뀌었으면 route-change 이벤트 방출(old !== new만).
+      this.emitInputDeviceChanged(prevLabel, this.activeInput?.label ?? '', `recover:${reason}`);
       return true;
     } catch (e) {
       this.stream = null;

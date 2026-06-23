@@ -85,8 +85,6 @@ export interface SessionMeta {
   /** active input device actually used for this session (built-in vs external mic) */
   inputDeviceId?: string;
   inputDeviceLabel?: string;
-  /** noisy-environment mode flag — context for STT accuracy attribution */
-  noisyMode?: boolean;
   /** Reserved slot for self-test vs real-field split. Defaults to 'field'; an explicit UI
    *  toggle is a Vance follow-up. userEmail (device.json) + value-pattern already allow
    *  crude post-hoc splitting today. */

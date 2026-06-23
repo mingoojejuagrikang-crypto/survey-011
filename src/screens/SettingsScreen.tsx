@@ -867,6 +867,8 @@ export function SettingsScreen() {
   // S-2: result of "타입 검토" (null = not run; checked = columns compared).
   const [typeReview, setTypeReview] = useState<{ mismatches: TypeMismatch[]; checked: number } | null>(null);
   const [tablePreviewOpen, setTablePreviewOpen] = useState(false);
+  // v0.19.0 W3 — "입력 테이블 생성/재생성" 클릭 시 먼저 뜨는 '최종 설정값 확인' 게이트.
+  const [generateGateOpen, setGenerateGateOpen] = useState(false);
   const [showUrlInput, setShowUrlInput] = useState(false);
   // v0.14.0 F — 저장된 시트 목록을 기본 접힌 드롭다운으로(세로 풀리스트가 시트 多 시 화면 점유 과다).
   const [savedSheetsOpen, setSavedSheetsOpen] = useState(false);
@@ -1064,26 +1066,36 @@ export function SettingsScreen() {
     }
   };
 
-  const onGenerate = () => {
-    if (s.tableGenerated) {
-      s.set({ tableGenerated: false });
-      return;
-    }
-    const total = computeTotalRows(s.columns);
-    // Compute session label: ISO 날짜 + 선택된 컬럼 값 (date 타입 컬럼은 중복이므로 제외)
+  // v0.19.0 W3 — "입력 테이블 생성"/"재생성"은 더 이상 클릭 즉시 생성하지 않는다.
+  //   클릭 → 먼저 '최종 설정값 확인' 게이트(TablePreviewModal에 confirmMode로 진입)를 띄우고,
+  //   "확인(생성)"을 눌렀을 때만 실제 생성 부수효과(s.set 등)를 실행한다. "취소"면 미생성.
+  //   요약(총 행수·세션 라벨)은 store의 (이미 생성됐을 수 있는) 값이 아니라 '현재 columns'에서
+  //   파생해 stale을 피한다.
+  const prospectiveSessionLabel = () => {
     const isoDate = new Date().toISOString().slice(0, 10);
     const pickedCol = s.sessionLabelColId
       ? s.columns.find((c) => c.id === s.sessionLabelColId)
       : null;
     const colVal = pickSessionLabelValue(s.columns, pickedCol);
-    const sessionAutoLabel = colVal ? `${isoDate} ${colVal}` : isoDate;
+    return colVal ? `${isoDate} ${colVal}` : isoDate;
+  };
+
+  // 게이트 열기 — 생성/재생성 모두 동일 경로. 부수효과는 onGenerateConfirm까지 미룬다.
+  const onGenerate = () => {
+    setGenerateGateOpen(true);
+  };
+
+  // "확인(생성)" — 여기서만 실제 생성 부수효과 실행.
+  const onGenerateConfirm = () => {
+    const total = computeTotalRows(s.columns);
+    const sessionAutoLabel = prospectiveSessionLabel();
     s.set({ tableGenerated: true, totalRows: total, sessionAutoLabel });
-    setTablePreviewOpen(true);
+    setGenerateGateOpen(false);
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ScreenHeader title="설정" sub="오늘의 측정 항목과 시트 연결" />
+      <ScreenHeader sub="오늘의 측정 항목과 시트 연결" />
 
       <div
         style={{
@@ -1547,44 +1559,8 @@ export function SettingsScreen() {
                 세션명 미리보기: <span style={{ color: T.text, fontWeight: 700 }}>{s.sessionAutoLabel}</span>
               </div>
             )}
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                gap: 10, marginTop: 2,
-              }}
-            >
-              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
-                소음 환경 모드
-              </div>
-              <button
-                onClick={() => {
-                  const next = !s.noisyMode;
-                  s.set({ noisyMode: next });
-                  // v0.5.0 W7(T-19): 설정 변경 계측 — STT 정확도를 모드별로 귀속시키기 위함.
-                  logger.log({ type: 'app', extra: `setting_changed:noisyMode=${next}` });
-                }}
-                style={{
-                  width: 60, height: 32, borderRadius: 16,
-                  background: s.noisyMode ? T.blue : '#2A2D32',
-                  border: 'none', cursor: 'pointer',
-                  position: 'relative',
-                }}
-                title="음성 인식 임계값을 높이고 1자 결과를 거부합니다"
-              >
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 4, left: s.noisyMode ? 32 : 4,
-                    width: 24, height: 24, borderRadius: 12,
-                    background: '#fff',
-                    transition: 'left 150ms ease',
-                  }}
-                />
-              </button>
-            </div>
-            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
-              비닐하우스·기계 소음 환경에서 음성 인식 정확도를 높입니다 (낮은 신뢰도 결과 거부).
-            </div>
+            {/* v0.19.0 W4-UI — "소음 환경 모드" 토글 UI 제거(민구 결정). store의 noisyMode 필드는
+                Mack이 별도로 제거한다(여기선 JSX·참조만 삭제). 아래 "빠른 인식 (실험)" 토글은 보존. */}
 
             {/* v0.15.0 A6 — 스피커폰 모드 토글 삭제(민구 요청 + Trace 회귀신호 0). 모드로 게이트되던
                 가드(TTS-중 명령차단·post-TTS 잔향 폐기·신뢰도 상향)도 함께 제거 — 이어폰 barge-in 기본. */}
@@ -1717,11 +1693,25 @@ export function SettingsScreen() {
         </div>
       </div>
 
+      {/* 생성 후 '미리보기' — 닫기 전용(부수효과 없음). */}
       {tablePreviewOpen && (
         <TablePreviewModal
           columns={s.columns}
           totalRows={s.totalRows}
           onClose={() => setTablePreviewOpen(false)}
+        />
+      )}
+
+      {/* v0.19.0 W3 — '최종 설정값 확인' 게이트. 요약/미리보기는 현재 columns에서 파생(stale 방지).
+          "확인(생성)" = onGenerateConfirm에서만 실제 생성, "취소" = 미생성. */}
+      {generateGateOpen && (
+        <TablePreviewModal
+          columns={s.columns}
+          totalRows={computeTotalRows(s.columns)}
+          sessionLabel={prospectiveSessionLabel()}
+          regenerating={s.tableGenerated}
+          onConfirm={onGenerateConfirm}
+          onClose={() => setGenerateGateOpen(false)}
         />
       )}
     </div>
@@ -1730,17 +1720,26 @@ export function SettingsScreen() {
 
 // ─── table preview modal ───────────────────────────────────────
 function TablePreviewModal({
-  columns, totalRows, onClose,
+  columns, totalRows, onClose, onConfirm, sessionLabel, regenerating,
 }: {
   columns: import('../types').Column[];
   totalRows: number;
   onClose: () => void;
+  /** v0.19.0 W3 — 주어지면 '최종 설정값 확인' 게이트 모드: 컬럼 구성·총 행수·세션 라벨 요약을
+   *  헤더에 표시하고, 푸터를 "취소 / 확인(생성)"으로 바꿔 확인 시에만 onConfirm을 호출한다.
+   *  미주입 시(생성 후 '미리보기')는 기존대로 닫기 전용. */
+  onConfirm?: () => void;
+  sessionLabel?: string;
+  regenerating?: boolean;
 }) {
   const MAX_PREVIEW = 50;
   const displayRows = Math.min(totalRows, MAX_PREVIEW);
   const colWidths = columns.map((c) =>
     c.type === 'date' ? 110 : c.type === 'text' || c.type === 'name' || c.type === 'options' ? 100 : 70,
   );
+  const isGate = !!onConfirm;
+  const voiceCount = columns.filter((c) => c.input === 'voice').length;
+  const autoCount = columns.filter((c) => c.input === 'auto').length;
 
   return (
     <div
@@ -1772,7 +1771,9 @@ function TablePreviewModal({
           }}
         >
           <div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>테이블 미리보기</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>
+              {isGate ? (regenerating ? '재생성 — 설정값 확인' : '입력 테이블 생성 — 설정값 확인') : '테이블 미리보기'}
+            </div>
             <div style={{ fontSize: 12, color: T.textMute, marginTop: 2 }}>
               총 {totalRows}행
               {totalRows > MAX_PREVIEW ? ` (처음 ${MAX_PREVIEW}행 표시)` : ''}
@@ -1780,6 +1781,7 @@ function TablePreviewModal({
           </div>
           <button
             onClick={onClose}
+            aria-label="닫기"
             style={{
               width: 36, height: 36, borderRadius: 18,
               border: 'none', background: 'rgba(255,255,255,0.06)',
@@ -1790,6 +1792,31 @@ function TablePreviewModal({
             {I.close(18, T.textDim)}
           </button>
         </div>
+
+        {/* v0.19.0 W3 — 게이트 모드 요약 스트립: 컬럼 구성(음성/자동/총)·세션 라벨. */}
+        {isGate && (
+          <div
+            style={{
+              padding: '12px 16px', borderBottom: `1px solid ${T.line}`,
+              display: 'flex', flexDirection: 'column', gap: 8,
+            }}
+          >
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <SummaryPill label="음성입력" value={voiceCount} accent />
+              <SummaryPill label="자동입력" value={autoCount} />
+              <SummaryPill label="전체 항목" value={columns.length} />
+              <SummaryPill label="총 행수" value={totalRows} />
+            </div>
+            {sessionLabel && (
+              <div style={{ fontSize: 13, color: T.textDim }}>
+                세션명:{' '}
+                <span style={{ color: T.text, fontWeight: 700, fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>
+                  {sessionLabel}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div style={{ minWidth: 'max-content' }}>
@@ -1873,19 +1900,70 @@ function TablePreviewModal({
         </div>
 
         <div style={{ padding: '12px 16px', borderTop: `1px solid ${T.line}` }}>
-          <button
-            onClick={onClose}
-            style={{
-              width: '100%', height: 48, borderRadius: 14, border: 'none',
-              background: T.blue, color: '#fff',
-              fontSize: 15, fontWeight: 800, cursor: 'pointer',
-              boxShadow: `0 4px 14px ${T.blueGlow}`,
-            }}
-          >
-            확인
-          </button>
+          {isGate ? (
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                onClick={onClose}
+                style={{
+                  flex: 1, height: 48, borderRadius: 14,
+                  border: `1px solid ${T.lineStrong}`, background: 'transparent',
+                  color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                취소
+              </button>
+              <button
+                onClick={onConfirm}
+                style={{
+                  flex: 2, height: 48, borderRadius: 14, border: 'none',
+                  background: T.green, color: '#06200F',
+                  fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                  boxShadow: '0 4px 14px rgba(0,200,83,0.32)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                }}
+              >
+                {I.check(18, '#06200F')} {regenerating ? '재생성' : '생성'}
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onClose}
+              style={{
+                width: '100%', height: 48, borderRadius: 14, border: 'none',
+                background: T.blue, color: '#fff',
+                fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                boxShadow: `0 4px 14px ${T.blueGlow}`,
+              }}
+            >
+              확인
+            </button>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** v0.19.0 W3 — 게이트 요약 칩(라벨 + 큰 숫자). 의미색 변경 없음(음성=blue accent). */
+function SummaryPill({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'baseline', gap: 6,
+        padding: '6px 12px', borderRadius: 10,
+        background: accent ? 'rgba(41,121,255,0.12)' : 'rgba(255,255,255,0.05)',
+        border: `1px solid ${accent ? 'rgba(41,121,255,0.35)' : T.line}`,
+      }}
+    >
+      <span style={{ fontSize: 12, color: accent ? T.blue : T.textDim, fontWeight: 700 }}>{label}</span>
+      <span
+        style={{
+          fontSize: 18, fontWeight: 800, color: accent ? T.blue : T.text,
+          fontFamily: 'JetBrains Mono, ui-monospace, monospace', letterSpacing: -0.5,
+        }}
+      >
+        {value}
+      </span>
     </div>
   );
 }

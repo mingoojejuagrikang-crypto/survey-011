@@ -4,7 +4,13 @@ import type { Column, SheetConfig, SavedSheet, LegacyInputMode } from '../types'
 import type { ReviewFilter } from '../lib/reviewQuery';
 import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
 import { isCycling } from '../lib/autoValue';
-import { saveSettingsBackup, loadSettingsBackup, deleteSettingsBackup } from '../lib/db';
+import {
+  saveSettingsBackup,
+  loadSettingsBackup,
+  deleteSettingsBackup,
+  saveSheetsRecord,
+  loadSheetsRecord,
+} from '../lib/db';
 import { logger } from '../lib/logger';
 
 /**
@@ -13,7 +19,24 @@ import { logger } from '../lib/logger';
  * localStorage를 1차(동기·기존 동작 보존)로 쓰되 모든 쓰기를 IDB('kv')에 미러하고, getItem에서
  * localStorage가 비어 있으면 IDB에서 복원한다. localStorage 히트 시 동기 반환 → 정상 경로의
  * 하이드레이션 레이스 표면은 늘리지 않는다(IDB 폴백은 evict된 경우에만 비동기로 탄다).
+ *
+ * v0.19.0 W2 — 하이드레이션 게이트(레이스 가드). 근본원인: 홈 설치형 앱 업데이트 부팅 시
+ * localStorage가 evict되면 getItem이 **비동기** IDB 복원 Promise를 반환한다. 그 복원이 끝나기 전,
+ * 부팅 초기에 일어나는 `set()`(인증 부트스트랩·컬럼 reconcile 등)이 기본 상태(savedSheets:[])를
+ * 직렬화해 setItem write-through를 호출하면 IDB 미러가 **빈 배열로 덮여 영구 소실**된다. 따라서
+ * 하이드레이션(onRehydrateStorage)이 끝날 때까지 IDB write-through를 보류한다 — localStorage 1차
+ * 쓰기는 그대로(동기 동작 보존), IDB 미러만 게이트. 게이트가 풀린 뒤의 모든 쓰기는 정상 미러된다.
+ * (시트 목록 자체는 saveSheet/removeSavedSheet의 전용 IDB 레코드로도 별도 미러돼 이 bulk 경로와
+ * 무관하게 결정론적으로 복원된다 — 아래 saveSheet 참고.)
  */
+let hydrationComplete = false;
+/** v0.19.0 W2 — onRehydrateStorage 콜백에서 호출. 세 부팅 경로(localStorage 동기 히트 / IDB 비동기
+ *  복원 / 신규 설치) 모두에서 하이드레이션 완료 직후 게이트를 연다. 안 열리면 이후 모든 쓰기가
+ *  영구히 미러되지 않으므로 반드시 onRehydrateStorage에서 1회 호출돼야 한다. */
+function markHydrationComplete(): void {
+  hydrationComplete = true;
+}
+
 const mirroredStorage: StateStorage = {
   getItem: (name) => {
     let local: string | null = null;
@@ -30,6 +53,11 @@ const mirroredStorage: StateStorage = {
   },
   setItem: (name, value) => {
     try { localStorage.setItem(name, value); } catch { /* ignore */ }
+    // v0.19.0 W2 — 하이드레이션 완료 전에는 IDB 미러를 덮지 않는다(빈 기본값 clobber 방지).
+    if (!hydrationComplete) {
+      logger.log({ type: 'app', extra: 'settings_write_pre_hydration_skipped_idb' });
+      return;
+    }
     void saveSettingsBackup(name, value); // write-through 미러(best-effort)
   },
   removeItem: (name) => {
@@ -58,8 +86,6 @@ interface SettingsState {
   sessionLabelColId: string | null;
   /** Pre-computed session label captured at table generation time. */
   sessionAutoLabel: string | null;
-  /** Noisy environment mode — raises STT confidence threshold + rejects single-char results. */
-  noisyMode: boolean;
   /** v0.9.0 (딜레이 단축 실험) — 빠른 인식. true면 interim(중간) 결과가 유효 숫자로 안정되면
    *  브라우저 final(무음 종료감지)을 기다리지 않고 조기 커밋한다. 미완성 숫자 절단 리스크가 있어
    *  기본 false(실기기 A/B용). */
@@ -179,7 +205,6 @@ export const useSettingsStore = create<SettingsState>()(
       ttsRate: 1.05,
       sessionLabelColId: null,
       sessionAutoLabel: null,
-      noisyMode: false,
       fastRecognition: false,
       preferredVoiceName: '',
       teamFolderId: null,
@@ -245,19 +270,29 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => {
           if (!entry.sheetId) return state; // id 없으면 dedupe 불가 — 저장하지 않음
           const rest = state.savedSheets.filter((x) => x.sheetId !== entry.sheetId);
-          return { savedSheets: [entry, ...rest] }; // 최근 사용을 최상단으로
+          const savedSheets = [entry, ...rest]; // 최근 사용을 최상단으로
+          // v0.19.0 W2 — 전용 IDB 레코드에도 미러(bulk write-through와 무관한 결정론적 복원 경로).
+          void saveSheetsRecord({ savedSheets, sheetUrl: state.sheetUrl, updatedAt: Date.now() });
+          return { savedSheets };
         }),
       removeSavedSheet: (sheetId) =>
-        set((state) => ({ savedSheets: state.savedSheets.filter((x) => x.sheetId !== sheetId) })),
+        set((state) => {
+          const savedSheets = state.savedSheets.filter((x) => x.sheetId !== sheetId);
+          void saveSheetsRecord({ savedSheets, sheetUrl: state.sheetUrl, updatedAt: Date.now() });
+          return { savedSheets };
+        }),
     }),
     {
       name: 'survey-011-settings-v3',
-      version: 9,
+      version: 10,
       // v0.14.0 C — localStorage + IDB 내구 미러(eviction 방어).
       storage: createJSONStorage(() => mirroredStorage),
       // v0.14.0 C — 하이드레이션 breadcrumb. 다음 강제종료/시간경과 테스트 로그에서 시트 등록이
       // 살아있었는지(eviction 여부)와 IDB 복원이 작동했는지 판별할 계측. token은 별도 키라 함께 본다.
       onRehydrateStorage: () => (state) => {
+        // v0.19.0 W2 — 하이드레이션 게이트 해제(setItem write-through 재개). 세 부팅 경로 모두 이
+        // 콜백을 거치므로 여기서 단 1회 연다. 반드시 호출돼야 이후 쓰기가 IDB로 미러된다.
+        markHydrationComplete();
         try {
           const hasUrl = !!(state?.sheetUrl && state.sheetUrl.trim());
           const cols = state?.columns?.length ?? 0;
@@ -268,6 +303,30 @@ export const useSettingsStore = create<SettingsState>()(
             type: 'app',
             extra: `settings_hydrated:url=${hasUrl ? 'Y' : 'N'},cols=${cols},saved=${saved},token=${token ? 'Y' : 'N'}`,
           });
+          // v0.19.0 W2 — settings의 savedSheets가 비었으면(업데이트/evict로 settings persist는
+          // 풀렸으나) 전용 IDB 레코드에서 결정론적으로 복원한다. 전용 레코드는 bulk write-through에
+          // 절대 덮이지 않으므로 버전 마이그레이션·evict와 무관한 복원 경로다(비동기, best-effort).
+          if (saved === 0) {
+            void loadSheetsRecord().then((rec) => {
+              if (!rec || !Array.isArray(rec.savedSheets) || rec.savedSheets.length === 0) return;
+              const cur = useSettingsStore.getState();
+              if (cur.savedSheets.length > 0) return; // 그새 채워졌으면 덮지 않음
+              const restored = (rec.savedSheets as unknown[]).filter(
+                (x): x is SavedSheet =>
+                  x !== null && typeof x === 'object' &&
+                  typeof (x as SavedSheet).name === 'string' &&
+                  typeof (x as SavedSheet).url === 'string' &&
+                  typeof (x as SavedSheet).sheetId === 'string' &&
+                  typeof (x as SavedSheet).addedAt === 'number',
+              );
+              if (restored.length === 0) return;
+              const patch: Partial<SettingsState> = { savedSheets: restored };
+              // 연결 시트 URL도 비어 있으면 전용 레코드 값으로 함께 복원.
+              if (!cur.sheetUrl?.trim() && rec.sheetUrl?.trim()) patch.sheetUrl = rec.sheetUrl;
+              cur.set(patch);
+              logger.log({ type: 'app', extra: `saved_sheets_restored_from_record:${restored.length}` });
+            });
+          }
         } catch { /* best-effort 계측 */ }
       },
       migrate: (persisted: unknown, version: number) => {
@@ -277,6 +336,7 @@ export const useSettingsStore = create<SettingsState>()(
           reviewScope?: unknown;
           speakerOutput?: unknown;
           speakerphoneMode?: unknown;
+          noisyMode?: unknown;
           trendRuleClearedV6?: boolean;
           savedSheets?: unknown;
         };
@@ -291,7 +351,6 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.ttsRate !== 'number') s.ttsRate = 1.05;
         if (typeof s.sessionLabelColId !== 'string' && s.sessionLabelColId !== null) s.sessionLabelColId = null;
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
-        if (typeof s.noisyMode !== 'boolean') s.noisyMode = false;
         if (typeof s.fastRecognition !== 'boolean') s.fastRecognition = false;
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
@@ -380,6 +439,14 @@ export const useSettingsStore = create<SettingsState>()(
         // 잔존 영속값을 무조건 삭제한다(다운그레이드 마커 불필요 — 필드 자체가 더는 존재하지 않음).
         if (version < 9) {
           delete s.speakerphoneMode;
+        }
+
+        // ── v10 (v0.19.0 W4) — "소음 환경 모드"(noisyMode) 폐기 ──────────────────────────────
+        // 토글 UI(Vance)·라이브 참조(신뢰도 상향·단일문자 거부)·세션 meta 필드를 전부 삭제했다
+        // (민구 결정: TTS 되읽기로 오인식 판독 가능 → 소음모드는 오히려 방해, 신뢰도 0.65 통일).
+        // 인터페이스에서 필드를 없앴으므로 잔존 영속값을 무조건 삭제한다(다운그레이드 마커 불필요).
+        if (version < 10) {
+          delete s.noisyMode;
         }
 
         return s as SettingsState;

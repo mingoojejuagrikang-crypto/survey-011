@@ -172,22 +172,21 @@ test('[설정] 테이블 생성 후 미리보기 팝업 (S1-C)', async ({ page }
     await generateBtn.click();
     await page.waitForTimeout(400);
 
-    // 미리보기 팝업이 열려야 함
-    const previewModal = page.locator('text=테이블 미리보기');
-    await expect(previewModal).toBeVisible({ timeout: 3000 });
-    console.log('✓ 테이블 생성 후 미리보기 팝업 열림 확인');
+    // v0.19.0 W3 — 클릭 즉시 생성이 아니라 '최종 설정값 확인' 게이트가 먼저 열린다.
+    const gate = page.locator('text=입력 테이블 생성 — 설정값 확인');
+    await expect(gate).toBeVisible({ timeout: 3000 });
+    console.log('✓ W3 — 생성 클릭 시 설정값 확인 게이트 열림');
 
-    // 팝업 닫기
-    const closeBtn = page.locator('text=확인').last();
-    await closeBtn.click();
-    await page.waitForTimeout(200);
+    // "생성" 확인 → 그때 실제 생성.
+    await page.locator('button', { hasText: '생성' }).last().click();
+    await page.waitForTimeout(300);
 
     // "총 N행 생성됨 (미리보기)" 버튼이 표시됨
     const generatedBtn = page.locator('text=생성됨').first();
     await expect(generatedBtn).toBeVisible({ timeout: 2000 });
-    console.log('✓ 생성 후 "총 N행 생성됨 (미리보기)" 버튼 표시 확인');
+    console.log('✓ 게이트 확인 후 "총 N행 생성됨 (미리보기)" 버튼 표시 확인');
 
-    // 클릭하면 다시 팝업 열림
+    // 클릭하면 닫기 전용 미리보기 팝업 열림.
     await generatedBtn.click();
     await expect(page.locator('text=테이블 미리보기')).toBeVisible({ timeout: 2000 });
     console.log('✓ 생성됨 버튼 클릭 시 미리보기 재열림 확인');
@@ -296,16 +295,15 @@ test('[입력] 테이블 생성 후 시작 버튼 활성화', async ({ page }) =
   await voiceToggle.click();
   await page.waitForTimeout(200);
 
-  // 테이블 생성
+  // 테이블 생성 (v0.19.0 W3 — 게이트의 "생성"으로 확정)
   const generateBtn = page.locator('text=입력 테이블 생성').first();
   if (await generateBtn.isVisible()) {
     await generateBtn.click();
     await page.waitForTimeout(500);
-    // 미리보기 닫기
-    const confirmBtn = page.locator('text=확인').last();
+    const confirmBtn = page.locator('button', { hasText: '생성' }).last();
     if (await confirmBtn.isVisible()) {
       await confirmBtn.click();
-      await page.waitForTimeout(200);
+      await page.waitForTimeout(300);
     }
   }
 

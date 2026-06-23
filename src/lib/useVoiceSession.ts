@@ -1247,19 +1247,11 @@ export function useVoiceSession() {
       }
     }
 
-    const settingsNow = useSettingsStore.getState();
-    const noisyMode = settingsNow.noisyMode;
-    // v0.15.0 A6 — 스피커폰 모드 삭제. 모드로 게이트되던 신뢰도 상향(0.80)을 제거. 소음 모드만
-    // 임계를 올린다(0.80), 기본은 0.65.
-    const minConfidence = noisyMode ? 0.80 : 0.65;
-
-    // Input-3: 소음 환경 모드 — 1글자 이하 결과 거부
-    if (noisyMode && text.replace(/\s/g, '').length <= 1) {
-      recorderRef.current?.startClip();
-      useSessionStore.getState().setRecognized('');
-      await say(`${awaiting.name} 다시 말씀해 주세요.`);
-      return;
-    }
+    // v0.19.0 W4 — "소음 환경 모드"(noisyMode) 완전 제거(민구 결정). TTS가 인식값을 되읽어주므로
+    // 오인식 판독에 문제가 없어 소음모드는 오히려 방해였다. 신뢰도 임계는 0.65로 통일(기존 비-소음
+    // 기본값 유지). noisyMode로만 발동하던 단일문자 거부 분기도 함께 제거한다. (아래 lone-syllable
+    // homophone 가드는 noisyMode와 독립이므로 그대로 보존된다.)
+    const minConfidence = 0.65;
 
     // T-3 (single-syllable homophone, "이"→2): on a MEASUREMENT column (int/float) a lone
     // Sino-Korean syllable that doubles as a common non-number word ("이","사","오","일"…) was
@@ -1792,7 +1784,6 @@ export function useVoiceSession() {
         // fixed auto column (농가명 = grower name), a PII vector. Reach is fully computable from
         // sessionId + appVersion + totalRows + completedRows. The label still lives on the Session
         // object (unchanged); it just stays out of telemetry events.
-        noisyMode: s.noisyMode,
         sessionMode: 'field',
       },
     });
@@ -1859,7 +1850,6 @@ export function useVoiceSession() {
           // label intentionally omitted (PII — grower name); see start-event note.
           inputDeviceId: input?.deviceId,
           inputDeviceLabel: input?.label,
-          noisyMode: settingsNow.noisyMode,
           sessionMode: 'field',
         },
       });

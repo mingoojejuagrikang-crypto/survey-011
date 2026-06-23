@@ -192,6 +192,78 @@ test('W8 — 로그인 상태: 모달 목록 조회 → 선택 복구, 클립 ro
   expect(pageErrors).toEqual([]);
 });
 
+// ─── v0.19.0 W6 — 세션별 개별 zip(각 sessions.json 단일세션) 복구 호환 ──────────────
+// W6에서 "시트에 추가" 백업이 1 통합 zip → 세션당 1 zip으로 바뀐다. listRecoverableSessionsFromDrive가
+// N개의 단일세션 zip을 정상 파싱·열거(dedupe)하는지 직접 검증한다(brief 명시 안전망). 기존
+// recover-list-stage는 1 zip에 2세션을 담는 형태라, 여기서는 "각 zip = 단일세션" W6 산출 형태를 쓴다.
+function makeSingleSessionZipBuilder(sessionId: string, label: string, date: string) {
+  return async (): Promise<Buffer> => {
+    const zip = new JSZip();
+    zip.file('device.json', '{}');
+    zip.file('events.json', '[]');
+    const session = {
+      id: sessionId, date, label,
+      columns: DRIVE_SESSION.columns,
+      rows: [{ index: 1, values: { c6: '1', c8: '35.1' }, complete: true, audioClips: { c8: `${sessionId}:1:c8` } }],
+      completedRows: 1, syncedRows: 0,
+      startedAt: Date.parse(`${date}T01:00:00Z`), finishedAt: Date.parse(`${date}T01:05:00Z`),
+    };
+    // W6 파일명 컨벤션 검증: prefix growth-log_<date> + sessionId 포함(별도 zip 단위).
+    zip.file('sessions.json', JSON.stringify({ schema: 1, appVersion: '0.19.0', sessions: [session] }));
+    zip.file(`clips/${sessionId}:1:c8.wav`, new Uint8Array([82, 73, 70, 70, 0, 0, 0, 0]));
+    return zip.generateAsync({ type: 'nodebuffer' });
+  };
+}
+
+test('W6 — N개 단일세션 zip 열거: 각 zip의 sessions.json(1세션)을 모두 파싱·dedupe', async ({ page }) => {
+  const zipA = await makeSingleSessionZipBuilder('sess_aaa', '세션A', '2026-06-22')();
+  const zipB = await makeSingleSessionZipBuilder('sess_bbb', '세션B', '2026-06-23')();
+
+  await page.route('**://www.googleapis.com/**', async (route) => {
+    const u = new URL(route.request().url());
+    if (u.pathname === '/drive/v3/files' && u.searchParams.has('q')) {
+      const q = u.searchParams.get('q') ?? '';
+      if (q.includes("name='survey-011'")) { await route.fulfill({ json: { files: [{ id: 'fld-app', createdTime: ISO(60) }] } }); return; }
+      if (q.includes("name='log'")) { await route.fulfill({ json: { files: [{ id: 'fld-log', createdTime: ISO(60) }] } }); return; }
+      if (q.includes("'fld-log' in parents")) {
+        // W6 산출: 세션당 개별 zip(파일명에 sessionId 포함). 둘 다 30일 내.
+        await route.fulfill({ json: { files: [
+          { id: 'zip-a', name: 'growth-log_2026-06-22_sess_aaa_1.zip', createdTime: ISO(1) },
+          { id: 'zip-b', name: 'growth-log_2026-06-23_sess_bbb_2.zip', createdTime: ISO(0) },
+        ] } });
+        return;
+      }
+      await route.fulfill({ json: { files: [] } }); return;
+    }
+    if (u.searchParams.get('alt') === 'media') {
+      const id = u.pathname.split('/').pop();
+      if (id === 'zip-a') { await route.fulfill({ contentType: 'application/zip', body: zipA }); return; }
+      if (id === 'zip-b') { await route.fulfill({ contentType: 'application/zip', body: zipB }); return; }
+    }
+    await route.fulfill({ status: 404, body: 'unexpected: ' + route.request().url() });
+  });
+
+  await bootApp(page, { signedIn: true });
+  await page.locator('text=세션 복구').click();
+  await page.waitForTimeout(400);
+  await page.locator('button:has-text("목록 조회")').click();
+  await page.waitForTimeout(800);
+
+  // 두 단일세션 zip의 세션이 모두 열거돼야 한다(개별 zip → 1세션씩 병합).
+  await expect(page.locator('text=세션A')).toBeVisible();
+  await expect(page.locator('text=세션B')).toBeVisible();
+
+  // 선택 복구 → 두 세션 모두 IDB에 저장.
+  await page.locator('button:has-text("선택 복구")').click();
+  await page.waitForTimeout(800);
+  await page.locator('button:has-text("완료")').click();
+  await page.waitForTimeout(300);
+
+  const sessions = await readIdb(page, 'sessions');
+  const ids = (sessions.values as Array<{ id: string }>).map((s) => s.id).sort();
+  expect(ids).toEqual(['sess_aaa', 'sess_bbb']);
+});
+
 test('W8 — 미로그인: Drive 호출 0회 + 로그인 안내(모달 미오픈)', async ({ page }) => {
   const calls = await stubDriveApi(page);
   await bootApp(page, { signedIn: false });
