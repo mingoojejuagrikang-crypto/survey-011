@@ -100,6 +100,19 @@ input::placeholder {
   100% { transform: scale(0.96); opacity: 0; }
 }
 
+/* v0.17.0 A-hero — current-field "breathing" pulse on the active rail dot / hero
+   listening state. Recording-only; paused freezes it. transform/opacity only. */
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.06); opacity: 0.78; }
+}
+
+/* v0.17.0 A-hero — "듣는 중" three dots blink (per-dot 0/.2/.4s stagger via inline delay). */
+@keyframes blink {
+  0%, 100% { opacity: 0.22; }
+  50% { opacity: 1; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* No scale spring for motion-sensitive users — fade only. */
   @keyframes value-burst {
@@ -107,6 +120,10 @@ input::placeholder {
     20%  { transform: scale(1); opacity: 1; }
     72%  { transform: scale(1); opacity: 1; }
     100% { transform: scale(1); opacity: 0; }
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.78; }
   }
 }
 

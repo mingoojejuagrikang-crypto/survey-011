@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { T } from '../tokens';
+import { T, TYPE_LABELS, TYPE_COLORS } from '../tokens';
 import { I } from '../components/icons';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -205,6 +205,18 @@ function SummaryRow({ label, value, unit, accent }: { label: string; value: numb
   );
 }
 
+// ─── A-hero helpers (v0.17.0) ─────────────────────────────────
+/** README 타이포 스케일(A): 값 길이로 hero 숫자 크기 자동 조절. ≤4자 150 / ≤6자 104 / 그 외 50.
+ *  clamp로 작은 화면(375px 세로)에서도 안 깨지게 상한만 길이별로 둔다(min은 동일 비율 축소). */
+function heroFontSize(value: string): string {
+  const len = (value || '').length;
+  if (len <= 4) return 'clamp(64px, 22vw, 150px)';
+  if (len <= 6) return 'clamp(48px, 16vw, 104px)';
+  return 'clamp(34px, 11vw, 50px)';
+}
+
+type HeroEvent = 'listening' | 'confirm' | 'complete';
+
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
   totalRows, columns, voiceCols, currentColId, completing, paused, confidence, inputLabel,
@@ -232,6 +244,35 @@ function ActiveState({
   const rowValues = sess.getRowValues(row);
   const [editingColId, setEditingColId] = useState<string | null>(null);
   const [cmdHelpOpen, setCmdHelpOpen] = useState(false);
+
+  // ── A-hero 파생 (v0.17.0) — 전부 store 신호에서 읽기만 한다(useVoiceSession 무수정).
+  //    hero 이벤트: complete > confirm > listening. 정정(correct)은 hero가 아니라
+  //    ModifyIndicatorPill(정정 구간 내내 화면을 점유, z-fight 없음)에서 직전값→새값으로 표시한다.
+  const currentCol = voiceCols.find((c) => c.id === currentColId) || voiceCols[0];
+  const currentValue = currentCol ? (rowValues[currentCol.id] ?? '') : '';
+  const heroEvent: HeroEvent = completing
+    ? 'complete'
+    : currentValue
+    ? 'confirm'
+    : 'listening';
+
+  // 직전값 캡처 — store에 prevValue가 없으므로 view 레이어 ref로 정정 직전의 값을 기억한다.
+  //   매 렌더에서 필드별 "마지막 비어있지 않은 값"을 추적해 둔다(재프롬프트가 셀을 ''로 비우기
+  //   직전의 값을 잃지 않게 — 빈 값은 추적값을 덮어쓰지 않는다). 정정(modifyIndicator)이 대상 셀을
+  //   가리키면 그 추적값이 곧 "직전값"이다. store는 건드리지 않는다.
+  //   ModifyIndicatorPill의 직전값(취소선)→새값 표시에 쓴다.
+  const lastNonEmptyRef = useRef<Record<string, string>>({});
+  const lastRowRef = useRef(row);
+  if (lastRowRef.current !== row) { lastNonEmptyRef.current = {}; lastRowRef.current = row; }
+  const modCol = sess.modifyIndicator?.colId;
+  const modCurrent = modCol ? (rowValues[modCol] ?? '') : '';
+  // 정정 대상 셀은 새 값이 이미 채워졌을 수 있으므로, 추적값 갱신 '전에' 직전값을 읽는다.
+  const modPrev = modCol ? lastNonEmptyRef.current[modCol] : undefined;
+  // 추적값 갱신(비어있지 않은 값만). 정정 대상 셀은 새 값이 직전값이 되지 않도록 제외.
+  for (const c of voiceCols) {
+    const v = rowValues[c.id] ?? '';
+    if (v && c.id !== modCol) lastNonEmptyRef.current[c.id] = v;
+  }
 
   return (
     <>
@@ -284,8 +325,8 @@ function ActiveState({
         </div>
         <div
           style={{
-            marginTop: 6, position: 'relative', height: 4, borderRadius: 2,
-            background: 'rgba(255,255,255,0.08)',
+            marginTop: 6, position: 'relative', height: 5, borderRadius: 3,
+            background: T.line,
           }}
         >
           <div
@@ -367,7 +408,17 @@ function ActiveState({
           padding: '0 20px', minHeight: 0, gap: 18,
         }}
       >
-        {/* v0.4.5 I1: 중앙 Hero(항목명+큰 값) 제거 — 칩 영역(chip-pulse 블링크 + 값 표시)과 중복. */}
+        {/* v0.17.0 A-hero — 한 번에 한 값을 거대 mono로 중앙 표시. listening/confirm/complete
+            이벤트별 톤(정정은 ModifyIndicatorPill이 직전값→새값으로 담당). 칩 그리드는 위에서
+            컴팩트 진행 레일로 유지(터치/auto 편집·재녹음 핸들러 보존). 정정·이상치·일시정지 카드가
+            뜨면 중복을 피해 hero는 숨긴다. */}
+        {!paused && currentCol && !sess.modifyIndicator && !sess.anomalyAlert && (
+          <VoiceHero
+            event={heroEvent}
+            col={currentCol}
+            value={currentValue}
+          />
+        )}
 
         {/* I-2: 행 이동 (버튼 — 음성 "이전"/"다음"과 동일 동작) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -510,9 +561,16 @@ function ActiveState({
       {/* v0.12.0 AREA2 V4 — '수정 값' 인디케이터. 중앙 이상치 팝업과 겹치지 않게 상호배타로만 렌더.
           대상 셀 칩은 activeColIdx(모든 수정-재진입 경로가 setActiveCol로 지정)로 이미 하이라이트됨. */}
       {sess.modifyIndicator && !sess.anomalyAlert && (
-        <ModifyIndicatorPill name={sess.modifyIndicator.name} />
+        <ModifyIndicatorPill
+          name={sess.modifyIndicator.name}
+          prevValue={modPrev}
+          newValue={modCurrent}
+        />
       )}
-      {sess.valueBurst && !sess.anomalyAlert && !paused && (
+      {/* v0.17.0 A-hero — CenterValueBurst는 hero/pill이 중앙 거대값을 점유하지 않을 때만 띄운다.
+          confirm hero(거대 값)·정정 pill이 같은 값을 중앙에 이미 크게 보여주므로, 그때 burst를 함께
+          렌더하면 동일 값이 이중으로 겹친다(이중상). 그 구간엔 burst를 생략해 중복을 없앤다. */}
+      {sess.valueBurst && !sess.anomalyAlert && !paused && !sess.modifyIndicator && heroEvent !== 'confirm' && (
         <CenterValueBurst
           key={sess.valueBurst.seq}
           name={sess.valueBurst.name}
@@ -578,7 +636,12 @@ function PausedCard() {
  *  v0.14.0 E(민구 요청) — 모든 알람/안내를 화면 중앙·최대 크기로 통일. 기존 상단 작은 pill을
  *  이상치 팝업과 같은 중앙 대형 카드로 교체(톤은 BLUE로 구분 — 수정은 오류가 아니라 재입력 안내).
  *  비대화형(pointerEvents:none) — 입력 흐름을 막지 않는다. */
-function ModifyIndicatorPill({ name }: { name: string }) {
+function ModifyIndicatorPill({ name, prevValue, newValue }: { name: string; prevValue?: string; newValue?: string }) {
+  // v0.17.0 A-hero: 정정 구간 두 국면을 한 카드로 표현한다(이 카드가 정정 내내 화면을 점유 — hero와
+  //   z-fight 없음). ① 재프롬프트(새 값 아직): "수정 — 다시 말해주세요" + 항목명.
+  //   ② 새 값 도착(echo 구간): 직전값(취소선·mute) → ↓(amber) → 새값(거대·amber) + "↺ 정정되었습니다".
+  const committed = !!newValue && newValue !== prevValue;
+  const accent = committed ? T.amber : T.blue;
   return (
     <div
       style={{
@@ -591,23 +654,55 @@ function ModifyIndicatorPill({ name }: { name: string }) {
         style={{
           maxWidth: 'min(560px, 94vw)', maxHeight: '88vh', overflowY: 'auto',
           padding: '20px 28px', borderRadius: 18,
-          background: 'rgba(18,26,40,0.96)', border: `2px solid ${T.blue}`,
+          background: committed ? 'rgba(40,32,12,0.96)' : 'rgba(18,26,40,0.96)',
+          border: `2px solid ${accent}`,
           boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
-          display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center',
+          display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
         }}
       >
-        <span style={{ fontSize: 18, fontWeight: 800, color: T.blue, letterSpacing: -0.2 }}>
-          수정 — 다시 말해주세요
+        {/* 항목명 + 타입(읽기 일관) */}
+        <span style={{ fontSize: 17, fontWeight: 800, color: accent, letterSpacing: -0.2 }}>
+          {committed ? `${name} 정정` : '수정 — 다시 말해주세요'}
         </span>
-        <span
-          style={{
-            fontSize: 'clamp(34px, 9vw, 52px)', fontWeight: 900, color: T.text,
-            letterSpacing: -0.5, textAlign: 'center', maxWidth: '100%',
-            wordBreak: 'keep-all', lineHeight: 1.15,
-          }}
-        >
-          {name}
-        </span>
+        {committed ? (
+          <>
+            {prevValue && (
+              <span
+                style={{
+                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                  fontSize: 'clamp(22px, 7vw, 38px)', fontWeight: 700,
+                  color: T.textMute, textDecoration: 'line-through', letterSpacing: -0.5,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '88vw',
+                }}
+              >
+                {prevValue}
+              </span>
+            )}
+            <span style={{ fontSize: 18, color: T.amber, lineHeight: 1 }} aria-hidden>↓</span>
+            <span
+              style={{
+                fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                fontSize: heroFontSize(newValue || ''),
+                fontWeight: 800, color: T.amber, letterSpacing: -1, lineHeight: 1,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '94vw',
+                animation: 'chip-pop 320ms ease-out',
+              }}
+            >
+              {newValue}
+            </span>
+            <span style={{ fontSize: 15, fontWeight: 800, color: T.amber, marginTop: 2 }}>↺ 정정되었습니다</span>
+          </>
+        ) : (
+          <span
+            style={{
+              fontSize: 'clamp(34px, 9vw, 52px)', fontWeight: 900, color: T.text,
+              letterSpacing: -0.5, textAlign: 'center', maxWidth: '100%',
+              wordBreak: 'keep-all', lineHeight: 1.15,
+            }}
+          >
+            {name}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -677,6 +772,121 @@ function ActiveTtsSlider() {
         {s.ttsRate.toFixed(2)}x
       </span>
     </div>
+  );
+}
+
+// ─── A-hero (v0.17.0) — 한 번에 한 값, 거대 mono. ─────────────────
+/** 입력 탭의 시각 중심(방향 A). 현재 필드의 이벤트 상태를 거대 숫자/안내로 표시한다.
+ *  값/이벤트는 전부 store에서 파생된 props로만 들어온다(플로우 로직 무수정).
+ *  - listening: 필드명 + "측정값을 말씀해 주세요" + 깜빡이는 점 3개(blink).
+ *  - confirm:   필드명+타입배지 → 거대 값(mono, 길이별 150/104/50) → "✓ 정상".
+ *  - complete:  ✓ + "행 입력 완료".
+ *  정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(직전값 취소선→새값). */
+function VoiceHero({
+  event, col, value,
+}: {
+  event: HeroEvent;
+  col: Column;
+  value: string;
+}) {
+  const accent = event === 'listening' ? T.blue : T.green; // confirm/complete = green
+
+  if (event === 'complete') {
+    return (
+      <div
+        aria-live="polite"
+        style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+          textAlign: 'center', minWidth: 0, width: '100%',
+        }}
+      >
+        <span style={{ fontSize: 'clamp(48px, 16vw, 72px)', lineHeight: 1, color: T.green }} aria-hidden>✓</span>
+        <span style={{ fontSize: 24, fontWeight: 800, color: T.text, letterSpacing: -0.4 }}>행 입력 완료</span>
+        <span style={{ fontSize: 14, color: T.textDim, fontWeight: 500 }}>다음 행으로 이동합니다…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      aria-live="polite"
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+        textAlign: 'center', minWidth: 0, width: '100%',
+      }}
+    >
+      {/* 필드명 + 타입배지 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%', minWidth: 0 }}>
+        <span
+          style={{
+            fontSize: 'clamp(18px, 5vw, 22px)', fontWeight: 800,
+            color: event === 'listening' ? T.blue : T.textDim,
+            letterSpacing: -0.3, whiteSpace: 'nowrap', overflow: 'hidden',
+            textOverflow: 'ellipsis', maxWidth: '70vw',
+          }}
+        >
+          {col.name}
+        </span>
+        <TypeBadge type={col.type} />
+      </div>
+
+      {event === 'listening' ? (
+        <>
+          <span style={{ fontSize: 'clamp(16px, 4.4vw, 19px)', color: T.textDim, fontWeight: 500 }}>
+            측정값을 말씀해 주세요
+          </span>
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }} aria-hidden>
+            {[0, 1, 2].map((i) => (
+              <span
+                key={i}
+                style={{
+                  width: 12, height: 12, borderRadius: '50%', background: T.blue,
+                  animation: `blink 1.2s ease-in-out ${i * 0.2}s infinite`,
+                }}
+              />
+            ))}
+          </div>
+        </>
+      ) : (
+        <>
+          {/* confirm: 거대 값 */}
+          <span
+            key={value}
+            style={{
+              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+              fontSize: heroFontSize(value),
+              fontWeight: 800, lineHeight: 1,
+              color: T.text,
+              letterSpacing: -2,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '94vw',
+              animation: 'chip-pop 320ms ease-out',
+            }}
+          >
+            {value || '—'}
+          </span>
+          {/* 상태 라벨 */}
+          <span style={{ fontSize: 'clamp(15px, 4.4vw, 19px)', fontWeight: 800, color: accent, letterSpacing: -0.2 }}>
+            ✓ 정상
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TypeBadge({ type }: { type: Column['type'] }) {
+  const c = TYPE_COLORS[type];
+  return (
+    <span
+      style={{
+        flexShrink: 0,
+        padding: '3px 9px', borderRadius: 8,
+        fontSize: 12, fontWeight: 700, letterSpacing: -0.1,
+        color: c.fg, background: c.bg,
+      }}
+    >
+      {TYPE_LABELS[type]}
+    </span>
   );
 }
 
@@ -815,8 +1025,9 @@ function ColumnChip({
               transformOrigin: 'right center',
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
               color: isActive ? T.text : isDone ? T.text : T.textDim,
-              // Active chip's value reads larger for at-a-glance confirmation.
-              fontSize: isActive ? 'clamp(16px, 5.2vw, 22px)' : 'clamp(13px, 4vw, 17px)',
+              // v0.17.0 A-hero: 거대 값은 중앙 hero가 담당 → 칩은 컴팩트 진행 레일로서
+              // 작은 확인값만 유지(활성도 과하게 키우지 않음).
+              fontSize: isActive ? 'clamp(14px, 4.4vw, 18px)' : 'clamp(13px, 4vw, 17px)',
               fontWeight: 800,
               letterSpacing: -0.3,
               maxWidth: '100%',
