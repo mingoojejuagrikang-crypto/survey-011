@@ -20,7 +20,7 @@ import {
   inferColumns,
   parseSpreadsheetId,
 } from '../lib/sheets';
-import { computeTotalRows, nestedAutoValue, buildCyclingValues } from '../lib/autoValue';
+import { computeTotalRows, nestedAutoValue, buildCyclingValues, autoValue } from '../lib/autoValue';
 import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
 import { getKoreanVoices, refreshVoices, setPreferredVoiceName, speak, warmupTts } from '../lib/speech';
@@ -191,34 +191,11 @@ function SegmentToggle<V extends string>({
 
 // ─── auto detail panels ────────────────────────────────────────
 function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => void }) {
-  // Numeric types support fixed or sequential
-  if (col.type === 'int' || col.type === 'float') {
-    if (col.auto.kind === 'seq') {
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13, color: T.textMute }}>순차</span>
-          <MiniInput
-            value={col.auto.from}
-            onChange={(v) =>
-              onChange({ ...col, auto: { kind: 'seq', from: +v || 0, to: col.auto.kind === 'seq' ? col.auto.to : 0 } })
-            }
-          />
-          <span style={{ color: T.textMute, fontSize: 14 }}>~</span>
-          <MiniInput
-            value={col.auto.to}
-            onChange={(v) =>
-              onChange({ ...col, auto: { kind: 'seq', from: col.auto.kind === 'seq' ? col.auto.from : 0, to: +v || 0 } })
-            }
-          />
-          <button
-            onClick={() => onChange({ ...col, auto: { kind: 'fixed', value: '' } })}
-            style={linkButton}
-          >
-            단일값
-          </button>
-        </div>
-      );
-    }
+  // v0.21.0 설정탭#1 — 정수(int): 단일/순차 선택 + 순차 from~to 인라인 입력은 ColumnCard의
+  //   "생성방식" 칩 행으로 일원화됐다(음성확인 아래줄). 따라서 여기 int 분기는 '단일값'일 때의
+  //   값 입력만 담당한다(seq는 칩 행에서 from~to 노출).
+  if (col.type === 'int') {
+    if (col.auto.kind === 'seq') return null; // seq의 from~to는 ColumnCard 칩 행에서 노출
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, color: T.textMute }}>단일값</span>
@@ -228,12 +205,22 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
           onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v } })}
           wide
         />
-        <button
-          onClick={() => onChange({ ...col, auto: { kind: 'seq', from: 1, to: 50 } })}
-          style={{ ...linkButton, color: T.blue, fontWeight: 700 }}
-        >
-          순차로 변경
-        </button>
+      </div>
+    );
+  }
+
+  // v0.21.0 설정탭#1 — 소수(float)는 자동입력 시 단일 고정값만 지원(순차 칩은 int 전용 spec).
+  //   기존 int|float 공통 분기에서 float의 순차 토글을 의도적으로 제거 — 자동 float은 고정값 입력만.
+  if (col.type === 'float') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, color: T.textMute }}>단일값</span>
+        <MiniInput
+          value={col.auto.kind === 'fixed' ? col.auto.value : ''}
+          placeholder="값"
+          onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v } })}
+          wide
+        />
       </div>
     );
   }
@@ -241,6 +228,10 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
   // date type: "오늘" radio or date picker
   if (col.type === 'date') {
     const isToday = col.auto.kind !== 'fixed' || col.auto.value === '오늘' || col.auto.value === '';
+    // v0.22.0 설정탭#3 후속 — "오늘" 선택 시 실제 치환될 날짜를 라벨 옆 muted로 미리보기.
+    //   ColumnDetailRow(게이트)의 autoValue(col, 1) 패턴 재사용 — 새 날짜 로직 만들지 않는다.
+    //   지정일 상태에선 date picker가 이미 날짜를 보여주므로 중복 표기 생략.
+    const todayPreview = isToday ? autoValue(col, 1) : '';
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
         <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
@@ -252,6 +243,11 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
               style={{ accentColor: T.blue }}
             />
             오늘
+            {isToday && todayPreview && (
+              <span style={{ fontSize: 12, color: T.textMute, fontWeight: 400 }}>
+                ({todayPreview})
+              </span>
+            )}
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 13, color: T.text }}>
             <input
@@ -307,11 +303,6 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
   // options - rendered separately
   return null;
 }
-
-const linkButton: React.CSSProperties = {
-  border: 'none', background: 'transparent', color: T.textMute, fontSize: 13,
-  cursor: 'pointer', textDecoration: 'underline',
-};
 
 // ─── options panel ─────────────────────────────────────────────
 function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Column) => void }) {
@@ -581,27 +572,6 @@ function ColumnCard({
           }}
           disabled={col.input === 'voice'}
         />
-        {/* v0.20.0 설정탭#3 — 순차/단일 하이라이트 칩. 자동입력 정수 컬럼이 순차(seq)인지 단일(fixed)인지
-            를 컬럼 카드 전단에서 즉시 식별. 읽기 전용 표시(실제 전환은 아래 AutoDetail '순차로 변경/단일값').
-            "음성확인 유/무" SegmentToggle과 동일한 라벨+pill 톤. int 전용(spec). */}
-        {col.input === 'auto' && col.type === 'int' && (col.auto.kind === 'seq' || col.auto.kind === 'fixed') && (
-          <div data-testid={`seq-fixed-${col.id}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, color: T.textMute, fontWeight: 700, letterSpacing: 0.4 }}>
-              생성방식
-            </span>
-            <span
-              style={{
-                display: 'inline-flex', alignItems: 'center', height: 36, padding: '0 14px',
-                borderRadius: 10, fontSize: 14, fontWeight: 700, letterSpacing: -0.1,
-                border: `1px solid ${col.auto.kind === 'seq' ? 'rgba(41,121,255,0.35)' : T.line}`,
-                background: col.auto.kind === 'seq' ? T.blueGlow : 'rgba(255,255,255,0.05)',
-                color: col.auto.kind === 'seq' ? T.text : T.textDim,
-              }}
-            >
-              {col.auto.kind === 'seq' ? '순차' : '단일'}
-            </span>
-          </div>
-        )}
         {/* v0.8.0 — 샘플키 토글은 조회탭으로 이전(WS4). 자동 유추·effectiveSampleKey 로직은 유지. */}
         {/* v0.8.0 — 이상치 알람(의미 반전: 증가=커지면 알람, 감소=작아지면 알람). 적격(사용자 입력
             숫자) 컬럼만 노출; 부적격 전환 시 store가 trendRule/pctThreshold 클리어. */}
@@ -657,6 +627,61 @@ function ColumnCard({
           </>
         )}
       </div>
+
+      {/* v0.21.0 설정탭#1 — 단일/순차 선택 일원화. 자동입력+정수 컬럼에서 "음성확인" 행 아래줄에
+          칩 하이라이트(SegmentToggle, 선택된 칩 강조)로 단일값/순차값을 고른다. 순차값 선택 시
+          그 자리(아래)에 from~to 인라인 입력을 노출. updateColumn(settingsStore)의 isCycling 전이
+          시 ttsAnnounce 자동 토글을 보존하려, onChange는 auto.kind만 바꾸고 ttsAnnounce는 건드리지
+          않는다(fixed↔seq 전이를 store가 감지해 음성확인을 자동 조정). int 전용(spec). */}
+      {col.input === 'auto' && col.type === 'int' && (col.auto.kind === 'seq' || col.auto.kind === 'fixed') && (
+        <div
+          data-testid={`seq-fixed-${col.id}`}
+          style={{ paddingLeft: 32, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
+        >
+          <SegmentToggle
+            label="생성방식"
+            value={col.auto.kind === 'seq' ? 'seq' : 'fixed'}
+            options={[
+              { id: 'fixed', label: '단일값' },
+              { id: 'seq', label: '순차값' },
+            ]}
+            onChange={(v) => {
+              if (v === 'seq') {
+                if (col.auto.kind === 'seq') return; // 이미 순차 — no-op
+                onChange({ ...col, auto: { kind: 'seq', from: 1, to: 50 } });
+              } else {
+                if (col.auto.kind === 'fixed') return; // 이미 단일 — no-op
+                onChange({ ...col, auto: { kind: 'fixed', value: '' } });
+              }
+            }}
+          />
+          {col.auto.kind === 'seq' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 13, color: T.textMute }}>시작</span>
+              <MiniInput
+                value={col.auto.from}
+                onChange={(v) =>
+                  onChange({
+                    ...col,
+                    auto: { kind: 'seq', from: +v || 0, to: col.auto.kind === 'seq' ? col.auto.to : 0 },
+                  })
+                }
+              />
+              <span style={{ color: T.textMute, fontSize: 14 }}>~</span>
+              <span style={{ fontSize: 13, color: T.textMute }}>끝</span>
+              <MiniInput
+                value={col.auto.to}
+                onChange={(v) =>
+                  onChange({
+                    ...col,
+                    auto: { kind: 'seq', from: col.auto.kind === 'seq' ? col.auto.from : 0, to: +v || 0 },
+                  })
+                }
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {col.input === 'auto' && col.type !== 'options' && (
         <div style={{ paddingLeft: 32 }}>
@@ -803,7 +828,13 @@ function TypeReviewModal({
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.6)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        // v0.21.0 설정탭#2 — standalone PWA safe-area(노치/상태바/홈인디케이터 침범 방지). backdrop
+        //   패딩에 env(safe-area-inset-*) 흡수. Safari 탭에선 env(...)=0이라 기존 24px 유지.
+        paddingTop: 'max(24px, env(safe-area-inset-top))',
+        paddingBottom: 'max(24px, env(safe-area-inset-bottom))',
+        paddingLeft: 'max(24px, env(safe-area-inset-left))',
+        paddingRight: 'max(24px, env(safe-area-inset-right))',
       }}
     >
       <div
@@ -1770,7 +1801,13 @@ function TablePreviewModal({
         backdropFilter: 'blur(4px)',
         WebkitBackdropFilter: 'blur(4px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16,
+        // v0.21.0 설정탭#2 — standalone PWA safe-area. position:fixed라 phoneStyle 셸 패딩을 벗어나므로
+        //   노치/상태바/홈인디케이터를 침범했다. backdrop 패딩에 env(safe-area-inset-*)를 흡수(중앙
+        //   정렬 카드가 inset만큼 안쪽으로 들어옴). 일반 Safari 탭에선 env(...)=0이라 기존 16px 유지.
+        paddingTop: 'max(16px, env(safe-area-inset-top))',
+        paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
+        paddingLeft: 'max(16px, env(safe-area-inset-left))',
+        paddingRight: 'max(16px, env(safe-area-inset-right))',
         animation: 'fade-up 200ms ease-out',
       }}
     >
@@ -1830,6 +1867,32 @@ function TablePreviewModal({
               <SummaryPill label="전체 항목" value={columns.length} />
               <SummaryPill label="총 행수" value={totalRows} />
             </div>
+            {/* v0.21.0 설정탭#4 — 실제 저장될 세션명을 게이트 요약 상단(컬럼 목록 위)에 prominent하게
+                노출. prospectiveSessionLabel()(SettingsScreen)이 'YYYY-MM-DD 라벨'을 이미 계산 — 재사용.
+                기존엔 요약 하단에 묻혀 있어 컬럼이 많으면 스크롤 뒤에 가려졌다 → 헤더 직하로 승격. */}
+            {sessionLabel && (
+              <div
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '8px 12px', borderRadius: 10,
+                  background: 'rgba(0,200,83,0.10)', border: '1px solid rgba(0,200,83,0.30)',
+                }}
+              >
+                <span style={{ fontSize: 12, fontWeight: 700, color: T.textDim, flexShrink: 0 }}>
+                  세션명
+                </span>
+                <span
+                  style={{
+                    flex: 1, minWidth: 0, fontSize: 14, fontWeight: 800, color: T.text,
+                    fontFamily: 'JetBrains Mono, ui-monospace, monospace', letterSpacing: -0.2,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right',
+                  }}
+                  title={sessionLabel}
+                >
+                  {sessionLabel}
+                </span>
+              </div>
+            )}
             <div
               style={{
                 maxHeight: 196, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
@@ -1842,14 +1905,6 @@ function TablePreviewModal({
                 <ColumnDetailRow key={c.id} col={c} />
               ))}
             </div>
-            {sessionLabel && (
-              <div style={{ fontSize: 13, color: T.textDim }}>
-                세션명:{' '}
-                <span style={{ color: T.text, fontWeight: 700, fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>
-                  {sessionLabel}
-                </span>
-              </div>
-            )}
           </div>
         )}
 
@@ -1996,6 +2051,14 @@ function ColumnDetailRow({ col }: { col: Column }) {
     valueText = '직접 입력';
   } else if (col.auto.kind === 'seq') {
     valueText = `${col.auto.from} ~ ${col.auto.to}`;
+  } else if (col.type === 'date') {
+    // v0.21.0 설정탭#3 — 자동입력+날짜는 실제 치환될 날짜를 함께 보여준다. autoValue()(autoValue.ts)
+    //   가 '오늘'→ISO 날짜 변환을 이미 보유 — 재사용. '오늘'(또는 빈값=오늘)이면 "오늘 (YYYY-MM-DD)"로,
+    //   날짜 지정이면 그 날짜를 그대로 표시(이 분기는 col.auto.kind==='fixed' 전제).
+    const resolved = autoValue(col, 1); // '오늘'/빈값 → 오늘 ISO, 지정일 → 그 날짜
+    const isTodayDynamic =
+      col.auto.kind === 'fixed' && (col.auto.value === '오늘' || col.auto.value === '');
+    valueText = isTodayDynamic ? `오늘 (${resolved})` : resolved || '(빈값)';
   } else if (col.auto.kind === 'fixed') {
     valueText = col.auto.value || '(빈값)';
   } else if (col.auto.kind === 'options') {

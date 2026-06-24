@@ -100,18 +100,21 @@ async function addColumn(page: Page, opts: { type?: string; input?: 'auto' | 'vo
   }
 }
 
-/** 자동 컬럼 sequential 설정 (from=1, to=N) */
+/** 자동 컬럼 sequential 설정 (from=1, to=N).
+ *  v0.21.0 설정탭#1 — "순차로 변경" 링크버튼이 "생성방식" 칩(단일값/순차값, int 전용)으로 일원화됐다.
+ *  순차값 칩은 int 컬럼에서만 노출되므로(text 기본 컬럼엔 미노출) 기존처럼 가드를 둬 비-int에선 no-op.
+ *  from/to는 MiniInput(plain input)이라 type=number가 아니므로 seq-fixed-* 컨테이너 내부 input으로 타깃. */
 async function setSequential(page: Page, to: number) {
-  const seqBtn = page.locator('text=순차로 변경').first();
-  if (await seqBtn.isVisible().catch(() => false)) {
-    await seqBtn.click();
+  const seqChip = page.locator('button', { hasText: '순차값' }).last();
+  if (await seqChip.isVisible().catch(() => false)) {
+    await seqChip.click();
     await page.waitForTimeout(200);
-    // 두 번째 숫자 입력 (to)
-    const numInputs = page.locator('input[type="number"]');
-    const cnt = await numInputs.count();
-    if (cnt >= 2) {
-      await numInputs.nth(1).fill(String(to));
-      await numInputs.nth(1).blur();
+    // from/to 인라인 입력(시작~끝)은 생성방식 칩 행(data-testid="seq-fixed-…") 안의 input 2개.
+    const seqRow = page.locator('[data-testid^="seq-fixed-"]').last();
+    const inputs = seqRow.locator('input');
+    if ((await inputs.count()) >= 2) {
+      await inputs.nth(1).fill(String(to)); // 끝(to)
+      await inputs.nth(1).blur();
       await page.waitForTimeout(100);
     }
   }

@@ -1354,10 +1354,11 @@ export function useVoiceSession() {
         // 원본 전체발화("이십구 점 부") 버퍼가 폐기돼 커밋 클립에 조각만 남는다(시트값은 정상·클립
         // audit만 유실). 그래서 이 분기에서만 startClip()을 생략한다 — 활성 슬롯이 재질문 TTS·조각
         // 발화를 거쳐 계속 녹음하다가 commit 지점 stopClip()에서 단일 연속 녹음으로 stop된다.
-        // audioTrim.findSpeechSegments가 원본·조각을 (긴 무음 gap ≫ MERGE_GAP_MS로) 두 세그먼트로
-        // 나누고 concatRanges가 사이 무음을 제거해 이어붙이므로(CLIP-BLANK-1 경로·기검증), 저장
-        // 클립이 전체값으로 재생/전사된다. 별도 cross-restart webm concat이 없어 iOS decodeAudioData
-        // (webm/opus) 위험(CLIP-2 ⚠️주시)을 구조적으로 피한다. `:raw`도 재시작이 없어 1회만 보존됨.
+        // v0.21.0 CLIP-MIDSPEECH-1 — audioTrim.buildKeptRanges가 원본·조각을 포함한 모든 발화를
+        // 감싸는 단일 포괄 범위로 트림하므로(중간 무음 보존, splice 없음), 저장 클립이 원본+조각을
+        // 사이 무음째 그대로 담아 전체값으로 재생/전사된다(사람 청취 보존). 별도 cross-restart webm
+        // concat이 없어 iOS decodeAudioData(webm/opus) 위험(CLIP-2 ⚠️주시)을 구조적으로 피한다.
+        // `:raw`도 재시작이 없어 1회만 보존됨.
         logger.log({ type: 'clip', extra: 'clip_decimal_kept', sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
         awaitingFieldRef.current = { ...awaiting, fractionWhole: parseFailWhole };
         await say(`${parseFailWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);

@@ -115,10 +115,10 @@ test('[설정] 행수 힌트 표시 (S1-B)', async ({ page }) => {
   await addBtn.click();
   await page.waitForTimeout(300);
 
-  // "순차로 변경" 클릭 (int 타입이면 sequential)
-  const seqBtn = page.locator('text=순차로 변경').first();
-  if (await seqBtn.isVisible()) {
-    await seqBtn.click();
+  // v0.21.0 설정탭#1 — "순차값" 칩 클릭(int 타입에서만 노출; 기본 text 컬럼이면 미노출 → no-op).
+  const seqChip = page.locator('button', { hasText: '순차값' }).last();
+  if (await seqChip.isVisible().catch(() => false)) {
+    await seqChip.click();
     await page.waitForTimeout(200);
   }
 
@@ -142,17 +142,17 @@ test('[설정] 테이블 생성 후 미리보기 팝업 (S1-C)', async ({ page }
   await addBtn.click();
   await page.waitForTimeout(200);
 
-  // int → sequential (1~5)
-  const seqBtn = page.locator('text=순차로 변경').first();
-  if (await seqBtn.isVisible()) {
-    await seqBtn.click();
+  // v0.21.0 설정탭#1 — int → sequential(1~5). "순차값" 칩(int 전용)이 보일 때만 설정.
+  const seqChip = page.locator('button', { hasText: '순차값' }).last();
+  if (await seqChip.isVisible().catch(() => false)) {
+    await seqChip.click();
     await page.waitForTimeout(200);
-    // to 값을 5로 설정
-    const toInputs = page.locator('input[value]');
-    const count = await toInputs.count();
-    if (count >= 2) {
-      await toInputs.nth(1).fill('5');
-      await toInputs.nth(1).blur();
+    // 끝(to) 값을 5로 — from/to는 생성방식 칩 행(seq-fixed-*) 내부 input 2개.
+    const seqRow = page.locator('[data-testid^="seq-fixed-"]').last();
+    const inputs = seqRow.locator('input');
+    if ((await inputs.count()) >= 2) {
+      await inputs.nth(1).fill('5');
+      await inputs.nth(1).blur();
       await page.waitForTimeout(200);
     }
   }
@@ -279,14 +279,18 @@ test('[입력] 테이블 생성 후 시작 버튼 활성화', async ({ page }) =
   await addBtn.first().click();
   await page.waitForTimeout(200);
 
-  const seqBtn = page.locator('text=순차로 변경').first();
-  if (await seqBtn.isVisible()) {
-    await seqBtn.click();
+  // v0.21.0 설정탭#1 — "순차값" 칩(int 전용)이 보일 때만 순차 설정(기본 text 컬럼이면 no-op).
+  const seqChip = page.locator('button', { hasText: '순차값' }).last();
+  if (await seqChip.isVisible().catch(() => false)) {
+    await seqChip.click();
     await page.waitForTimeout(200);
-    const inputs = page.locator('input').filter({ hasText: '' });
-    const toField = page.locator('input').nth(2);
-    await toField.fill('3');
-    await page.waitForTimeout(200);
+    const seqRow = page.locator('[data-testid^="seq-fixed-"]').last();
+    const inputs = seqRow.locator('input');
+    if ((await inputs.count()) >= 2) {
+      await inputs.nth(1).fill('3');
+      await inputs.nth(1).blur();
+      await page.waitForTimeout(200);
+    }
   }
 
   await addBtn.first().click();

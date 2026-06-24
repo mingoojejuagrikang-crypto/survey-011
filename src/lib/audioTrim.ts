@@ -199,33 +199,41 @@ export function findSpeechSegments(
   return segs;
 }
 
-/** 각 세그먼트를 앞 PAD_FRONT / 뒤 PAD_BACK만큼 확장한 뒤, 겹치거나 맞닿는 범위는 합쳐서 "보존
- *  범위" 목록을 만든다. 합쳐지지 않은 범위 사이의 긴 무음은 결과에서 빠진다(공백 제거). 단일
- *  세그먼트면 applyAsymmetricPad와 동일한 단일 범위가 나온다(기존 동작 보존). */
+/** v0.21.0 CLIP-MIDSPEECH-1 — **모든 세그먼트를 감싸는 단일 포괄 범위**를 만든다.
+ *  [min(seg.start) − PAD_FRONT, max(seg.end) + PAD_BACK] 한 구간만 반환하므로, 발화 세그먼트
+ *  **사이의 무음(어절 내 정지·선언↔값 갭 등)은 그대로 보존**된다. 앞 침묵/TTS 잔향과 뒤 EOS 꼬리만
+ *  잘리는 가장자리 트림만 남는다(짧고 깔끔).
+ *
+ *  배경(2026-06-24 v0.20.0 실기기 분석): 이전 다중 범위 + concatRanges 경로가 발화 세그먼트 사이
+ *  150ms↑ 갭을 제거해 72클립 중 15개(21%)에서 **발화 중간을 잘라 이어붙였다** — 농가가 저장 클립을
+ *  들어도 값을 알 수 없다는 불만. 민구 지시: "발화 중간은 편집하지 말 것." 이 단일범위 통합으로
+ *  splice가 0이 되고(buildClipBlobs가 항상 단일 range를 받음), 중간 무음은 audit에 보존된다.
+ *
+ *  세그먼트가 비면 빈 배열(호출자가 발화 미검출로 처리). 단일 세그먼트면 applyAsymmetricPad와
+ *  동일한 범위가 나온다(기존 단일발화 동작 그대로 보존). */
 export function buildKeptRanges(
   segments: { start: number; end: number }[],
   sampleRate: number,
   length: number,
 ): { start: number; end: number }[] {
+  if (segments.length === 0) return [];
   const front = Math.floor((sampleRate * PAD_FRONT_MS) / 1000);
   const back = Math.floor((sampleRate * PAD_BACK_MS) / 1000);
-  const ranges: { start: number; end: number }[] = [];
+  let minStart = segments[0].start;
+  let maxEnd = segments[0].end;
   for (const seg of segments) {
-    const start = Math.max(0, seg.start - front);
-    const end = Math.min(length, seg.end + back);
-    const last = ranges[ranges.length - 1];
-    if (last && start <= last.end) {
-      if (end > last.end) last.end = end; // 확장 후 겹침 → 합침(연속 보존, 갭 없음)
-    } else {
-      ranges.push({ start, end });
-    }
+    if (seg.start < minStart) minStart = seg.start;
+    if (seg.end > maxEnd) maxEnd = seg.end;
   }
-  return ranges;
+  // 모든 발화를 감싸는 단일 범위 — 가장자리만 트림, 내부 무음은 보존(splice 없음).
+  return [{ start: Math.max(0, minStart - front), end: Math.min(length, maxEnd + back) }];
 }
 
 /** 보존 범위들의 실제 오디오를 순서대로 이어붙인 mono PCM. 범위 사이 무음은 제거된다.
  *  v0.13.0 R4 — 각 내부 경계(이전 범위 끝/다음 범위 시작)에 짧은 선형 페이드를 적용해 직결 자리의
- *  진폭 불연속(클릭/팝)을 부드럽게 한다. 페이드 길이는 구간 절반을 넘지 않게 클램프(짧은 구간 보호). */
+ *  진폭 불연속(클릭/팝)을 부드럽게 한다. 페이드 길이는 구간 절반을 넘지 않게 클램프(짧은 구간 보호).
+ *  ⚠️ v0.21.0 CLIP-MIDSPEECH-1 이후 buildKeptRanges가 단일 범위만 돌려주므로 **이 함수는 기본 경로가
+ *  아니다**(발화 중간 splice 금지). 다중범위 로직·테스트 보존을 위해 남겨둔 휴면 폴백이다. */
 function concatRanges(
   mono: Float32Array,
   ranges: { start: number; end: number }[],
@@ -323,7 +331,9 @@ export function buildClipBlobs(
   hadPreroll: boolean,
   originalBlob: Blob,
 ): ProcessedClip {
-  // v0.9.0 CLIP-BLANK-1 — 다중 세그먼트 검출 + 내부 긴 공백 제거(선언·값은 각각 ±패딩으로 보존).
+  // v0.21.0 CLIP-MIDSPEECH-1 — 다중 세그먼트를 검출하되, buildKeptRanges가 **모두를 감싸는 단일
+  // 포괄 범위**로 통합한다. 발화 사이 무음은 보존되고(splice 0) 가장자리만 트림된다. (이전 v0.9.0은
+  // 세그먼트별 범위 + concat으로 내부 공백을 제거했으나, 발화 중간을 잘라 이어붙여 값 청취 불가.)
   const segments = findSpeechSegments(mono, sampleRate);
   if (segments.length === 0) {
     // 발화 미검출: 프리롤이 결합돼 있으면 결합 전체본을 저장본으로(프리롤 증거 보존),
@@ -349,7 +359,9 @@ export function buildClipBlobs(
       ? { blob: encodeWavMono(mono, sampleRate, 0, mono.length), raw: null }
       : { blob: originalBlob, raw: null };
   }
-  // 단일 범위면 연속 인코딩(기존 동작과 바이트 동일). 다중이면 범위들을 이어붙여 내부 공백 제거.
+  // v0.21.0 CLIP-MIDSPEECH-1 — buildKeptRanges가 항상 단일 범위를 돌려주므로 이 경로는 늘 연속
+  // 인코딩(기존 단일발화 동작과 바이트 동일, splice 0). concatRanges 분기는 도달하지 않는 보존용
+  // 폴백(테스트·로직 보존). 발화 사이 무음은 범위 안에 그대로 담겨 audit가 전체 값을 보존한다.
   const trimmed =
     ranges.length === 1
       ? encodeWavMono(mono, sampleRate, ranges[0].start, ranges[0].end)

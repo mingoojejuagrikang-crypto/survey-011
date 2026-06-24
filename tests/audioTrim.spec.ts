@@ -170,7 +170,7 @@ function synth2(silA: number, sp1: number, gap: number, sp2: number, silB: numbe
   return out;
 }
 
-test.describe('findSpeechSegments + buildKeptRanges (v0.9.0 CLIP-BLANK-1)', () => {
+test.describe('findSpeechSegments + buildKeptRanges (v0.21.0 CLIP-MIDSPEECH-1: 중간 갭 보존)', () => {
   test('긴 무음으로 갈린 두 발화 → 2개 세그먼트', () => {
     // 0.2s 무음 + 0.3s 발화 + 1.5s 긴 무음 + 0.3s 발화 + 0.2s 무음
     const mono = synth2(3200, 4800, 24000, 4800, 3200);
@@ -194,42 +194,78 @@ test.describe('findSpeechSegments + buildKeptRanges (v0.9.0 CLIP-BLANK-1)', () =
     expect(ranges[0].end).toBe(pad.end);
   });
 
-  test('buildClipBlobs: 긴 내부 공백이 제거되어 전체 span보다 짧아진다', () => {
-    const original = new Blob([new Uint8Array(1000)], { type: 'audio/webm' });
-    const mono = synth2(3200, 4800, 24000, 4800, 3200); // span 40000, 내부 1.5s 공백
-    const r = buildClipBlobs(mono, RATE, false, original);
-    expect(r.blob).not.toBe(original);
-    expect(r.blob.type).toBe('audio/wav');
-    const samples = (r.blob.size - 44) / 2;
-    // 두 발화(각 0.3s) + 각 ±패딩만 남고 1.5s 공백 제거 → 단일범위 트림(≈39680)보다 크게 짧다.
-    expect(samples).toBeLessThan(30000);
-    expect(samples).toBeGreaterThan(8000); // 두 발화 + 패딩은 보존
+  // [CLIP-MIDSPEECH-1] v0.21.0 — 발화 중간 splice 금지. 다중 세그먼트라도 buildKeptRanges는 모두를
+  // 감싸는 **단일 포괄 범위**만 돌려준다([min start − FRONT, max end + BACK]). 세그먼트 사이 무음은
+  // 범위 안에 그대로 담겨 보존되고(중간 갭 미제거), 가장자리만 트림된다 → concatRanges 미경유(splice 0).
+  test('buildKeptRanges: 다중 세그먼트도 단일 포괄 범위로 통합(중간 갭 보존, splice 0)', () => {
+    const FRONT = (RATE * PAD_FRONT_MS) / 1000; // 4800
+    const BACK = (RATE * PAD_BACK_MS) / 1000;   // 2880
+    // 두 발화 세그먼트(긴 갭으로 분리) + 충분한 leading/trailing 여백
+    const segs = [
+      { start: 16000, end: 20800 }, // 발화1
+      { start: 28800, end: 33600 }, // 발화2 (사이 8000 무음)
+    ];
+    const total = 49600;
+    const ranges = buildKeptRanges(segs, RATE, total);
+    // 핵심: 다중 세그먼트인데도 단일 범위 — concatRanges를 탈 다중범위가 만들어지지 않는다.
+    expect(ranges.length, '다중 세그먼트가 여러 범위로 쪼개짐 → splice 발생 위험').toBe(1);
+    expect(ranges[0].start).toBe(16000 - FRONT); // min start − FRONT
+    expect(ranges[0].end).toBe(33600 + BACK);    // max end + BACK
+    // 단일 범위가 두 발화 사이의 8000 무음을 통째로 포함(중간 갭 보존 = 발화 중간 미편집).
+    const gapStart = 20800, gapEnd = 28800;
+    expect(ranges[0].start).toBeLessThanOrEqual(gapStart);
+    expect(ranges[0].end).toBeGreaterThanOrEqual(gapEnd);
   });
 
-  // [CLIP-DECIMAL-FRAG-1] v0.16.0 — 소수 재질문에서 startClip 재시작을 생략하면, 원본 전체발화
-  // ("이십구 점 부")와 재질문 TTS 뒤의 조각 발화("구")가 한 연속 녹음에 담긴다. 그 사이는 긴 무음
-  // (TTS·사용자 반응 갭 ≫ MERGE_GAP_MS)이므로 findSpeechSegments가 두 세그먼트로 나누고 concat이
-  // 사이 무음만 제거해 둘 다 보존한다 — 저장 클립이 전체값 audit를 담는다는 로직을 명시적으로 표지.
-  // (cross-restart webm concat이 아니라 단일 녹음 디코드라 iOS decodeAudioData webm/opus 위험을 회피.)
-  test('decimal-frag: 원본 발화 + 긴 재질문 갭 + 조각 발화 → 두 세그먼트 모두 보존', () => {
+  // [CLIP-MIDSPEECH-1] v0.21.0 — (구 CLIP-BLANK-1 갱신) 발화 중간 splice 금지. 두 발화 사이의 내부
+  // 무음은 이제 **보존**된다(이전엔 concatRanges로 제거 → 발화 중간을 잘라 이어붙여 값 청취 불가).
+  // 가장자리(앞 침묵/뒤 꼬리)만 트림되고, 트림본은 두 발화 + 사이 갭을 모두 단일 연속 범위로 담는다.
+  test('buildClipBlobs: 다중 발화도 중간 갭을 보존한 단일 범위로 트림(splice 없음)', () => {
     const original = new Blob([new Uint8Array(1000)], { type: 'audio/webm' });
-    // 0.2s 무음 + 0.6s 원본("이십구 점 부") + 2.0s 재질문 TTS/반응 갭 + 0.3s 조각("구") + 0.2s 무음
+    // 1s 무음 + 0.3s 발화 + 0.5s 갭(>MERGE) + 0.3s 발화 + 1s 무음 → 가장자리 트림은 KEEP_RATIO 통과.
+    const mono = synth2(16000, 4800, 8000, 4800, 16000); // span 49600
+    const r = buildClipBlobs(mono, RATE, false, original);
+    expect(r.blob).not.toBe(original); // 가장자리 트림이 실제로 일어남(전체본 폴백 아님)
+    expect(r.blob.type).toBe('audio/wav');
+    const samples = (r.blob.size - 44) / 2;
+    // 포괄 범위 = [16000−4800, 33600+2880] = [11200, 36480] → 25280 샘플.
+    // 핵심: 단일범위라 두 발화 사이 0.5s(8000) 갭이 **그대로 포함**된다(중간 미편집).
+    expect(Math.abs(samples - 25280)).toBeLessThanOrEqual(2 * 320);
+    // 갭이 제거됐다면 ≈17280이 됐을 것 — 그보다 분명히 길다 = 내부 무음 보존됨(splice 0의 증거).
+    const ifGapRemoved = 25280 - 8000;
+    expect(samples, '내부 갭이 제거됨 → 발화 중간 splice 발생').toBeGreaterThan(ifGapRemoved + 4 * 320);
+    // 앞뒤 가장자리는 잘렸으므로 전체 span(49600)보다는 분명히 짧다.
+    expect(samples).toBeLessThan(mono.length - 10000);
+  });
+
+  // [CLIP-DECIMAL-FRAG-1] v0.16.0 → v0.21.0 CLIP-MIDSPEECH-1 갱신 — 소수 재질문에서 startClip
+  // 재시작을 생략하면, 원본 전체발화("이십구 점 부")와 재질문 TTS 뒤의 조각 발화("구")가 한 연속
+  // 녹음에 담긴다. 그 사이는 긴 무음(TTS·사용자 반응 갭 ≫ MERGE_GAP_MS)이지만, v0.21.0부터는 발화
+  // 중간 splice 금지에 따라 이 갭을 **제거하지 않고 보존**한다(단일 포괄 범위). 저장 클립은 원본·갭·
+  // 조각을 모두 담아 전체값 audit를 보존한다. (단일 녹음 디코드라 iOS decodeAudioData webm/opus 위험 회피.)
+  test('decimal-frag: 원본 발화 + 긴 재질문 갭 + 조각 발화 → 갭 포함 단일 범위로 모두 보존', () => {
+    const original = new Blob([new Uint8Array(1000)], { type: 'audio/webm' });
+    // 1s 무음 + 0.6s 원본("이십구 점 부") + 0.75s 재질문 갭 + 0.3s 조각("구") + 1s 무음
     const ORIG = 9600;   // 0.6s
+    const GAP = 12000;   // 0.75s (> MERGE_GAP_MS)
     const FRAG = 4800;   // 0.3s
-    const mono = synth2(3200, ORIG, 32000, FRAG, 3200);
+    const mono = synth2(16000, ORIG, GAP, FRAG, 16000); // span 58400
     const segs = findSpeechSegments(mono, RATE);
     expect(segs.length, '원본과 조각이 두 세그먼트로 분리되지 않음').toBe(2);
     const r = buildClipBlobs(mono, RATE, false, original);
     expect(r.blob).not.toBe(original);
     const samples = (r.blob.size - 44) / 2;
-    // 두 발화(0.6s + 0.3s = 0.9s = 14400) + 각 ±패딩이 보존되고 2.0s 갭은 제거된다 →
-    // 원본 단독 길이(트림 시 ≈ 0.6s+패딩)보다 분명히 길다(= 조각만이 아니라 원본도 들어있음).
-    const origAlone = ORIG + (RATE * PAD_FRONT_MS) / 1000 + (RATE * PAD_BACK_MS) / 1000; // ≈ 17280
-    const fragAlone = FRAG + (RATE * PAD_FRONT_MS) / 1000 + (RATE * PAD_BACK_MS) / 1000; // ≈ 12480
-    expect(samples, '원본 발화가 유실되고 조각만 남음').toBeGreaterThan(fragAlone + 2 * 320);
-    expect(samples, '두 발화 합 + 패딩이 보존되지 않음').toBeGreaterThan(origAlone);
-    // 갭(2.0s=32000)이 제거됐으므로 전체 span(53600)보다 크게 짧다.
-    expect(samples).toBeLessThan(mono.length - 20000);
+    // 포괄 범위 = [16000−4800, (16000+9600+12000+4800)+2880] = [11200, 45280] → 34080 샘플.
+    const FRONT = (RATE * PAD_FRONT_MS) / 1000, BACK = (RATE * PAD_BACK_MS) / 1000;
+    const expected = (16000 + ORIG + GAP + FRAG + BACK) - (16000 - FRONT); // 34080
+    expect(Math.abs(samples - expected)).toBeLessThanOrEqual(2 * 320);
+    // 원본·갭·조각이 모두 한 범위에 담긴다 → 원본만(트림 ≈0.6s+패딩)보다 분명히 길다.
+    const origAlone = ORIG + FRONT + BACK; // ≈ 17280
+    expect(samples, '원본 발화가 유실되고 조각만 남음').toBeGreaterThan(origAlone);
+    // 핵심: 갭(0.75s=12000)이 보존됐는지 — 갭을 제거했다면 ≈22080이 됐을 것보다 분명히 길다.
+    expect(samples, '재질문 갭이 제거됨 → 발화 중간 splice 발생').toBeGreaterThan(expected - GAP + 4 * 320);
+    // 가장자리(앞뒤 1s씩)는 잘렸으므로 전체 span(58400)보다는 짧다.
+    expect(samples).toBeLessThan(mono.length - 10000);
   });
 });
 

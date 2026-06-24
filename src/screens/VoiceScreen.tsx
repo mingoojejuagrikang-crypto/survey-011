@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
-import { T, TYPE_LABELS, TYPE_COLORS } from '../tokens';
+import { T } from '../tokens';
 import { I } from '../components/icons';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
@@ -448,16 +448,17 @@ function ActiveState({
         })}
       </div>
 
-      {/* 3) 1fr 흡수영역 — VoiceHero + TTS 에코. 모든 가변/조건부 내용을 여기에 모은다.
-          hero가 팝업(이상치/수정/일시정지) 표시로 숨겨지면 이 구역만 비워지고, 아래 컨트롤바(row4)는
-          grid track이 고정이라 움직이지 않는다(버그B 해소). overflow:hidden으로 hero가 길어도
-          이 구역 밖으로 새지 않게(아래 컨트롤바 보호). */}
+      {/* 3) 1fr 흡수영역 — VoiceHero 단독. v0.21.0 입력탭#1+4(민구 재요청) — 화면 본문의 TTS 에코
+          ({sess.lastTts}: "횡경 말씀해 주세요" 등 컬럼명 안내문구)를 화면에서 제거한다. ⚠️ TTS 음성
+          안내는 그대로 유지(useVoiceSession의 say()/setLastTts 무수정) — 화면에 그리는 텍스트만 삭제.
+          에코 줄이 사라지면서 hero가 흡수영역 세로를 온전히 쓸 수 있어 #2(팝업 잘림)도 함께 완화된다.
+          overflow:hidden은 유지(hero가 길어도 아래 컨트롤바 보호) — hero 내부는 자체 가용높이 기준 축소. */}
       <div
         style={{
           minHeight: 0, overflow: 'hidden',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          padding: '12px 20px 6px', gap: 12,
+          padding: '12px 20px', gap: 12,
         }}
       >
         {/* v0.17.0 A-hero — 한 번에 한 값을 거대 mono로 중앙 표시. listening/confirm/complete
@@ -471,18 +472,6 @@ function ActiveState({
             sampleParts={sampleLabelParts}
           />
         )}
-
-        {/* TTS 에코(마지막 안내 음성) — 흡수영역 하단. minHeight로 빈 줄이어도 높이 보존(점프 방지). */}
-        <div
-          style={{
-            width: '100%', maxWidth: 'min(560px, 94vw)', textAlign: 'center',
-            fontSize: 15, color: T.textDim, fontWeight: 500,
-            fontStyle: 'italic', letterSpacing: -0.1, minHeight: 20,
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-          }}
-        >
-          {sess.lastTts}
-        </div>
       </div>
 
       {/* 4) 하단 컨트롤바 — 한자리 고정. 이전/다음·마이크·종료·명령어 칩·도움말·속도 슬라이더.
@@ -648,7 +637,15 @@ function PausedCard() {
       style={{
         position: 'fixed', inset: 0, zIndex: 46,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        pointerEvents: 'none', padding: '16px',
+        pointerEvents: 'none',
+        // v0.21.0 입력탭#3 — standalone(홈화면 설치) safe-area 침범 방지(App.tsx:40-46 패턴).
+        //   fixed/inset:0 오버레이라 셸 패딩 바깥에 그려져 상태바·노치를 침범할 수 있다.
+        //   기본 16px에 env(safe-area-inset-*)를 더해 내부 카드를 안전영역 안으로 민다.
+        //   일반 Safari 탭에선 env(...)가 0이라 무영향.
+        paddingTop: 'max(16px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(16px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(16px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(16px, env(safe-area-inset-right, 0px))',
       }}
     >
       <div
@@ -893,8 +890,9 @@ const HERO_PANEL = {
 /** 입력 탭의 시각 중심(방향 A). 현재 필드의 이벤트 상태를 거대 숫자/안내로 표시한다.
  *  값/이벤트는 전부 store에서 파생된 props로만 들어온다(플로우 로직 무수정).
  *  - 패널 상단: 범용 샘플 식별 라벨(sampleParts, 순차변화 파트는 굵게/액센트).
- *  - listening: 필드명 + "측정값을 말씀해 주세요"(동적 대형 문구). v0.20.0 점3개 제거 → 패널 자체 점멸(panel-pulse).
- *  - confirm:   필드명+타입배지 → 거대 값(mono, 길이별 150/104/50) → "✓ 정상".
+ *  - listening: 필드명을 거대하게 단독 표시(v0.21.0 입력탭#3 — 정적 안내문구·타입배지 삭제,
+ *               항목명을 가용공간 기준 최대 크기로). 패널 자체 점멸(panel-pulse)로 '듣는 중' 신호.
+ *  - confirm:   필드명 → 거대 값(mono, 길이별 150/104/50) → "✓ 정상"(배지 없음).
  *  - complete:  ✓ + "행 입력 완료".
  *  정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(직전값 취소선→새값). */
 function VoiceHero({
@@ -916,6 +914,12 @@ function VoiceHero({
       style={{
         // v0.18.0 1a — 반투명 패널: 다른 팝업과 동일한 frame + 2px 상태색 border + shadow.
         maxWidth: 'min(560px, 94vw)', width: '100%',
+        // v0.21.0 입력탭#2 — 잘림 방지: 흡수영역(1fr, overflow:hidden) 안에서 패널이 가용높이를
+        //   넘으면 하드 클립되던 문제. 패널 자체 maxHeight:100% + 내부 overflowY:auto로, 짧은
+        //   기기/긴 값에서도 항목명·값이 잘리지 않고 패널 내부에서 스크롤되게 한다(다른 중앙
+        //   오버레이의 min(70vh,520px)+overflowY:auto 가드와 동일 전략). minHeight:0은 flex
+        //   자식이 컨테이너를 넘기지 않게(축소 허용) 하는 표준 가드.
+        maxHeight: '100%', minHeight: 0, overflowY: 'auto',
         padding: '18px 24px', borderRadius: 18,
         background: HERO_PANEL.bg,
         border: `2px solid ${HERO_PANEL.border}`,
@@ -940,57 +944,53 @@ function VoiceHero({
           <span style={{ fontSize: 24, fontWeight: 800, color: T.text, letterSpacing: -0.4 }}>행 입력 완료</span>
           <span style={{ fontSize: 14, color: T.textDim, fontWeight: 500 }}>다음 행으로 이동합니다…</span>
         </>
+      ) : event === 'listening' ? (
+        // v0.21.0 입력탭#3 — "측정값을 말씀해 주세요" 정적 안내문구 + 데이터형 배지(TypeBadge) 삭제.
+        //   듣는 중에는 "지금 어느 항목을 말해야 하는가"(항목명)가 유일한 시각 신호이므로, 항목명을
+        //   hero 가용공간 기준 최대 크기로 키운다(고정 clamp 상한 대신 vw 비중↑·상한↑). 장갑·원거리
+        //   가독 우선. 한 줄 유지(keep-all)하되 좁은 기기/긴 이름은 자동 축소(clamp 하한). TTS 음성
+        //   안내(say)는 그대로라 화면을 안 봐도 무엇을 말할지 들린다.
+        <span
+          style={{
+            fontSize: 'clamp(34px, 13vw, 76px)', fontWeight: 900,
+            color: T.text, letterSpacing: -1, lineHeight: 1.05,
+            wordBreak: 'keep-all', textAlign: 'center', maxWidth: '100%',
+          }}
+        >
+          {col.name}
+        </span>
       ) : (
         <>
-          {/* 측정 항목명 + 타입배지 (샘플 라벨과 위계 구분 — 항목명이 더 큼) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%', minWidth: 0 }}>
-            <span
-              style={{
-                fontSize: 'clamp(18px, 5vw, 22px)', fontWeight: 800,
-                color: T.text,
-                letterSpacing: -0.3, whiteSpace: 'nowrap', overflow: 'hidden',
-                textOverflow: 'ellipsis', maxWidth: '70vw',
-              }}
-            >
-              {col.name}
-            </span>
-            <TypeBadge type={col.type} />
-          </div>
-
-          {event === 'listening' ? (
-            // v0.20.0 입력탭#5 — 점3개 제거(패널 자체가 점멸). 안내문구는 기기별 가변 최대 크기로
-            //   (clamp + vw, 절대 px 지양). 한 줄 유지(keep-all)하되 좁은 기기에선 자동 축소.
-            <span
-              style={{
-                fontSize: 'clamp(22px, 7.4vw, 34px)', color: T.text, fontWeight: 800,
-                letterSpacing: -0.4, lineHeight: 1.15, wordBreak: 'keep-all', maxWidth: '100%',
-              }}
-            >
-              측정값을 말씀해 주세요
-            </span>
-          ) : (
-            <>
-              {/* confirm: 거대 값 */}
-              <span
-                key={value}
-                style={{
-                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                  fontSize: heroFontSize(value),
-                  fontWeight: 800, lineHeight: 1,
-                  color: T.text,
-                  letterSpacing: -2,
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '88vw',
-                  animation: 'chip-pop 320ms ease-out',
-                }}
-              >
-                {value || '—'}
-              </span>
-              {/* 상태 라벨 */}
-              <span style={{ fontSize: 'clamp(15px, 4.4vw, 19px)', fontWeight: 800, color: statusAccent, letterSpacing: -0.2 }}>
-                ✓ 정상
-              </span>
-            </>
-          )}
+          {/* 측정 항목명 (배지 제거 — 항목명만, 샘플 라벨과 위계 구분 위해 값보다 작게) */}
+          <span
+            style={{
+              fontSize: 'clamp(18px, 5.4vw, 24px)', fontWeight: 800,
+              color: T.text,
+              letterSpacing: -0.3, whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis', maxWidth: '88vw',
+            }}
+          >
+            {col.name}
+          </span>
+          {/* confirm: 거대 값 */}
+          <span
+            key={value}
+            style={{
+              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+              fontSize: heroFontSize(value),
+              fontWeight: 800, lineHeight: 1,
+              color: T.text,
+              letterSpacing: -2,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '88vw',
+              animation: 'chip-pop 320ms ease-out',
+            }}
+          >
+            {value || '—'}
+          </span>
+          {/* 상태 라벨 */}
+          <span style={{ fontSize: 'clamp(15px, 4.4vw, 19px)', fontWeight: 800, color: statusAccent, letterSpacing: -0.2 }}>
+            ✓ 정상
+          </span>
         </>
       )}
     </div>
@@ -1030,21 +1030,8 @@ function SampleLabelHeader({ parts }: { parts: AnnounceLabelPart[] }) {
   );
 }
 
-function TypeBadge({ type }: { type: Column['type'] }) {
-  const c = TYPE_COLORS[type];
-  return (
-    <span
-      style={{
-        flexShrink: 0,
-        padding: '3px 9px', borderRadius: 8,
-        fontSize: 12, fontWeight: 700, letterSpacing: -0.1,
-        color: c.fg, background: c.bg,
-      }}
-    >
-      {TYPE_LABELS[type]}
-    </span>
-  );
-}
+// v0.21.0 입력탭#3 — TypeBadge(항목 옆 데이터형 작은 배지) 컴포넌트 및 사용처 삭제(불필요).
+//   TYPE_LABELS/TYPE_COLORS import도 함께 제거(다른 사용처 없음).
 
 // ─── chip with optional inline edit ────────────────────────────
 function ColumnChip({
