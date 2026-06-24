@@ -42,6 +42,13 @@ interface SessionState {
      *  정상으로 판명(초록). 정정 응답이 정상이면 같은 알람 객체의 next를 정정값으로 갱신하고
      *  status='corrected'로만 바꿔, 옛 이상치 값이 남아 echo TTS와 어긋나던 불일치를 없앤다. */
     status?: 'pending' | 'corrected';
+    /** v0.20.0 입력탭#6 — 어떤 규칙이 발동했는지. 'trend'=추세 방향 알람(increase/decrease),
+     *  'range'=변동률 % 임계(pctThreshold) 알람. Mack이 useVoiceSession.ts에서 trigger로 채운다.
+     *  AnomalyAlertPopup(Vance)이 이 값으로 "추세 알람 …" vs "범위 알람 ±NN%" 표시를 가른다.
+     *  미지정이면 팝업은 추세 형태로 폴백한다(기존 동작 보존). */
+    kind?: 'trend' | 'range';
+    /** v0.20.0 — range 알람일 때 임계 변동률(%). kind==='range'에서 팝업이 "±NN%"로 표시한다. */
+    threshold?: number;
   } | null;
   /** v0.12.0 AREA2 V4 — '수정 값' 인디케이터. 수정 재안내(announceField isModify) 중 어떤 항목을
    *  다시 말해야 하는지 화면에 파란 pill로 띄운다. 일반 안내로 진입하면 null로 해제. anomalyAlert가

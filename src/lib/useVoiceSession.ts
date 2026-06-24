@@ -9,7 +9,7 @@ import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, wa
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip } from './db';
-import { AudioRecorder } from './audioRecorder';
+import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import { getCachedIndex, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
@@ -105,7 +105,8 @@ export function useVoiceSession() {
   // start()에서 1회 계산(현장 세션은 자정을 의미 있게 넘기지 않는다).
   const sessionTodayRef = useRef<string>('');
   // Ref to resume() — breaks the circular dependency between handleFinal and resume.
-  const resumeRef = useRef<() => Promise<void>>(async () => {});
+  // v0.20.0 Phase 5 #3 — resume이 해제 방식(source)을 받도록 시그니처 확장.
+  const resumeRef = useRef<(source?: 'voice' | 'touch') => Promise<void>>(async () => {});
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
@@ -977,6 +978,10 @@ export function useVoiceSession() {
 
   // ── final result handler ───────────────────────────────────
   const handleFinal = useCallback(async (textArg: string, alts: string[], confidence: number) => {
+    // v0.20.0 Phase 5 #4 — 반응속도(발화 확정→값 커밋) 측정 시작점. STT final이 handleFinal에
+    // 진입한 순간을 찍어, 값 커밋 시점(아래 value 이벤트)까지의 경과ms를 commitLatencyMs로 동봉한다.
+    // EOS 꼬리([STT-11], 브라우저 무음종료)와 달리 이건 **앱 파이프라인** 지연(파싱·추세검사·persist).
+    const handleFinalAt = Date.now();
     // `text` is mutable so the redo-with-inline-value path (e.g. "다시 8.4") can rewrite the
     // effective utterance to just the value and fall through to the normal value-commit path.
     let text = textArg;
@@ -991,7 +996,7 @@ export function useVoiceSession() {
       if (cmd === 'resume') {
         epochRef.current++;
         cancelTts();
-        await resumeRef.current();
+        await resumeRef.current('voice'); // v0.20.0 Phase 5 #3 — 음성 '재시작'으로 해제
       } else if (cmd === 'end') {
         epochRef.current++;
         cancelTts();
@@ -1098,12 +1103,12 @@ export function useVoiceSession() {
     }
     if (cmd === 'pause') {
       cancelTts();
-      await pause();
+      await pause('voice'); // v0.20.0 Phase 5 #3 — 음성 명령으로 일시정지
       return;
     }
     if (cmd === 'resume') {
       cancelTts();
-      await resumeRef.current();
+      await resumeRef.current('voice'); // v0.20.0 Phase 5 #3 — 음성 명령으로 재개
       return;
     }
     if (cmd === 'prevRow') {
@@ -1248,10 +1253,13 @@ export function useVoiceSession() {
     }
 
     // v0.19.0 W4 — "소음 환경 모드"(noisyMode) 완전 제거(민구 결정). TTS가 인식값을 되읽어주므로
-    // 오인식 판독에 문제가 없어 소음모드는 오히려 방해였다. 신뢰도 임계는 0.65로 통일(기존 비-소음
-    // 기본값 유지). noisyMode로만 발동하던 단일문자 거부 분기도 함께 제거한다. (아래 lone-syllable
-    // homophone 가드는 noisyMode와 독립이므로 그대로 보존된다.)
-    const minConfidence = 0.65;
+    // 오인식 판독에 문제가 없어 소음모드는 오히려 방해였다. noisyMode로만 발동하던 단일문자 거부
+    // 분기도 함께 제거한다. (아래 lone-syllable homophone 가드는 noisyMode와 독립이므로 그대로 보존.)
+    // v0.20.0 입력탭#1 — 값 게이트 신뢰도 임계를 하드코딩(0.65) 대신 사용자 조절 가능한
+    // settingsStore.recognitionTolerance(기본 0.60, 범위 0.40~0.90)로 이전한다. 장갑 낀 손가락용
+    // 가로 다이얼(Vance)이 이 값을 쓴다. **값 게이트만** 바꾼다 — 위 명령 게이트(commandMinConfidence,
+    // 기본 0.7)와 lone-syllable 동음이의 가드, 아래 `confidence > 0` 미보고 센티넬은 그대로 둔다.
+    const minConfidence = useSettingsStore.getState().recognitionTolerance;
 
     // T-3 (single-syllable homophone, "이"→2): on a MEASUREMENT column (int/float) a lone
     // Sino-Korean syllable that doubles as a common non-number word ("이","사","오","일"…) was
@@ -1326,7 +1334,17 @@ export function useVoiceSession() {
       }
     }
     if (parsed === null) {
-      logger.log({ type: 'stt_parse_failed', text, altsCount: alts.length, extra: parseFailReason ?? undefined, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+      // v0.20.0 Phase 5 #2 — parse_failed 보강: 원본 transcript(text)는 이미 동봉. 여기에 항목명
+      // (colName)과 직전 컨텍스트(소수부 재질문 중이면 정수부 fractionWhole)를 더해 "주로 실패하는
+      // 숫자/항목"을 다음 세션부터 정량화한다. (런타임에 '기대값'은 알 수 없어 추가하지 않는다 —
+      // 실세션은 정답이 없는 자유 측정이므로 transcript+context로 패턴을 집계하는 것이 정직하다.)
+      logger.log({
+        type: 'stt_parse_failed', text, altsCount: alts.length,
+        extra: parseFailReason ?? undefined,
+        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        colName: awaiting.name,
+        ...(awaiting.fractionWhole != null ? { originalText: `frac_ctx:${awaiting.fractionWhole}` } : {}),
+      });
       // v0.10.0 A1: 소수 의도인데 소수부 유실("111 점 에") → 정수부를 유지하고 "소수점 아래만" 타깃
       // 재질문(전체 재발화 회피). 값 추측(에→1)은 하지 않는다 — 같은 STT 문자열이 111.1·111.5
       // 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정).
@@ -1354,6 +1372,10 @@ export function useVoiceSession() {
     const sess = useSessionStore.getState();
     sess.setRowValue(awaiting.row, awaiting.colId, parsed);
     sess.setRecognized(parsed);
+    // v0.20.0 Phase 5 #4 — 반응속도: final 진입→값 store 커밋까지 앱 파이프라인 경과ms(파싱·가드·
+    // 동음이의/소수 합성 포함). 아래 value 이벤트(정상·추세위반 둘 다)에 durationMs로 싣는다 — echo
+    // TTS 대기 전에 캡처해 TTS 길이가 섞이지 않게 한다(순수 커밋 지연).
+    const commitLatencyMs = Date.now() - handleFinalAt;
     // v0.15.0 A4 — 이상치→정정→정상 흐름 중복 팝업 억제. 추세 알림에 새 값으로 응답한 정정 커밋
     // (trendConfirm)은 아래에서 anomalyAlert 팝업을 초록(corrected)으로 전환해 이미 같은 값을 크게
     // 보여준다. 그 뒤 advance→announceField가 팝업을 닫으면(setAnomalyAlert(null)), VoiceScreen의
@@ -1399,7 +1421,8 @@ export function useVoiceSession() {
     // Codex MEDIUM-4: clip for this field is being committed (stopped) — no longer active.
     // The next announceField will re-set it after its own startClip().
     activeClipRef.current = null;
-    const clipStopPromise = recorderRef.current?.stopClip()
+    const clipStopPromise: Promise<ClipResult> =
+      recorderRef.current?.stopClip()
       ?? Promise.resolve({ blob: null, raw: null, prerollMs: 0 });
     // v0.6.0 CLIP-EMPTY: drop the cell's audioClip pointer when the clip never saved (empty/too
     // small/failed). The pointer was pre-registered in pendingClipsRef AND may already be in the
@@ -1486,10 +1509,27 @@ export function useVoiceSession() {
     const savePromise = (async () => {
       try {
         logger.log({ type: 'clip', extra: 'clip_stop_await', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-        const { blob: clipBlob, raw: rawBlob } = await clipStopPromise;
+        const { blob: clipBlob, raw: rawBlob, trimFailed, trimFailReason } = await clipStopPromise;
         logger.log({ type: 'clip', extra: `clip_stop_resolved:${clipBlob ? clipBlob.size : 'null'}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+        // v0.20.0 BL-2 — 트림이 예외(decodeAudioData 등)로 생략됐으면(저장본=미트림 원본 webm) 가시화한다.
+        // 이전엔 무이벤트 침묵 폴백이라 "음성클립 편집 실패"(이원창 c7 3·4·5 = 비고 3행)가 로그에 안 보였다.
+        // 클립 자체는 저장되어 재생 가능(capture 플로우 불깨짐) — 이건 순수 관측용 신호다(보수적).
+        if (trimFailed) {
+          logger.log({
+            type: 'clip', extra: `clip_trim_failed:${trimFailReason ?? 'unknown'}`,
+            sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId, clipKey,
+          });
+        }
         if (!clipBlob) {
-          logger.log({ type: 'error', extra: 'clip_empty', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+          // v0.20.0 Phase 5 #5 — clip_empty에 직전 입력장치 전이(있으면)를 컨텍스트로 동봉한다.
+          // BT clip_empty는 내장↔블루투스 thrash 직후 트랙 사망으로 발생 — 전이를 같은 이벤트에 붙여
+          // 다음 분석이 BT 라우팅 원인을 즉시 잇게 한다(이전엔 별도 input_device_changed와 ts로만 상관).
+          const lic = recorderRef.current?.getLastInputChange();
+          logger.log({
+            type: 'error',
+            extra: lic ? `clip_empty:after:${lic.reason}:${lic.transition}` : 'clip_empty',
+            sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId,
+          });
           // v0.14.0 B-1 — 빈 클립 = 장치 라우팅 변경으로 트랙이 죽어 MediaRecorder가 빈 데이터만
           // 내는 신호. 스트림을 재획득해 이후 클립을 되살린다(쿨다운 가드 — 폭주 방지). 실기기 로그
           // (v0.13.0 세션 8409)에서 row 11부터 18까지 전부 죽었던 연속 소실의 차단책.
@@ -1550,6 +1590,7 @@ export function useVoiceSession() {
         sessionId: sessionIdRef.current,
         row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
         text, parsed, confidence,
+        durationMs: commitLatencyMs, // v0.20.0 Phase 5 #4 — 발화 확정→커밋 반응속도(ms)
         ...(awaiting.isModify && awaiting.previousValue != null
           ? { previousValue: awaiting.previousValue }
           : {}),
@@ -1570,18 +1611,23 @@ export function useVoiceSession() {
         v.trigger === 'pct'
           ? (v.pctText ? `${v.pctText}%` : '')
           : Math.abs(v.next - v.prev).toFixed(decForDiff);
-      const midPart = changeText ? ` ${changeText}` : ''; // prev=0(빈 %)이면 변화량 구절 생략
-      // v0.13.0 R7(민구 결정): 끝의 '확인해주세요'를 제거하고 앞에 '이상치 알림'을 붙인다.
-      //  - '확인해주세요'는 detectCommand가 'confirm'으로 매칭(startsWith '확인')해, 스피커폰에서 이
-      //    TTS가 마이크로 새어들어가 알람이 스스로 닫히는 self-confirm 환각([IOS-3] 알람판)의 원인.
-      //  - '이상치 알림' 접두로 화면을 안 보는 현장에서도 무엇인지 즉시 안다(팝업이 시각 안내 담당).
-      //  - barge-in 가드 자체는 변경하지 않는다(STT-6 소음방어 보존 — 실기기 로그 후 별도 판단).
-      // v0.15.0 A2(민구 요청): 사용자 표시 라벨을 "이상치"→"추세"로 통일. 발화 접두도 함께 맞춘다
-      // (UI 라벨 일관성). self-confirm 환각 제거(끝의 "확인해주세요" 제거)는 v0.13.0 R7 그대로 유지
-      // — 접두 단어 변경은 detectCommand 매칭/가드 구조와 무관하다.
+      // v0.20.0 입력탭#6 — 알람 종류 + 표시 임계. 'pct' 트리거=변동률 **범위 알람**(threshold=설정 %),
+      // 'direction'/'both'=추세 **방향 알람**(증가/감소 + 절대 변화량). AnomalyAlertPopup(Vance)이
+      // 같은 kind/threshold를 읽어 "범위 알람 ±NN%" / "추세 알람 감소 NN"을 그리므로, 아래 TTS 문구를
+      // **팝업 라벨과 글자까지 동일**하게 맞춘다(시각·청각 일치).
+      const alertKind: 'trend' | 'range' = v.trigger === 'pct' ? 'range' : 'trend';
+      // changeNum = 변화량 숫자만(팝업 changeText.replace와 동일 규칙) — 추세 발화/표시에 쓴다.
+      const changeNum = changeText.replace(/[^0-9.]/g, '');
+      // range는 설정된 임계 %를 우선 표시(팝업의 `threshold ?? changeNum`과 동일). 미설정 시 실제 변동%.
+      const rangeThreshold = col?.pctThreshold;
+      const rangeNum = rangeThreshold != null ? String(rangeThreshold) : changeNum;
+      // v0.20.0 입력탭#6 — 문구 단축(목적+값만, "~합니다/하세요"·"직전 조사보다" 제거).
+      //  추세: "추세 알람 증가|감소 NN"(NN=절대 변화량) · 범위: "범위 알람 ±NN%"(NN=설정 임계 %).
+      // self-confirm 환각 방어(끝에 '확인해주세요' 없음, v0.13.0 R7)는 유지 — 문구가 명령어로 끝나지 않음.
       const alertText =
-        `추세 알림. ${formatForTts(parsed)}. 직전 조사보다${midPart} ` +
-        `${v.direction === 'up' ? '증가' : '감소'}했습니다.`;
+        alertKind === 'range'
+          ? `범위 알람 ±${rangeNum}%`
+          : `추세 알람 ${v.direction === 'up' ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
       // 시각 팝업: 이전값→현재값과 변화량을 띄운다(발화만으론 스쳐 지나가 확인이 어렵다는 요청).
       // v0.12.0 AREA2 V2 — 어떤 샘플·행/직전 회차의 비교인지 식별정보를 함께 싣는다(별도 재계산).
       const alertExtra = getAnomalyAlertData(awaiting.row);
@@ -1595,6 +1641,8 @@ export function useVoiceSession() {
         sampleKey: alertExtra.sampleKey,
         prevDate: alertExtra.prevDate,
         status: 'pending', // v0.13.0 R2 — 이상치(빨강) 상태. 정정 정상 시 'corrected'(초록)로 갱신.
+        kind: alertKind, // v0.20.0 입력탭#6 — 팝업이 추세/범위 표시를 가르는 신호.
+        ...(rangeThreshold != null ? { threshold: rangeThreshold } : {}),
       });
       useSessionStore.getState().setLastTts(alertText);
       await say(alertText);
@@ -1647,6 +1695,7 @@ export function useVoiceSession() {
       text,
       parsed,
       confidence,
+      durationMs: commitLatencyMs, // v0.20.0 Phase 5 #4 — 발화 확정→커밋 반응속도(ms)
       // #3 error-vs-intent: present only when this value re-commits a corrected cell.
       // previousValue (pre-modify) vs parsed (final) discriminates STT prefix-drop from re-entry.
       ...(awaiting.isModify && awaiting.previousValue != null
@@ -1876,8 +1925,12 @@ export function useVoiceSession() {
   /** Pause STT value processing without stopping the controller.
    *  The controller stays active so the user can say '재시작' to resume.
    *  Recorder is disposed to prevent clip accumulation while paused. */
-  const pause = useCallback(async () => {
-    logger.log({ type: 'command', parsed: 'pause', extra: 'phase', sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow });
+  // v0.20.0 Phase 5 #3 — 일시정지/재개에 진입·해제 방식(source)을 명시 동봉. 'voice'=음성 명령,
+  // 'touch'=마이크 버튼 탭. 기존 호출부(VoiceScreen 탭)는 인자 없이 호출하므로 기본값을 둔다 —
+  // 그 경로가 곧 touch다. extra를 `phase:<source>`로 확장(신규 이벤트 타입 무첨가, log-replay 호환).
+  // 다음 분석이 "일시정지 횟수 + 어떤 방식으로 해제했는지"(민구 요청·Trace #4)를 정량화한다.
+  const pause = useCallback(async (source: 'voice' | 'touch' = 'touch') => {
+    logger.log({ type: 'command', parsed: 'pause', extra: `phase:${source}`, sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow });
     cancelTts();
     // dispose가 in-flight stopClip을 null로 해소해 정상 클립이 clip_empty로 떨어지는 것을 방지:
     // stop()과 동일하게 pending save를 먼저 flush.
@@ -1895,10 +1948,12 @@ export function useVoiceSession() {
   }, [say]);
 
   /** Resume from paused: re-announce current field. Controller is kept alive during pause. */
-  const resume = useCallback(async () => {
+  const resume = useCallback(async (source: 'voice' | 'touch' = 'touch') => {
     const sess = useSessionStore.getState();
     if (sess.phase !== 'paused') return;
-    logger.log({ type: 'command', parsed: 'resume', extra: 'phase', sessionId: sessionIdRef.current, row: sess.activeRow });
+    // v0.20.0 Phase 5 #3 — 해제 방식 동봉(voice='재시작' 음성, touch=마이크 버튼). 일시정지가 어떤
+    // 경로로 풀렸는지를 정량화해 "분투→해제" 패턴(강남호 13/14 churn)을 다음 세션부터 분해한다.
+    logger.log({ type: 'command', parsed: 'resume', extra: `phase:${source}`, sessionId: sessionIdRef.current, row: sess.activeRow });
     sess.setPhase('active');
     epochRef.current = 0;
     // Controller stays alive during pause (pause() no longer stops it).

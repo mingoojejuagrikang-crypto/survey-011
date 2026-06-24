@@ -169,7 +169,23 @@ export class SpeechController {
       const r = e.results[e.results.length - 1];
       const final = r.isFinal;
       const text = (r[0]?.transcript || '').trim();
-      const confidence = r[0]?.confidence ?? 1;
+      // v0.20.0 Phase 5 #1 (Pax HIGH) — RAW confidence 가시화. iOS Safari가 confidence를 비우거나
+      // 0으로 돌려주면 신뢰도 게이트 전체가 무의미해진다(Pax 우려) → 온디바이스 검증이 필요하다.
+      // 여기서 `?? 1` 폴백 **전에** 엔진이 준 원시값을 그대로 로그한다: raw=<숫자> 또는 raw=absent
+      // (필드 부재 = "엔진이 점수를 안 줌"). 게이트가 쓰는 보정값(`?? 1`)과 구별해 다음 로그가
+      // "엔진이 0.0을 줬다" vs "아무것도 안 줬다"를 정량화하게 한다. **final에만** 기록(게이트가
+      // final에서만 판정 + interim 폭주 방지 — 한 발화당 interim 수십 회라 로그 링버퍼를 잠식).
+      const rawConf = r[0]?.confidence;
+      const confAbsent = typeof rawConf !== 'number' || Number.isNaN(rawConf);
+      if (final) {
+        logger.log({
+          type: 'stt',
+          extra: `raw_confidence:${confAbsent ? 'absent' : rawConf}`,
+          ...(confAbsent ? {} : { confidence: rawConf }),
+          text,
+        });
+      }
+      const confidence = rawConf ?? 1;
       const alts: string[] = [];
       for (let i = 0; i < r.length; i++) alts.push(r[i].transcript.trim());
       // barge-in TTS 컷 (interim 단계). 이어폰(기본): 명령어든 값이든 사용자가 말하기 시작하면

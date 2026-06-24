@@ -470,9 +470,12 @@ test('[선언문] 음성 탭 명령 힌트에 "재시작" 표시', async ({ page
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 11. [설정-B] 음성 탭 ActiveState에 TTS 속도 슬라이더 표시
+// 11. [설정-B] 음성 탭 ActiveState에 TTS 속도 다이얼 표시
+//   v0.20.0: 속도 슬라이더 → 가로 다이얼(ActiveControlDials/<Dial>)로 전환.
+//   testid 'dial-tts-rate' 스코프 안의 native input[type=range]를 타깃한다(컨트롤바엔
+//   [인식 허용범위]·[안내 속도] 두 다이얼이 있어 .first()는 허용범위를 잡으므로).
 // ═════════════════════════════════════════════════════════════════════════════
-test('[설정-B] 음성 탭 입력 화면에 TTS 속도 슬라이더', async ({ page }) => {
+test('[설정-B] 음성 탭 입력 화면에 TTS 속도 다이얼', async ({ page }) => {
   await freshSettings(page);
   await addColumn(page);
   await setSequential(page, 2);
@@ -485,24 +488,24 @@ test('[설정-B] 음성 탭 입력 화면에 TTS 속도 슬라이더', async ({ 
   const startBtn = page.locator('text=음성 입력 시작').first();
   const isDisabled = await startBtn.getAttribute('disabled');
   if (isDisabled !== null) {
-    console.log('ℹ headless — 입력 화면 못 진입, TTS 슬라이더 확인 불가');
+    console.log('ℹ headless — 입력 화면 못 진입, TTS 다이얼 확인 불가');
     return;
   }
 
   await startBtn.click();
   await page.waitForTimeout(800);
 
-  // range 슬라이더 표시 확인
-  const slider = page.locator('input[type="range"]').first();
+  // TTS 속도 다이얼 표시 확인 (dial-tts-rate 스코프의 range)
+  const slider = page.locator('[data-testid="dial-tts-rate"] input[type="range"]').first();
   const sliderVisible = await slider.isVisible().catch(() => false);
   if (sliderVisible) {
     const min = await slider.getAttribute('min');
     const max = await slider.getAttribute('max');
-    console.log(`✓ TTS 속도 슬라이더 표시됨 (min=${min}, max=${max})`);
+    console.log(`✓ TTS 속도 다이얼 표시됨 (min=${min}, max=${max})`);
     expect(min).toBe('0.5');
     expect(max).toBe('2');
   } else {
-    console.log('ℹ 입력 화면 미진입 — 슬라이더 확인 불가');
+    console.log('ℹ 입력 화면 미진입 — 다이얼 확인 불가');
   }
 });
 

@@ -249,6 +249,7 @@ function ActiveState({
   onTouchCommit: (row: number, colId: string, value: string) => void;
 }) {
   const sess = useSessionStore();
+  const s = useSettingsStore();
   const row = sess.activeRow;
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
@@ -342,7 +343,9 @@ function ActiveState({
               <span
                 style={{
                   fontSize: 11, fontWeight: 700,
-                  color: confidence < 0.65 ? T.amber : T.green,
+                  // v0.20.0 입력탭#1 — 신뢰도 색 임계를 사용자 조절 허용범위(recognitionTolerance)에
+                  //   맞춘다(하드코딩 0.65 제거). 허용범위 미만이면 amber(불안), 이상이면 green.
+                  color: confidence < s.recognitionTolerance ? T.amber : T.green,
                   fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                   letterSpacing: -0.2,
                 }}
@@ -607,7 +610,7 @@ function ActiveState({
           </button>
         </div>
 
-        <ActiveTtsSlider />
+        <ActiveControlDials />
       </div>
 
       {/* Fixed 오버레이들 — position:fixed라 grid track을 만들지 않는다(구역 높이에 무영향). */}
@@ -650,7 +653,8 @@ function PausedCard() {
     >
       <div
         style={{
-          maxWidth: 'min(560px, 94vw)', maxHeight: '88vh', overflowY: 'auto',
+          // v0.20.0 입력탭#4 — 상단 칩 영역 침범 방지 캡(88vh→min(70vh,520px)).
+          maxWidth: 'min(560px, 94vw)', maxHeight: 'min(70vh, 520px)', overflowY: 'auto',
           padding: '24px 30px', borderRadius: 18,
           background: 'rgba(40,32,12,0.96)', border: `2px solid ${T.amber}`,
           boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
@@ -701,7 +705,8 @@ function ModifyIndicatorPill({ name, prevValue, newValue }: { name: string; prev
     >
       <div
         style={{
-          maxWidth: 'min(560px, 94vw)', maxHeight: '88vh', overflowY: 'auto',
+          // v0.20.0 입력탭#4 — 상단 칩 영역 침범 방지 캡(88vh→min(70vh,520px)).
+          maxWidth: 'min(560px, 94vw)', maxHeight: 'min(70vh, 520px)', overflowY: 'auto',
           padding: '20px 28px', borderRadius: 18,
           background: committed ? 'rgba(40,32,12,0.96)' : 'rgba(18,26,40,0.96)',
           border: `2px solid ${accent}`,
@@ -758,45 +763,118 @@ function ModifyIndicatorPill({ name, prevValue, newValue }: { name: string; prev
 }
 
 
-function ActiveTtsSlider() {
+/** v0.20.0 입력탭#1·#2 — 장갑 손가락용 가로 다이얼(재사용 프리미티브). 네이티브 input[type=range]
+ *  위에 큰 트랙·큰 thumb를 styled해 role=slider/키보드 화살표/focus-visible를 보존한다(접근성 기본).
+ *  라벨(상단)·큰 값 표시(우측)·굵은 트랙으로 원거리·장갑 가독. 컨트롤바에 두 개를 수평 배치한다.
+ *  값 포맷은 valueLabel로 주입(% 또는 x). 변경 콜백은 onChange(연속), 마지막 변경 후 샘플은 호출자. */
+function Dial({
+  label, value, min, max, step, accent, valueLabel, ariaValueText, onChange, testId,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  accent: string;
+  valueLabel: string;
+  ariaValueText?: string;
+  onChange: (v: number) => void;
+  testId?: string;
+}) {
+  const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  return (
+    <div
+      data-testid={testId}
+      style={{
+        flex: 1, minWidth: 0,
+        display: 'flex', flexDirection: 'column', gap: 4,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 }}>
+        <span style={{ fontSize: 12, color: T.textMute, fontWeight: 700, whiteSpace: 'nowrap' }}>
+          {label}
+        </span>
+        <span
+          style={{
+            fontSize: 15, fontWeight: 800, color: accent,
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            letterSpacing: -0.3, whiteSpace: 'nowrap',
+          }}
+        >
+          {valueLabel}
+        </span>
+      </div>
+      <input
+        type="range"
+        className="dial-range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={label}
+        aria-valuetext={ariaValueText ?? valueLabel}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        style={{
+          width: '100%', height: 34, margin: 0,
+          accentColor: accent,
+          // 굵은 트랙 — 장갑 손가락이 끌기 쉽게(min 44px 터치 타깃은 height로 확보).
+          background: `linear-gradient(90deg, ${accent} 0%, ${accent} ${pct}%, ${T.lineStrong} ${pct}%, ${T.lineStrong} 100%)`,
+          borderRadius: 999,
+          cursor: 'pointer',
+          touchAction: 'none',
+        }}
+      />
+    </div>
+  );
+}
+
+/** v0.20.0 입력탭#1·#2 — 입력 컨트롤바: [인식 허용범위] · [안내 속도] 두 다이얼을 수평 배치.
+ *  허용범위(recognitionTolerance) 0.40~0.90 → %로 표시. 속도(ttsRate) 0.5~2.0 → x로 표시·샘플 음성.
+ *  두 다이얼은 375 폭에서도 한 줄에 들어가게 동일 flex(각 minWidth:0). */
+function ActiveControlDials() {
   const s = useSettingsStore();
-  const debounceRef = useRef<number | null>(null);
-  const sample = (rate: number) => {
-    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => {
+  const ttsDebounceRef = useRef<number | null>(null);
+  const sampleTts = (rate: number) => {
+    if (ttsDebounceRef.current !== null) window.clearTimeout(ttsDebounceRef.current);
+    ttsDebounceRef.current = window.setTimeout(() => {
       void speak('이 속도로 안내합니다.', { interrupt: true, rate });
     }, 350);
   };
+  const tolPct = Math.round(s.recognitionTolerance * 100);
   return (
     <div
       style={{
-        padding: '6px 16px 10px', flexShrink: 0,
-        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '6px 12px 8px', flexShrink: 0,
+        display: 'flex', alignItems: 'flex-end', gap: 16,
       }}
     >
-      <span style={{ fontSize: 12, color: T.textMute, whiteSpace: 'nowrap' }}>속도</span>
-      <input
-        type="range"
+      <Dial
+        testId="dial-tolerance"
+        label="인식 허용범위"
+        value={s.recognitionTolerance}
+        min={0.4}
+        max={0.9}
+        step={0.05}
+        accent={T.green}
+        valueLabel={`${tolPct}%`}
+        ariaValueText={`인식 허용범위 ${tolPct} 퍼센트`}
+        onChange={(v) => s.set({ recognitionTolerance: v })}
+      />
+      <Dial
+        testId="dial-tts-rate"
+        label="안내 속도"
+        value={s.ttsRate}
         min={0.5}
         max={2}
         step={0.05}
-        value={s.ttsRate}
-        onChange={(e) => {
-          const v = parseFloat(e.target.value);
+        accent={T.blue}
+        valueLabel={`${s.ttsRate.toFixed(2)}x`}
+        ariaValueText={`안내 속도 ${s.ttsRate.toFixed(2)}배`}
+        onChange={(v) => {
           s.set({ ttsRate: v });
-          sample(v);
+          sampleTts(v);
         }}
-        style={{ flex: 1, accentColor: T.blue }}
       />
-      <span
-        style={{
-          fontSize: 12, fontWeight: 700, color: T.blue,
-          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-          minWidth: 36, textAlign: 'right',
-        }}
-      >
-        {s.ttsRate.toFixed(2)}x
-      </span>
     </div>
   );
 }
@@ -815,7 +893,7 @@ const HERO_PANEL = {
 /** 입력 탭의 시각 중심(방향 A). 현재 필드의 이벤트 상태를 거대 숫자/안내로 표시한다.
  *  값/이벤트는 전부 store에서 파생된 props로만 들어온다(플로우 로직 무수정).
  *  - 패널 상단: 범용 샘플 식별 라벨(sampleParts, 순차변화 파트는 굵게/액센트).
- *  - listening: 필드명 + "측정값을 말씀해 주세요" + 깜빡이는 점 3개(blink).
+ *  - listening: 필드명 + "측정값을 말씀해 주세요"(동적 대형 문구). v0.20.0 점3개 제거 → 패널 자체 점멸(panel-pulse).
  *  - confirm:   필드명+타입배지 → 거대 값(mono, 길이별 150/104/50) → "✓ 정상".
  *  - complete:  ✓ + "행 입력 완료".
  *  정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(직전값 취소선→새값). */
@@ -829,6 +907,8 @@ function VoiceHero({
 }) {
   // confirm/complete = green(확정), listening = green 패널 + 거대 값 전 안내. 상태 라벨 색만 분기.
   const statusAccent = T.green;
+  // v0.20.0 입력탭#5 — listening일 때 패널 자체가 은은히 점멸(점3개 제거). transform 미사용 호흡.
+  const isListening = event === 'listening';
 
   return (
     <div
@@ -842,6 +922,10 @@ function VoiceHero({
         boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
         textAlign: 'center', minWidth: 0,
+        // v0.20.0 입력탭#5 — 패널 자체 점멸(듣는 중 신호). opacity+box-shadow만(scale 금지 — 94vw가
+        //   overflow:hidden 1fr 구역에서 잘림). 다른 상태(confirm/complete)는 점멸하지 않는다.
+        animation: isListening ? 'panel-pulse 1.8s ease-in-out infinite' : undefined,
+        willChange: isListening ? 'opacity, box-shadow' : undefined,
       }}
     >
       {/* v0.18.0 1b — 범용 샘플 식별 라벨 헤더. announceColumns 셀렉터 산출 파트를 그대로 표시.
@@ -874,22 +958,16 @@ function VoiceHero({
           </div>
 
           {event === 'listening' ? (
-            <>
-              <span style={{ fontSize: 'clamp(16px, 4.4vw, 19px)', color: T.textDim, fontWeight: 500 }}>
-                측정값을 말씀해 주세요
-              </span>
-              <div style={{ display: 'flex', gap: 10, marginTop: 4 }} aria-hidden>
-                {[0, 1, 2].map((i) => (
-                  <span
-                    key={i}
-                    style={{
-                      width: 12, height: 12, borderRadius: '50%', background: T.green,
-                      animation: `blink 1.2s ease-in-out ${i * 0.2}s infinite`,
-                    }}
-                  />
-                ))}
-              </div>
-            </>
+            // v0.20.0 입력탭#5 — 점3개 제거(패널 자체가 점멸). 안내문구는 기기별 가변 최대 크기로
+            //   (clamp + vw, 절대 px 지양). 한 줄 유지(keep-all)하되 좁은 기기에선 자동 축소.
+            <span
+              style={{
+                fontSize: 'clamp(22px, 7.4vw, 34px)', color: T.text, fontWeight: 800,
+                letterSpacing: -0.4, lineHeight: 1.15, wordBreak: 'keep-all', maxWidth: '100%',
+              }}
+            >
+              측정값을 말씀해 주세요
+            </span>
           ) : (
             <>
               {/* confirm: 거대 값 */}

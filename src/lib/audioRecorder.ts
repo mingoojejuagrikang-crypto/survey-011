@@ -49,6 +49,11 @@ export interface ClipResult {
   raw: Blob | null;
   /** 이 클립에 결합된 프리롤 길이(ms). 프리롤 없으면 0. clip_duration 텔레메트리와 동일 값. */
   prerollMs: number;
+  /** v0.20.0 BL-2 — 트림이 예외(decodeAudioData 실패 등)로 생략됐는지. true면 저장본은 원본(미트림)
+   *  webm/mp4. 호출자(useVoiceSession)가 row/colId와 함께 clip_trim_failed를 남긴다. */
+  trimFailed?: boolean;
+  /** v0.20.0 BL-2 — 트림 실패 사유. trimFailed가 true일 때만. */
+  trimFailReason?: string;
 }
 
 /** onstop이 끝내 발화하지 않는 환경(iOS Safari 마이크 점유 등)에서 hang을 막는 안전장치.
@@ -201,12 +206,22 @@ export class AudioRecorder {
     try {
       const oldCat = classifyInputDevice(oldLabel).text;
       const newCat = classifyInputDevice(newLabel).text;
+      // v0.20.0 Phase 5 #5 — 직전 입력장치 전이를 stash해 clip_empty 컨텍스트로 동봉할 수 있게 한다.
+      // BT clip_empty(이원창 row1)는 항상 직전 input_device_changed(내장↔블루투스 thrash)와 상관 —
+      // 그 전이를 clip_empty 이벤트에 붙이면 다음 분석이 BT 라우팅 원인을 즉시 잇는다(W7 연계).
+      this.lastInputChange = { reason, transition: `${oldCat}→${newCat}`, at: Date.now() };
       logger.log({
         type: 'session',
         extra: `input_device_changed:${reason}:${oldCat}→${newCat}`,
         text: `${oldLabel || '(빈)'}→${newLabel || '(빈)'}`,
       });
     } catch { /* best-effort 계측 */ }
+  }
+
+  /** v0.20.0 Phase 5 #5 — 가장 최근 입력장치 전이(있으면). useVoiceSession이 clip_empty 로그에 동봉. */
+  private lastInputChange: { reason: string; transition: string; at: number } | null = null;
+  getLastInputChange(): { reason: string; transition: string; at: number } | null {
+    return this.lastInputChange;
   }
 
   /** v0.14.0 B-1/D — 장치 변경(devicechange / track ended·mute·unmute) 처리.
@@ -590,7 +605,11 @@ export class AudioRecorder {
     if (processed.blob !== rawRecording) {
       logger.log({ type: 'clip', extra: `clip_trimmed:${rawRecording.size}->${processed.blob.size}`, prerollMs });
     }
-    return { blob: processed.blob, raw: processed.raw, prerollMs };
+    // v0.20.0 BL-2 — 트림 실패 신호를 ClipResult로 전파(이벤트는 row/colId가 있는 useVoiceSession에서).
+    return {
+      blob: processed.blob, raw: processed.raw, prerollMs,
+      ...(processed.trimFailed ? { trimFailed: true, trimFailReason: processed.trimFailReason } : {}),
+    };
   }
 
   private stopClipRaw(): Promise<Blob | null> {

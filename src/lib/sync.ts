@@ -36,6 +36,19 @@ export interface SyncReport {
   failures: SyncFailure[];
   /** Session IDs that were actually pushed to the sheet — only these are safe to auto-delete. */
   successIds: string[];
+  /** v0.20.0 Phase 2 — structured "needs (re)login" signal so DataScreen can mount the
+   *  LoginRequiredModal WITHOUT brittle string-matching on `message`/`reason`. Set true when:
+   *   ① the preflight access-token is null (not logged in / token expired before sync), or
+   *   ② an append/update throws a 401/403 (token expired MID-push — the common real-device cause
+   *      per the v0.19.0 analysis). The caller surfaces the modal + resumes after re-login. */
+  needsLogin?: boolean;
+}
+
+/** v0.20.0 — does this sheets-API error message carry an auth failure (expired/invalid token)?
+ *  sheets.ts embeds the HTTP status in the thrown message (e.g. "행 일괄 추가 실패 (401): …").
+ *  We read the structured status, not free Korean text, to stay robust to wording changes. */
+function isAuthFailure(message: string): boolean {
+  return /\b(401|403)\b/.test(message);
 }
 
 /**
@@ -62,6 +75,8 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     return report;
   }
   if (!getAccessToken()) {
+    // ② structured signal — DataScreen mounts LoginRequiredModal and resumes after re-login.
+    report.needsLogin = true;
     report.message = 'Google 로그인이 필요합니다. 설정 탭에서 로그인 후 다시 시도하세요.';
     return report;
   }
@@ -226,6 +241,9 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
         sessionLabel: session.label,
         reason: failReason,
       });
+      // ② token expired MID-push (401/403) — flag the structured needsLogin signal so the caller
+      // prompts re-login. We still record the failure so retry/diagnostics keep working.
+      if (isAuthFailure(failReason)) report.needsLogin = true;
       console.error('sync failed for', session.id, failReason);
       continue;
     }

@@ -264,15 +264,20 @@ test('W6 — N개 단일세션 zip 열거: 각 zip의 sessions.json(1세션)을 
   expect(ids).toEqual(['sess_aaa', 'sess_bbb']);
 });
 
-test('W8 — 미로그인: Drive 호출 0회 + 로그인 안내(모달 미오픈)', async ({ page }) => {
+test('W8 — 미로그인: Drive 호출 0회 + 로그인 필요 팝업(복구 모달 미오픈)', async ({ page }) => {
   const calls = await stubDriveApi(page);
   await bootApp(page, { signedIn: false });
 
   await page.locator('text=세션 복구').click();
   await page.waitForTimeout(400);
-  await expect(page.locator('text=Drive 복구는 설정탭 로그인 후 가능합니다')).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator('text=Drive에서 세션 복구')).toHaveCount(0); // 모달 미오픈
-  expect(calls.filter((c) => c.includes('/drive/'))).toEqual([]);
+  // v0.20.0 Phase 2 — 미로그인 시 안내 텍스트 대신 범용 LoginRequiredModal을 띄운다(시트 동기화·
+  // Drive 백업·복구 공용). 재로그인 성공 시 Drive 복구 모달을 이어서 연다(graceful resume).
+  const loginModal = page.locator('[role="dialog"][aria-labelledby="login-required-title"]');
+  await expect(loginModal).toBeVisible({ timeout: 10_000 });
+  await expect(loginModal).toContainText('로그인이 필요합니다');
+  await expect(loginModal).toContainText('Drive');
+  await expect(page.locator('text=Drive에서 세션 복구')).toHaveCount(0); // 복구 모달은 아직 미오픈
+  expect(calls.filter((c) => c.includes('/drive/'))).toEqual([]); // Drive 호출 0회 유지
 });
 
 test('W8 — 목록 조회 실패(서버 오류): 모달 내 graceful 실패 메시지', async ({ page }) => {

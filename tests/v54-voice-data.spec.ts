@@ -400,16 +400,20 @@ test('[음성-7] Active 상태 — 명령어 힌트 칩 표시', async ({ page }
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// [음성-8] TTS 슬라이더 범위 (min=0.5, max=2, step=0.05)
+// [음성-8] TTS 속도 다이얼 범위 (min=0.5, max=2, step=0.05)
+//   v0.20.0: 속도 슬라이더 → 가로 다이얼(ActiveControlDials/<Dial>)로 전환. 다이얼은
+//   role=slider인 native input[type=range] 위에 styled — testid 'dial-tts-rate'로 특정.
+//   (컨트롤바엔 [인식 허용범위]·[안내 속도] 두 다이얼이 있어 .first()는 허용범위를 잡으므로
+//    반드시 dial-tts-rate 스코프 안의 range를 타깃한다.)
 // ═════════════════════════════════════════════════════════════════════════════
-test('[음성-8] Active 상태 — TTS 속도 슬라이더 범위', async ({ page }) => {
+test('[음성-8] Active 상태 — TTS 속도 다이얼 범위', async ({ page }) => {
   await setupVoiceTab(page);
   const entered = await enterActiveState(page);
   if (!entered) return;
 
-  const slider = page.locator('input[type="range"]').first();
+  const slider = page.locator('[data-testid="dial-tts-rate"] input[type="range"]').first();
   if (!(await slider.isVisible().catch(() => false))) {
-    console.log('ℹ TTS 슬라이더 없음 — 스킵');
+    console.log('ℹ TTS 속도 다이얼 없음 — 스킵');
     return;
   }
 

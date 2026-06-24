@@ -82,6 +82,10 @@ interface SettingsState {
   totalRows: number;
   /** TTS playback rate (0.5 ~ 2.0) */
   ttsRate: number;
+  /** v0.20.0 — 음성인식 최소 신뢰도(인식 허용범위). 사용자 조절 가능 다이얼(입력탭). 범위 0.40~0.90,
+   *  기본 0.60. 장갑 손가락 조작용 가로 다이얼이 이 값을 제어한다. Mack이 useVoiceSession.ts에서
+   *  하드코딩 0.65 대신 이 값을 읽는다(Wave 2). 낮을수록 소음환경에서 더 관대(더 많이 수용). */
+  recognitionTolerance: number;
   /** Which auto column's value is used as the session label suffix. null = auto-pick. */
   sessionLabelColId: string | null;
   /** Pre-computed session label captured at table generation time. */
@@ -203,6 +207,7 @@ export const useSettingsStore = create<SettingsState>()(
       tableGenerated: false,
       totalRows: 50,
       ttsRate: 1.05,
+      recognitionTolerance: 0.6,
       sessionLabelColId: null,
       sessionAutoLabel: null,
       fastRecognition: false,
@@ -284,7 +289,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'survey-011-settings-v3',
-      version: 10,
+      version: 11,
       // v0.14.0 C — localStorage + IDB 내구 미러(eviction 방어).
       storage: createJSONStorage(() => mirroredStorage),
       // v0.14.0 C — 하이드레이션 breadcrumb. 다음 강제종료/시간경과 테스트 로그에서 시트 등록이
@@ -349,6 +354,16 @@ export const useSettingsStore = create<SettingsState>()(
             .map((c) => reconcileColumnFlags(c, c));
         }
         if (typeof s.ttsRate !== 'number') s.ttsRate = 1.05;
+        // v0.20.0 — 인식 허용범위(최소 신뢰도). 구버전 영속본엔 없으므로 기본 0.60으로 치유.
+        // 비유한수·범위이탈도 안전 기본값으로(ttsRate와 동일한 무조건 coercion 패턴).
+        if (
+          typeof s.recognitionTolerance !== 'number' ||
+          !Number.isFinite(s.recognitionTolerance) ||
+          s.recognitionTolerance < 0.4 ||
+          s.recognitionTolerance > 0.9
+        ) {
+          s.recognitionTolerance = 0.6;
+        }
         if (typeof s.sessionLabelColId !== 'string' && s.sessionLabelColId !== null) s.sessionLabelColId = null;
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
         if (typeof s.fastRecognition !== 'boolean') s.fastRecognition = false;
@@ -448,6 +463,11 @@ export const useSettingsStore = create<SettingsState>()(
         if (version < 10) {
           delete s.noisyMode;
         }
+
+        // ── v11 (v0.20.0) — 인식 허용범위(recognitionTolerance) 신설(기본 0.60) ──────────────
+        // 구버전 영속본엔 필드가 없다. 위 무조건 coercion 블록(ttsRate 인접)이 누락/손상을 이미
+        // 0.60으로 치유하므로 여기선 추가 작업이 필요 없다(version 게이트는 마이그레이션 기록용).
+        // 신규 필드라 다운그레이드 라운드트립 마커는 불필요.
 
         return s as SettingsState;
       },

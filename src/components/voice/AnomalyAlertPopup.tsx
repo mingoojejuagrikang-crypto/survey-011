@@ -27,10 +27,28 @@ export function AnomalyAlertPopup({
     sampleKey?: string;
     prevDate?: string;
     status?: 'pending' | 'corrected';
+    /** v0.20.0 입력탭#6 — 어떤 규칙이 발동했는지(추세 방향 알람 vs 변동률 범위 알람). Mack이
+     *  useVoiceSession.ts에서 채운다(Wave 2). 미제공이면 기존 표시(changeText+증가/감소)로 폴백. */
+    kind?: 'trend' | 'range';
+    /** v0.20.0 — range 알람일 때 임계 변동률(%). kind==='range'에서만 사용. */
+    threshold?: number;
   };
 }) {
   const up = a.direction === 'up';
   const corrected = a.status === 'corrected';
+  // v0.20.0 입력탭#6 — 표시 문구 단축(목적+값만, "~합니다/하세요" 제거).
+  //   추세 알람: "추세 알람 증가|감소 NN"(NN=변화량, changeText에서 숫자만) · 범위 알람: "범위 알람 ±NN%".
+  //   Mack이 a.kind/a.threshold를 채우기 전까지는 폴백(기존 changeText + 증가/감소)로 동작한다.
+  const changeNum = a.changeText ? a.changeText.replace(/[^0-9.]/g, '') : '';
+  // 폴백 기본은 **추세 알람 형태**: 이 팝업의 역사적 정체성이 '추세 알림'이고 추세가 지배적 케이스라,
+  //   Mack이 a.kind를 채우기 전에도 흔한 경우의 DISPLAY 스펙("추세 알람 감소 NN")이 라이브로 동작한다.
+  //   소수 케이스(범위 알람)는 Mack이 같은 릴리스 Wave 2에서 a.kind==='range'로 교정한다.
+  const alarmLabel = corrected
+    ? '정상'
+    : a.kind === 'range'
+    ? `범위 알람 ±${a.threshold ?? changeNum}%`
+    : // a.kind==='trend' 또는 미제공(폴백) — 둘 다 추세 형태로 표시.
+      `추세 알람 ${up ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
   // R2 — corrected(정정 후 정상)면 GREEN, 그 외(이상치 대기)는 RED 통일(V3).
   const accent = corrected ? T.green : T.red;
   return (
@@ -45,7 +63,10 @@ export function AnomalyAlertPopup({
     >
       <div
         style={{
-          maxWidth: 'min(620px, 96vw)', maxHeight: '90vh', overflowY: 'auto',
+          // v0.20.0 입력탭#4 — 오버레이 최대 높이 캡 축소(90vh→min(70vh,520px)). 중앙 정렬 박스가
+          //   커져도 상단 칩 영역(statusbar+상태바+칩 168)을 침범하지 않게 하는 가드. 내용이 더 길면
+          //   내부 overflowY:auto로 스크롤한다.
+          maxWidth: 'min(620px, 96vw)', maxHeight: 'min(70vh, 520px)', overflowY: 'auto',
           padding: '24px 30px', borderRadius: 18,
           background: corrected ? 'rgba(18,34,22,0.96)' : 'rgba(34,18,18,0.96)',
           border: `2px solid ${accent}`,
@@ -53,12 +74,12 @@ export function AnomalyAlertPopup({
           display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
           <span style={{ fontSize: 20, fontWeight: 800, color: T.text }}>
-            {a.colName} {corrected ? '정상 복귀' : '추세 알림'}
+            {a.colName}
           </span>
           <span style={{ fontSize: 19, fontWeight: 800, color: accent }}>
-            {corrected ? '정상' : `${a.changeText ? `${a.changeText} ` : ''}${up ? '증가' : '감소'}`}
+            {alarmLabel}
           </span>
         </div>
         {/* V2 — 어떤 샘플/행을 보는지. 샘플키 미상이면 '행 N' 폴백. 긴 키도 박스 안에서 줄바꿈.

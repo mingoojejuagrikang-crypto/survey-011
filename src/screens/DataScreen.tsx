@@ -12,7 +12,7 @@ import type { Column, Session } from '../types';
 import { exportLogZip, exportLogZipsPerSession, downloadZip } from '../lib/exportLog';
 import { uploadLogToBothDrives, LOG_FOLDER_ID } from '../lib/driveUpload';
 import { hydrateSessions } from '../lib/hydrate';
-import { getAccessToken } from '../lib/googleAuth';
+import { getAccessToken, signIn } from '../lib/googleAuth';
 import {
   listRecoverableSessionsFromDrive,
   restoreSelectedSessions,
@@ -20,6 +20,7 @@ import {
   type ZipSessionMeta,
 } from '../lib/recoverFromDrive';
 import { logger } from '../lib/logger';
+import { LoginRequiredModal } from '../components/LoginRequiredModal';
 
 /** v0.6.0 — human label for a sync result that may both append and update rows in place.
  *  "N행 추가", "M행 갱신", or "N행 추가, M행 갱신" depending on what happened. */
@@ -85,7 +86,40 @@ export function DataScreen() {
   // 클릭 시 공유시트/재다운로드를 제공한다. 모달을 닫을 때 null로 비워 Blob 참조를 해제(메모리 회수).
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
 
+  // v0.20.0 Phase 2 — 범용 "로그인 필요" 팝업 상태. 토큰 만료/미로그인이 감지되는 모든 지점(시트
+  // 동기화·Drive 백업·세션 복구)에서 reason 문구와 함께 마운트한다. `resume`은 재로그인 성공 직후
+  // 다시 실행할 직전 동작 클로저 — 사용자가 하던 일을 잃지 않고 이어가게 한다(graceful resume).
+  const [loginPrompt, setLoginPrompt] = useState<{ reason: string; resume: () => void } | null>(null);
+
   const lastSelectedIdsRef = useRef<string[]>([]);
+
+  // v0.20.0 Phase 2 — 재로그인 핸들러. signIn()은 GIS 팝업을 클릭 제스처 안에서 동기적으로 열어야
+  // 하므로(googleAuth S-1) 반드시 모달의 onLogin 클릭에서 직접 호출된다. 재로그인 성공 시:
+  //  ① 시트 연결이 풀렸으면(순수 토큰 만료가 아닌 강한 evict 케이스) savedSheets 최상단으로 재연결
+  //     ([STORE-1] 설계 의도 — 순수 토큰 만료에선 sheetUrl/sheetTab이 살아 있어 이 분기는 no-op),
+  //  ② 팝업을 닫고 ③ 직전 동작(resume)을 이어서 실행한다.
+  const handleLoginPromptLogin = useCallback(() => {
+    const prompt = loginPrompt;
+    logger.log({ type: 'app', extra: 'login_prompt_login_clicked' });
+    void signIn()
+      .then(() => {
+        // graceful resume: 순수 토큰 만료에선 sheetUrl이 살아 있어 재연결 불필요. 강한 evict로 연결이
+        // 풀렸고 저장 시트가 있으면 최근 사용 시트로 1-탭 재연결한다(설계 의도, [STORE-1] 연계).
+        const st = useSettingsStore.getState();
+        if (!st.sheetUrl?.trim() && st.savedSheets.length > 0) {
+          const top = st.savedSheets[0];
+          st.set({ sheetUrl: top.url });
+          logger.log({ type: 'app', extra: 'login_prompt_sheet_reconnected', parsed: top.sheetId });
+        }
+        setLoginPrompt(null);
+        prompt?.resume(); // 중단 없이 직전 동작 재개
+      })
+      .catch((e) => {
+        // 재로그인 실패(취소/팝업 차단 등) — 팝업은 닫고 사유를 배너로 남긴다(조용한 실패 금지).
+        setLoginPrompt(null);
+        setMsg('로그인 실패: ' + ((e as Error)?.message ?? '다시 시도해 주세요.'));
+      });
+  }, [loginPrompt]);
 
   // 데이터탭을 떠나면(언마운트) 재생 중인 음성 클립 정지 — 전역 싱글톤이라 화면 밖에서 계속 재생되지 않도록 (Codex HIGH)
   useEffect(() => () => { clipPlayer.stop(); }, []);
@@ -192,6 +226,10 @@ export function DataScreen() {
           const anyUser = new Set<string>();   // 업로드 성공한 목적지 라벨 집계(메시지용)
           const anyAdmin = new Set<string>();
           const failedDests = new Set<string>();
+          // v0.20.0 Phase 2 — Drive 백업 실패가 토큰 만료(401/403)면 시트추가와 독립으로 로그인
+          // 팝업을 띄울 수 있게 신호를 모은다(시트추가는 성공해도 백업만 만료될 수 있다).
+          let backupNeedsLogin = false;
+          const isAuth = (s: string) => /\b(401|403)\b/.test(s) || /로그인이 필요/.test(s);
           // 데이터 유실 방지 불변식: autoDelete는 backupOk일 때만 삭제하므로, **모든** 세션이
           // 완전 백업(본인 Drive 필수 + 관리자 설정 시 admin도 필수)됐을 때만 backupOk=true.
           // 한 세션이라도 실패하면 false → 자동삭제 보류(부분 성공으로 삭제하지 않음).
@@ -203,7 +241,10 @@ export function DataScreen() {
               if (!sessionOk) allOk = false;
               if (dual.userDriveId) anyUser.add('본인 Drive');
               if (dual.adminDriveId) anyAdmin.add('관리자 Drive');
-              for (const e of dual.errors) failedDests.add(e.split(':')[0]);
+              for (const e of dual.errors) {
+                failedDests.add(e.split(':')[0]);
+                if (isAuth(e)) backupNeedsLogin = true;
+              }
               // 세션별 업로드 결과 계측 — 어느 세션 zip이 어느 목적지에서 실패했는지 정량 확인.
               logger.log({
                 type: 'app',
@@ -216,11 +257,15 @@ export function DataScreen() {
             } catch (err) {
               allOk = false;
               failedDests.add('exception');
-              logger.log({ type: 'app', extra: `drive_upload:failed:${z.sessionId}:${String((err as Error)?.message ?? err)}` });
+              const emsg = String((err as Error)?.message ?? err);
+              if (isAuth(emsg)) backupNeedsLogin = true;
+              logger.log({ type: 'app', extra: `drive_upload:failed:${z.sessionId}:${emsg}` });
               console.warn('Drive 로그 업로드 실패(세션)', z.sessionId, err);
             }
           }
           backupOk = allOk;
+          // 백업이 토큰 만료로 실패했으면 report에 needsLogin을 전파(시트추가 성공/실패와 독립).
+          if (backupNeedsLogin) report.needsLogin = true;
           const parts = [...anyUser, ...anyAdmin];
           if (parts.length > 0) {
             setMsg((m) => (m ? `${m} · 로그 ${parts.join('+')} 백업` : `✓ 로그 ${parts.join('+')} 백업`));
@@ -251,6 +296,16 @@ export function DataScreen() {
     const result = await runSyncInner(ids);
     if (!result) return;
     const { report, backupOk } = result;
+    // v0.20.0 Phase 2 — 토큰 만료/미로그인(structured needsLogin)이면 로그인 팝업을 띄우고, 재로그인
+    // 성공 시 같은 동기화를 그대로 재개한다. report.message는 runSyncInner에서 이미 항상 표면화됐다
+    // (조용한 실패 제거) — 팝업은 그 위에 "다음 행동"을 명시한다.
+    if (report.needsLogin) {
+      setLoginPrompt({
+        reason: '시트 동기화에 로그인이 필요합니다. 로그인하면 이어서 업로드합니다.',
+        resume: () => { void handleSyncConfirm(ids, autoDelete); },
+      });
+      return;
+    }
     // 시트 업로드 성공한 세션 자동 삭제. 로그 백업 실패 시 데이터 유실 방지를 위해 삭제 보류.
     if (autoDelete && report.ok > 0 && report.successIds.length > 0) {
       if (!backupOk) {
@@ -321,7 +376,13 @@ export function DataScreen() {
         if (getAccessToken()) {
           setRecoverModalOpen(true);
         } else {
-          setMsg((m) => `${m ?? ''} · Drive 복구는 설정탭 로그인 후 가능합니다.`);
+          // v0.20.0 Phase 2 — 미로그인/토큰 만료면 안내 텍스트만 남기던 것을 로그인 팝업으로 승격.
+          // 재로그인 성공 시 Drive 복구 모달을 바로 연다(graceful resume). 로컬 IDB 재하이드레이션
+          // (1단계)은 이미 끝났으므로 여기서는 Drive 2단계만 이어가면 된다.
+          setLoginPrompt({
+            reason: 'Drive에서 세션을 복구하려면 로그인이 필요합니다.',
+            resume: () => { setRecoverModalOpen(true); },
+          });
         }
       }
     } finally {
@@ -556,6 +617,16 @@ export function DataScreen() {
         <ExportDoneModal
           result={exportResult}
           onClose={() => setExportResult(null)}
+        />
+      )}
+
+      {/* v0.20.0 Phase 2 — 범용 로그인 필요 팝업(시트 동기화·Drive 백업·세션 복구 공용). onLogin은
+          GIS 팝업을 클릭 제스처 안에서 열고(googleAuth S-1) 성공 시 직전 동작을 이어서 실행한다. */}
+      {loginPrompt && (
+        <LoginRequiredModal
+          reason={loginPrompt.reason}
+          onLogin={handleLoginPromptLogin}
+          onClose={() => setLoginPrompt(null)}
         />
       )}
 

@@ -113,6 +113,13 @@ input::placeholder {
   50% { opacity: 1; }
 }
 
+/* v0.20.0 입력탭#5 — VoiceHero listening 패널 자체의 은은한 점멸(점3개 대체). transform 미사용
+   (94vw 패널이 overflow:hidden 1fr 구역에서 scale 시 잘림) — opacity + box-shadow 호흡만 한다. */
+@keyframes panel-pulse {
+  0%, 100% { opacity: 0.92; box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 0 rgba(0,200,83,0.0); }
+  50% { opacity: 1; box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 22px 2px rgba(0,200,83,0.30); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* No scale spring for motion-sensitive users — fade only. */
   @keyframes value-burst {
@@ -125,7 +132,30 @@ input::placeholder {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.78; }
   }
+  /* v0.20.0 — 패널 점멸도 모션 민감 사용자는 은은한 opacity만(box-shadow 호흡 제거). */
+  @keyframes panel-pulse {
+    0%, 100% { opacity: 0.94; }
+    50% { opacity: 1; }
+  }
 }
 
 /* prevent iOS bounce, keep PWA feel */
 html { -webkit-text-size-adjust: 100%; }
+
+/* v0.20.0 입력탭#1·#2 — Dial: 장갑 손가락용 큰 thumb. 네이티브 range를 유지(role=slider/키보드)하되
+   thumb를 28px·흰색·테두리로 키워 장갑·원거리 조작성을 확보한다. 트랙 채움색은 인라인 gradient. */
+.dial-range { -webkit-appearance: none; appearance: none; outline: none; }
+.dial-range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #FFFFFF; border: 3px solid rgba(0,0,0,0.35);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5); cursor: pointer; margin-top: 0;
+}
+.dial-range::-moz-range-thumb {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: #FFFFFF; border: 3px solid rgba(0,0,0,0.35);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5); cursor: pointer;
+}
+.dial-range::-webkit-slider-runnable-track { height: 12px; border-radius: 999px; background: transparent; }
+.dial-range::-moz-range-track { height: 12px; border-radius: 999px; background: transparent; }
+.dial-range:focus-visible { box-shadow: 0 0 0 3px rgba(41,121,255,0.5); }

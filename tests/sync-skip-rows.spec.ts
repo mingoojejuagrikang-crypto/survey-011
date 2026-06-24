@@ -90,6 +90,11 @@ async function stubSheets(
 }
 
 async function seedAndBoot(page: Page, session: unknown) {
+  // v0.20.0 Phase 2 — 시트 추가 성공 시 Drive 로그 백업이 뒤따른다. 백업 인증 실패(401)가 이제
+  // LoginRequiredModal을 띄우므로(의도된 신규 동작), Drive(www.googleapis.com)를 stub해 백업이
+  // 성공하게 한다. 한 응답 형태가 findFolder(files[0].id)·uploadZip(data.id) 모두를 만족한다.
+  await page.route('**://www.googleapis.com/**', (r) =>
+    r.fulfill({ json: { id: 'stub', files: [{ id: 'stub' }] } }));
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(async ({ sess, settings }) => {
     localStorage.clear();

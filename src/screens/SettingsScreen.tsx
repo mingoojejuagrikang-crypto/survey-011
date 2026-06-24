@@ -30,35 +30,34 @@ import { usePwaUpdate, applyUpdate, checkForUpdateNow } from '../lib/pwaUpdate';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
-/** 세션명 접미사 후보로 쓸 "농가명/이름" 컬럼 식별 (v0.4.3: '이름' 데이터형 대신 이름 문자열로 식별). */
-function isNameColumn(c: Column): boolean {
-  const nm = c.name?.trim();
-  return nm === '농가명' || nm === '이름';
+/** 단일 컬럼에서 세션명 접미사로 쓸 값을 뽑는다(fixed 값 또는 단일 선택 옵션). 없으면 ''. */
+function colSessionValue(col: Column): string {
+  if (col.auto.kind === 'fixed') return col.auto.value;
+  if (col.auto.kind === 'options' && col.auto.selected.length === 1) return col.auto.selected[0];
+  return '';
 }
 
 /**
- * 세션명 접미사로 쓸 컬럼 값을 고른다.
- * 우선순위: 명시 선택(pickedCol) > '농가명/이름' 컬럼 > 첫 auto 고정값(날짜 제외) 컬럼.
- * (세션명 기본값을 "날짜 + 이름"으로 구성하기 위해 이름 컬럼을 최우선.)
+ * 세션명 접미사로 쓸 값을 고른다.
+ *  - 명시 선택(pickedCol): 그 컬럼 하나의 값(사용자 수동 선택 보존).
+ *  - 자동(pickedCol 없음, v0.20.0 설정탭#4): **자동입력 고정값(auto.kind==='fixed') 컬럼들을 전부**
+ *    공백으로 join한다(날짜 컬럼·'오늘' 제외). 농가명/라벨/처리 등 그 세션을 식별하는 고정값을 모두
+ *    세션명에 담아, "생성일 + 고정값 항목들"이 기본 세션명이 되게 한다. 값이 없으면 ''.
  */
 function pickSessionLabelValue(columns: Column[], pickedCol: Column | null | undefined): string {
-  const effectiveCol =
-    pickedCol ??
-    columns.find((c) => isNameColumn(c) && c.auto.kind === 'fixed' && !!c.auto.value) ??
-    columns.find(
+  if (pickedCol) return colSessionValue(pickedCol);
+  const parts = columns
+    .filter(
       (c) =>
         c.input === 'auto' &&
         c.type !== 'date' &&
         c.auto.kind === 'fixed' &&
         !!c.auto.value &&
         c.auto.value !== '오늘',
-    );
-  if (!effectiveCol) return '';
-  if (effectiveCol.auto.kind === 'fixed') return effectiveCol.auto.value;
-  if (effectiveCol.auto.kind === 'options' && effectiveCol.auto.selected.length === 1) {
-    return effectiveCol.auto.selected[0];
-  }
-  return '';
+    )
+    .map((c) => c.auto.kind === 'fixed' ? c.auto.value.trim() : '')
+    .filter(Boolean);
+  return parts.join(' ');
 }
 
 /** v0.18.0 1f — 설정 footer의 수동 업데이트 컨트롤. 새 SW 대기 중이면 "새로고침"(즉시 적용),
@@ -512,7 +511,7 @@ function ColumnCard({
           }}
         />
         <span style={{ fontSize: 12, fontWeight: 700, color: T.textMute, letterSpacing: 0.2 }}>
-          타입
+          데이터 타입
         </span>
         <button
           style={{
@@ -555,12 +554,12 @@ function ColumnCard({
         }}
       >
         <SegmentToggle
-          label="입력"
+          label="입력방식"
           value={col.input}
           options={[
             { id: 'auto', label: '자동' },
             { id: 'voice', label: '음성' },
-            { id: 'touch', label: '터치' },
+            { id: 'touch', label: '수동' },
           ]}
           onChange={(v) => {
             const updates: Partial<typeof col> = { input: v };
@@ -582,6 +581,27 @@ function ColumnCard({
           }}
           disabled={col.input === 'voice'}
         />
+        {/* v0.20.0 설정탭#3 — 순차/단일 하이라이트 칩. 자동입력 정수 컬럼이 순차(seq)인지 단일(fixed)인지
+            를 컬럼 카드 전단에서 즉시 식별. 읽기 전용 표시(실제 전환은 아래 AutoDetail '순차로 변경/단일값').
+            "음성확인 유/무" SegmentToggle과 동일한 라벨+pill 톤. int 전용(spec). */}
+        {col.input === 'auto' && col.type === 'int' && (col.auto.kind === 'seq' || col.auto.kind === 'fixed') && (
+          <div data-testid={`seq-fixed-${col.id}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, color: T.textMute, fontWeight: 700, letterSpacing: 0.4 }}>
+              생성방식
+            </span>
+            <span
+              style={{
+                display: 'inline-flex', alignItems: 'center', height: 36, padding: '0 14px',
+                borderRadius: 10, fontSize: 14, fontWeight: 700, letterSpacing: -0.1,
+                border: `1px solid ${col.auto.kind === 'seq' ? 'rgba(41,121,255,0.35)' : T.line}`,
+                background: col.auto.kind === 'seq' ? T.blueGlow : 'rgba(255,255,255,0.05)',
+                color: col.auto.kind === 'seq' ? T.text : T.textDim,
+              }}
+            >
+              {col.auto.kind === 'seq' ? '순차' : '단일'}
+            </span>
+          </div>
+        )}
         {/* v0.8.0 — 샘플키 토글은 조회탭으로 이전(WS4). 자동 유추·effectiveSampleKey 로직은 유지. */}
         {/* v0.8.0 — 이상치 알람(의미 반전: 증가=커지면 알람, 감소=작아지면 알람). 적격(사용자 입력
             숫자) 컬럼만 노출; 부적격 전환 시 store가 trendRule/pctThreshold 클리어. */}
@@ -603,13 +623,13 @@ function ColumnCard({
             {/* v0.8.0 — 증가/감소 = "이상치로 볼 변화 방향"(삭제된 전역 토글 설명을 컬럼 카드로 이전). */}
             <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4, paddingLeft: 2 }}>
               직전 조사보다 그 방향으로 변하면 추세 알림을 띄웁니다.
-              증가=커지면 · 감소=작아지면. 변동률 %를 적으면 방향과 무관하게 그만큼 변할 때도 알립니다.
+              증가=커지면 · 감소=작아지면. 이상값 범위(%)를 적으면 방향과 무관하게 그만큼 변할 때도 알립니다.
             </div>
             {/* v0.8.0 — 변동률 % 임계값(방향 무관). 빈 값=undefined(off), 값 입력 시에만 활성. */}
             <label
               style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: T.textDim }}
             >
-              변동률
+              이상값 범위
               <input
                 type="number"
                 inputMode="decimal"
@@ -1793,7 +1813,10 @@ function TablePreviewModal({
           </button>
         </div>
 
-        {/* v0.19.0 W3 — 게이트 모드 요약 스트립: 컬럼 구성(음성/자동/총)·세션 라벨. */}
+        {/* v0.20.0 설정탭#1 — 게이트 요약을 카운트 Pill에서 **컬럼별 상세 행**으로 교체. 각 컬럼의
+            입력방식·값/범위(고정값/순차 from~to/선택옵션)·이상치 알람 조건(추세 증가/감소)·이상값
+            범위(%)를 한 줄씩 스캔 가능하게 보여준다. 현재 columns prop에서 파생(stale 없음). 게이트
+            헤더 스트립은 비스크롤이므로 컬럼이 많아도 모달을 넘지 않게 자체 maxHeight+overflowY. */}
         {isGate && (
           <div
             style={{
@@ -1806,6 +1829,18 @@ function TablePreviewModal({
               <SummaryPill label="자동입력" value={autoCount} />
               <SummaryPill label="전체 항목" value={columns.length} />
               <SummaryPill label="총 행수" value={totalRows} />
+            </div>
+            <div
+              style={{
+                maxHeight: 196, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
+                display: 'flex', flexDirection: 'column', gap: 4,
+                border: `1px solid ${T.line}`, borderRadius: 10, padding: 4,
+                background: T.inputBg,
+              }}
+            >
+              {columns.map((c) => (
+                <ColumnDetailRow key={c.id} col={c} />
+              ))}
             </div>
             {sessionLabel && (
               <div style={{ fontSize: 13, color: T.textDim }}>
@@ -1940,6 +1975,96 @@ function TablePreviewModal({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** v0.20.0 설정탭#1 — 입력방식 라벨(자동/음성/수동). 설정탭 SegmentToggle 라벨과 일치. */
+const INPUT_LABELS: Record<Column['input'], string> = {
+  auto: '자동',
+  voice: '음성',
+  touch: '수동',
+};
+
+/** v0.20.0 설정탭#1 — 게이트 컬럼별 상세 한 줄. 값/범위·알람조건·이상값 범위를 columns에서 파생. */
+function ColumnDetailRow({ col }: { col: Column }) {
+  // 값/범위: 고정값 → 그 값, 순차 → from~to, 옵션 → 선택값(개수), 음성/수동 → 입력대기 표시.
+  let valueText: string;
+  if (col.input === 'voice') {
+    valueText = '음성 입력';
+  } else if (col.input === 'touch') {
+    valueText = '직접 입력';
+  } else if (col.auto.kind === 'seq') {
+    valueText = `${col.auto.from} ~ ${col.auto.to}`;
+  } else if (col.auto.kind === 'fixed') {
+    valueText = col.auto.value || '(빈값)';
+  } else if (col.auto.kind === 'options') {
+    valueText = col.auto.selected.length > 0 ? col.auto.selected.join(', ') : '(미선택)';
+  } else {
+    valueText = '';
+  }
+  const trendText =
+    col.trendRule === 'increase' ? '증가' : col.trendRule === 'decrease' ? '감소' : null;
+  const pctText =
+    typeof col.pctThreshold === 'number' && Number.isFinite(col.pctThreshold) && col.pctThreshold > 0
+      ? `±${col.pctThreshold}%`
+      : null;
+
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '6px 8px', borderRadius: 8, background: 'rgba(255,255,255,0.02)',
+      }}
+    >
+      <span
+        style={{
+          fontSize: 13, fontWeight: 800, color: T.text, flexShrink: 0,
+          maxWidth: 96, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}
+        title={col.name}
+      >
+        {col.name || '(이름없음)'}
+      </span>
+      <span
+        style={{
+          fontSize: 11, fontWeight: 700, color: T.textMute, flexShrink: 0,
+          padding: '1px 7px', borderRadius: 999, border: `1px solid ${T.line}`,
+        }}
+      >
+        {INPUT_LABELS[col.input]}
+      </span>
+      <span
+        style={{
+          flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: T.textDim,
+          fontFamily: 'JetBrains Mono, ui-monospace, monospace', letterSpacing: -0.2,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right',
+        }}
+        title={valueText}
+      >
+        {valueText}
+      </span>
+      {trendText && (
+        <span
+          style={{
+            fontSize: 11, fontWeight: 800, color: T.amber, flexShrink: 0,
+            padding: '1px 7px', borderRadius: 999, background: 'rgba(255,179,0,0.12)',
+          }}
+        >
+          추세 {trendText}
+        </span>
+      )}
+      {pctText && (
+        <span
+          style={{
+            fontSize: 11, fontWeight: 800, color: T.red, flexShrink: 0,
+            padding: '1px 7px', borderRadius: 999, background: 'rgba(255,82,82,0.12)',
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+          }}
+        >
+          {pctText}
+        </span>
+      )}
     </div>
   );
 }

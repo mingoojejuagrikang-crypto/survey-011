@@ -57,6 +57,14 @@ export interface PrerollPcm {
 export interface ProcessedClip {
   blob: Blob;
   raw: Blob | null;
+  /** v0.20.0 BL-2 — 트림 **실패**(decodeAudioData 등 예외) 신호. 정상 no-op 트림(빈 blob·발화
+   *  미검출·효과 미미·과트림 등 healthy 폴백)과 구별하기 위해 **catch(예외 경로)에서만** true가
+   *  된다. 호출자(stopClip)가 이를 ClipResult로 전파하고, useVoiceSession이 row/colId 컨텍스트와
+   *  함께 `clip_trim_failed` 텔레메트리를 방출한다(현재 무이벤트 침묵 폴백이라 빈도 추적 불가).
+   *  ⚠️ raw===null을 실패 신호로 쓰면 안 된다 — healthy 경로 5종도 raw===null이라 오탐(분석 오염). */
+  trimFailed?: boolean;
+  /** v0.20.0 BL-2 — 실패 사유(decode_error 등). trimFailed가 true일 때만 의미. */
+  trimFailReason?: string;
 }
 
 let _ctx: AudioContext | null = null;
@@ -375,8 +383,13 @@ export async function processClip(blob: Blob, preroll?: PrerollPcm | null): Prom
 
     const combined = combineWithPreroll(mono, sampleRate, preroll);
     return buildClipBlobs(combined.mono, sampleRate, combined.prerollSamples > 0, blob);
-  } catch {
-    return { blob, raw: null }; // decode 미지원/실패 등 — 원본 유지
+  } catch (e) {
+    // v0.20.0 BL-2 — decodeAudioData 등 트림 **예외 경로**. 저장본은 안전하게 원본(webm/mp4) 유지
+    // (= 재생 가능한 클립이라 capture 플로우는 안 깨짐). 다만 트림이 통째로 생략됐음을 신호로
+    // 표시(trimFailed)해, 호출자가 row/colId와 함께 clip_trim_failed를 남긴다. 이전엔 이 폴백이
+    // 무이벤트(침묵)라 "음성클립 편집 실패"(미트림 .webm)가 로그상 보이지 않았다(BL-2 근본 가시화).
+    // **healthy no-op 트림과 구별** — 그 경로들은 buildClipBlobs/상단 early-return이라 여기 안 온다.
+    return { blob, raw: null, trimFailed: true, trimFailReason: `decode:${String((e as Error)?.name ?? e)}` };
   }
 }
 
