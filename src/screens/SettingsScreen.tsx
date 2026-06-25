@@ -21,6 +21,7 @@ import {
   parseSpreadsheetId,
 } from '../lib/sheets';
 import { computeTotalRows, nestedAutoValue, buildCyclingValues, autoValue } from '../lib/autoValue';
+import { buildSessionLabel, sessionConstantValue } from '../lib/sessionLabel';
 import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
 import { getKoreanVoices, refreshVoices, setPreferredVoiceName, speak, warmupTts } from '../lib/speech';
@@ -30,7 +31,8 @@ import { usePwaUpdate, applyUpdate, checkForUpdateNow } from '../lib/pwaUpdate';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
-/** 단일 컬럼에서 세션명 접미사로 쓸 값을 뽑는다(fixed 값 또는 단일 선택 옵션). 없으면 ''. */
+/** 단일 컬럼에서 세션명 접미사로 쓸 값을 뽑는다(fixed 값 또는 단일 선택 옵션). 없으면 ''.
+ *  명시 선택(pickedCol) 경로 전용 — 사용자가 세션명 컬럼을 직접 고른 경우 그 컬럼의 값을 그대로 쓴다. */
 function colSessionValue(col: Column): string {
   if (col.auto.kind === 'fixed') return col.auto.value;
   if (col.auto.kind === 'options' && col.auto.selected.length === 1) return col.auto.selected[0];
@@ -40,24 +42,14 @@ function colSessionValue(col: Column): string {
 /**
  * 세션명 접미사로 쓸 값을 고른다.
  *  - 명시 선택(pickedCol): 그 컬럼 하나의 값(사용자 수동 선택 보존).
- *  - 자동(pickedCol 없음, v0.20.0 설정탭#4): **자동입력 고정값(auto.kind==='fixed') 컬럼들을 전부**
- *    공백으로 join한다(날짜 컬럼·'오늘' 제외). 농가명/라벨/처리 등 그 세션을 식별하는 고정값을 모두
- *    세션명에 담아, "생성일 + 고정값 항목들"이 기본 세션명이 되게 한다. 값이 없으면 ''.
+ *  - 자동(pickedCol 없음): **세션 상수**(농가명/라벨/처리 등 행마다 안 바뀌는 유효 자동입력값)를 전부
+ *    공백 join한다. v0.22.0 — 판정을 `sessionLabel.sessionConstantValue`(SSOT)로 통일했다. 이로써
+ *    기존에 누락되던 **단일선택 options 컬럼(라벨=[A] 등)**까지 포함된다(`2026-06-25 강남호 A`).
+ *    이전 구현은 `auto.kind==='fixed'`만 봐 단일선택 options를 놓쳤다(P2 근인).
  */
 function pickSessionLabelValue(columns: Column[], pickedCol: Column | null | undefined): string {
   if (pickedCol) return colSessionValue(pickedCol);
-  const parts = columns
-    .filter(
-      (c) =>
-        c.input === 'auto' &&
-        c.type !== 'date' &&
-        c.auto.kind === 'fixed' &&
-        !!c.auto.value &&
-        c.auto.value !== '오늘',
-    )
-    .map((c) => c.auto.kind === 'fixed' ? c.auto.value.trim() : '')
-    .filter(Boolean);
-  return parts.join(' ');
+  return columns.map(sessionConstantValue).filter(Boolean).join(' ');
 }
 
 /** v0.18.0 1f — 설정 footer의 수동 업데이트 컨트롤. 새 SW 대기 중이면 "새로고침"(즉시 적용),
@@ -1122,13 +1114,22 @@ export function SettingsScreen() {
   //   "확인(생성)"을 눌렀을 때만 실제 생성 부수효과(s.set 등)를 실행한다. "취소"면 미생성.
   //   요약(총 행수·세션 라벨)은 store의 (이미 생성됐을 수 있는) 값이 아니라 '현재 columns'에서
   //   파생해 stale을 피한다.
+  // v0.22.0 — 세션명 우선순위: 사용자 자유입력(sessionCustomLabel) > (생성일 + 세션 상수들) >
+  //   생성일 단독. SSOT는 sessionLabel.buildSessionLabel(입력탭 buildAutoLabel과 동일 결과).
+  //   단, 사용자가 세션명 *컬럼*을 명시 선택(sessionLabelColId)한 경우는 그 컬럼 값만 접미로 쓰는
+  //   기존 동작을 보존한다(자유입력이 없을 때만). 자유입력이 있으면 무엇보다 우선한다.
   const prospectiveSessionLabel = () => {
     const isoDate = new Date().toISOString().slice(0, 10);
+    const custom = (s.sessionCustomLabel ?? '').trim();
+    if (custom) return custom; // 자유입력 최우선(날짜 미접두)
     const pickedCol = s.sessionLabelColId
       ? s.columns.find((c) => c.id === s.sessionLabelColId)
       : null;
-    const colVal = pickSessionLabelValue(s.columns, pickedCol);
-    return colVal ? `${isoDate} ${colVal}` : isoDate;
+    if (pickedCol) {
+      const colVal = pickSessionLabelValue(s.columns, pickedCol);
+      return colVal ? `${isoDate} ${colVal}` : isoDate;
+    }
+    return buildSessionLabel(s.columns, { isoDate });
   };
 
   // 게이트 열기 — 생성/재생성 모두 동일 경로. 부수효과는 onGenerateConfirm까지 미룬다.
@@ -1566,21 +1567,25 @@ export function SettingsScreen() {
                 gap: 10,
               }}
             >
+              {/* v0.22.0 — 이 select는 세션명에 쓸 *항목(컬럼)*을 고른다. 자유입력 세션명과 구분해
+                  라벨을 "세션명 항목"으로 명확히 한다(아래 텍스트칸이 실제 세션명). */}
               <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
-                세션명
+                세션명 항목
               </div>
               <select
                 value={s.sessionLabelColId ?? ''}
                 onChange={(e) => {
                   const newColId = e.target.value || null;
                   const isoDate = new Date().toISOString().slice(0, 10);
-                  const pickedCol = newColId
-                    ? s.columns.find((c) => c.id === newColId)
-                    : null;
-                  const colVal = pickSessionLabelValue(s.columns, pickedCol);
+                  const custom = (s.sessionCustomLabel ?? '').trim();
+                  const pickedCol = newColId ? s.columns.find((c) => c.id === newColId) : null;
+                  // v0.22.0 — 효과 라벨 = 자유입력 우선, 없으면 (선택 항목값 또는 상수 join).
+                  const autoLabel = pickedCol
+                    ? (() => { const v = pickSessionLabelValue(s.columns, pickedCol); return v ? `${isoDate} ${v}` : isoDate; })()
+                    : buildSessionLabel(s.columns, { isoDate });
                   s.set({
                     sessionLabelColId: newColId,
-                    sessionAutoLabel: colVal ? `${isoDate} ${colVal}` : isoDate,
+                    sessionAutoLabel: custom || autoLabel,
                   });
                 }}
                 style={{
@@ -1605,11 +1610,50 @@ export function SettingsScreen() {
                   ))}
               </select>
             </div>
-            {s.sessionAutoLabel && (
-              <div style={{ fontSize: 12, color: T.textMute }}>
-                세션명 미리보기: <span style={{ color: T.text, fontWeight: 700 }}>{s.sessionAutoLabel}</span>
-              </div>
-            )}
+            {/* v0.22.0 — 자유입력 세션명(민구 채택). 입력값이 있으면 자동 라벨보다 우선해 세션명이 된다.
+                비우면 자동(생성일 + 상수들)으로 폴백. 입력칸 16px·44px 터치 타깃·줄바꿈 불필요. */}
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+              }}
+            >
+              <label htmlFor="session-custom-label" style={{ fontSize: 13, fontWeight: 700, color: T.textDim, flexShrink: 0 }}>
+                세션명
+              </label>
+              <input
+                id="session-custom-label"
+                type="text"
+                value={s.sessionCustomLabel ?? ''}
+                placeholder="비우면 자동(생성일 + 항목)"
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  const custom = raw.trim();
+                  const isoDate = new Date().toISOString().slice(0, 10);
+                  const pickedCol = s.sessionLabelColId
+                    ? s.columns.find((c) => c.id === s.sessionLabelColId)
+                    : null;
+                  const autoLabel = pickedCol
+                    ? (() => { const v = pickSessionLabelValue(s.columns, pickedCol); return v ? `${isoDate} ${v}` : isoDate; })()
+                    : buildSessionLabel(s.columns, { isoDate });
+                  s.set({
+                    sessionCustomLabel: raw === '' ? null : raw,
+                    sessionAutoLabel: custom || autoLabel,
+                  });
+                }}
+                style={{
+                  flex: 1, minWidth: 0, maxWidth: 200, height: 44, borderRadius: 8,
+                  background: T.inputBg, border: `1px solid ${T.line}`,
+                  color: T.text, fontSize: 16, fontWeight: 600,
+                  padding: '0 10px', outline: 'none', textAlign: 'right',
+                }}
+              />
+            </div>
+            {/* v0.22.0 — 미리보기는 *효과* 라벨(자유입력 있으면 그것, 없으면 자동 디폴트)을 보여준다.
+                store의 sessionAutoLabel은 위 핸들러가 효과 라벨로 유지하지만, 아직 한 번도 편집하지
+                않은 초기 상태(null)에서도 디폴트가 보이도록 prospectiveSessionLabel()로 직접 계산한다. */}
+            <div style={{ fontSize: 12, color: T.textMute }}>
+              세션명 미리보기: <span style={{ color: T.text, fontWeight: 700 }}>{prospectiveSessionLabel()}</span>
+            </div>
             {/* v0.19.0 W4-UI — "소음 환경 모드" 토글 UI 제거(민구 결정). store의 noisyMode 필드는
                 Mack이 별도로 제거한다(여기선 JSX·참조만 삭제). 아래 "빠른 인식 (실험)" 토글은 보존. */}
 

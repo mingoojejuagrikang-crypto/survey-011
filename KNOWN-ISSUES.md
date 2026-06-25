@@ -233,6 +233,13 @@
 - **⚠️ 미검증 전제(다음 세션 분기):** 수정은 "iOS PWA 업데이트 시 **IndexedDB는 살아남고 localStorage만 evict된다**"를 가정. 만약 다음 실기기 업데이트에서 **여전히** 목록이 사라지면 IDB도 함께 비워지는 더 강한 제약 → **대비책: 재로그인 후 Drive에서 최근 사용 시트 목록 재발견(시트는 사용자 Drive에 있으므로 저장소 독립 복원)**. (token은 별도 키라 업데이트 시 여전히 만료 → 재로그인 후 살아남은 목록에서 1-탭 재연결, 설계 의도와 일치.)
 - **⚙️ 후속(v0.19.0 실기기 → v0.20.0):** 민구 제보 "새 세션 추가 후 시트에 추가 **버튼 무반응·메시지 없음**" = **토큰 만료**(IDB evict 아님, 민구 재확인). 근본은 ① 토큰 만료 사유가 화면에 안 떴고(`report.ok===0` 메시지 미표출) ② 재로그인 유도 없음. **v0.20.0 수정:** `SyncReport.needsLogin`(토큰 null 프리플라이트 + 401/403 `isAuthFailure`, 문자열매칭 아님) → 시트동기화·Drive백업·복구 공통 `LoginRequiredModal` 마운트 + `report.message` 무조건 표출 + 재로그인 후 stashed 액션 resume(sheetUrl 살아있으면 그대로, 비었으면 `savedSheets[0]` 재연결). 회귀 `tests/sync-token-expiry.spec.ts`. **⚠️ 잔존(보수):** 백업-only 재로그인 resume은 표시상 닫히나 이미 synced면 백업 재푸시 안 됨(향후 백업 전용 retry 항목). 주 케이스(동기화 시작 시 만료)는 시트 프리플라이트에서 잡혀 sheet+backup 완전 재개.
 
+### [CLIP-DEVICECHANGE-1] v0.14.0 회귀 — 유휴 중 입력장치 변경 시 전 세션 클립 소실
+- **증상:** 측정 중 BT 연결/해제 등으로 `devicechange`가 한 번 발생하면 그 뒤 세션 내내 `clip_no_stream`·`clip_empty`로 모든 음성클립이 빈다(STT 값은 정상 저장 — 인식은 자체 오디오 경로라 무관).
+- **원인:** `audioRecorder.ts handleDeviceChange()`가 유휴(녹음 중 아님)일 때 `recoverStream('devicechange')` 호출 → recoverStream이 **살아있는 스트림을 먼저 파괴한 뒤** `getUserMedia` 재호출. iOS Safari는 **사용자 제스처 밖 getUserMedia를 NotAllowedError로 거부** → 멀쩡한 스트림까지 잃고 영구 복구 불가. 이후 빈 클립마다 `useVoiceSession recoverStream('clip_empty')` 재시도도 전부 실패(제스처 없음). v0.14.0이 [IOS-5] "devicechange 시 재-getUserMedia 안 함" 정책을 깬 것이 근인.
+- **해결:** v0.22.0 — 유휴 devicechange에서 자동 재-getUserMedia 제거(비파괴 라벨 갱신만, [IOS-5] 복귀). clip_empty 자동 재시도 게이트(폭주 차단). 스트림이 실제로 죽으면 `micLost` 노출 → **사용자 제스처(입력탭 "마이크 재연결" 버튼)에서만** 재획득(iOS의 유일한 복구 경로).
+- **출처:** `2026-06-25 v0.21.0 실기기 로그`(sess_1782355366530, 세션시작 +2.6s devicechange → `clip_recorder_recover_failed:devicechange` → clip_no_stream×56·clip_empty×41; firsthand 코드 확인).
+- **현재 상태:** ✅수정됨(v0.22.0 `audioRecorder.ts`·`useVoiceSession.ts`) — `clip_no_stream` 제거 기대. ⚠️ `clip_empty`(BT 라우트 자체 캡처불가, AUDIO-ROUTE-1)는 iOS 한계로 잔존 가능 → 실기기 판별 대기.
+
 ---
 
 ## ③ iOS / TTS / Safari
@@ -581,6 +588,14 @@
 - **출처:** `2026-06-18 v0.13.0 클립 전사 분석`(/tmp/clip_analysis.json) → **survey-011 v0.14.0**.
 - **현재 상태:** ✅수정됨(무회귀 검증) (`src/lib/audioTrim.ts` robustPeak/MIN_KEPT_MS) — 캡처 회복(B-1)과 함께 실기기에서 청취 개선 확인 필요.
 
+### [TREND-AUTH-1] 이상치 알람이 구글 로그인 지연 시 전 세션 미작동
+- **증상:** 음성입력 시 이상치(추세·범위) 알람이 일부 세션에서 안 뜬다.
+- **원인:** `useVoiceSession evaluateTrend`가 직전값을 과거 시트 인덱스(`pastValue`)에서 가져오는데, 인덱스가 없으면 `trend_skip:no_index`로 조용히 스킵. 그 인덱스는 세션 start() 시 `getAccessToken()`이 토큰을 반환할 때만 프리페치(트리거 1곳뿐, `:1820`). 토큰이 늦거나(`auth_token_settled late=true`) 타임아웃(`auth_signin_timeout`)이면 프리페치 안 됨 → 전 세션 알람 미작동.
+- **해결:** v0.22.0 — `googleAuth.settlePending` 성공경로에 `onTokenSettled` 구독훅 추가, useVoiceSession이 구독해 **토큰 지각 도착 시 재프리페치**(`resetPastIndexRetries`+`prefetchPastIndex`, 남은 셀부터 알람 복구). start()의 1회 프리페치는 유지.
+- **한계(설계상):** 토큰 도착 **전** 입력한 셀, 타임아웃/오프라인 세션은 여전히 알람 불가 — 회차간 비교는 시트 과거값이 필요하므로 불가피.
+- **출처:** `2026-06-25 v0.21.0 실기기 로그`(`auth_signin_timeout:15000`×2·late settle 17~19s; 단 토큰 일찍 온 이 세션에선 trend 10회 정상 발화 → "일부 세션"과 일치; firsthand 코드 확인).
+- **현재 상태:** ✅수정됨(v0.22.0 `googleAuth.ts`·`useVoiceSession.ts`) — 지각 토큰 복구 실기기 검증 대기.
+
 ---
 
 ## ⑦ 리뷰 프로세스 교훈
@@ -624,6 +639,20 @@
 - **해결·회피:** **v0.5.0에서 keep을 일반화** — 현재 칸에 값이 있으면(또는 reentry 중) 그 값을 유지하고 advance, 값이 없으면 "유지할 값이 없습니다. {항목명} 말씀해 주세요." 명시 피드백 + `keep_no_value` 로그(무음 return 금지). `voiceCommands.ts` desc 갱신.
 - **출처:** `2026-06-10 실기기 로그` → **survey-011 v0.5.0** 수정
 - **현재 상태:** ✅수정됨 (`src/lib/useVoiceSession.ts` keep 분기 line 871~, `src/lib/voiceCommands.ts`) — **2026-06-12 실기기 확인(재입력 안)**: 06-11 v0.6.0 로그 row12에서 "이전"으로 완료행 재진입 후 "유지" 2회(c7 conf .96 / c8 conf .94) → 값 233.3/244.4 보존·정상 진행. ⚠️ 재입력 **밖**(빈 칸) `keep_no_value` 경로는 여전히 미발화 — 다음 테스트 1회 요청.
+
+### [POPUP-CLIP-1] 음성입력 알람 팝업 내부 문자 잘림
+- **증상:** 음성입력 중 이상치 알람 팝업에서 긴 항목명·긴 값이 …로 잘리거나 가로로 넘쳐 안 보임.
+- **원인:** `AnomalyAlertPopup` 항목명 라벨이 `whiteSpace:nowrap+overflow:hidden+textOverflow:ellipsis`, hero 현재값이 무줄바꿈 `clamp(40~60px)`로 가로 넘침. (z-index/레이어 문제 아님 — 팝업은 이미 fixed 오버레이고 PausedCard>AnomalyAlert는 의도된 상호배타.)
+- **해결:** v0.22.0 — 항목명 ellipsis→줄바꿈 허용(`whiteSpace:normal`·`wordBreak:keep-all`·`overflowWrap:anywhere`), 큰 숫자 `maxWidth:100%`+줄바꿈+clamp 하한 축소. CommandHelpPopup·ModifyReentry 동일 점검. z-index 불변(PausedCard 우선순위 보존).
+- **출처:** `2026-06-25 v0.21.0 민구 제보` + 375px 시뮬레이션 실측(잘림 0 확인).
+- **현재 상태:** ✅수정됨(v0.22.0 `AnomalyAlertPopup.tsx`·`CommandHelpPopup.tsx`·`VoiceScreen.tsx`).
+
+### [SESSION-LABEL-OPTIONS-1] 세션명 디폴트가 단일선택 옵션 상수를 누락
+- **증상:** 세션명 기본값이 "생성일 + 고정값"으로 요청됐는데 실제론 날짜 단독(`2026-06-25-2`)으로 남음 — 농가명·라벨 등 세션 식별값이 빠짐.
+- **원인:** `pickSessionLabelValue`(SettingsScreen)가 "고정값"을 `auto.kind==='fixed'`로만 판정 → 단일선택 **options**(농가명=[강남호], 라벨=[A])를 놓침. 사용자의 "고정값"(세션 내내 불변값) ≠ 코드의 `fixed` 종류. 세션시작 폴백 `buildAutoLabel`(VoiceScreen)도 첫 고정값 하나만 집어 형식 불일치(SSOT 위반 — 주석은 "일치"라 주장).
+- **해결:** v0.22.0 — `sessionLabel.ts`에 `sessionConstantValue`(=`!isCycling`+유효값, 단일선택 options[0] 포함, date·순환 제외)·`buildSessionLabel`(우선순위: 사용자지정 > 날짜+상수 > 날짜) 신설, pickSessionLabelValue/buildAutoLabel 단일 헬퍼로 통일. 설정탭에 자유입력 세션명 필드(`settingsStore.sessionCustomLabel`) 추가.
+- **출처:** `2026-06-25 v0.21.0 실기기 로그`(sessions.json: 농가명/라벨=단일선택 options, label=`2026-06-25-2`; firsthand 코드 확인).
+- **현재 상태:** ✅수정됨(v0.22.0 `sessionLabel.ts`·`SettingsScreen.tsx`·`VoiceScreen.tsx`·`settingsStore.ts`).
 
 ---
 

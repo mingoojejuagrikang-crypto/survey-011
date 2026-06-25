@@ -224,18 +224,28 @@ export class AudioRecorder {
     return this.lastInputChange;
   }
 
-  /** v0.14.0 B-1/D — 장치 변경(devicechange / track ended·mute·unmute) 처리.
-   *  민구 현장 관찰: BT↔스피커폰 라우팅 변경 시 (1) 배지가 안 바뀌고(특히 speaker→BT 복귀),
-   *  (2) 이후 클립이 전부 빈 데이터로 죽는다(MediaRecorder 트랙 중단). 둘 다 "재-getUserMedia를
-   *  안 함([IOS-5])"이 근인이라, v0.14.0에서 정책을 제한적으로 반전한다:
-   *   - **녹음 중이면** 비파괴 라벨 갱신만(refreshActiveInputLabel) — 진행 중 클립 손실 방지.
-   *   - **유휴면**(필드 사이·일시정지 — 장치 토글의 대다수) 스트림을 재획득해 배지와 다음 클립
-   *     캡처를 실제 활성 장치로 정확히 맞춘다. 쿨다운으로 폭주를 막는다. */
+  /** v0.22.0 P0 — 장치 변경(devicechange / track ended·mute·unmute) 처리.
+   *  근인(2026-06-25 실기기 로그): v0.14.0이 **유휴 중 devicechange에서 자동 재-getUserMedia**
+   *  (recoverStream)를 켰는데, iOS Safari는 **사용자 제스처 밖 getUserMedia를 NotAllowedError로
+   *  거부**한다. recoverStream이 살아있던 스트림을 먼저 파괴(트랙 stop, this.stream=null)한 뒤
+   *  재획득에 실패 → 살아있던 스트림까지 잃고 클립이 영구 소실됐다(세션시작 +2.6s devicechange
+   *  1회 → clip_no_stream×56·clip_empty×41, 이후 1537 자동 재시도도 제스처 밖이라 전부 실패 폭주).
+   *  → [IOS-5] 종결 정책("유휴 devicechange에서 재-getUserMedia 하지 않는다")으로 복귀한다:
+   *   - **녹음 중이든 유휴든** 비파괴 라벨 갱신만(refreshActiveInputLabel). 스트림을 절대 버리지
+   *     않으므로 클립이 계속 녹음되고, clip_empty 자동 재시도(useVoiceSession:1537)도 터지지 않는다.
+   *  스트림/트랙이 실제로 죽은 경우의 복구는 **사용자 제스처 경로**(reconnectMic→recoverStream
+   *  ('user_gesture'))로만 한다 — iOS가 getUserMedia를 거부하지 않는 유일한 컨텍스트. */
   private handleDeviceChange(): void {
-    const recording =
-      !!this.active && !this.active.finalized && this.active.recorder.state === 'recording';
-    if (recording) { void this.refreshActiveInputLabel(); return; }
-    void this.recoverStream('devicechange');
+    void this.refreshActiveInputLabel();
+  }
+
+  /** v0.22.0 P0 — 클립 레코더 스트림이 실제로 죽었는지(녹음 불가) 여부. 자동 복구를 멈추고
+   *  사용자 제스처 재연결(reconnectMic)을 띄울지 판정하는 데 쓴다(useVoiceSession.micLost).
+   *  스트림이 null이거나 활성 오디오 트랙이 없거나 ended면 죽은 것으로 본다. */
+  isStreamLost(): boolean {
+    if (!this.stream) return true;
+    const track = this.stream.getAudioTracks()[0] ?? null;
+    return !track || track.readyState === 'ended';
   }
 
   /** v0.14.0 B-1 — 스트림을 재획득해 죽은 레코더/스테일 입력장치를 되살린다(재-getUserMedia).

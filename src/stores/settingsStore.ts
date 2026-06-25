@@ -90,6 +90,9 @@ interface SettingsState {
   sessionLabelColId: string | null;
   /** Pre-computed session label captured at table generation time. */
   sessionAutoLabel: string | null;
+  /** v0.22.0 — 사용자 자유입력 세션명(설정탭 "세션명" 텍스트칸). 비어있지 않으면 자동 라벨(생성일+
+   *  상수들)보다 **우선**해 세션명이 된다(buildSessionLabel의 customName). null/'' = 미사용(자동). */
+  sessionCustomLabel: string | null;
   /** v0.9.0 (딜레이 단축 실험) — 빠른 인식. true면 interim(중간) 결과가 유효 숫자로 안정되면
    *  브라우저 final(무음 종료감지)을 기다리지 않고 조기 커밋한다. 미완성 숫자 절단 리스크가 있어
    *  기본 false(실기기 A/B용). */
@@ -210,6 +213,7 @@ export const useSettingsStore = create<SettingsState>()(
       recognitionTolerance: 0.6,
       sessionLabelColId: null,
       sessionAutoLabel: null,
+      sessionCustomLabel: null,
       fastRecognition: false,
       preferredVoiceName: '',
       teamFolderId: null,
@@ -366,6 +370,8 @@ export const useSettingsStore = create<SettingsState>()(
         }
         if (typeof s.sessionLabelColId !== 'string' && s.sessionLabelColId !== null) s.sessionLabelColId = null;
         if (typeof s.sessionAutoLabel !== 'string' && s.sessionAutoLabel !== null) s.sessionAutoLabel = null;
+        // v0.22.0 — 자유입력 세션명. 구버전 영속본엔 없으므로 null로 치유(미사용=자동 라벨).
+        if (typeof s.sessionCustomLabel !== 'string' && s.sessionCustomLabel !== null) s.sessionCustomLabel = null;
         if (typeof s.fastRecognition !== 'boolean') s.fastRecognition = false;
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
@@ -468,6 +474,11 @@ export const useSettingsStore = create<SettingsState>()(
         // 구버전 영속본엔 필드가 없다. 위 무조건 coercion 블록(ttsRate 인접)이 누락/손상을 이미
         // 0.60으로 치유하므로 여기선 추가 작업이 필요 없다(version 게이트는 마이그레이션 기록용).
         // 신규 필드라 다운그레이드 라운드트립 마커는 불필요.
+
+        // ── v0.22.0 — 자유입력 세션명(sessionCustomLabel) 신설(기본 null). persist version은
+        //   올리지 않는다(불필요): zustand initializer 기본값(null) + 위 sessionAutoLabel 인접
+        //   coercion이 누락/손상 영속본을 null로 치유하므로 version bump 없이 안전하다. (version을
+        //   12로 올리면 settings-migration.spec의 version===11 단정 5건이 깨지는 것도 회피.)
 
         return s as SettingsState;
       },

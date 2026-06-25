@@ -138,6 +138,28 @@ const SIGNIN_TIMEOUT_MS = 15_000;
 // 다음 실기기 로그로 판별하는 핵심 신호.
 let lastSignInStartedAt = 0;
 
+// v0.22.0 P1 — 토큰이 **늦게 settle될 때** 외부(useVoiceSession)가 알 수 있도록 하는 모듈 레벨
+// 구독. 근인: 이상치 알람용 과거값 프리페치는 세션 start() 시점에 토큰이 있을 때만 트리거되는데,
+// 토큰이 늦게 도착하면(auth_token_settled late=true 17~19s) 그 1회 프리페치가 안 돼 전 세션
+// 알람이 미작동했다. settlePending 성공 경로에서 이 리스너들을 호출하면, 세션 도중 토큰이 도착해도
+// 남은 셀부터 알람을 복구할 수 있다(구독자가 anomalyRule이 있고 인덱스가 없으면 재프리페치).
+type TokenSettledListener = (value: { email: string; token: string }) => void;
+const tokenSettledListeners = new Set<TokenSettledListener>();
+
+/** 토큰이 성공적으로 확정될 때마다 호출되는 콜백을 등록한다. 반환된 함수로 구독 해제.
+ *  signIn() 성공(콜백 경로)에서 호출된다 — early 토큰(start 시점 이미 보유)은 발화하지 않으므로
+ *  구독자는 '늦게 도착한 토큰'에만 반응한다(early 케이스는 기존 start() 1회 프리페치가 담당). */
+export function onTokenSettled(cb: TokenSettledListener): () => void {
+  tokenSettledListeners.add(cb);
+  return () => { tokenSettledListeners.delete(cb); };
+}
+
+function notifyTokenSettled(value: { email: string; token: string }): void {
+  for (const cb of [...tokenSettledListeners]) {
+    try { cb(value); } catch { /* 구독자 예외가 다른 구독자/settle을 막지 않게 격리 */ }
+  }
+}
+
 /** pending을 단 한 번만 settle하는 게이트. 콜백/타임아웃/error_callback 어느 경로든 여기로 모인다.
  *  settled 가드로 늦게 도착한 콜백을 안전하게 무시하고, 타이머를 정리한다. */
 function settlePending(outcome:
@@ -148,8 +170,14 @@ function settlePending(outcome:
   p.settled = true;
   if (p.timer) { clearTimeout(p.timer); p.timer = null; }
   pending = null;
-  if (outcome.ok) p.resolve(outcome.value);
-  else p.reject(outcome.error);
+  if (outcome.ok) {
+    p.resolve(outcome.value);
+    // v0.22.0 P1 — 토큰 확정을 구독자에게 알림(지각 토큰 시 과거값 재프리페치 트리거). resolve 후
+    // 호출해 storeToken이 이미 끝난 상태(getAccessToken()이 새 토큰을 반환)에서 구독자가 동작하게 한다.
+    notifyTokenSettled(outcome.value);
+  } else {
+    p.reject(outcome.error);
+  }
 }
 
 /** 타임아웃으로 고착이 검출되면, 늦게라도 콜백이 와도 재시도가 가능하도록 tokenClient 싱글톤을 버린다.

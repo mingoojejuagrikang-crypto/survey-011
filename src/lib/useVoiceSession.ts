@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
@@ -13,7 +13,7 @@ import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import { getCachedIndex, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
-import { getAccessToken } from './googleAuth';
+import { getAccessToken, onTokenSettled } from './googleAuth';
 import { ensureUniqueSessionLabel } from './sessionLabel';
 
 
@@ -107,6 +107,14 @@ export function useVoiceSession() {
   // Ref to resume() — breaks the circular dependency between handleFinal and resume.
   // v0.20.0 Phase 5 #3 — resume이 해제 방식(source)을 받도록 시그니처 확장.
   const resumeRef = useRef<(source?: 'voice' | 'touch') => Promise<void>>(async () => {});
+  // v0.22.0 P0 — 클립 레코더 스트림이 죽어 자동복구 불가(= 사용자 제스처로 재연결 필요)일 때 true.
+  // 근인: iOS Safari가 제스처 밖 getUserMedia를 거부하므로, 스트림이 죽으면 자동 recoverStream을
+  // 멈추고 이 플래그로 입력탭 "마이크 재연결" 버튼(Vance)을 노출한다. reconnectMic()이 제스처
+  // 컨텍스트에서 recoverStream('user_gesture')를 시도해 성공하면 false로 클리어. 무한 실패 폭주 차단.
+  const [micLost, setMicLost] = useState(false);
+  // clip_empty 자동 재시도 once 가드(세션당). 스트림이 죽어 micLost로 전환되면 더 이상 자동
+  // recoverStream을 부르지 않는다(제스처 밖이라 어차피 실패). start()에서 리셋.
+  const micLostLatchedRef = useRef(false);
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
@@ -976,6 +984,50 @@ export function useVoiceSession() {
     [],
   );
 
+  // ── v0.22.0 P0: 클립 레코더 스트림 소실 → micLost 게이트 ──────────────
+  /** 빈/극소 클립이 났을 때의 처리. **자동 재-getUserMedia는 절대 하지 않는다**(수칙 3) —
+   *  recoverStream은 destructive-first(살아있던 스트림을 먼저 stop·null 처리)이고 이 콜백은
+   *  클립 저장 콜백(사용자 제스처 밖)에서 불리므로, iOS Safari가 getUserMedia를 NotAllowedError로
+   *  거부해 멀쩡하던 스트림까지 죽인다 — 그게 바로 이번 P0 근인이다(clip_empty×41 폭주).
+   *   - 스트림이 실제로 죽었으면(isStreamLost) micLost로 래치(once) → 사용자 제스처(reconnectMic)
+   *     로만 복구. 무한 실패 폭주 차단.
+   *   - 스트림이 멀쩡하면(트랙 살아있음) **no-op**. 복구가 필요 없다 — 다음 startClip()이 살아있는
+   *     스트림 위에 새 MediaRecorder를 만들어 자가 치유한다(transient 빈 클립의 자연 회복). */
+  const maybeAutoRecoverOrLatch = useCallback((reason: string) => {
+    const rec = recorderRef.current;
+    if (!rec) return;
+    if (rec.isStreamLost() && !micLostLatchedRef.current) {
+      micLostLatchedRef.current = true;
+      setMicLost(true);
+      logger.log({
+        type: 'clip', extra: `mic_lost:${reason}`,
+        sessionId: sessionIdRef.current,
+      });
+    }
+    // 스트림이 살아있으면 자동 복구 금지(no-op) — 다음 클립이 자가 치유. recoverStream은 오직
+    // reconnectMic(제스처)에서만.
+  }, []);
+
+  /** v0.22.0 P0 — 사용자 버튼 탭(제스처)에서 호출. iOS가 getUserMedia를 거부하지 않는 유일한
+   *  컨텍스트라 여기서만 스트림을 재획득한다. 성공 시 micLost를 false로 클리어하고 래치를 푼다. */
+  const reconnectMic = useCallback(() => {
+    const rec = recorderRef.current;
+    logger.log({ type: 'clip', extra: 'mic_reconnect_attempt', sessionId: sessionIdRef.current });
+    if (!rec) {
+      logger.log({ type: 'clip', extra: 'mic_reconnect_no_recorder', sessionId: sessionIdRef.current });
+      return;
+    }
+    void rec.recoverStream('user_gesture').then((ok) => {
+      if (ok) {
+        micLostLatchedRef.current = false;
+        setMicLost(false);
+        logger.log({ type: 'clip', extra: 'mic_reconnect_ok', sessionId: sessionIdRef.current });
+      } else {
+        logger.log({ type: 'clip', extra: 'mic_reconnect_failed', sessionId: sessionIdRef.current });
+      }
+    });
+  }, []);
+
   // ── final result handler ───────────────────────────────────
   const handleFinal = useCallback(async (textArg: string, alts: string[], confidence: number) => {
     // v0.20.0 Phase 5 #4 — 반응속도(발화 확정→값 커밋) 측정 시작점. STT final이 handleFinal에
@@ -1531,16 +1583,18 @@ export function useVoiceSession() {
             extra: lic ? `clip_empty:after:${lic.reason}:${lic.transition}` : 'clip_empty',
             sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId,
           });
-          // v0.14.0 B-1 — 빈 클립 = 장치 라우팅 변경으로 트랙이 죽어 MediaRecorder가 빈 데이터만
-          // 내는 신호. 스트림을 재획득해 이후 클립을 되살린다(쿨다운 가드 — 폭주 방지). 실기기 로그
-          // (v0.13.0 세션 8409)에서 row 11부터 18까지 전부 죽었던 연속 소실의 차단책.
-          void recorderRef.current?.recoverStream('clip_empty');
+          // v0.22.0 P0 — 빈 클립 자동 재시도 폭주 차단. 자동 recoverStream은 iOS에서 **제스처 밖
+          // getUserMedia**라 NotAllowedError로 거부되어 살아있던 스트림까지 잃고 매 빈 클립마다
+          // 재시도가 폭주했다(실기기: clip_empty×41). → 스트림이 실제로 죽었으면 자동 재시도를 멈추고
+          // micLost로 표시(once 가드) → 사용자 제스처(reconnectMic)로만 복구. 스트림이 멀쩡하면
+          // no-op(다음 클립이 자가 치유). 자동 recoverStream은 더 이상 부르지 않는다(수칙 3).
+          maybeAutoRecoverOrLatch('clip_empty');
           await resolveFailedCapture(savePromiseSelf);
           return;
         }
         if (clipBlob.size <= 200) {
           logger.log({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
-          void recorderRef.current?.recoverStream('clip_too_small');
+          maybeAutoRecoverOrLatch('clip_too_small');
           await resolveFailedCapture(savePromiseSelf);
           return;
         }
@@ -1809,6 +1863,10 @@ export function useVoiceSession() {
     brokenClipKeysRef.current = new Set();
     correctionBackupRef.current = null;
     trendSkipLoggedRef.current = new Set();
+    // v0.22.0 P0 — micLost 게이트 리셋: 이전 세션이 마이크 소실로 끝났어도 새 세션은 깨끗한
+    // 스트림으로 시작한다(start()가 새 AudioRecorder.init()로 재획득).
+    micLostLatchedRef.current = false;
+    setMicLost(false);
     sessionTodayRef.current = localTodayISO();
     // v0.8.0: 과거값 인덱스 프리페치(fire-and-forget) — 마스터 토글 제거 → 이상치 알람 규칙
     // (방향 trendRule 또는 변동률 pctThreshold)이 한 컬럼이라도 있고 Google 연결 시에만.
@@ -1972,6 +2030,10 @@ export function useVoiceSession() {
     if (!recorderRef.current) {
       recorderRef.current = new AudioRecorder();
       await recorderRef.current.init().catch(() => {});
+      // v0.22.0 P0 — 재개는 fresh AudioRecorder.init()로 살아있는 스트림을 새로 잡으므로 micLost
+      // 게이트를 푼다(일시정지 전 마이크 소실로 켜졌던 재연결 버튼이 멀쩡한 마이크에 남지 않게).
+      micLostLatchedRef.current = false;
+      setMicLost(false);
     }
     const vc = voiceColsList();
     const cur = vc[sess.activeColIdx];
@@ -1981,6 +2043,29 @@ export function useVoiceSession() {
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
   useEffect(() => { resumeRef.current = resume; }, [resume]);
+
+  // v0.22.0 P1 — 토큰 지각 settle 시 과거값 인덱스 재프리페치. 근인: 이상치 알람용 프리페치는
+  // start() 시점에 토큰이 있을 때만 1회 트리거되는데, 토큰이 늦게 도착하면(auth_token_settled
+  // late=true 17~19s) 또는 타임아웃이면 전 세션 알람이 미작동했다. settlePending 성공 경로의
+  // onTokenSettled 구독으로, 세션 도중 토큰이 도착했을 때 — anomalyRule이 있고 아직 인덱스가
+  // 없으면 — 재프리페치해 남은 셀부터 알람을 복구한다(start()의 1회 프리페치는 early 토큰 케이스로
+  // 유지). 정직한 한계: 토큰 도착 '전' 입력 셀, 타임아웃/오프라인은 여전히 알람 없음(회차간 비교는
+  // 시트가 있어야 하므로 불가피).
+  useEffect(() => {
+    const unsubscribe = onTokenSettled(() => {
+      const s = useSettingsStore.getState();
+      const anyAnomalyRule = s.columns.some(
+        (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
+      );
+      // 인덱스가 이미 캐시돼 있으면 재프리페치 불필요(early 토큰 케이스가 채웠음).
+      if (anyAnomalyRule && !getCachedIndex()) {
+        logger.log({ type: 'app', extra: 'past_index_reprefetch:token_settled', sessionId: sessionIdRef.current });
+        resetPastIndexRetries();
+        prefetchPastIndex();
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   // v0.12.0 AREA1 — 입력탭 읽기전용 입력장치 CATEGORY 배지용. getUserMedia가 실제로 잡은 마이크
   // 라벨을 노출(init() 비동기 resolve 후 채워짐). 안정 참조(useCallback []) — VoiceScreen이
@@ -2031,7 +2116,7 @@ export function useVoiceSession() {
     // 다음 행 진행 시 persistSession에서 자연스럽게 반영됨.
   }, []);
 
-  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, goNextRow, pause, resume, commitTouchValue, lastConfidenceRef, getActiveInputLabel };
+  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, goNextRow, pause, resume, commitTouchValue, lastConfidenceRef, getActiveInputLabel, micLost, reconnectMic };
 }
 
 // ─── helpers ─────────────────────────────────────────────────

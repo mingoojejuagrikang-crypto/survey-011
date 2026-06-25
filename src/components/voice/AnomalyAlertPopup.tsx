@@ -92,14 +92,17 @@ export function AnomalyAlertPopup({
         >
           샘플: {a.sampleKey || `행 ${a.row}`}
         </div>
+        {/* v0.22.0 입력탭#2(P2 잘림): 직전값→현재값 행. flexWrap + maxWidth로 긴 값이 가로로
+            넘쳐 박스를 벗어나지 못하게 한다(필요시 줄바꿈). 자식 컬럼은 minWidth:0로 축소 허용. */}
         <div
           style={{
-            display: 'flex', alignItems: 'flex-end', gap: 12,
+            display: 'flex', alignItems: 'flex-end', justifyContent: 'center', flexWrap: 'wrap', gap: 12,
+            maxWidth: '100%',
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
           }}
         >
           {/* V2 — 직전 값을 그 회차 날짜로 라벨링(prevDate 있을 때만 날짜 표기). */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
             <span
               style={{
                 fontSize: 13, fontWeight: 700, color: T.textDim, letterSpacing: -0.2,
@@ -109,21 +112,40 @@ export function AnomalyAlertPopup({
               직전{a.prevDate ? ` (${a.prevDate})` : ''}
             </span>
             {/* v0.18.0 1d — 직전값 대비 보강(textDim→text 인접 대비 위해 크기 유지·굵게). */}
-            <span style={{ fontSize: 'clamp(30px, 8vw, 36px)', fontWeight: 800, color: T.textDim }}>{a.prev}</span>
+            <span
+              style={{
+                fontSize: 'clamp(30px, 8vw, 36px)', fontWeight: 800, color: T.textDim,
+                maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.05,
+              }}
+            >
+              {a.prev}
+            </span>
           </div>
           <span style={{ fontSize: 26, color: T.textDim, paddingBottom: 4 }}>→</span>
-          {/* R3 — hero 현재값 위에 항목명 라벨(accent색)을 붙여 정수값도 어느 항목인지 즉시 식별. */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+          {/* R3 — hero 현재값 위에 항목명 라벨(accent색)을 붙여 정수값도 어느 항목인지 즉시 식별.
+              v0.22.0 입력탭#2(P2 잘림): 긴 항목명("과실 횡경 평균값" 등)이 ellipsis로 …잘리던 문제 →
+              줄바꿈 허용(whiteSpace:normal + wordBreak:keep-all/overflowWrap:anywhere)으로 전부 표시. */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
             <span
               style={{
                 fontSize: 13, fontWeight: 800, color: accent, letterSpacing: -0.2,
                 fontFamily: 'system-ui, sans-serif', maxWidth: 'min(280px, 60vw)',
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere',
+                textAlign: 'center', lineHeight: 1.25,
               }}
             >
               {a.colName}
             </span>
-            <span style={{ fontSize: 'clamp(40px, 11vw, 60px)', fontWeight: 900, color: T.text, letterSpacing: -0.5 }}>
+            {/* v0.22.0 입력탭#2(P2 잘림): 큰 현재값이 길면(소수·음수 등) 가로로 넘쳐 박스를 벗어나던
+                문제 → maxWidth:100% + overflowWrap:anywhere로 줄바꿈 보장, clamp 하한↓로 좁은 기기에서
+                축소도 함께(잘림 0). */}
+            <span
+              style={{
+                fontSize: 'clamp(34px, 11vw, 60px)', fontWeight: 900, color: T.text, letterSpacing: -0.5,
+                maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
+                textAlign: 'center', lineHeight: 1.05,
+              }}
+            >
               {a.next}
             </span>
           </div>

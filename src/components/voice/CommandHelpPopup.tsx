@@ -39,17 +39,21 @@ export function CommandHelpPopup({ onClose }: { onClose: () => void }) {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
           {VOICE_COMMANDS.map((cmd) => (
-            <div key={cmd.id} style={{ display: 'flex', alignItems: 'baseline', gap: 18 }}>
+            <div key={cmd.id} style={{ display: 'flex', alignItems: 'baseline', gap: 18, minWidth: 0 }}>
               <span
                 style={{
                   flexShrink: 0, minWidth: 96, textAlign: 'center',
                   padding: '6px 15px', borderRadius: 999,
                   background: T.blueGlow, color: '#fff', fontSize: 21, fontWeight: 800,
+                  // v0.22.0(P2 잘림 점검): 명령어 단어가 길어도 pill 안에서 줄바꿈(잘림 0).
+                  whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere',
                 }}
               >
                 {cmd.display}
               </span>
-              <span style={{ fontSize: 20, color: T.textDim, lineHeight: 1.4 }}>{cmd.desc}</span>
+              {/* v0.22.0(P2 잘림 점검): 설명이 길어도 flex 자식이 부모를 넘기지 않게 minWidth:0 +
+                  줄바꿈 보장. 잘림(ellipsis) 없음 — 전체 표시. */}
+              <span style={{ flex: 1, minWidth: 0, fontSize: 20, color: T.textDim, lineHeight: 1.4, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>{cmd.desc}</span>
             </div>
           ))}
         </div>

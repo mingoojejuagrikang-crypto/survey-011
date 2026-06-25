@@ -9,6 +9,7 @@ import { useVoiceSession } from '../lib/useVoiceSession';
 import { isSpeechSupported, speak } from '../lib/speech';
 import { PRIMARY_COMMANDS } from '../lib/voiceCommands';
 import { getSampleLabelParts, type AnnounceLabelPart } from '../lib/announceColumns';
+import { buildSessionLabel } from '../lib/sessionLabel';
 import { AnomalyAlertPopup } from '../components/voice/AnomalyAlertPopup';
 import { CommandHelpPopup } from '../components/voice/CommandHelpPopup';
 import type { Column } from '../types';
@@ -41,7 +42,12 @@ export function VoiceScreen() {
       <ReadyState
         totalRows={totalRows}
         onStart={async () => {
-          await voiceSession.start(s.sessionAutoLabel || buildAutoLabel(s.columns));
+          // v0.22.0 — 세션명 우선순위(SSOT, 설정탭 prospectiveSessionLabel과 동일):
+          //   자유입력(sessionCustomLabel) > 저장된 sessionAutoLabel > 자동 디폴트(buildAutoLabel).
+          //   설정탭이 생성 시 sessionAutoLabel을 효과 라벨로 채우지만, 미생성/미편집 상태에서도
+          //   같은 결과가 나도록 자유입력을 명시적으로 최우선에 둔다.
+          const label = (s.sessionCustomLabel ?? '').trim() || s.sessionAutoLabel || buildAutoLabel(s.columns);
+          await voiceSession.start(label);
           await lockPortrait();
         }}
       />
@@ -77,29 +83,88 @@ export function VoiceScreen() {
           else voiceSession.pause();
         }}
       />
+      {/* v0.22.0 P0(UI) — 마이크 재연결 배너. 클립 마이크가 죽어 사용자 제스처로 재획득이 필요할 때만
+          (sess.micLost===true) 노출. 장갑·원거리 현장 고려해 화면 상단 가로 폭 전체·큰 터치 타깃의
+          눈에 띄는 RED 배너로 띄운다. 평소(micLost=false)엔 숨김. Mack이 useVoiceSession에 micLost/
+          reconnectMic를 추가하기 전엔 타입 에러가 날 수 있다(통합 전 예상치 — Larry가 최종 tsc 검증). */}
+      <MicReconnectBanner micLost={voiceSession.micLost} onReconnect={() => voiceSession.reconnectMic()} />
     </div>
   );
 }
 
-/** Compose a default session label like "2026-06-08 이원창" (날짜 + 이름).
- *  설정탭(SettingsScreen)의 sessionAutoLabel 형식과 일치시킨다.
- *  v0.4.3: '이름' 데이터형 대신 "농가명/이름" 문자열로 이름 컬럼을 식별(기준일자 같은 date 컬럼 오선택 방지). */
-function buildAutoLabel(columns: Column[]): string {
-  const isoDate = new Date().toISOString().slice(0, 10);
-  const nameCol = columns.find(
-    (c) => (c.name?.trim() === '농가명' || c.name?.trim() === '이름') && c.auto.kind === 'fixed' && !!c.auto.value,
+/** v0.22.0 P0(UI) — "마이크 재연결" 배너. 클립 마이크가 죽어(블루투스 끊김·OS 인터럽션 등) 사용자
+ *  제스처로 재획득해야 할 때만(micLost) 화면 상단에 띄운다. 장갑·원거리·소음 현장 기준:
+ *   - 화면 가로 폭 전체를 쓰는 RED 배너(주변 톤과 확실히 구분 — 이상치 RED와 달리 상단 고정).
+ *   - 버튼은 큰 터치 타깃(min 56px 높이)·큰 글자(18px)·명확한 라벨("마이크 재연결").
+ *   - 기존 토큰(T.red/T.card)·safe-area 패턴(PausedCard와 동일) 재사용.
+ *  micLost=false면 아무것도 렌더하지 않는다. 버튼 탭 → onReconnect(=sess.reconnectMic). */
+function MicReconnectBanner({ micLost, onReconnect }: { micLost: boolean; onReconnect: () => void }) {
+  if (!micLost) return null;
+  return (
+    <div
+      role="alert"
+      aria-live="assertive"
+      style={{
+        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 60,
+        display: 'flex', justifyContent: 'center',
+        // safe-area(노치·상태바) 침범 방지 — standalone 설치형 대응(App.tsx/PausedCard 패턴).
+        paddingTop: 'max(8px, env(safe-area-inset-top, 0px))',
+        paddingLeft: 'max(10px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(10px, env(safe-area-inset-right, 0px))',
+        pointerEvents: 'none', // 컨테이너는 통과, 내부 카드만 인터랙티브.
+      }}
+    >
+      <div
+        style={{
+          pointerEvents: 'auto',
+          width: '100%', maxWidth: 560,
+          display: 'flex', alignItems: 'center', gap: 12,
+          padding: '12px 14px', borderRadius: 16,
+          background: 'rgba(34,18,18,0.97)', border: `2px solid ${T.red}`,
+          boxShadow: '0 8px 28px rgba(0,0,0,0.5)',
+        }}
+      >
+        <span style={{ fontSize: 26, flexShrink: 0 }} aria-hidden>🎙️</span>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span
+            style={{
+              fontSize: 17, fontWeight: 900, color: T.red, letterSpacing: -0.3,
+              wordBreak: 'keep-all', overflowWrap: 'anywhere', lineHeight: 1.2,
+            }}
+          >
+            마이크 연결이 끊겼습니다
+          </span>
+          <span style={{ fontSize: 13, color: T.textDim, fontWeight: 600, lineHeight: 1.3 }}>
+            아래 버튼을 눌러 다시 연결하세요
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onReconnect}
+          style={{
+            flexShrink: 0,
+            minHeight: 56, padding: '0 18px', borderRadius: 14,
+            border: 'none', cursor: 'pointer',
+            background: T.red, color: '#fff',
+            fontSize: 18, fontWeight: 900, letterSpacing: -0.3,
+            display: 'flex', alignItems: 'center', gap: 8,
+            boxShadow: '0 4px 14px rgba(255,82,82,0.4)',
+          }}
+          title="마이크 재연결"
+        >
+          {I.mic(22, '#fff')} 마이크 재연결
+        </button>
+      </div>
+    </div>
   );
-  if (nameCol && nameCol.auto.kind === 'fixed') return `${isoDate} ${nameCol.auto.value}`;
-  for (const c of columns) {
-    if (c.input !== 'auto' || c.type === 'date') continue;
-    if (c.auto.kind === 'fixed' && c.auto.value && c.auto.value !== '오늘') {
-      return `${isoDate} ${c.auto.value}`;
-    }
-    if (c.auto.kind === 'options' && c.auto.selected.length === 1) {
-      return `${isoDate} ${c.auto.selected[0]}`;
-    }
-  }
-  return isoDate;
+}
+
+/** v0.22.0 — 기본 세션 라벨. 설정탭(prospectiveSessionLabel)과 **동일한 SSOT**(sessionLabel.
+ *  buildSessionLabel)로 통일했다. 이전 구현은 첫 고정값 하나만 집어(농가명 우선) 설정탭의
+ *  "생성일 + 상수들 전부 join"과 형식이 어긋났다(SSOT 위반 근인). 이제 두 경로가 같은 결과를 낸다:
+ *  `2026-06-25 강남호 A`(고정값 + 단일선택 options까지). 날짜·순환 컬럼은 헬퍼가 제외한다. */
+function buildAutoLabel(columns: Column[]): string {
+  return buildSessionLabel(columns);
 }
 
 // ─── READY ────────────────────────────────────────────────────
@@ -711,19 +776,26 @@ function ModifyIndicatorPill({ name, prevValue, newValue }: { name: string; prev
           display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
         }}
       >
-        {/* 항목명 + 타입(읽기 일관) */}
-        <span style={{ fontSize: 17, fontWeight: 800, color: accent, letterSpacing: -0.2 }}>
+        {/* 항목명 + 타입(읽기 일관)
+            v0.22.0(P2 잘림 점검): 긴 항목명("과실 횡경 평균값" 등)도 헤더에서 잘리지 않게 줄바꿈 허용. */}
+        <span
+          style={{
+            fontSize: 17, fontWeight: 800, color: accent, letterSpacing: -0.2,
+            maxWidth: '100%', textAlign: 'center', wordBreak: 'keep-all', overflowWrap: 'anywhere', lineHeight: 1.25,
+          }}
+        >
           {committed ? `${name} 정정` : '수정 — 다시 말해주세요'}
         </span>
         {committed ? (
           <>
+            {/* v0.22.0(P2 잘림 점검): 직전/새 값 ellipsis→줄바꿈(긴 값도 잘림 0, 박스 안에서 줄바꿈). */}
             {prevValue && (
               <span
                 style={{
                   fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                   fontSize: 'clamp(22px, 7vw, 38px)', fontWeight: 700,
                   color: T.textMute, textDecoration: 'line-through', letterSpacing: -0.5,
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '88vw',
+                  maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.1,
                 }}
               >
                 {prevValue}
@@ -734,8 +806,8 @@ function ModifyIndicatorPill({ name, prevValue, newValue }: { name: string; prev
               style={{
                 fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                 fontSize: heroFontSize(newValue || ''),
-                fontWeight: 800, color: T.amber, letterSpacing: -1, lineHeight: 1,
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '94vw',
+                fontWeight: 800, color: T.amber, letterSpacing: -1, lineHeight: 1.05,
+                maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center',
                 animation: 'chip-pop 320ms ease-out',
               }}
             >
