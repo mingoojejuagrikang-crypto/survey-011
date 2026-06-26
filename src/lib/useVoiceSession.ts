@@ -46,6 +46,10 @@ interface AwaitingField {
    *  소수 한 자리면 `${fractionWhole}.${digit}`로 합성해 커밋(전체 재발화 불필요). 값 추측(에→1)은
    *  하지 않는다 — 같은 STT 문자열이 111.1·111.5 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정). */
   fractionWhole?: string;
+  /** v0.23.0 입력탭#4 — 마지막 행까지 입력 완료 후의 "종료 대기" 센티넬. 명령(종료/수정 등)이 계속
+   *  처리되도록 awaiting을 null로 두지 않되, handleFinal의 atEnd 가드가 일반 값 발화를 새 행으로
+   *  커밋하지 않고 종료 안내로 흡수한다(자동 종료 제거). */
+  atEnd?: boolean;
 }
 
 /** v0.9.0 빠른 인식(조기확정): interim 숫자가 이 시간(ms) 동안 같은 값으로 안정되면 final을
@@ -506,26 +510,38 @@ export function useVoiceSession() {
     return out;
   };
 
-  /** 마지막 행 너머에 더 갈 곳이 없을 때의 종료 처리(민구 결정 4): 빈 행(placeholder)이 있으면
-   *  행 번호를 TTS로 안내한 뒤 자동 종료, 없으면 기존 "모든 입력 완료" 안내 후 종료. */
-  const finishAtEnd = useCallback(async () => {
+  /** v0.23.0 입력탭#4(민구 결정 — "안내 후 대기"): 마지막 행 너머에 더 갈 곳이 없어도 **자동 종료하지
+   *  않는다**. 빈 행이 있으면 함께 안내하고, 어느 경우든 "종료하려면 '종료' 또는 종료 버튼" 안내 후
+   *  세션을 active로 유지한다. awaiting을 마지막 음성 필드에 atEnd 센티넬로 둬서 '종료'/'수정' 등 명령은
+   *  계속 dispatch되되(handleFinal `if(!awaiting) return` 게이트 통과), 일반 값 발화는 atEnd 가드가
+   *  새 행 커밋 대신 종료 재안내로 흡수한다. 종료는 '종료' 음성 명령 또는 종료 버튼으로만 일어난다. */
+  const announceEndReached = useCallback(async () => {
     const sess = useSessionStore.getState();
     const vc = voiceColsList();
     const total = computeTotalRows(useSettingsStore.getState().columns);
     const empties = listEmptyRows(total, vc);
-    sess.setPhase('done');
-    if (empties.length > 0) {
-      const msg = `마지막 행까지 입력했습니다. ${formatRowList(empties)}이 비어 있습니다. 데이터 탭에서 확인해 주세요.`;
-      sess.setLastTts(msg);
-      logger.log({
-        type: 'session', extra: `end_with_empty_rows:${empties.join(',')}`,
-        sessionId: sessionIdRef.current,
-      });
-      await say(msg);
-    } else {
-      await say('모든 입력이 완료되었습니다.');
-    }
-    await stop(false);
+    const lastCol = vc[vc.length - 1] ?? null;
+    // 명령 컨텍스트 유지용 atEnd 센티넬(마지막 음성 필드). 값 커밋은 handleFinal의 atEnd 가드가 차단.
+    awaitingFieldRef.current = lastCol
+      ? { row: total, colId: lastCol.id, name: lastCol.name, atEnd: true }
+      : null;
+    sess.setReaskReason(null);
+    sess.setRecognized('');
+    // phase='complete'로 둬 hero가 "✓ 행 입력 완료"를 보이게 한다(마지막 컬럼을 '듣는 중'처럼 보이는
+    // 오해 방지). STT는 계속 돌아 '종료'/'수정' 음성 명령이 처리되되(handleFinal는 paused만 게이트),
+    // early-commit(active 전용)은 멈춘다. 종료는 '종료' 음성·종료 버튼만.
+    sess.setPhase('complete');
+    const tail = "종료하려면 '종료'라고 말씀하거나 종료 버튼을 누르세요.";
+    const msg = empties.length > 0
+      ? `마지막 행까지 입력했습니다. ${formatRowList(empties)}이 비어 있습니다. ${tail}`
+      : `마지막 행까지 입력했습니다. ${tail}`;
+    sess.setLastTts(msg);
+    logger.log({
+      type: 'session',
+      extra: empties.length > 0 ? `end_reached_waiting:empty=${empties.join(',')}` : 'end_reached_waiting',
+      sessionId: sessionIdRef.current,
+    });
+    await say(msg);
   }, [say]);
 
   // ── progression ────────────────────────────────────────────
@@ -605,7 +621,8 @@ export function useVoiceSession() {
     // Otherwise find next incomplete row (아래 방향만 — wrap-around 없음)
     const next = findNextIncompleteRow(row + 1, total, vc);
     if (next === null) {
-      await finishAtEnd();
+      // v0.23.0 입력탭#4 — 자동 종료 제거. 안내 후 '종료' 명령/버튼까지 세션 유지.
+      await announceEndReached();
       return;
     }
 
@@ -618,7 +635,7 @@ export function useVoiceSession() {
     await announceRowDiff(row, next);
     if (epochRef.current !== startEpoch) return;
     if (vc[targetCol]) await announceField(vc[targetCol]);
-  }, [announceField, announceRowComplete, announceRowDiff, finishAtEnd, persistSession, say]);
+  }, [announceField, announceRowComplete, announceRowDiff, announceEndReached, persistSession, say]);
 
   // ── modify (cross-row) ─────────────────────────────────────
   const enterModifyMode = useCallback(async (preExtractedValue?: string, pendingCmd?: PendingCommandClip | null) => {
@@ -859,7 +876,7 @@ export function useVoiceSession() {
   // 재입력 모드를 무조건 해제하고, 현재 행이 미완료면 skip 표시 + 즉시 영속화(placeholder)한 뒤
   // 아래 방향의 다음 미완료 행으로만 이동한다. returnRow를 만들지 않으므로(기존 stale 복귀도
   // 해제) 완료 행으로 반복 복귀하는 NAV-1 루프가 구조적으로 불가능해진다. 더 갈 행이 없으면
-  // 빈 행 안내 후 자동 종료(finishAtEnd).
+  // v0.23.0 입력탭#4 — 자동 종료하지 않고 빈 행 안내 후 종료 대기(announceEndReached).
   const goNextRow = useCallback(async () => {
     const sess = useSessionStore.getState();
     const settings = useSettingsStore.getState();
@@ -880,12 +897,12 @@ export function useVoiceSession() {
     }
     const next = findNextIncompleteRow(row + 1, total, vc);
     if (next === null) {
-      awaitingFieldRef.current = null;
-      await finishAtEnd();
+      // v0.23.0 입력탭#4 — '다음'으로 마지막 행에 도달해도 자동 종료하지 않고 종료 안내 후 대기.
+      await announceEndReached();
       return;
     }
     await jumpToRow(next, { setReturn: false });
-  }, [finishAtEnd, jumpToRow, persistSession]);
+  }, [announceEndReached, jumpToRow, persistSession]);
 
   // ── v0.4.5 I3: "이전" 재입력 모드 진입 ─────────────────────
   // 이전 행으로 가서 1번 필드부터 모든 음성 필드를 순서대로 재입력. 기존 값은 유지하되 발화 시 교체,
@@ -1283,6 +1300,14 @@ export function useVoiceSession() {
       ...(eosTailMs != null ? { eosTailMs } : {}),
     });
 
+    // v0.23.0 입력탭#4 — 마지막 행 종료 대기(atEnd): 명령(종료/수정/이동 등)은 위에서 이미 dispatch됐다.
+    // 여기 도달한 것은 일반 값 발화이므로 새 행으로 커밋하지 않고 종료 안내만 재생한다(자동 종료 제거).
+    if (awaiting.atEnd) {
+      useSessionStore.getState().setRecognized('');
+      await say("입력이 끝났습니다. 종료하려면 '종료'라고 말씀하거나 종료 버튼을 누르세요.");
+      return;
+    }
+
     // Item 12: 컬럼명 완전 일치 STT 거부 — 숫자/날짜 컬럼에만 적용 (text/options 컬럼은 컬럼명이 유효한 값일 수 있음)
     const allColumns = useSettingsStore.getState().columns;
     const currentCol = allColumns.find((c) => c.id === awaiting.colId);
@@ -1291,6 +1316,7 @@ export function useVoiceSession() {
       if (colNames.includes(text.trim())) {
         logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
         useSessionStore.getState().setRecognized('');
+        useSessionStore.getState().setReaskReason('parse_failed');
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
@@ -1299,6 +1325,7 @@ export function useVoiceSession() {
         logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, extra: 'known_noise' });
         recorderRef.current?.startClip();
         useSessionStore.getState().setRecognized('');
+        useSessionStore.getState().setReaskReason('parse_failed');
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
@@ -1329,6 +1356,7 @@ export function useVoiceSession() {
         logger.log({ type: 'stt_rejected_ambiguous_syllable', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
         recorderRef.current?.startClip();
         useSessionStore.getState().setRecognized('');
+        useSessionStore.getState().setReaskReason('parse_failed');
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
@@ -1336,8 +1364,16 @@ export function useVoiceSession() {
 
     // Low confidence — re-ask
     if (confidence > 0 && confidence < minConfidence) {
+      // v0.23.0 입력탭#2 — 저신뢰 재질문을 명시 이벤트로 로깅(이전엔 무로깅). confidence + 활성 허용범위를
+      // 함께 박제해 차기 분석이 "설정값 vs 실제 신뢰도"를 정량 대조할 수 있게 한다(설정값 미로깅 갭 해소).
+      logger.log({
+        type: 'stt_rejected_low_confidence', text, confidence,
+        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        colName: awaiting.name, extra: `tolerance:${minConfidence}`,
+      });
       recorderRef.current?.startClip(); // restart clip
       useSessionStore.getState().setRecognized('');
+      useSessionStore.getState().setReaskReason('low_confidence');
       await say(`잘 못 들었습니다. ${awaiting.name} 다시 말씀해 주세요.`);
       return;
     }
@@ -1397,6 +1433,8 @@ export function useVoiceSession() {
         colName: awaiting.name,
         ...(awaiting.fractionWhole != null ? { originalText: `frac_ctx:${awaiting.fractionWhole}` } : {}),
       });
+      // v0.23.0 입력탭#2 — 파싱 실패도 재질문 사유로 표면화(높은 신뢰도인데 재질문되는 혼동 해소).
+      useSessionStore.getState().setReaskReason('parse_failed');
       // v0.10.0 A1: 소수 의도인데 소수부 유실("111 점 에") → 정수부를 유지하고 "소수점 아래만" 타깃
       // 재질문(전체 재발화 회피). 값 추측(에→1)은 하지 않는다 — 같은 STT 문자열이 111.1·111.5
       // 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정).
@@ -1425,6 +1463,7 @@ export function useVoiceSession() {
     const sess = useSessionStore.getState();
     sess.setRowValue(awaiting.row, awaiting.colId, parsed);
     sess.setRecognized(parsed);
+    sess.setReaskReason(null); // v0.23.0 입력탭#2 — 성공 커밋 시 재질문 사유 큐 해제.
     // v0.20.0 Phase 5 #4 — 반응속도: final 진입→값 store 커밋까지 앱 파이프라인 경과ms(파싱·가드·
     // 동음이의/소수 합성 포함). 아래 value 이벤트(정상·추세위반 둘 다)에 durationMs로 싣는다 — echo
     // TTS 대기 전에 캡처해 TTS 길이가 섞이지 않게 한다(순수 커밋 지연).
@@ -1782,7 +1821,7 @@ export function useVoiceSession() {
         row: awaitingFieldRef.current?.row, colId: awaitingFieldRef.current?.colId,
         extra: `attempt:${extra}` });
     const awaiting = awaitingFieldRef.current;
-    if (!awaiting || awaiting.trendConfirm) return;
+    if (!awaiting || awaiting.trendConfirm || awaiting.atEnd) return;
     if (useSessionStore.getState().phase !== 'active') return;
     if (ctrlRef.current?.isTtsMuted()) {
       // TTS 중 barge-in은 final 경로가 처리 — 안정화 후보가 무장돼 있었다면 무산 사유를 기록.
@@ -1888,6 +1927,8 @@ export function useVoiceSession() {
         startedAt: Date.now(),
         totalRows: total,
         completedRows: 0,
+        // v0.23.0 입력탭#2 — 세션 시작 시 활성 인식 허용범위를 박제(설정값 미로깅 갭 해소).
+        recognitionTolerance: s.recognitionTolerance,
         // NOTE: session label intentionally NOT logged — buildAutoLabel derives it from the first
         // fixed auto column (농가명 = grower name), a PII vector. Reach is fully computable from
         // sessionId + appVersion + totalRows + completedRows. The label still lives on the Session

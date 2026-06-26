@@ -13,7 +13,12 @@ import { T } from '../../tokens';
  *     화면 최대 요소일 때 상단 헤더와 시선이 떨어져 '어느 항목 값인가'가 즉시 안 보이던 문제 해소.
  *     직전값/현재값을 '라벨 + 값' 2단 대칭 구조로 만든다.
  *   - R2(민구 요청): status='corrected'면 톤을 GREEN으로 바꾸고 헤더를 '정상 복귀'로, 현재값을 정정값
- *     으로 즉시 반영한다(정정 재측정이 정상으로 판명된 경우). 빨강(이상치)↔초록(정정완료) 구분. */
+ *     으로 즉시 반영한다(정정 재측정이 정상으로 판명된 경우). 빨강(이상치)↔초록(정정완료) 구분.
+ *  v0.23.0 입력탭#1(중앙 흡수, Vance): 기존 position:fixed; inset:0 오버레이를 **제거**하고, 카드만
+ *   반환한다. ActiveState의 중앙 흡수영역(grid row3, 1fr, overflow:hidden)이 직접 자식으로 렌더해
+ *   중앙 정렬한다. 흡수영역의 가용 높이에 카드를 맞춰(maxHeight:100% + minHeight:0 + overflowY:auto)
+ *   짧은 기기/긴 음수소수(-355.5 등)에서도 부모 overflow:hidden에 **잘리지 않고** 내부 스크롤한다.
+ *   (이전: min(70vh,520px) 캡 — 375px 세로에서 70vh가 트랙보다 커 부모에 클립되던 잔여 위험 제거.) */
 export function AnomalyAlertPopup({
   a,
 }: {
@@ -57,102 +62,96 @@ export function AnomalyAlertPopup({
       data-status={corrected ? 'corrected' : 'pending'}
       aria-live="assertive"
       style={{
-        position: 'fixed', inset: 0, zIndex: 45,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', pointerEvents: 'none',
+        // v0.23.0 입력탭#1 — 중앙 흡수: 흡수영역(1fr, overflow:hidden) 가용 높이에 맞춘다.
+        //   maxHeight:100% + minHeight:0 + overflowY:auto로 짧은 기기/긴 값에서도 부모에 잘리지
+        //   않고 내부 스크롤. 폭은 흡수영역 패딩 안에서 채우되 가독 상한(min(620px,96vw)) 유지.
+        width: '100%', maxWidth: 'min(620px, 96vw)',
+        maxHeight: '100%', minHeight: 0, overflowY: 'auto',
+        padding: '24px 30px', borderRadius: 18,
+        background: corrected ? 'rgba(18,34,22,0.96)' : 'rgba(34,18,18,0.96)',
+        border: `2px solid ${accent}`,
+        boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
+        display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
       }}
     >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <span style={{ fontSize: 20, fontWeight: 800, color: T.text }}>
+          {a.colName}
+        </span>
+        <span style={{ fontSize: 19, fontWeight: 800, color: accent }}>
+          {alarmLabel}
+        </span>
+      </div>
+      {/* V2 — 어떤 샘플/행을 보는지. 샘플키 미상이면 '행 N' 폴백. 긴 키도 박스 안에서 줄바꿈.
+          v0.18.0 1d — 원거리 가독: 샘플 식별 줄을 키우고 대비 보강(textDim→text). */}
       <div
         style={{
-          // v0.20.0 입력탭#4 — 오버레이 최대 높이 캡 축소(90vh→min(70vh,520px)). 중앙 정렬 박스가
-          //   커져도 상단 칩 영역(statusbar+상태바+칩 168)을 침범하지 않게 하는 가드. 내용이 더 길면
-          //   내부 overflowY:auto로 스크롤한다.
-          maxWidth: 'min(620px, 96vw)', maxHeight: 'min(70vh, 520px)', overflowY: 'auto',
-          padding: '24px 30px', borderRadius: 18,
-          background: corrected ? 'rgba(18,34,22,0.96)' : 'rgba(34,18,18,0.96)',
-          border: `2px solid ${accent}`,
-          boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
-          display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
+          fontSize: 'clamp(15px, 4.4vw, 17px)', color: T.text, fontWeight: 700, textAlign: 'center',
+          lineHeight: 1.4, maxWidth: '100%', wordBreak: 'break-all', overflowWrap: 'anywhere',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-          <span style={{ fontSize: 20, fontWeight: 800, color: T.text }}>
+        샘플: {a.sampleKey || `행 ${a.row}`}
+      </div>
+      {/* v0.22.0 입력탭#2(P2 잘림): 직전값→현재값 행. flexWrap + maxWidth로 긴 값이 가로로
+          넘쳐 박스를 벗어나지 못하게 한다(필요시 줄바꿈). 자식 컬럼은 minWidth:0로 축소 허용. */}
+      <div
+        style={{
+          display: 'flex', alignItems: 'flex-end', justifyContent: 'center', flexWrap: 'wrap', gap: 12,
+          maxWidth: '100%',
+          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+        }}
+      >
+        {/* V2 — 직전 값을 그 회차 날짜로 라벨링(prevDate 있을 때만 날짜 표기). */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
+          <span
+            style={{
+              fontSize: 13, fontWeight: 700, color: T.textDim, letterSpacing: -0.2,
+              fontFamily: 'system-ui, sans-serif',
+            }}
+          >
+            직전{a.prevDate ? ` (${a.prevDate})` : ''}
+          </span>
+          {/* v0.18.0 1d — 직전값 대비 보강(textDim→text 인접 대비 위해 크기 유지·굵게). */}
+          <span
+            style={{
+              fontSize: 'clamp(30px, 8vw, 36px)', fontWeight: 800, color: T.textDim,
+              maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.05,
+            }}
+          >
+            {a.prev}
+          </span>
+        </div>
+        <span style={{ fontSize: 26, color: T.textDim, paddingBottom: 4 }}>→</span>
+        {/* R3 — hero 현재값 위에 항목명 라벨(accent색)을 붙여 정수값도 어느 항목인지 즉시 식별.
+            v0.22.0 입력탭#2(P2 잘림): 긴 항목명("과실 횡경 평균값" 등)이 ellipsis로 …잘리던 문제 →
+            줄바꿈 허용(whiteSpace:normal + wordBreak:keep-all/overflowWrap:anywhere)으로 전부 표시. */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
+          <span
+            style={{
+              fontSize: 13, fontWeight: 800, color: accent, letterSpacing: -0.2,
+              fontFamily: 'system-ui, sans-serif', maxWidth: 'min(280px, 60vw)',
+              whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere',
+              textAlign: 'center', lineHeight: 1.25,
+            }}
+          >
             {a.colName}
           </span>
-          <span style={{ fontSize: 19, fontWeight: 800, color: accent }}>
-            {alarmLabel}
+          {/* v0.22.0 입력탭#2(P2 잘림): 큰 현재값이 길면(소수·음수 등) 가로로 넘쳐 박스를 벗어나던
+              문제 → maxWidth:100% + overflowWrap:anywhere로 줄바꿈 보장, clamp 하한↓로 좁은 기기에서
+              축소도 함께(잘림 0). */}
+          <span
+            style={{
+              fontSize: 'clamp(34px, 11vw, 60px)', fontWeight: 900, color: T.text, letterSpacing: -0.5,
+              maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
+              textAlign: 'center', lineHeight: 1.05,
+            }}
+          >
+            {a.next}
           </span>
         </div>
-        {/* V2 — 어떤 샘플/행을 보는지. 샘플키 미상이면 '행 N' 폴백. 긴 키도 박스 안에서 줄바꿈.
-            v0.18.0 1d — 원거리 가독: 샘플 식별 줄을 키우고 대비 보강(textDim→text). */}
-        <div
-          style={{
-            fontSize: 'clamp(15px, 4.4vw, 17px)', color: T.text, fontWeight: 700, textAlign: 'center',
-            lineHeight: 1.4, maxWidth: '100%', wordBreak: 'break-all', overflowWrap: 'anywhere',
-          }}
-        >
-          샘플: {a.sampleKey || `행 ${a.row}`}
-        </div>
-        {/* v0.22.0 입력탭#2(P2 잘림): 직전값→현재값 행. flexWrap + maxWidth로 긴 값이 가로로
-            넘쳐 박스를 벗어나지 못하게 한다(필요시 줄바꿈). 자식 컬럼은 minWidth:0로 축소 허용. */}
-        <div
-          style={{
-            display: 'flex', alignItems: 'flex-end', justifyContent: 'center', flexWrap: 'wrap', gap: 12,
-            maxWidth: '100%',
-            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-          }}
-        >
-          {/* V2 — 직전 값을 그 회차 날짜로 라벨링(prevDate 있을 때만 날짜 표기). */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
-            <span
-              style={{
-                fontSize: 13, fontWeight: 700, color: T.textDim, letterSpacing: -0.2,
-                fontFamily: 'system-ui, sans-serif',
-              }}
-            >
-              직전{a.prevDate ? ` (${a.prevDate})` : ''}
-            </span>
-            {/* v0.18.0 1d — 직전값 대비 보강(textDim→text 인접 대비 위해 크기 유지·굵게). */}
-            <span
-              style={{
-                fontSize: 'clamp(30px, 8vw, 36px)', fontWeight: 800, color: T.textDim,
-                maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.05,
-              }}
-            >
-              {a.prev}
-            </span>
-          </div>
-          <span style={{ fontSize: 26, color: T.textDim, paddingBottom: 4 }}>→</span>
-          {/* R3 — hero 현재값 위에 항목명 라벨(accent색)을 붙여 정수값도 어느 항목인지 즉시 식별.
-              v0.22.0 입력탭#2(P2 잘림): 긴 항목명("과실 횡경 평균값" 등)이 ellipsis로 …잘리던 문제 →
-              줄바꿈 허용(whiteSpace:normal + wordBreak:keep-all/overflowWrap:anywhere)으로 전부 표시. */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
-            <span
-              style={{
-                fontSize: 13, fontWeight: 800, color: accent, letterSpacing: -0.2,
-                fontFamily: 'system-ui, sans-serif', maxWidth: 'min(280px, 60vw)',
-                whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere',
-                textAlign: 'center', lineHeight: 1.25,
-              }}
-            >
-              {a.colName}
-            </span>
-            {/* v0.22.0 입력탭#2(P2 잘림): 큰 현재값이 길면(소수·음수 등) 가로로 넘쳐 박스를 벗어나던
-                문제 → maxWidth:100% + overflowWrap:anywhere로 줄바꿈 보장, clamp 하한↓로 좁은 기기에서
-                축소도 함께(잘림 0). */}
-            <span
-              style={{
-                fontSize: 'clamp(34px, 11vw, 60px)', fontWeight: 900, color: T.text, letterSpacing: -0.5,
-                maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
-                textAlign: 'center', lineHeight: 1.05,
-              }}
-            >
-              {a.next}
-            </span>
-          </div>
-        </div>
-        <div style={{ fontSize: 15, color: corrected ? T.green : T.textDim, fontWeight: 600 }}>
-          {corrected ? '✓ 정정되었습니다' : "'확인' 또는 새 값으로 정정"}
-        </div>
+      </div>
+      <div style={{ fontSize: 15, color: corrected ? T.green : T.textDim, fontWeight: 600 }}>
+        {corrected ? '✓ 정정되었습니다' : "'확인' 또는 새 값으로 정정"}
       </div>
     </div>
   );

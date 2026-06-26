@@ -217,28 +217,34 @@ export function DataScreen() {
 
       // 2) 로그 백업: 사용자 본인 드라이브 + 관리자 폴더 양쪽 업로드 (v0.10 멀티유저).
       // v0.10.1 Codex HIGH 수정: 관리자 폴더 설정 시 admin 업로드도 성공해야 backupOk → autoDelete 차단.
-      if (report.successIds.length > 0) {
+      // v0.23.0 데이터탭#1 — 로그 백업을 '새 행이 추가된 세션'(successIds)이 아니라 **선택한 모든
+      // 세션(행 보유)**으로 확장한다. 이미 동기화돼 새 행이 0인 세션을 함께 선택해도 그 로그가 누락되지
+      // 않게 한다(민구 제보: "일부만 업로드"). autoDelete는 아래에서 여전히 successIds로만 게이트한다.
+      const allSessionsForBackup = useDataStore.getState().sessions;
+      const hasRows = (id: string) =>
+        (allSessionsForBackup.find((s) => s.id === id)?.rows.length ?? 0) > 0;
+      const uploadIds = ids.filter(hasRows);
+      if (uploadIds.length > 0) {
         try {
-          // v0.19.0 W6 — 세션별 개별 zip 업로드(기존: 성공 세션 전체 통합 1 zip → 1회 업로드).
-          // 세션당 1 zip을 생성해 각각 본인+관리자 Drive에 올린다. 파일명은 수확 prefix
-          // `growth-log_<date>` 보존 + 세션 식별자 포함(rclone/SOP-003·복구 파싱 호환).
-          const zips = await exportLogZipsPerSession(report.successIds);
+          // v0.19.0 W6 — 세션별 개별 zip 업로드. v0.23.0 데이터탭#1 — 대상 = 선택한 모든 세션(행 보유).
+          // 파일명은 수확 prefix `growth-log_<date>` + 세션 식별자(rclone/SOP-003·복구 파싱 호환).
+          const zips = await exportLogZipsPerSession(uploadIds);
           const anyUser = new Set<string>();   // 업로드 성공한 목적지 라벨 집계(메시지용)
           const anyAdmin = new Set<string>();
           const failedDests = new Set<string>();
+          const backedUpOk = new Set<string>(); // 세션별 백업 성공 집계(autoDelete 불변식 + N/N 메시지)
           // v0.20.0 Phase 2 — Drive 백업 실패가 토큰 만료(401/403)면 시트추가와 독립으로 로그인
           // 팝업을 띄울 수 있게 신호를 모은다(시트추가는 성공해도 백업만 만료될 수 있다).
           let backupNeedsLogin = false;
           const isAuth = (s: string) => /\b(401|403)\b/.test(s) || /로그인이 필요/.test(s);
-          // 데이터 유실 방지 불변식: autoDelete는 backupOk일 때만 삭제하므로, **모든** 세션이
-          // 완전 백업(본인 Drive 필수 + 관리자 설정 시 admin도 필수)됐을 때만 backupOk=true.
-          // 한 세션이라도 실패하면 false → 자동삭제 보류(부분 성공으로 삭제하지 않음).
-          let allOk = true;
+          // 데이터 유실 방지 불변식(v0.23.0): 로그는 선택한 모든 세션을 올리되, autoDelete 대상은
+          // successIds(시트에 새로 반영된 세션)로만 한정한다. 그 successIds가 **모두** 완전 백업(본인
+          // Drive 필수 + 관리자 설정 시 admin도 필수)됐을 때만 backupOk=true → 부분 성공으로는 삭제 안 함.
           for (const z of zips) {
             try {
               const dual = await uploadLogToBothDrives(z.blob, z.filename);
               const sessionOk = !!dual.userDriveId && (!dual.adminConfigured || !!dual.adminDriveId);
-              if (!sessionOk) allOk = false;
+              if (sessionOk) backedUpOk.add(z.sessionId);
               if (dual.userDriveId) anyUser.add('본인 Drive');
               if (dual.adminDriveId) anyAdmin.add('관리자 Drive');
               for (const e of dual.errors) {
@@ -255,7 +261,6 @@ export function DataScreen() {
                 parsed: z.sessionId,
               });
             } catch (err) {
-              allOk = false;
               failedDests.add('exception');
               const emsg = String((err as Error)?.message ?? err);
               if (isAuth(emsg)) backupNeedsLogin = true;
@@ -263,16 +268,22 @@ export function DataScreen() {
               console.warn('Drive 로그 업로드 실패(세션)', z.sessionId, err);
             }
           }
-          backupOk = allOk;
+          // autoDelete 불변식: 삭제 대상(successIds)이 모두 백업됐을 때만 backupOk.
+          backupOk = report.successIds.every((id) => backedUpOk.has(id));
           // 백업이 토큰 만료로 실패했으면 report에 needsLogin을 전파(시트추가 성공/실패와 독립).
           if (backupNeedsLogin) report.needsLogin = true;
-          const parts = [...anyUser, ...anyAdmin];
-          if (parts.length > 0) {
-            setMsg((m) => (m ? `${m} · 로그 ${parts.join('+')} 백업` : `✓ 로그 ${parts.join('+')} 백업`));
-          }
-          if (failedDests.size > 0) {
-            setMsg((m) => `${m ?? ''} · ⚠️ 백업 실패: ${[...failedDests].join(', ')}`);
-            console.warn('Drive 로그 부분 실패', [...failedDests]);
+          const dest = [...anyUser, ...anyAdmin];
+          const okN = backedUpOk.size;
+          const totalN = zips.length;
+          // N/N 세션 로그 백업(+성공 목적지). '일부만 업로드' 재발 시 즉시 가시화(민구 데이터탭#1).
+          setMsg((m) => {
+            const base = `로그 ${okN}/${totalN} 세션 백업${dest.length ? ` (${dest.join('+')})` : ''}`;
+            return m ? `${m} · ${base}` : `✓ ${base}`;
+          });
+          if (okN < totalN) {
+            const failedIds = zips.filter((z) => !backedUpOk.has(z.sessionId)).map((z) => z.sessionId);
+            setMsg((m) => `${m ?? ''} · ⚠️ ${totalN - okN}개 세션 로그 백업 실패`);
+            console.warn('Drive 로그 백업 실패 세션', failedIds, [...failedDests]);
           }
         } catch (err) {
           logger.log({ type: 'app', extra: `drive_upload:failed:${String((err as Error)?.message ?? err)}` });
@@ -280,7 +291,7 @@ export function DataScreen() {
           console.warn('Drive 로그 업로드 실패', err);
         }
       } else {
-        // ok == 0 (전부 실패 또는 preflight) → 백업 대상 없음, backupOk false → autoDelete 차단
+        // 선택 세션 중 행 보유 세션이 없음 → 백업 대상 없음, backupOk false → autoDelete 차단
       }
       return { report, backupOk };
     } catch (err) {

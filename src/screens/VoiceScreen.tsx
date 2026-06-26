@@ -7,11 +7,16 @@ import { computeTotalRows, nestedAutoValue, computeRowFromAutoChange, buildCycli
 import { useWakeLock, lockPortrait } from '../lib/wakeLock';
 import { useVoiceSession } from '../lib/useVoiceSession';
 import { isSpeechSupported, speak } from '../lib/speech';
+import { logger } from '../lib/logger';
 import { PRIMARY_COMMANDS } from '../lib/voiceCommands';
 import { getSampleLabelParts, type AnnounceLabelPart } from '../lib/announceColumns';
 import { buildSessionLabel } from '../lib/sessionLabel';
 import { AnomalyAlertPopup } from '../components/voice/AnomalyAlertPopup';
 import { CommandHelpPopup } from '../components/voice/CommandHelpPopup';
+import { PausedCard } from '../components/voice/PausedCard';
+import { ModifyIndicatorPill } from '../components/voice/ModifyIndicatorPill';
+import { ReaskCue, type ReaskReason } from '../components/voice/ReaskCue';
+import { heroFontSize } from '../components/voice/heroLayout';
 import type { Column } from '../types';
 
 export function VoiceScreen() {
@@ -19,6 +24,11 @@ export function VoiceScreen() {
   const sess = useSessionStore();
   const voiceSession = useVoiceSession();
   const [confidence, setConfidence] = useState<number | null>(null);
+  // v0.23.0 입력탭#3(쿨다운 피드백, Vance) — 재연결 버튼 탭 후 audioRecorder의 RECOVER_COOLDOWN_MS
+  //   (~3s) 동안 두 번째 탭이 무반응처럼 보이던 문제. 탭 즉시 로컬 "reconnecting" 상태를 켜고
+  //   쿨다운 창 동안 버튼을 비활성+"재연결 중…" 스피너로 보인다. audioRecorder 로직(복구 타이밍)은
+  //   건드리지 않고 UI 상태만 반영한다(도메인 경계 보존). 창은 3s 후 자동 해제.
+  const [reconnecting, setReconnecting] = useState(false);
 
   useWakeLock(sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused');
 
@@ -72,6 +82,7 @@ export function VoiceScreen() {
         completing={sess.phase === 'complete'}
         paused={sess.phase === 'paused'}
         confidence={confidence}
+        reaskReason={(sess.reaskReason ?? null) as ReaskReason}
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}
@@ -87,7 +98,20 @@ export function VoiceScreen() {
           (sess.micLost===true) 노출. 장갑·원거리 현장 고려해 화면 상단 가로 폭 전체·큰 터치 타깃의
           눈에 띄는 RED 배너로 띄운다. 평소(micLost=false)엔 숨김. Mack이 useVoiceSession에 micLost/
           reconnectMic를 추가하기 전엔 타입 에러가 날 수 있다(통합 전 예상치 — Larry가 최종 tsc 검증). */}
-      <MicReconnectBanner micLost={voiceSession.micLost} onReconnect={() => voiceSession.reconnectMic()} />
+      <MicReconnectBanner
+        micLost={voiceSession.micLost}
+        reconnecting={reconnecting}
+        onReconnect={() => {
+          // v0.23.0 입력탭#3 — 쿨다운 동안 UI를 잠가 더블탭 무반응 오인 방지. 실제 재연결 로직은
+          //   voiceSession.reconnectMic()(audioRecorder, ~3s RECOVER_COOLDOWN_MS) — 타이밍 무수정.
+          //   3s(=쿨다운 길이) 동안 reconnecting=true. 성공해 micLost가 false로 바뀌면 배너 자체가
+          //   언마운트되며 타이머는 effect cleanup이 정리한다(setState-after-unmount 방지).
+          if (reconnecting) return;
+          setReconnecting(true);
+          voiceSession.reconnectMic();
+        }}
+        onCooldownEnd={() => setReconnecting(false)}
+      />
     </div>
   );
 }
@@ -97,8 +121,31 @@ export function VoiceScreen() {
  *   - 화면 가로 폭 전체를 쓰는 RED 배너(주변 톤과 확실히 구분 — 이상치 RED와 달리 상단 고정).
  *   - 버튼은 큰 터치 타깃(min 56px 높이)·큰 글자(18px)·명확한 라벨("마이크 재연결").
  *   - 기존 토큰(T.red/T.card)·safe-area 패턴(PausedCard와 동일) 재사용.
- *  micLost=false면 아무것도 렌더하지 않는다. 버튼 탭 → onReconnect(=sess.reconnectMic). */
-function MicReconnectBanner({ micLost, onReconnect }: { micLost: boolean; onReconnect: () => void }) {
+ *  micLost=false면 아무것도 렌더하지 않는다. 버튼 탭 → onReconnect(=sess.reconnectMic).
+ *  v0.23.0 입력탭#3 — 쿨다운 피드백: reconnecting=true 동안 버튼을 비활성+스피너+"재연결 중…"으로
+ *   바꿔, RECOVER_COOLDOWN_MS(~3s) 내 더블탭이 죽은 버튼처럼 보이던 문제를 없앤다. 탭 시 호출자가
+ *   reconnecting을 켜고, 이 컴포넌트가 3s 타이머로 onCooldownEnd를 호출해 해제한다(언마운트 시
+ *   cleanup으로 setState-after-unmount 방지 — micLost가 false로 바뀌면 배너 자체가 언마운트됨). */
+function MicReconnectBanner({
+  micLost, reconnecting, onReconnect, onCooldownEnd,
+}: {
+  micLost: boolean;
+  reconnecting: boolean;
+  onReconnect: () => void;
+  onCooldownEnd: () => void;
+}) {
+  // 쿨다운 타이머: reconnecting이 켜지면 3s(=audioRecorder RECOVER_COOLDOWN_MS) 후 해제 콜백.
+  //   ⚠️ deps는 [reconnecting]만 — onCooldownEnd를 deps에 넣으면 부모(VoiceScreen)가 confidence
+  //   폴링(300ms)으로 매 렌더 새 함수 정체성을 주어, 타이머가 발화 전에 매번 리셋돼 "재연결 중…"이
+  //   영영 안 풀리는 새 버그가 된다. onCooldownEnd는 안정 setter만 호출하므로 rising edge 캡처로 안전.
+  //   언마운트(=micLost false로 배너 제거) 시 clearTimeout으로 정리(setState-after-unmount 방지).
+  useEffect(() => {
+    if (!reconnecting) return;
+    const id = window.setTimeout(() => onCooldownEnd(), 3000);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reconnecting]);
+
   if (!micLost) return null;
   return (
     <div
@@ -141,18 +188,38 @@ function MicReconnectBanner({ micLost, onReconnect }: { micLost: boolean; onReco
         <button
           type="button"
           onClick={onReconnect}
+          disabled={reconnecting}
+          aria-busy={reconnecting}
+          data-testid="mic-reconnect-btn"
           style={{
             flexShrink: 0,
             minHeight: 56, padding: '0 18px', borderRadius: 14,
-            border: 'none', cursor: 'pointer',
-            background: T.red, color: '#fff',
+            border: 'none', cursor: reconnecting ? 'wait' : 'pointer',
+            background: reconnecting ? '#7a2e2e' : T.red, color: '#fff',
+            opacity: reconnecting ? 0.85 : 1,
             fontSize: 18, fontWeight: 900, letterSpacing: -0.3,
             display: 'flex', alignItems: 'center', gap: 8,
-            boxShadow: '0 4px 14px rgba(255,82,82,0.4)',
+            boxShadow: reconnecting ? 'none' : '0 4px 14px rgba(255,82,82,0.4)',
           }}
-          title="마이크 재연결"
+          title={reconnecting ? '재연결 중…' : '마이크 재연결'}
         >
-          {I.mic(22, '#fff')} 마이크 재연결
+          {reconnecting ? (
+            <>
+              {/* spin 키프레임은 index.css 전역(다른 스피너와 공유). 없으면 정적 아이콘으로 폴백돼도 의미 전달. */}
+              <span
+                aria-hidden
+                style={{
+                  width: 20, height: 20, flexShrink: 0,
+                  border: '3px solid rgba(255,255,255,0.4)', borderTopColor: '#fff',
+                  borderRadius: '50%', display: 'inline-block',
+                  animation: 'spin 0.8s linear infinite',
+                }}
+              />
+              재연결 중…
+            </>
+          ) : (
+            <>{I.mic(22, '#fff')} 마이크 재연결</>
+          )}
         </button>
       </div>
     </div>
@@ -282,20 +349,14 @@ function SummaryRow({ label, value, unit, accent }: { label: string; value: numb
 }
 
 // ─── A-hero helpers (v0.17.0) ─────────────────────────────────
-/** README 타이포 스케일(A): 값 길이로 hero 숫자 크기 자동 조절. ≤4자 150 / ≤6자 104 / 그 외 50.
- *  clamp로 작은 화면(375px 세로)에서도 안 깨지게 상한만 길이별로 둔다(min은 동일 비율 축소). */
-function heroFontSize(value: string): string {
-  const len = (value || '').length;
-  if (len <= 4) return 'clamp(64px, 22vw, 150px)';
-  if (len <= 6) return 'clamp(48px, 16vw, 104px)';
-  return 'clamp(34px, 11vw, 50px)';
-}
+// v0.23.0 입력탭#1 — heroFontSize는 components/voice/heroLayout 로 분리(ModifyIndicatorPill과 공유,
+//   순환 import 방지). 위 import에서 가져온다.
 
 type HeroEvent = 'listening' | 'confirm' | 'complete';
 
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
-  totalRows, columns, voiceCols, currentColId, completing, paused, confidence,
+  totalRows, columns, voiceCols, currentColId, completing, paused, confidence, reaskReason,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
 }: {
   totalRows: number;
@@ -305,6 +366,7 @@ function ActiveState({
   completing: boolean;
   paused: boolean;
   confidence: number | null;
+  reaskReason: ReaskReason;
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
   onJumpToRow: (row: number) => void;
@@ -513,11 +575,15 @@ function ActiveState({
         })}
       </div>
 
-      {/* 3) 1fr 흡수영역 — VoiceHero 단독. v0.21.0 입력탭#1+4(민구 재요청) — 화면 본문의 TTS 에코
-          ({sess.lastTts}: "횡경 말씀해 주세요" 등 컬럼명 안내문구)를 화면에서 제거한다. ⚠️ TTS 음성
-          안내는 그대로 유지(useVoiceSession의 say()/setLastTts 무수정) — 화면에 그리는 텍스트만 삭제.
-          에코 줄이 사라지면서 hero가 흡수영역 세로를 온전히 쓸 수 있어 #2(팝업 잘림)도 함께 완화된다.
-          overflow:hidden은 유지(hero가 길어도 아래 컨트롤바 보호) — hero 내부는 자체 가용높이 기준 축소. */}
+      {/* 3) 1fr 흡수영역 — v0.23.0 입력탭#1(중앙 흡수, Vance): 기존엔 일시정지·이상치·수정 카드가
+          전부 position:fixed; inset:0 오버레이로 떠 실기기(특히 375px)에서 잘렸다(핸드오프 최우선).
+          이 세 카드를 **이 흡수영역(grid row3, 1fr, overflow:hidden)** 안으로 옮겨, 가용공간에 맞춰
+          크게·잘림없이 렌더한다. 트랙이 1fr 고정이라 어떤 카드가 떠도 아래 컨트롤바 Y는 불변(v0.19.0
+          W5 인변량 보존 — 버그B). 각 카드는 ABSORB_CLAMP(maxHeight:100%+minHeight:0+overflowY:auto)로
+          짧은 기기/긴 음수소수(-355.5)에서도 부모 overflow:hidden에 잘리지 않고 내부 스크롤.
+          상호배타 우선순위: 일시정지 > 이상치 > 수정 > hero(현재값). 정확히 하나만 렌더한다.
+          (상단 MicReconnectBanner·？명령어 CommandHelpPopup은 흡수 대상 아님 — 현행 fixed 유지.)
+          TTS 음성 안내는 그대로 유지(useVoiceSession의 say()/setLastTts 무수정). */}
       <div
         style={{
           minHeight: 0, overflow: 'hidden',
@@ -526,17 +592,30 @@ function ActiveState({
           padding: '12px 20px', gap: 12,
         }}
       >
-        {/* v0.17.0 A-hero — 한 번에 한 값을 거대 mono로 중앙 표시. listening/confirm/complete
-            이벤트별 톤(정정은 ModifyIndicatorPill이 직전값→새값으로 담당). 정정·이상치·일시정지
-            카드가 뜨면 중복을 피해 hero는 숨긴다. */}
-        {!paused && currentCol && !sess.modifyIndicator && !sess.anomalyAlert && (
+        {paused ? (
+          // 일시정지 카드(최우선) — '재시작'/'종료' 음성명령 안내.
+          <PausedCard />
+        ) : sess.anomalyAlert ? (
+          // 이상치/범위 알람 카드 — 직전값→현재값·변화량(긴 항목명/큰 음수소수 잘림 0).
+          <AnomalyAlertPopup a={sess.anomalyAlert} />
+        ) : sess.modifyIndicator ? (
+          // 수정 재안내 카드 — 직전값(취소선)→새값.
+          <ModifyIndicatorPill
+            name={sess.modifyIndicator.name}
+            prevValue={modPrev}
+            newValue={modCurrent}
+          />
+        ) : currentCol ? (
+          // v0.17.0 A-hero — 한 번에 한 값을 거대 mono로 중앙 표시. listening/confirm/complete.
+          //   listening일 때 재질문 사유 큐(reaskReason, Mack 필드)를 hero 아래 보조선으로 함께 노출.
           <VoiceHero
             event={heroEvent}
             col={currentCol}
             value={currentValue}
             sampleParts={sampleLabelParts}
+            reaskReason={heroEvent === 'listening' ? reaskReason : null}
           />
-        )}
+        ) : null}
       </div>
 
       {/* 4) 하단 컨트롤바 — 한자리 고정. 이전/다음·마이크·종료·명령어 칩·도움말·속도 슬라이더.
@@ -667,170 +746,15 @@ function ActiveState({
         <ActiveControlDials />
       </div>
 
-      {/* Fixed 오버레이들 — position:fixed라 grid track을 만들지 않는다(구역 높이에 무영향). */}
+      {/* v0.23.0 입력탭#1 — 일시정지/이상치/수정 카드는 더 이상 여기(fixed 오버레이)에서 그리지
+          않는다. 위 row3(1fr) 흡수영역으로 이전했다(잘림 방지). 여기 남는 fixed 오버레이는 흡수
+          대상이 아닌 ？명령어 도움말(CommandHelpPopup)뿐 — 전체 명령어 모달이라 흡수영역 한 칸에
+          넣지 않고 화면 전체 모달을 유지한다.
+          v0.18.0 1c — CenterValueBurst('항목:값' 팝업) 완전 제거(store의 valueBurst는 write-only). */}
       {cmdHelpOpen && <CommandHelpPopup onClose={() => setCmdHelpOpen(false)} />}
-      {sess.anomalyAlert && <AnomalyAlertPopup a={sess.anomalyAlert} />}
-      {/* v0.12.0 AREA2 V4 — '수정 값' 인디케이터. 중앙 이상치 팝업과 겹치지 않게 상호배타로만 렌더.
-          대상 셀 칩은 activeColIdx(모든 수정-재진입 경로가 setActiveCol로 지정)로 이미 하이라이트됨. */}
-      {sess.modifyIndicator && !sess.anomalyAlert && (
-        <ModifyIndicatorPill
-          name={sess.modifyIndicator.name}
-          prevValue={modPrev}
-          newValue={modCurrent}
-        />
-      )}
-      {/* v0.18.0 1c — CenterValueBurst('항목:값' 팝업) 완전 제거. 인식값은 hero(거대 값)·
-          ModifyIndicatorPill(정정)·AnomalyAlertPopup(이상치)로만 노출돼 중복 표시를 없앤다.
-          store의 valueBurst 필드/pushValueBurst 호출(useVoiceSession.ts)은 zero-diff 가드상
-          무수정 — write-only dead state로 남되 어디에도 렌더되지 않는다. */}
-      {/* v0.15.0 A5 — 일시정지 중앙 대형 카드. 다른 중앙 안내(이상치/수정/버스트)보다 위(z-index)에
-          두고, paused일 때 그것들을 가린다(상호배타). 후속 음성명령('재시작'/'종료')을 함께 안내. */}
-      {paused && <PausedCard />}
     </div>
   );
 }
-
-/** v0.15.0 A5 — 일시정지 상태를 화면 중앙·대형 카드로 안내한다. 기존 상단 작은 'PAUSE' 표시를 대체.
- *  톤은 AMBER(일시정지=주의/대기, 이상치 RED·수정 BLUE와 구분). 그 아래 후속 음성명령('재시작'으로
- *  재개 / '종료'로 저장)을 안내해, 화면을 보지 않아도/봐도 다음 행동을 알 수 있게 한다.
- *  비대화형(pointerEvents:none) — 하단 마이크/버튼 탭으로도 재개·종료 가능. */
-function PausedCard() {
-  return (
-    <div
-      data-testid="paused-card"
-      aria-live="polite"
-      style={{
-        position: 'fixed', inset: 0, zIndex: 46,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        pointerEvents: 'none',
-        // v0.21.0 입력탭#3 — standalone(홈화면 설치) safe-area 침범 방지(App.tsx:40-46 패턴).
-        //   fixed/inset:0 오버레이라 셸 패딩 바깥에 그려져 상태바·노치를 침범할 수 있다.
-        //   기본 16px에 env(safe-area-inset-*)를 더해 내부 카드를 안전영역 안으로 민다.
-        //   일반 Safari 탭에선 env(...)가 0이라 무영향.
-        paddingTop: 'max(16px, env(safe-area-inset-top, 0px))',
-        paddingBottom: 'max(16px, env(safe-area-inset-bottom, 0px))',
-        paddingLeft: 'max(16px, env(safe-area-inset-left, 0px))',
-        paddingRight: 'max(16px, env(safe-area-inset-right, 0px))',
-      }}
-    >
-      <div
-        style={{
-          // v0.20.0 입력탭#4 — 상단 칩 영역 침범 방지 캡(88vh→min(70vh,520px)).
-          maxWidth: 'min(560px, 94vw)', maxHeight: 'min(70vh, 520px)', overflowY: 'auto',
-          padding: '24px 30px', borderRadius: 18,
-          background: 'rgba(40,32,12,0.96)', border: `2px solid ${T.amber}`,
-          boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
-          display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 22, color: T.amber }} aria-hidden>⏸</span>
-          <span
-            style={{
-              fontSize: 'clamp(30px, 8vw, 44px)', fontWeight: 900, color: T.text,
-              letterSpacing: -0.5, lineHeight: 1.1, wordBreak: 'keep-all',
-            }}
-          >
-            일시정지
-          </span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
-          <span style={{ fontSize: 16, color: T.textDim, fontWeight: 600, textAlign: 'center', lineHeight: 1.5 }}>
-            <b style={{ color: T.amber }}>"재시작"</b> 이라고 말하면 이어서 진행
-          </span>
-          <span style={{ fontSize: 16, color: T.textDim, fontWeight: 600, textAlign: 'center', lineHeight: 1.5 }}>
-            <b style={{ color: T.amber }}>"종료"</b> 라고 말하면 저장하고 끝냅니다
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** v0.12.0 AREA2 V4 — 수정 재안내 중 어떤 항목을 다시 말해야 하는지 알리는 안내.
- *  v0.14.0 E(민구 요청) — 모든 알람/안내를 화면 중앙·최대 크기로 통일. 기존 상단 작은 pill을
- *  이상치 팝업과 같은 중앙 대형 카드로 교체(톤은 BLUE로 구분 — 수정은 오류가 아니라 재입력 안내).
- *  비대화형(pointerEvents:none) — 입력 흐름을 막지 않는다. */
-function ModifyIndicatorPill({ name, prevValue, newValue }: { name: string; prevValue?: string; newValue?: string }) {
-  // v0.17.0 A-hero: 정정 구간 두 국면을 한 카드로 표현한다(이 카드가 정정 내내 화면을 점유 — hero와
-  //   z-fight 없음). ① 재프롬프트(새 값 아직): "수정 — 다시 말해주세요" + 항목명.
-  //   ② 새 값 도착(echo 구간): 직전값(취소선·mute) → ↓(amber) → 새값(거대·amber) + "↺ 정정되었습니다".
-  const committed = !!newValue && newValue !== prevValue;
-  const accent = committed ? T.amber : T.blue;
-  return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 42,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        pointerEvents: 'none', padding: '16px',
-      }}
-    >
-      <div
-        style={{
-          // v0.20.0 입력탭#4 — 상단 칩 영역 침범 방지 캡(88vh→min(70vh,520px)).
-          maxWidth: 'min(560px, 94vw)', maxHeight: 'min(70vh, 520px)', overflowY: 'auto',
-          padding: '20px 28px', borderRadius: 18,
-          background: committed ? 'rgba(40,32,12,0.96)' : 'rgba(18,26,40,0.96)',
-          border: `2px solid ${accent}`,
-          boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
-          display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
-        }}
-      >
-        {/* 항목명 + 타입(읽기 일관)
-            v0.22.0(P2 잘림 점검): 긴 항목명("과실 횡경 평균값" 등)도 헤더에서 잘리지 않게 줄바꿈 허용. */}
-        <span
-          style={{
-            fontSize: 17, fontWeight: 800, color: accent, letterSpacing: -0.2,
-            maxWidth: '100%', textAlign: 'center', wordBreak: 'keep-all', overflowWrap: 'anywhere', lineHeight: 1.25,
-          }}
-        >
-          {committed ? `${name} 정정` : '수정 — 다시 말해주세요'}
-        </span>
-        {committed ? (
-          <>
-            {/* v0.22.0(P2 잘림 점검): 직전/새 값 ellipsis→줄바꿈(긴 값도 잘림 0, 박스 안에서 줄바꿈). */}
-            {prevValue && (
-              <span
-                style={{
-                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                  fontSize: 'clamp(22px, 7vw, 38px)', fontWeight: 700,
-                  color: T.textMute, textDecoration: 'line-through', letterSpacing: -0.5,
-                  maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.1,
-                }}
-              >
-                {prevValue}
-              </span>
-            )}
-            <span style={{ fontSize: 18, color: T.amber, lineHeight: 1 }} aria-hidden>↓</span>
-            <span
-              style={{
-                fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                fontSize: heroFontSize(newValue || ''),
-                fontWeight: 800, color: T.amber, letterSpacing: -1, lineHeight: 1.05,
-                maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center',
-                animation: 'chip-pop 320ms ease-out',
-              }}
-            >
-              {newValue}
-            </span>
-            <span style={{ fontSize: 15, fontWeight: 800, color: T.amber, marginTop: 2 }}>↺ 정정되었습니다</span>
-          </>
-        ) : (
-          <span
-            style={{
-              fontSize: 'clamp(34px, 9vw, 52px)', fontWeight: 900, color: T.text,
-              letterSpacing: -0.5, textAlign: 'center', maxWidth: '100%',
-              wordBreak: 'keep-all', lineHeight: 1.15,
-            }}
-          >
-            {name}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
 
 /** v0.20.0 입력탭#1·#2 — 장갑 손가락용 가로 다이얼(재사용 프리미티브). 네이티브 input[type=range]
  *  위에 큰 트랙·큰 thumb를 styled해 role=slider/키보드 화살표/focus-visible를 보존한다(접근성 기본).
@@ -909,6 +833,17 @@ function ActiveControlDials() {
       void speak('이 속도로 안내합니다.', { interrupt: true, rate });
     }, 350);
   };
+  // v0.23.0 입력탭#2(허용범위 로깅, Vance) — Larry가 찾은 핵심 갭: 인식 허용범위(recognitionTolerance)
+  //   변경이 **한 번도 로깅되지 않아** "설정값 vs 인식률" 대조가 불가능했다. 다이얼 onChange는 드래그
+  //   중 step마다 발화하므로 그대로 로깅하면 수십 건 폭주 → debounce(드래그 한 번 = 로그 한 줄).
+  //   포맷은 SettingsScreen:1677의 fastRecognition 로깅과 동일(`setting_changed:<key>=<v>`).
+  const tolLogRef = useRef<number | null>(null);
+  const logTolerance = (v: number) => {
+    if (tolLogRef.current !== null) window.clearTimeout(tolLogRef.current);
+    tolLogRef.current = window.setTimeout(() => {
+      logger.log({ type: 'app', extra: `setting_changed:recognitionTolerance=${v}` });
+    }, 400);
+  };
   const tolPct = Math.round(s.recognitionTolerance * 100);
   return (
     <div
@@ -927,7 +862,10 @@ function ActiveControlDials() {
         accent={T.green}
         valueLabel={`${tolPct}%`}
         ariaValueText={`인식 허용범위 ${tolPct} 퍼센트`}
-        onChange={(v) => s.set({ recognitionTolerance: v })}
+        onChange={(v) => {
+          s.set({ recognitionTolerance: v });
+          logTolerance(v); // 디바운스 — 드래그 한 번에 settled 값 한 줄만 로깅(감사 가능).
+        }}
       />
       <Dial
         testId="dial-tts-rate"
@@ -968,12 +906,16 @@ const HERO_PANEL = {
  *  - complete:  ✓ + "행 입력 완료".
  *  정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(직전값 취소선→새값). */
 function VoiceHero({
-  event, col, value, sampleParts,
+  event, col, value, sampleParts, reaskReason,
 }: {
   event: HeroEvent;
   col: Column;
   value: string;
   sampleParts: AnnounceLabelPart[];
+  /** v0.23.0 입력탭#2 — listening일 때만 비-null. 재질문 사유(신뢰도 낮음 / 파싱 실패)를 항목명 아래
+   *  보조선으로 노출(상단 인식률 %와 구분). null이면 미표시. Mack이 sessionStore.reaskReason을 null로
+   *  리셋하면 자동으로 사라진다. */
+  reaskReason: ReaskReason;
 }) {
   // confirm/complete = green(확정), listening = green 패널 + 거대 값 전 안내. 상태 라벨 색만 분기.
   const statusAccent = T.green;
@@ -1022,15 +964,21 @@ function VoiceHero({
         //   hero 가용공간 기준 최대 크기로 키운다(고정 clamp 상한 대신 vw 비중↑·상한↑). 장갑·원거리
         //   가독 우선. 한 줄 유지(keep-all)하되 좁은 기기/긴 이름은 자동 축소(clamp 하한). TTS 음성
         //   안내(say)는 그대로라 화면을 안 봐도 무엇을 말할지 들린다.
-        <span
-          style={{
-            fontSize: 'clamp(34px, 13vw, 76px)', fontWeight: 900,
-            color: T.text, letterSpacing: -1, lineHeight: 1.05,
-            wordBreak: 'keep-all', textAlign: 'center', maxWidth: '100%',
-          }}
-        >
-          {col.name}
-        </span>
+        <>
+          <span
+            style={{
+              fontSize: 'clamp(34px, 13vw, 76px)', fontWeight: 900,
+              color: T.text, letterSpacing: -1, lineHeight: 1.05,
+              wordBreak: 'keep-all', textAlign: 'center', maxWidth: '100%',
+            }}
+          >
+            {col.name}
+          </span>
+          {/* v0.23.0 입력탭#2 — 재질문 사유 큐. 듣는 중(listening)일 때만, reaskReason 비-null이면
+              항목명 아래 보조선으로 노출(상단 인식률 %와 구분 — "왜 또 물어보지?" 해소). 4-way 상호
+              배타와 경쟁하지 않는 hero 하위 요소. Mack이 reaskReason=null로 리셋하면 자동 사라짐. */}
+          <ReaskCue reason={reaskReason} />
+        </>
       ) : (
         <>
           {/* 측정 항목명 (배지 제거 — 항목명만, 샘플 라벨과 위계 구분 위해 값보다 작게) */}

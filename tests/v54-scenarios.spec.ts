@@ -163,70 +163,59 @@ test(`[설정] v${APP_VERSION} 버전 표시`, async ({ page }) => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 3. [설정-A] 날짜 컬럼 — "오늘/날짜 지정" 라디오 UX
+// 3. [설정-A] 날짜 컬럼 — "오늘 | 지정" SegmentToggle UX
+//    v0.23.0 설정탭#3(Vance) — 라디오 2개를 칩 하이라이트 SegmentToggle(오늘|지정)로 교체.
+//    '지정' 칩 → date picker 노출, '오늘' 칩 → 미리보기. data-testid=date-mode-{id}/date-picker-{id}.
 // ═════════════════════════════════════════════════════════════════════════════
-test('[설정-A] 날짜 컬럼 — 오늘 라디오가 기본 선택', async ({ page }) => {
+test('[설정-A] 날짜 컬럼 — 오늘 칩이 기본 + 지정 선택 시 date picker', async ({ page }) => {
   await freshSettings(page);
   // 새 컬럼 추가 (type='text' 기본) → 'date'로 전환
   await addColumn(page, { type: 'date' });
   await page.waitForTimeout(200);
 
-  // MOCK 컬럼들도 date 타입이 있어 page 전체에 "오늘" 라벨이 여러 개.
-  // 마지막 컬럼 카드(새로 추가된 카드)만 스코프.
-  const lastCard = page.locator('[draggable="true"]').last();
+  // 마지막 컬럼 카드(새로 추가된 카드)의 날짜 토글만 스코프.
+  const lastCard = page.locator('[data-testid^="col-card-"]').last();
+  const dateToggle = lastCard.locator('[data-testid^="date-mode-"]').first();
+  await expect(dateToggle).toBeVisible({ timeout: 2000 });
 
-  const todayLabel = lastCard.locator('label').filter({ hasText: '오늘' }).first();
-  const todayVisible = await todayLabel.isVisible().catch(() => false);
+  // '오늘' 기본 선택 → date picker 숨김.
+  const datePicker = lastCard.locator('input[type="date"]');
+  expect(await datePicker.isVisible().catch(() => false)).toBe(false);
+  console.log('✓ 기본 "오늘" 칩 — date picker 숨김');
 
-  if (!todayVisible) {
-    console.log('ℹ 날짜 타입 라디오 없음 — 스킵');
-    return;
-  }
-  console.log('✓ "오늘" 라디오 버튼 표시 확인');
-
-  // 날짜 지정 라디오 선택 → date input 나타나야 함
-  const dateLabel = lastCard.locator('label').filter({ hasText: '날짜 지정' }).first();
-  if (!(await dateLabel.isVisible().catch(() => false))) {
-    console.log('ℹ "날짜 지정" 라디오 없음 — 스킵');
-    return;
-  }
-
-  await dateLabel.click();
+  // '지정' 칩 클릭 → date picker 노출.
+  await dateToggle.locator('button', { hasText: '지정' }).click();
   await page.waitForTimeout(300);
+  await expect(datePicker).toBeVisible({ timeout: 2000 });
+  console.log('✓ "지정" 칩 선택 시 date picker 표시됨');
 
-  const dateInput = lastCard.locator('input[type="date"]');
-  await expect(dateInput).toBeVisible({ timeout: 2000 });
-  console.log('✓ "날짜 지정" 선택 시 date input 표시됨');
-
-  // 다시 "오늘" 선택 → 마지막 카드의 date input 숨겨짐
-  await todayLabel.click();
+  // 다시 '오늘' → date picker 숨김.
+  await dateToggle.locator('button', { hasText: '오늘' }).click();
   await page.waitForTimeout(300);
-  const dateInputVisible = await dateInput.isVisible().catch(() => false);
-  expect(dateInputVisible).toBe(false);
-  console.log('✓ "오늘" 재선택 시 date input 사라짐');
+  expect(await datePicker.isVisible().catch(() => false)).toBe(false);
+  console.log('✓ "오늘" 재선택 시 date picker 사라짐');
 });
 
-test('[설정-A] 날짜 컬럼 — 날짜 지정 후 date picker 값 입력', async ({ page }) => {
+test('[설정-A] 날짜 컬럼 — 지정 후 date picker 값 입력', async ({ page }) => {
   await freshSettings(page);
   await addColumn(page, { type: 'date' });
-
-  const dateLabel = page.locator('label').filter({ hasText: '날짜 지정' }).first();
-  if (!(await dateLabel.isVisible().catch(() => false))) {
-    console.log('ℹ 날짜 라디오 없음 — 스킵');
-    return;
-  }
-
-  await dateLabel.click();
   await page.waitForTimeout(200);
 
-  const dateInput = page.locator('input[type="date"]').last();
+  const lastCard = page.locator('[data-testid^="col-card-"]').last();
+  const dateToggle = lastCard.locator('[data-testid^="date-mode-"]').first();
+  await expect(dateToggle).toBeVisible({ timeout: 2000 });
+
+  await dateToggle.locator('button', { hasText: '지정' }).click();
+  await page.waitForTimeout(200);
+
+  const dateInput = lastCard.locator('input[type="date"]').last();
   await dateInput.fill('2026-05-22');
   await dateInput.blur();
   await page.waitForTimeout(200);
 
   const val = await dateInput.inputValue();
   expect(val).toBe('2026-05-22');
-  console.log('✓ 날짜 지정 입력값 2026-05-22 저장 확인');
+  console.log('✓ 지정 입력값 2026-05-22 저장 확인');
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

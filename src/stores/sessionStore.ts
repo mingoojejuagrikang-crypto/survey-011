@@ -54,6 +54,11 @@ interface SessionState {
    *  다시 말해야 하는지 화면에 파란 pill로 띄운다. 일반 안내로 진입하면 null로 해제. anomalyAlert가
    *  떠 있을 땐 렌더하지 않는다(중앙 팝업과 겹침 방지 — VoiceScreen에서 상호배타 처리). */
   modifyIndicator: { name: string; colId: string } | null;
+  /** v0.23.0 입력탭#2(재질문 사유, Mack) — 직전 음성 입력이 왜 재질문됐는지. 'low_confidence'=신뢰도가
+   *  허용범위 미만, 'parse_failed'=인식은 됐으나 숫자/값으로 파싱 불가(항목명·잡음 거부 포함). null=정상.
+   *  VoiceScreen(Vance)의 ReaskCue가 이 값으로 "신뢰도 낮음" vs "숫자 인식 실패"를 구분 표시한다.
+   *  성공 커밋·다음 필드 진입 시 null로 리셋한다(큐가 남지 않도록). 상단 인식률 %와는 독립. */
+  reaskReason: 'low_confidence' | 'parse_failed' | null;
   /** All row values, keyed by row index → col id → value */
   allRowValues: Record<number, Record<string, string>>;
   /** Row indices that have been fully completed */
@@ -73,6 +78,7 @@ interface SessionState {
   pushValueBurst: (name: string, value: string) => void;
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
   setModifyIndicator: (m: SessionState['modifyIndicator']) => void;
+  setReaskReason: (r: SessionState['reaskReason']) => void;
   setActiveCol: (i: number) => void;
   setActiveRow: (r: number) => void;
   setRowValue: (row: number, colId: string, v: string) => void;
@@ -97,6 +103,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   valueBurst: null,
   anomalyAlert: null,
   modifyIndicator: null,
+  reaskReason: null,
   allRowValues: {},
   completedRows: [],
   skippedRows: [],
@@ -112,6 +119,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({ valueBurst: { name, value, seq: (s.valueBurst?.seq ?? 0) + 1 } })),
   setAnomalyAlert: (anomalyAlert) => set({ anomalyAlert }),
   setModifyIndicator: (modifyIndicator) => set({ modifyIndicator }),
+  setReaskReason: (reaskReason) => set({ reaskReason }),
   setActiveCol: (activeColIdx) => set({ activeColIdx }),
   setActiveRow: (activeRow) => set({ activeRow }),
 
@@ -164,6 +172,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       valueBurst: null,
       anomalyAlert: null,
       modifyIndicator: null,
+      reaskReason: null,
       allRowValues: {},
       completedRows: [],
       skippedRows: [],

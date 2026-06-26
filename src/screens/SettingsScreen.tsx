@@ -28,6 +28,8 @@ import { getKoreanVoices, refreshVoices, setPreferredVoiceName, speak, warmupTts
 import { logger } from '../lib/logger';
 import { isTrendEligible } from '../lib/columnFlags';
 import { usePwaUpdate, applyUpdate, checkForUpdateNow } from '../lib/pwaUpdate';
+import { HelpButton, SettingsHelpModal } from '../components/settings/SettingsHelp';
+import { COLUMN_HELP, FIRST_ENTRY_TIP, SETTINGS_TIP_SEEN_KEY } from '../components/settings/helpCopy';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
@@ -135,6 +137,10 @@ function MiniInput({
   );
 }
 
+/** v0.23.0 설정탭#2(Vance) — SegmentToggle의 선두 라벨 스타일 SSOT. 자동값 행("입력값") 라벨이
+ *  입력방식/음성확인 행 라벨과 같은 폭·톤으로 정렬되도록 공유한다. */
+const ROW_LABEL_STYLE = { fontSize: 12, color: T.textMute, fontWeight: 700, letterSpacing: 0.4 } as const;
+
 function SegmentToggle<V extends string>({
   label, value, options, onChange, disabled, testId,
 }: {
@@ -147,9 +153,12 @@ function SegmentToggle<V extends string>({
 }) {
   return (
     <div data-testid={testId} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <span style={{ fontSize: 12, color: T.textMute, fontWeight: 700, letterSpacing: 0.4 }}>
-        {label}
-      </span>
+      {/* v0.23.0 — label="" 이면 라벨 span 생략(날짜 토글은 "입력값" 선두 라벨 아래라 자체 라벨 불필요). */}
+      {label !== '' && (
+        <span style={ROW_LABEL_STYLE}>
+          {label}
+        </span>
+      )}
       <div
         style={{
           display: 'inline-flex', background: T.inputBg, borderRadius: 10,
@@ -186,18 +195,17 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
   // v0.21.0 설정탭#1 — 정수(int): 단일/순차 선택 + 순차 from~to 인라인 입력은 ColumnCard의
   //   "생성방식" 칩 행으로 일원화됐다(음성확인 아래줄). 따라서 여기 int 분기는 '단일값'일 때의
   //   값 입력만 담당한다(seq는 칩 행에서 from~to 노출).
+  // v0.23.0 설정탭#2(Vance) — 내부 "단일값" span 제거. 선두 라벨 "입력값"(ColumnCard 자동값 행)이
+  //   라벨 역할을 대신하므로 중복을 없앤다(int+seq는 wrapper에서 이미 제외 — 여기 도달 시 fixed).
   if (col.type === 'int') {
     if (col.auto.kind === 'seq') return null; // seq의 from~to는 ColumnCard 칩 행에서 노출
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, color: T.textMute }}>단일값</span>
-        <MiniInput
-          value={col.auto.kind === 'fixed' ? col.auto.value : ''}
-          placeholder="값"
-          onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v } })}
-          wide
-        />
-      </div>
+      <MiniInput
+        value={col.auto.kind === 'fixed' ? col.auto.value : ''}
+        placeholder="값"
+        onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v } })}
+        wide
+      />
     );
   }
 
@@ -205,58 +213,53 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
   //   기존 int|float 공통 분기에서 float의 순차 토글을 의도적으로 제거 — 자동 float은 고정값 입력만.
   if (col.type === 'float') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, color: T.textMute }}>단일값</span>
-        <MiniInput
-          value={col.auto.kind === 'fixed' ? col.auto.value : ''}
-          placeholder="값"
-          onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v } })}
-          wide
-        />
-      </div>
+      <MiniInput
+        value={col.auto.kind === 'fixed' ? col.auto.value : ''}
+        placeholder="값"
+        onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v } })}
+        wide
+      />
     );
   }
 
-  // date type: "오늘" radio or date picker
+  // date type — v0.23.0 설정탭#3(Vance): 라디오 2개를 SegmentToggle(칩 하이라이트, 오늘|지정)로 교체.
+  //   '지정' 선택 시 <input type="date">를 노출(기존 로직 유지). '오늘' 미리보기({autoValue(col,1)})
+  //   보존. 모델은 그대로 auto:{kind:'fixed', value:'오늘' | 'YYYY-MM-DD'}. 결과: `입력값 [오늘] 지정 2026-06-26`.
   if (col.type === 'date') {
     const isToday = col.auto.kind !== 'fixed' || col.auto.value === '오늘' || col.auto.value === '';
-    // v0.22.0 설정탭#3 후속 — "오늘" 선택 시 실제 치환될 날짜를 라벨 옆 muted로 미리보기.
-    //   ColumnDetailRow(게이트)의 autoValue(col, 1) 패턴 재사용 — 새 날짜 로직 만들지 않는다.
-    //   지정일 상태에선 date picker가 이미 날짜를 보여주므로 중복 표기 생략.
     const todayPreview = isToday ? autoValue(col, 1) : '';
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
-        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 13, color: T.text }}>
-            <input
-              type="radio"
-              checked={isToday}
-              onChange={() => onChange({ ...col, auto: { kind: 'fixed', value: '오늘' } })}
-              style={{ accentColor: T.blue }}
-            />
-            오늘
-            {isToday && todayPreview && (
-              <span style={{ fontSize: 12, color: T.textMute, fontWeight: 400 }}>
-                ({todayPreview})
-              </span>
-            )}
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 13, color: T.text }}>
-            <input
-              type="radio"
-              checked={!isToday}
-              onChange={() => {
-                const today = new Date().toISOString().slice(0, 10);
-                onChange({ ...col, auto: { kind: 'fixed', value: today } });
-              }}
-              style={{ accentColor: T.blue }}
-            />
-            날짜 지정
-          </label>
-        </div>
-        {!isToday && (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
+        <SegmentToggle
+          testId={`date-mode-${col.id}`}
+          label=""
+          value={isToday ? 'today' : 'fixed'}
+          options={[
+            { id: 'today', label: '오늘' },
+            { id: 'fixed', label: '지정' },
+          ]}
+          onChange={(v) => {
+            if (v === 'today') {
+              if (isToday) return; // 이미 오늘 — no-op
+              onChange({ ...col, auto: { kind: 'fixed', value: '오늘' } });
+            } else {
+              if (!isToday) return; // 이미 지정 — no-op
+              const today = new Date().toISOString().slice(0, 10);
+              onChange({ ...col, auto: { kind: 'fixed', value: today } });
+            }
+          }}
+        />
+        {isToday ? (
+          // '오늘' 선택 시 실제 치환될 날짜 미리보기(muted). autoValue(col,1)로 ISO 변환(새 로직 없음).
+          todayPreview && (
+            <span style={{ fontSize: 13, color: T.textMute, fontWeight: 600, fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>
+              {todayPreview}
+            </span>
+          )
+        ) : (
           <input
             type="date"
+            data-testid={`date-picker-${col.id}`}
             value={col.auto.kind === 'fixed' ? col.auto.value : ''}
             onChange={(e) => onChange({ ...col, auto: { kind: 'fixed', value: e.target.value } })}
             style={{
@@ -272,23 +275,21 @@ function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Column) => v
   }
 
   // text / name : fixed value only ('이름'은 동작상 텍스트와 동일, 라벨·세션명 픽업에만 차이)
+  //   v0.23.0 설정탭#2 — 내부 "단일값" span 제거(선두 "입력값" 라벨이 대신함).
   if (col.type === 'text' || col.type === 'name') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
-        <span style={{ fontSize: 13, color: T.textMute }}>단일값</span>
-        <input
-          type="text"
-          value={col.auto.kind === 'fixed' ? col.auto.value : ''}
-          placeholder="값"
-          onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v.target.value } })}
-          style={{
-            flex: 1, height: 36, borderRadius: 8,
-            background: T.inputBg, border: `1px solid ${T.line}`,
-            color: T.text, fontSize: 15, fontWeight: 600,
-            outline: 'none', padding: '0 10px', minWidth: 0,
-          }}
-        />
-      </div>
+      <input
+        type="text"
+        value={col.auto.kind === 'fixed' ? col.auto.value : ''}
+        placeholder="값"
+        onChange={(v) => onChange({ ...col, auto: { kind: 'fixed', value: v.target.value } })}
+        style={{
+          flex: 1, height: 36, borderRadius: 8,
+          background: T.inputBg, border: `1px solid ${T.line}`,
+          color: T.text, fontSize: 15, fontWeight: 600,
+          outline: 'none', padding: '0 10px', minWidth: 0,
+        }}
+      />
     );
   }
 
@@ -415,6 +416,7 @@ function ColumnCard({
   onRemove,
   onMoveUp,
   onMoveDown,
+  onHelp,
   isFirst,
   isLast,
 }: {
@@ -424,6 +426,8 @@ function ColumnCard({
   onRemove: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  /** v0.23.0 설정탭#4 — `?` 도움말 팝업 열기(모달 상태는 SettingsScreen이 소유). */
+  onHelp: () => void;
   isFirst: boolean;
   isLast: boolean;
 }) {
@@ -516,6 +520,8 @@ function ColumnCard({
         >
           {TYPE_LABELS[col.type]} {I.chevDown(12, typ.fg)}
         </button>
+        {/* v0.23.0 설정탭#4(Vance) — 카드별 `?` 도움말. 인라인 설명을 팝업으로 이전(아래 추세 설명 삭제). */}
+        <HelpButton onOpen={onHelp} label={`${col.name || '항목'} 설정 도움말`} />
         <button
           onClick={onRemove}
           style={{
@@ -582,39 +588,47 @@ function ColumnCard({
                 onChange({ ...col, trendRule: v === 'off' ? undefined : v })
               }
             />
-            {/* v0.8.0 — 증가/감소 = "이상치로 볼 변화 방향"(삭제된 전역 토글 설명을 컬럼 카드로 이전). */}
-            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4, paddingLeft: 2 }}>
-              직전 조사보다 그 방향으로 변하면 추세 알림을 띄웁니다.
-              증가=커지면 · 감소=작아지면. 이상값 범위(%)를 적으면 방향과 무관하게 그만큼 변할 때도 알립니다.
-            </div>
+            {/* v0.23.0 설정탭#4(Vance) — 인라인 추세 설명을 카드 `?` 도움말 팝업(COLUMN_HELP)으로
+                이전. 화면 밀도를 낮추고(장갑·소음 현장 가독), 설명은 필요할 때만 팝업으로 본다. */}
             {/* v0.8.0 — 변동률 % 임계값(방향 무관). 빈 값=undefined(off), 값 입력 시에만 활성. */}
             <label
               style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: T.textDim }}
             >
               이상값 범위
-              <input
-                type="number"
-                inputMode="decimal"
-                min={0}
-                step="any"
-                data-testid={`pct-threshold-${col.id}`}
-                placeholder="% (선택)"
-                value={col.pctThreshold ?? ''}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  const n = raw === '' ? undefined : Number(raw);
-                  onChange({
-                    ...col,
-                    pctThreshold: n === undefined || !Number.isFinite(n) ? undefined : n,
-                  });
-                }}
-                style={{
-                  width: 96, height: 32, borderRadius: 8,
-                  background: T.inputBg, border: `1px solid ${T.line}`,
-                  color: T.text, fontSize: 14, fontWeight: 600,
-                  padding: '0 8px', outline: 'none',
-                }}
-              />
+              {/* v0.23.0 설정탭#1(Vance) — 단위 "%"를 입력칸 옆에 **항상** 보이게(placeholder만으론
+                  값 입력 시 사라져 단위가 안 보였다). 입력칸과 % 접미를 한 묶음으로 감싸 정렬 유지. */}
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step="any"
+                  data-testid={`pct-threshold-${col.id}`}
+                  placeholder="선택"
+                  value={col.pctThreshold ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    const n = raw === '' ? undefined : Number(raw);
+                    onChange({
+                      ...col,
+                      pctThreshold: n === undefined || !Number.isFinite(n) ? undefined : n,
+                    });
+                  }}
+                  style={{
+                    width: 76, height: 32, borderRadius: 8,
+                    background: T.inputBg, border: `1px solid ${T.line}`,
+                    color: T.text, fontSize: 14, fontWeight: 600,
+                    padding: '0 8px', outline: 'none',
+                  }}
+                />
+                <span
+                  data-testid={`pct-unit-${col.id}`}
+                  aria-hidden
+                  style={{ fontSize: 14, fontWeight: 800, color: T.textDim }}
+                >
+                  %
+                </span>
+              </span>
             </label>
           </>
         )}
@@ -675,9 +689,19 @@ function ColumnCard({
         </div>
       )}
 
-      {col.input === 'auto' && col.type !== 'options' && (
-        <div style={{ paddingLeft: 32 }}>
-          <AutoDetail col={col} onChange={onChange} />
+      {/* v0.23.0 설정탭#2(Vance) — 자동값 행에 선두 라벨 "입력값"을 추가해 입력방식·음성확인 행과
+          정렬한다(이전엔 "단일값" span/무라벨로 3행이 어긋남). int+seq는 생성방식 칩 행에서 from~to를
+          이미 보이고 AutoDetail이 null을 반환하므로 이 행 자체를 그린다(라벨만 남아 빈 행이 되지 않게
+          AutoDetail이 콘텐츠를 갖는 분기에서만 노출 — int+seq는 건너뜀). */}
+      {col.input === 'auto' && col.type !== 'options' && !(col.type === 'int' && col.auto.kind === 'seq') && (
+        <div
+          data-testid={`auto-value-row-${col.id}`}
+          style={{ paddingLeft: 32, display: 'flex', alignItems: 'center', gap: 8, minHeight: 36, flexWrap: 'wrap' }}
+        >
+          <span style={ROW_LABEL_STYLE}>입력값</span>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+            <AutoDetail col={col} onChange={onChange} />
+          </div>
         </div>
       )}
 
@@ -915,6 +939,19 @@ export function SettingsScreen() {
   const [showUrlInput, setShowUrlInput] = useState(false);
   // v0.14.0 F — 저장된 시트 목록을 기본 접힌 드롭다운으로(세로 풀리스트가 시트 多 시 화면 점유 과다).
   const [savedSheetsOpen, setSavedSheetsOpen] = useState(false);
+  // v0.23.0 설정탭#4(Vance) — `?` 도움말 팝업 열림 여부(카드별 `?` 또는 첫 진입 안내의 "자세히").
+  const [helpOpen, setHelpOpen] = useState(false);
+  // v0.23.0 설정탭#4 — 첫 진입 안내 배너(1회 dismissible). "본 적 있는지"는 localStorage에 영속
+  //   (settingsStore version bump 회피 — settings-migration.spec의 version===11 단정 보호). 초기값은
+  //   lazy로 읽어, 이미 본 적 있으면 처음부터 숨긴다. 테스트는 fresh context라 매번 뜨므로, 이 배너는
+  //   fixed 오버레이가 아니라 스크롤 영역 내부 인라인 배너 → 기존 Playwright 클릭 흐름을 막지 않는다.
+  const [tipDismissed, setTipDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem(SETTINGS_TIP_SEEN_KEY) === '1'; } catch { return false; }
+  });
+  const dismissTip = () => {
+    setTipDismissed(true);
+    try { localStorage.setItem(SETTINGS_TIP_SEEN_KEY, '1'); } catch { /* private mode 등 */ }
+  };
   const googleConfigured = isGoogleConfigured();
   const previewRowCount = computeTotalRows(s.columns);
   const pickerAvailable = s.googleConnected && !!getPickerApiKey();
@@ -1157,6 +1194,54 @@ export function SettingsScreen() {
           paddingBottom: 12,
         }}
       >
+        {/* v0.23.0 설정탭#4(Vance) — 첫 진입 1회 안내 배너(dismissible). 스크롤 영역 내부 인라인
+            배너라 fixed 오버레이와 달리 버튼/카드 탭을 가로채지 않는다(기존 Playwright 흐름 보존).
+            "자세히"로 전체 설명 팝업을, ✕로 영구 닫기(localStorage). */}
+        {!tipDismissed && (
+          <div
+            data-testid="settings-first-tip"
+            role="note"
+            style={{
+              margin: '8px 16px 0', padding: '12px 14px', borderRadius: 14,
+              background: 'rgba(41,121,255,0.10)', border: `1px solid ${T.blue}`,
+              display: 'flex', alignItems: 'flex-start', gap: 10,
+            }}
+          >
+            <span aria-hidden style={{ fontSize: 18, flexShrink: 0, lineHeight: 1.4 }}>💡</span>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <span style={{ fontSize: 14, color: T.text, fontWeight: 600, lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                {FIRST_ENTRY_TIP}
+              </span>
+              <button
+                type="button"
+                onClick={() => setHelpOpen(true)}
+                style={{
+                  alignSelf: 'flex-start', minHeight: 36, padding: '0 14px', borderRadius: 999,
+                  border: `1px solid ${T.blue}`, background: 'transparent',
+                  color: T.blue, fontSize: 13, fontWeight: 800, cursor: 'pointer',
+                }}
+              >
+                자세히 보기
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={dismissTip}
+              aria-label="안내 닫기"
+              data-testid="settings-first-tip-dismiss"
+              style={{
+                flexShrink: 0, width: 36, height: 36, borderRadius: '50%',
+                border: `1px solid ${T.lineStrong}`, background: 'transparent',
+                color: T.textDim, fontSize: 15, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+              title="닫기"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Section 1 - Google + Sheet URL */}
         <div style={{ padding: '0 16px', flexShrink: 0 }}>
           <div
@@ -1527,6 +1612,7 @@ export function SettingsScreen() {
                 onRemove={() => s.removeColumn(c.id)}
                 onMoveUp={() => s.reorderColumns(idx, idx - 1)}
                 onMoveDown={() => s.reorderColumns(idx, idx + 1)}
+                onHelp={() => setHelpOpen(true)}
                 isFirst={idx === 0}
                 isLast={idx === s.columns.length - 1}
               />
@@ -1807,6 +1893,16 @@ export function SettingsScreen() {
           regenerating={s.tableGenerated}
           onConfirm={onGenerateConfirm}
           onClose={() => setGenerateGateOpen(false)}
+        />
+      )}
+
+      {/* v0.23.0 설정탭#4(Vance) — 설명 팝업. 카드별 `?` 또는 첫 진입 안내의 "자세히 보기"에서 연다.
+          모든 데이터형/필드 설명을 한 곳에 모은다(COLUMN_HELP). 사용자 명시 오픈 → 자동 노출 아님. */}
+      {helpOpen && (
+        <SettingsHelpModal
+          title="설정 도움말"
+          items={COLUMN_HELP}
+          onClose={() => setHelpOpen(false)}
         />
       )}
     </div>

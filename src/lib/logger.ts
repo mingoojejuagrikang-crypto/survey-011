@@ -9,6 +9,9 @@ export interface LogEntry {
   type: 'stt' | 'tts' | 'command' | 'session' | 'value' | 'error' | 'clip'
     | 'stt_blocked_tts_muted' | 'stt_barge_in' | 'stt_rejected_col_name' | 'stt_alt_used' | 'stt_parse_failed'
     | 'stt_rejected_ambiguous_syllable'
+    // v0.23.0 입력탭#2: 신뢰도가 허용범위(recognitionTolerance) 미만이라 재질문된 케이스. confidence +
+    // extra:'tolerance:<v>'를 동봉 → 차기 로그 분석이 "설정값 vs 실제 신뢰도"를 정량 대조(현재 갭).
+    | 'stt_rejected_low_confidence'
     // v0.9.0 빠른 인식(조기확정): interim 안정화로 final 대기 없이 커밋. 절단/정정율 측정 근거.
     | 'stt_early_commit'
     // v0.5.0 W7(T-19): 세션 밖 앱 수명주기 이벤트 — app_boot / hydration_ok / recover_* /
@@ -85,6 +88,9 @@ export interface SessionMeta {
   /** active input device actually used for this session (built-in vs external mic) */
   inputDeviceId?: string;
   inputDeviceLabel?: string;
+  /** v0.23.0 입력탭#2 — 세션 시작 시 활성 인식 허용범위(recognitionTolerance, 0.40~0.90). 세션 단위로
+   *  설정값을 박제해 로그만으로 "허용범위 vs 인식률" 대조가 가능하게 한다(설정값 미로깅 갭 해소). */
+  recognitionTolerance?: number;
   /** Reserved slot for self-test vs real-field split. Defaults to 'field'; an explicit UI
    *  toggle is a Vance follow-up. userEmail (device.json) + value-pattern already allow
    *  crude post-hoc splitting today. */

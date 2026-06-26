@@ -238,7 +238,7 @@
 - **원인:** `audioRecorder.ts handleDeviceChange()`가 유휴(녹음 중 아님)일 때 `recoverStream('devicechange')` 호출 → recoverStream이 **살아있는 스트림을 먼저 파괴한 뒤** `getUserMedia` 재호출. iOS Safari는 **사용자 제스처 밖 getUserMedia를 NotAllowedError로 거부** → 멀쩡한 스트림까지 잃고 영구 복구 불가. 이후 빈 클립마다 `useVoiceSession recoverStream('clip_empty')` 재시도도 전부 실패(제스처 없음). v0.14.0이 [IOS-5] "devicechange 시 재-getUserMedia 안 함" 정책을 깬 것이 근인.
 - **해결:** v0.22.0 — 유휴 devicechange에서 자동 재-getUserMedia 제거(비파괴 라벨 갱신만, [IOS-5] 복귀). clip_empty 자동 재시도 게이트(폭주 차단). 스트림이 실제로 죽으면 `micLost` 노출 → **사용자 제스처(입력탭 "마이크 재연결" 버튼)에서만** 재획득(iOS의 유일한 복구 경로).
 - **출처:** `2026-06-25 v0.21.0 실기기 로그`(sess_1782355366530, 세션시작 +2.6s devicechange → `clip_recorder_recover_failed:devicechange` → clip_no_stream×56·clip_empty×41; firsthand 코드 확인).
-- **현재 상태:** ✅수정됨(v0.22.0 `audioRecorder.ts`·`useVoiceSession.ts`) — `clip_no_stream` 제거 기대. ⚠️ `clip_empty`(BT 라우트 자체 캡처불가, AUDIO-ROUTE-1)는 iOS 한계로 잔존 가능 → 실기기 판별 대기.
+- **현재 상태:** ✅**수정 확정(v0.22.0 실기기 검증, 2026-06-26).** 2026-06-26 v0.22.0 실기기 2세션 로그에서 확인: S1 `clip_no_stream` **56→1**로 격감(`clip_empty` 0). S2는 실제 `input_device_changed:refresh:track_ended:블루투스→내장` 발생 → `clip_empty`×1 → `mic_lost:clip_empty` 래치 → 사용자가 "마이크 재연결" 탭 → `mic_reconnect_ok`+`clip_recorder_recovered`로 **복구 성공**. 전환 순간 1~2건만 손실(이전엔 전 세션 소실). ⚠️ 전환 순간 `clip_empty` 잔존(AUDIO-ROUTE-1 네이티브 셸 영역). 출처 `Deliverables/2026-06-26-v0220-real-device-analysis.md`.
 
 ---
 
@@ -653,6 +653,27 @@
 - **해결:** v0.22.0 — `sessionLabel.ts`에 `sessionConstantValue`(=`!isCycling`+유효값, 단일선택 options[0] 포함, date·순환 제외)·`buildSessionLabel`(우선순위: 사용자지정 > 날짜+상수 > 날짜) 신설, pickSessionLabelValue/buildAutoLabel 단일 헬퍼로 통일. 설정탭에 자유입력 세션명 필드(`settingsStore.sessionCustomLabel`) 추가.
 - **출처:** `2026-06-25 v0.21.0 실기기 로그`(sessions.json: 농가명/라벨=단일선택 options, label=`2026-06-25-2`; firsthand 코드 확인).
 - **현재 상태:** ✅수정됨(v0.22.0 `sessionLabel.ts`·`SettingsScreen.tsx`·`VoiceScreen.tsx`·`settingsStore.ts`).
+
+### [LASTROW-AUTOEND-1] 마지막 행 입력 시 자동 종료로 수정 불가 (v0.23.0 변경)
+- **증상:** 마지막 행 마지막 음성값을 입력하면 `"모든 입력이 완료되었습니다"` 후 즉시 종료(`finishAtEnd`→`stop(false)`) → 사용자가 마지막 값을 고치려 해도 그 전에 세션이 끝남.
+- **원인:** `useVoiceSession.advance()`(및 `goNextRow`)가 `findNextIncompleteRow===null`이면 `finishAtEnd()`로 자동 종료. 민구 요청: 종료는 명시적이어야(수정 여지 확보).
+- **해결:** v0.23.0 — 자동 종료 제거. 마지막 행 후 `announceEndReached()`가 `"마지막 행까지 입력했습니다. 종료하려면 '종료'라고 말씀하거나 종료 버튼을 누르세요"` 안내 후 세션 active 유지. awaiting을 `atEnd` 센티넬로 둬 명령(종료/수정)은 계속 처리되되 일반 값 발화는 새 행으로 커밋되지 않고 재안내. 종료는 `'종료'` 음성 명령·종료 버튼만.
+- **출처:** `2026-06-26 v0.22.0 실기기 로그`(S1·S2 둘 다 마지막값→`session:stop` 즉시; 민구 요청). Playwright `v023-voice.spec.ts` B4 + `nav-unidirectional.spec.ts` 갱신.
+- **현재 상태:** ✅수정됨(v0.23.0 `useVoiceSession.ts`). 실기기 재검증 대기.
+
+### [REASK-TOLERANCE-LOG-1] 인식 허용범위 설정값 미로깅 → "설정값 vs 인식률" 비교 불가 + 고신뢰 재질문 혼동
+- **증상:** 민구 "허용범위 50% 설정 후 인식률 80~90%인데 재인식 요구". 로그로 검증 시도 → **허용범위 설정값이 어디에도 안 남아** 설정값 대조 불가. 분석 결과 허용범위 게이트는 **정상**(S1 신뢰도<0.60 = 정확히 5건 → 저신뢰 재질문 5건 일치). 고신뢰 재질문은 대부분 **파싱 실패**(`"200 10일 전에"`·`"200대 17.7"`·`"100-4.4"`)로 신뢰도 게이트와 무관.
+- **원인:** ① `recognitionTolerance`는 zustand persist로만 보관, `setting_changed`엔 `fastRecognition`만 로깅. ② 저신뢰 재질문 분기(`useVoiceSession:1338`)가 **이벤트 미로깅**. ③ 상단 인식률 %는 STT 신뢰도라 높게 떠도 값은 파싱 실패로 재질문되는 인지 부조화.
+- **해결:** v0.23.0 — ① 세션시작 메타에 `recognitionTolerance` 박제 + 허용범위 다이얼 변경 시 `setting_changed:recognitionTolerance=<v>` 로깅. ② 저신뢰 재질문에 신규 이벤트 `stt_rejected_low_confidence`(`confidence`+`extra:tolerance:<v>`). ③ 재질문 시 화면에 사유 큐(`sessionStore.reaskReason`: low_confidence/parse_failed) 표시(`ReaskCue`).
+- **출처:** `2026-06-26 v0.22.0 실기기 로그`(2세션 `setting_changed:recognitionTolerance` 0건; 저신뢰 5건/파싱실패 7건; firsthand 코드 확인). Playwright `v023-voice.spec.ts` B2.
+- **현재 상태:** ✅수정됨(v0.23.0 `useVoiceSession.ts`·`logger.ts`·`sessionStore.ts`·`VoiceScreen.tsx`·`ReaskCue.tsx`). 다음 실기기에서 허용범위 변경 후 설정값↔신뢰도 정량 대조 가능.
+
+### [LOG-UPLOAD-SELECTED-1] 다중세션 "시트에 추가" 시 일부 세션 로그만 Drive 업로드
+- **증상:** 민구 "복수 세션을 시트에 추가 시 일부 세션 로그 파일만 업로드되는 듯". v0.21.0 테스트에서 스피커폰 세션 로그가 Drive에 누락된 바 있음.
+- **원인:** 로그 업로드가 `report.successIds`(=시트에 **새 행이 실제 추가된** 세션)에만 게이팅(`DataScreen:220,225`) → 이미 동기화돼 새 행 0인 세션을 함께 선택하면 그 로그가 누락. 또 세션별 업로드 전체 실패가 `drive_upload:partial:user_drive,admin_drive`로 오라벨돼 사용자에게 실패가 분명히 안 보임.
+- **해결:** v0.23.0 — 로그 업로드 대상을 **선택한 모든 세션(행 보유)**으로 확장(`uploadIds = ids.filter(hasRows)`). 세션별 백업 성공을 `backedUpOk` Set으로 추적, `backupOk`(autoDelete 게이트)는 여전히 `successIds.every(backedUpOk)`로 데이터 유실 방지 불변식 보존. 사용자 메시지에 **"로그 N/N 세션 백업"** + 실패 세션 수 명시.
+- **출처:** `2026-06-26 v0.22.0 실기기 로그`(이번엔 2세션 모두 업로드 성공이나 근인=successIds 게이팅 코드 확인; 06-25 `drive_upload:partial:user_drive,admin_drive` 흔적). firsthand 코드 확인.
+- **현재 상태:** ✅수정됨(v0.23.0 `DataScreen.tsx`). 실기기 재검증: 새 행 0 세션 + 신규 세션 동반 선택 시 둘 다 업로드 + "N/N" 표기 확인.
 
 ---
 
