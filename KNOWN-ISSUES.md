@@ -209,6 +209,21 @@
 - **현재 상태:** ✅해결 — 다음 실기기에서 민구 클립 청취로 체감 확인.
 - **연관:** [CLIP-9](decode-fail 계측, 이번 2세션 `clip_trim_failed` **0건**)·[CLIP-10](첫값 truncation, 별개 메커니즘 — 미구현 잔존). 이번 2세션은 webm decode-fail 없이 전부 `.wav` 트림 성공 경로였고, 청취 불가의 실제 주원인은 truncation이 아니라 **중간 splice**였음.
 
+### [CLIP-BLANK-2] 조용한 클립에서 트림 시작이 실제 값 발화보다 한참 앞에 앵커돼 긴 앞 공백 — ✅v0.24.0 해결
+- **증상(v0.23.0 실기기, 2026-06-29 민구 제보):** "일부 클립 전단에 공백이 너무 길다." 누적 실기기 클립 분석(8개 v0.21+ 세션 **287 클립**, 별도 레포 `survey-011-test-harness` Tier1)으로 정량 재현: 값 클립의 **51/287(18%)** 가 트림본 앞에 0.6s↑ 공백, 최악 **10.8s**(`2026-06-23 r5c7`)·`2026-06-29 r3c8` 6.62s·`r4c8` 3.58s.
+- **원인:** `findSpeechSegments`의 thr=`robustPeak(97pct)*0.08`이 **조용한/노이즈 클립에서 노이즈 수준으로 붕괴**(예 r4c8 peak 0.023) → 초반 잡음·TTS잔향이 약한 세그먼트로 검출됨. `buildKeptRanges`가 `min(seg.start)`로 앵커하므로 약한 초반 세그먼트 하나가 트림 시작을 loud 값 발화보다 한참 앞으로 끌어당김. (프로덕션 로직을 raw WAV에 복제하면 실제 저장 트림 길이와 **4/4 비트 일치** → decode-path 아님을 확정.)
+- **해결(v0.24.0):** `findSpeechSegments`에 **약한 세그먼트 솎기**(`SEG_KEEP_RATIO=0.25`) — 세그먼트별 내부 최대 RMS를 추적해, 가장 강한 세그먼트(값 발화는 또렷이 큼) 대비 25% 미만의 약한 세그먼트를 버린다(2개↑일 때만, 전부 약하면 원본 유지). 단일/동급 세그먼트(정상·소수 재발화)는 불변 → `tests/audioTrim.spec.ts` 20 passed. 효과: 앞 공백 사례 **63→16건, 값 잘림 0건**(287 클립 스윕으로 ratio 결정 — 0.3↑은 값 잘림 6↑건 유발해 0.25 채택). 회귀: 하네스 `clip-regression`이 실제 audioTrim에 누적 raw 클립을 돌려 RED→GREEN·known-good 비퇴행 고정.
+- **출처:** `2026-06-29 v0.23.0 실기기 제보` + `survey-011-test-harness` 287클립 분석 → **survey-011 v0.24.0**
+- **현재 상태:** ✅해결 — 다음 실기기에서 민구 클립 청취로 체감 확인. 잔여 16건은 대부분 0.4~0.8s(pad+soft 온셋, 비치명적).
+- **연관:** [CLIP-MIDSPEECH-1](단일범위 통합)과 같은 `audioTrim` 검출부. **데이터-1(소수점 정수부 클립 유실)은 v0.21+ 287클립에서 0건 재현** — CLIP-MIDSPEECH-1 단일범위(splice 0)가 이미 유실 메커니즘 제거. 회귀 가드(`valueDrop` 단언)로만 유지.
+
+### [VALUE-PERSIST-1] 이상치 교정값 미반영 의혹 — 인시던트 데이터 미재현, 진단 우선(v0.24.0)
+- **의혹(v0.23.0 실기기, 2026-06-29 민구 제보):** "이상치 알람으로 새 값을 음성입력했으나 데이터엔 옛값, 음성클립만 교정값."
+- **인시던트 데이터 검증(2026-06-29 zip, 결정적):** trend_alert_corrected 3건(r3→55.5·r9→188.8·r11→222.2) **전부 새 `value`(parsed=교정값) 이벤트 + persisted `sessions.json` 값도 교정값 일치** → 값 커밋·persist 모두 정상, **미재현**. 값은 `useSessionStore`(setRowValue)→`composeRowValues`→`persistSession`→`useDataStore`(데이터탭 표시) 경로.
+- **잠재 경합(이론):** 값 커밋마다 fire-and-forget `persistSession()`이 겹쳐 돌 때 `await saveSession`→`upsertSession` 순서가 뒤집히면 옛 스냅샷이 last-writer-wins로 교정값을 덮을 수 있음(교정 간격 수 초라 이번 미발생).
+- **조치(v0.24.0, 방어+가시화):** ① `persistSession` **단조 가드**(`persistSeqRef`/`persistAppliedSeqRef`) — 더 오래된 스냅샷이 최신 dataStore upsert를 덮지 못하게. ② trend 교정 커밋 직후 committed vs persisted 비교 로깅(`trend_corrected_persist_check:ok|mismatch`) → 다음 실기기 재현 시 근인 즉시 포착.
+- **현재 상태:** ⚠️주시(진단 우선) — 추측 수정 금지(데이터 정상). 다음 실기기 mismatch 로그로 확정.
+
 ### [STT-DEC-NONBUG] 소수점 복구값 오커밋 의혹 — 1차 증거로 반증(코드 변경 없음)
 - **의혹(v0.20.0 분석 1차 패스):** `decimal_fraction_recovered:311.1`이 로그됐으나 셀엔 `하나`가 커밋된 듯 보임(A r16c7, B r11c7=`하나`, B r15c7=`아홉`) → 복구값이 stray STT 단어에 덮이는 레이스 의심.
 - **반증(Mack 추론 + Larry 실측 확정):** ① **이 2세션 `sessions.json` 최종 저장값 직접 확인(결정적): A r16c7=`311.1`, B r11c7=`211.1`, B r15c7=`299.9` — 전부 복구된 정답.** `value text='하나'/'아홉'` 이벤트는 복구값 커밋 ~2초 뒤 들어온 stray STT지만 **셀에 살아남지 못한** stale 중간 이벤트(시트 생존 0건). ② 코드상 커밋 경로(`setRowValue`)는 `parseValueForCol` 출력만 쓰고, 소수 복구→커밋이 동기·무await(1300→1373→awaiting=null)라 이후 stray final은 `if(!awaiting) return`에 차단 — 셀 보존이 구조적으로 보장됨. (Mack의 v0.17.0 doc 인용은 다른 세션이라 무효였고, 이 2세션 실측으로 대체.)
