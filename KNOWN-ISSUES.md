@@ -60,6 +60,7 @@
 - **현재 상태:** ✅수정됨(점-없는 잔여형 가드, **survey-011 v0.7.0 STT-C**) — 단일 숫자 + 무관 비숫자 잔여 토큰("제17.7", "현백 33.3")은 ambiguous(`null`) 처리해 재질문(`stt_parse_failed:extraneous_token`). 단위어·조사·기존 커밋 보장 어휘는 의도적으로 좁은 화이트리스트(`HARMLESS_RESIDUAL_TOKENS`, `src/lib/koreanNum.ts`)로 통과시켜 "당도 8" 류 정상 커밋은 유지. 침묵 커밋 3계열(multi_numeric·decimal_fraction_lost·extraneous_token) 모두 재질문으로 전환 — STT 오인식 자체는 잔존([STT-10] 화이트리스트 정밀도 관측). 회귀 `tests/koreanNum.spec.ts`.
 - **`2026-06-15 v0.8.0 실기기 로그`(decimal_fraction_lost 재발 ×5):** 소수점 뒤 숫자가 조사로 오인식되는 `decimal_fraction_lost`가 한 세션 5회(`"11 점 의"`·`"211 점에/점 의/점 에"`). **가드는 정상 작동**(전부 `stt_parse_failed`로 재질문, 침묵 커밋 0) — 즉 *데이터 유실은 없으나* 같은 소수 발화를 STT가 반복 실패해 사용자가 재발화하는 **마찰**이 빈발. STT 엔진(ko Web Speech) 한계라 코드 수정으로 근절 불가. 재질문 문구는 적정. 빈도 관측 지속(조기확정[딜레이] 토글과는 독립).
 - **✅ `2026-06-17 v0.11.0 실기기 로그`(비 오는 비닐하우스 — 가드 스택 실전 소음 스트레스 통과):** 빗소리·잔향이 다량 유입된 실전 최악 소음에서 STT가 `"뮤직"`·`"보리 9.9"`·`"미래 11 편에"`·`"다시다 점 사"` 같은 명백한 환각 음절을 인식했으나 — **garbage 값 커밋 0건·환각 명령 0건·저신뢰(<0.5) 커밋 0건.** 모든 환각이 거부 레인(`stt_parse_failed`/`ambiguous_syllable`, L1:4·6 / L2:11)에 머물고, 명령 26건은 전부 정당한 `confirm`(median conf 0.98). multi_numeric·decimal_fraction_lost·extraneous_token 3계열 가드 + 신뢰도 게이트가 **현장 폭우에서 데이터 무결성 유지**를 입증. (향후 회귀 가시화용 확인된 양호 동작.)
+- **✅ `2026-06-29 v0.23.0 실기기 로그`(가드 재확인, n=1):** decimal_fraction_lost×3·multi_numeric×3·extraneous_token×1 = 숫자파싱 마찰 7건 + 저신뢰 거부 3건 = **재질문 10건(value 40 중 25%)**. **전부 재질문 전환·침묵 커밋 0·데이터 유실 0** — 가드 정상. v0.23.0 신규 `stt_parse_failed` 유형 세분 로깅으로 마찰 유형별 빈도 가시화. 근절 불가(ko Web Speech 한계) 재확인 — 입력 효율 저하의 주원인이나 정확성은 보존.
 
 ### [STT-7] 수정 명령 `"수정"`이 `"수변"` / `"수 벽"`으로 오인식되어 무시되거나 파싱 실패
 - **증상:** 수정하고 싶을 때 `"수정"`이라고 말했으나 STT가 `"수변"`으로 오인식하여 TTS가 켜져 있어 차단(`stt_blocked_tts_muted`)되거나, `"수 벽"`으로 오인식하여 파싱 실패(`stt_parse_failed`)되어 정정 진입이 안 됨.
@@ -659,21 +660,21 @@
 - **원인:** `useVoiceSession.advance()`(및 `goNextRow`)가 `findNextIncompleteRow===null`이면 `finishAtEnd()`로 자동 종료. 민구 요청: 종료는 명시적이어야(수정 여지 확보).
 - **해결:** v0.23.0 — 자동 종료 제거. 마지막 행 후 `announceEndReached()`가 `"마지막 행까지 입력했습니다. 종료하려면 '종료'라고 말씀하거나 종료 버튼을 누르세요"` 안내 후 세션 active 유지. awaiting을 `atEnd` 센티넬로 둬 명령(종료/수정)은 계속 처리되되 일반 값 발화는 새 행으로 커밋되지 않고 재안내. 종료는 `'종료'` 음성 명령·종료 버튼만.
 - **출처:** `2026-06-26 v0.22.0 실기기 로그`(S1·S2 둘 다 마지막값→`session:stop` 즉시; 민구 요청). Playwright `v023-voice.spec.ts` B4 + `nav-unidirectional.spec.ts` 갱신.
-- **현재 상태:** ✅수정됨(v0.23.0 `useVoiceSession.ts`). 실기기 재검증 대기.
+- **현재 상태:** ✅수정됨(v0.23.0 `useVoiceSession.ts`). **✅ 2026-06-29 v0.23.0 실기기 확정:** 마지막값(ts 1782693368375) → +1.1s 신규 `session:end_reached_waiting` 단계 진입(즉시 stop 아님) → 사용자가 `"이전"`×3(conf 0.90~0.98) 발화로 이전 행 검토 → +27.8s `"종료"`(conf 0.943) → `session:stop`(18/18). 자동 즉시종료 제거 + 종료까지 대기·수정·네비 가능 설계 의도대로 작동.
 
 ### [REASK-TOLERANCE-LOG-1] 인식 허용범위 설정값 미로깅 → "설정값 vs 인식률" 비교 불가 + 고신뢰 재질문 혼동
 - **증상:** 민구 "허용범위 50% 설정 후 인식률 80~90%인데 재인식 요구". 로그로 검증 시도 → **허용범위 설정값이 어디에도 안 남아** 설정값 대조 불가. 분석 결과 허용범위 게이트는 **정상**(S1 신뢰도<0.60 = 정확히 5건 → 저신뢰 재질문 5건 일치). 고신뢰 재질문은 대부분 **파싱 실패**(`"200 10일 전에"`·`"200대 17.7"`·`"100-4.4"`)로 신뢰도 게이트와 무관.
 - **원인:** ① `recognitionTolerance`는 zustand persist로만 보관, `setting_changed`엔 `fastRecognition`만 로깅. ② 저신뢰 재질문 분기(`useVoiceSession:1338`)가 **이벤트 미로깅**. ③ 상단 인식률 %는 STT 신뢰도라 높게 떠도 값은 파싱 실패로 재질문되는 인지 부조화.
 - **해결:** v0.23.0 — ① 세션시작 메타에 `recognitionTolerance` 박제 + 허용범위 다이얼 변경 시 `setting_changed:recognitionTolerance=<v>` 로깅. ② 저신뢰 재질문에 신규 이벤트 `stt_rejected_low_confidence`(`confidence`+`extra:tolerance:<v>`). ③ 재질문 시 화면에 사유 큐(`sessionStore.reaskReason`: low_confidence/parse_failed) 표시(`ReaskCue`).
 - **출처:** `2026-06-26 v0.22.0 실기기 로그`(2세션 `setting_changed:recognitionTolerance` 0건; 저신뢰 5건/파싱실패 7건; firsthand 코드 확인). Playwright `v023-voice.spec.ts` B2.
-- **현재 상태:** ✅수정됨(v0.23.0 `useVoiceSession.ts`·`logger.ts`·`sessionStore.ts`·`VoiceScreen.tsx`·`ReaskCue.tsx`). 다음 실기기에서 허용범위 변경 후 설정값↔신뢰도 정량 대조 가능.
+- **현재 상태:** ✅수정됨(v0.23.0 `useVoiceSession.ts`·`logger.ts`·`sessionStore.ts`·`VoiceScreen.tsx`·`ReaskCue.tsx`). **🟡 2026-06-29 v0.23.0 실기기 부분확정:** 저신뢰 로깅 작동 — `stt_rejected_low_confidence` 3건 모두 `confidence`(0.074·0.269·0.462)+`tolerance:0.5` 동봉, 3건 다 conf<0.5 게이트 정상. 세션메타 `recognitionTolerance:0.5` 스냅샷 ✅. `stt_parse_failed` 유형 세분(decimal_fraction_lost×3·multi_numeric×3·extraneous_token×1) ✅. **검증 갭:** 이번 세션 `setting_changed:recognitionTolerance` 0건(민구가 다이얼 미변경) → 변경 로깅 경로·설정값↔신뢰도 대조는 **다음 실기기에서 허용범위 1회 변경 후 완결** 필요.
 
 ### [LOG-UPLOAD-SELECTED-1] 다중세션 "시트에 추가" 시 일부 세션 로그만 Drive 업로드
 - **증상:** 민구 "복수 세션을 시트에 추가 시 일부 세션 로그 파일만 업로드되는 듯". v0.21.0 테스트에서 스피커폰 세션 로그가 Drive에 누락된 바 있음.
 - **원인:** 로그 업로드가 `report.successIds`(=시트에 **새 행이 실제 추가된** 세션)에만 게이팅(`DataScreen:220,225`) → 이미 동기화돼 새 행 0인 세션을 함께 선택하면 그 로그가 누락. 또 세션별 업로드 전체 실패가 `drive_upload:partial:user_drive,admin_drive`로 오라벨돼 사용자에게 실패가 분명히 안 보임.
 - **해결:** v0.23.0 — 로그 업로드 대상을 **선택한 모든 세션(행 보유)**으로 확장(`uploadIds = ids.filter(hasRows)`). 세션별 백업 성공을 `backedUpOk` Set으로 추적, `backupOk`(autoDelete 게이트)는 여전히 `successIds.every(backedUpOk)`로 데이터 유실 방지 불변식 보존. 사용자 메시지에 **"로그 N/N 세션 백업"** + 실패 세션 수 명시.
 - **출처:** `2026-06-26 v0.22.0 실기기 로그`(이번엔 2세션 모두 업로드 성공이나 근인=successIds 게이팅 코드 확인; 06-25 `drive_upload:partial:user_drive,admin_drive` 흔적). firsthand 코드 확인.
-- **현재 상태:** ✅수정됨(v0.23.0 `DataScreen.tsx`). 실기기 재검증: 새 행 0 세션 + 신규 세션 동반 선택 시 둘 다 업로드 + "N/N" 표기 확인.
+- **현재 상태:** ✅수정됨(v0.23.0 `DataScreen.tsx`). **⚪ 2026-06-29 v0.23.0 미검증:** 단일 세션이라 "새 행 0 세션 + 신규 세션 동반 선택" 시나리오 자체가 미발생 → 선택업로드/`N/N` 표기 **다음 실기기에서 2개+ 세션 동시선택**으로 검증 필요. **🟡 partial 라벨 inconclusive:** 세션종료 자동 export가 `drive_upload:partial:user_drive,admin_drive`(핸들러 `DataScreen.tsx:258` = 그 export의 양 레그 에러)로 찍혔으나 4.3초 뒤 2차 export(`_1782708326230.zip`)가 admin 취합폴더 정상 안착 → 로그는 자기 업로드 성공을 기록 못 해 "전송실패-후-재시도성공 vs 실제 부분실패" 판별 불가. 차기 로그에서 단일세션 자동 export의 partial 빈도·레그 패턴 누적 관측(06-25·06-26·06-29 연속 관측).
 
 ---
 
