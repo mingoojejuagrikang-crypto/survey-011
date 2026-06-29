@@ -42,16 +42,20 @@ export function AnomalyAlertPopup({
   const up = a.direction === 'up';
   const corrected = a.status === 'corrected';
   // v0.20.0 입력탭#6 — 표시 문구 단축(목적+값만, "~합니다/하세요" 제거).
-  //   추세 알람: "추세 알람 증가|감소 NN"(NN=변화량, changeText에서 숫자만) · 범위 알람: "범위 알람 ±NN%".
-  //   Mack이 a.kind/a.threshold를 채우기 전까지는 폴백(기존 changeText + 증가/감소)로 동작한다.
+  //   추세 알람: "추세 알람 증가|감소 NN"(NN=변화량, changeText에서 숫자만) · 범위 알람(v0.24.0): "범위 알람
+  //   +|-NN%"(NN=실제 편차%, 증가=+/감소=−). Mack이 a.kind를 채우기 전엔 폴백(추세 형태)로 동작한다.
   const changeNum = a.changeText ? a.changeText.replace(/[^0-9.]/g, '') : '';
   // 폴백 기본은 **추세 알람 형태**: 이 팝업의 역사적 정체성이 '추세 알림'이고 추세가 지배적 케이스라,
   //   Mack이 a.kind를 채우기 전에도 흔한 경우의 DISPLAY 스펙("추세 알람 감소 NN")이 라이브로 동작한다.
   //   소수 케이스(범위 알람)는 Mack이 같은 릴리스 Wave 2에서 a.kind==='range'로 교정한다.
+  // v0.24.0 입력탭 — 범위 알람은 **설정 임계값이 아니라 실제로 벗어난 편차%를 부호와 함께** 보여준다
+  //   (민구 요청: "+##%" / "-##%"). changeNum=changeText의 실제 변동%(소수1자리) → 헤드라인은 정수 반올림.
+  //   증가=+, 감소=−. changeNum이 비면(드뭄) 설정 임계값으로 폴백.
+  const rangePct = changeNum ? Math.round(Number(changeNum)) : a.threshold;
   const alarmLabel = corrected
     ? '정상'
     : a.kind === 'range'
-    ? `범위 알람 ±${a.threshold ?? changeNum}%`
+    ? `범위 알람 ${up ? '+' : '-'}${rangePct}%`
     : // a.kind==='trend' 또는 미제공(폴백) — 둘 다 추세 형태로 표시.
       `추세 알람 ${up ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
   // R2 — corrected(정정 후 정상)면 GREEN, 그 외(이상치 대기)는 RED 통일(V3).

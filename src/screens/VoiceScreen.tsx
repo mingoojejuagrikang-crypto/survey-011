@@ -984,10 +984,12 @@ function VoiceHero({
           {/* 측정 항목명 (배지 제거 — 항목명만, 샘플 라벨과 위계 구분 위해 값보다 작게) */}
           <span
             style={{
+              // v0.24.0 입력탭 — 잘림 방지: nowrap/ellipsis 제거 → 흡수영역 폭(maxWidth:100%) 안에서
+              //   줄바꿈(keep-all). 긴 항목명도 '…'로 안 잘리고 패널 내부에서 흐른다.
               fontSize: 'clamp(18px, 5.4vw, 24px)', fontWeight: 800,
-              color: T.text,
-              letterSpacing: -0.3, whiteSpace: 'nowrap', overflow: 'hidden',
-              textOverflow: 'ellipsis', maxWidth: '88vw',
+              color: T.text, lineHeight: 1.25,
+              letterSpacing: -0.3, wordBreak: 'keep-all', overflowWrap: 'anywhere',
+              maxWidth: '100%', textAlign: 'center',
             }}
           >
             {col.name}
@@ -996,12 +998,14 @@ function VoiceHero({
           <span
             key={value}
             style={{
+              // v0.24.0 입력탭 — 잘림 방지: nowrap/ellipsis/고정 88vw 제거 → 흡수영역(maxWidth:100%) 안에서
+              //   줄바꿈(긴 값·문자형도 '…'로 안 잘리고 영역 내부 스크롤로 안착). heroFontSize 길이별 축소 유지.
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
               fontSize: heroFontSize(value),
-              fontWeight: 800, lineHeight: 1,
+              fontWeight: 800, lineHeight: 1.1,
               color: T.text,
               letterSpacing: -2,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '88vw',
+              wordBreak: 'break-word', overflowWrap: 'anywhere', maxWidth: '100%', textAlign: 'center',
               animation: 'chip-pop 320ms ease-out',
             }}
           >

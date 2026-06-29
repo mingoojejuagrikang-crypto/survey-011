@@ -336,20 +336,20 @@ test('% 변동률 단독 알람 — 종경 pctThreshold 15, 방향 무관 발화
   await waitForActiveChip(page, '종경');
   expect((await getTtsLog(page)).some((t) => /추세 알람|범위 알람/.test(t))).toBe(false);
 
-  // 종경: 직전 50.0 → 60.5 = +21.0% (>= 15%) → 범위 알람. v0.20.0: 표시는 설정 임계 "±15%"(팝업과 동일).
+  // 종경: 직전 50.0 → 60.5 = +21.0% (>= 15%) → 범위 알람. v0.24.0: 표시는 **실제 편차+부호** "+21%"(팝업과 동일).
   await fireStt(page, '60.5', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('범위 알람 ±15%'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('범위 알람 +21%'))).toBe(true);
   expect(await getActiveChipName(page)).toContain('종경'); // advance 중단
 
   await fireStt(page, '확인', 500);
   await waitForRow(page, 2);
 
-  // 행2(나무1·과실2): 횡경 통과(80.5<100), 종경 직전 55.0 → 40.0 = -27.3% → % 단독 알람(감소했습니다).
+  // 행2(나무1·과실2): 횡경 통과(80.5<100), 종경 직전 55.0 → 40.0 = -27.3% → % 단독 알람. 표시 "-27%"(부호·반올림).
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '80.5', 500);
   await waitForActiveChip(page, '종경');
   await fireStt(page, '40.0', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('범위 알람 ±15%'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('범위 알람 -27%'))).toBe(true);
   await fireStt(page, '확인', 500);
 
   const events = await getTrendEvents(page);

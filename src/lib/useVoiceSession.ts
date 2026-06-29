@@ -102,6 +102,12 @@ export function useVoiceSession() {
   // re-checks it AFTER its await, so a tombstoned key can never be re-persisted. A key is
   // cleared only when a NEW clip is successfully saved under it. Reset in start().
   const brokenClipKeysRef = useRef<Set<string>>(new Set());
+  // v0.24.0 데이터-3 방어 — persistSession 단조 가드. 값 커밋마다 fire-and-forget persist가 겹쳐 돌 때,
+  // 더 일찍 시작된(=옛 값) 호출이 더 늦게 시작된(=새 값) 호출의 dataStore upsert를 last-writer-wins로
+  // 덮어쓰면 이상치 교정값이 옛값으로 되돌아간다. 호출마다 단조 증가 seq를 받아, durable 반영 직전에
+  // 더 큰 seq가 이미 반영됐으면 스킵한다. (data-3은 06-29 로그에서 미재현 — 방어+가시화.)
+  const persistSeqRef = useRef(0);
+  const persistAppliedSeqRef = useRef(0);
   // v0.7.0 B4: trend_skip 원인별 1회 로깅(세션당) — 같은 원인(no_index 등)이 셀마다 반복
   // 로깅돼 텔레메트리를 도배하지 않게 한다. start()에서 리셋.
   const trendSkipLoggedRef = useRef<Set<string>>(new Set());
@@ -279,6 +285,8 @@ export function useVoiceSession() {
 
   // ── persistence ────────────────────────────────────────────
   const persistSession = useCallback(async () => {
+    // v0.24.0 데이터-3 — 이 호출의 단조 순번(호출 순서=스냅샷 신선도 순서, setRowValue가 호출 전 실행됨).
+    const mySeq = ++persistSeqRef.current;
     const settings = useSettingsStore.getState();
     const sess = useSessionStore.getState();
     const completed = [...sess.completedRows].sort((a, b) => a - b);
@@ -403,6 +411,10 @@ export function useVoiceSession() {
         finalSession = { ...session, rows: strippedRows };
       }
     }
+    // v0.24.0 데이터-3 단조 가드 — await(saveSession) 뒤 시점. 이 사이 더 나중에 시작된(=새 값) persist가
+    // 이미 dataStore에 반영됐다면(persistAppliedSeqRef가 더 큼), 옛 스냅샷으로 덮어쓰지 않는다.
+    if (mySeq < persistAppliedSeqRef.current) return;
+    persistAppliedSeqRef.current = mySeq;
     useDataStore.getState().upsertSession(finalSession);
     if (finalSession !== session) {
       await saveSession(finalSession).catch(() => {});
@@ -1509,7 +1521,20 @@ export function useVoiceSession() {
     // v0.4.4 증분 영속화: 값 커밋 직후(행이 완료되기 전이라도) 진행 행을 IDB에 저장한다. advance()가
     // 행 완료 시 다시 저장하므로 중복이지만, 마지막 필드 입력 전 새로고침/앱 업데이트로 부분 입력이
     // 유실되는 것을 막는 핵심 보호다. (fire-and-forget — echo TTS/진행을 막지 않음.)
-    void persistSession();
+    // v0.24.0 데이터-3 진단 — 이상치 교정 커밋이면, persist 직후 dataStore 값이 교정값과 일치하는지
+    // 가시화(불일치=옛값 잔존, 단조 가드가 막아야 함). 다음 실기기 세션에서 재현 시 근인 즉시 포착.
+    const wasTrendCorrected = awaiting.trendConfirm;
+    void persistSession().then(() => {
+      if (!wasTrendCorrected) return;
+      const ds = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+      const persisted = ds?.rows.find((r) => r.index === clipAwaitingRow)?.values[clipAwaitingColId];
+      logger.log({
+        type: 'trend',
+        extra: persisted === parsed ? 'trend_corrected_persist_check:ok' : 'trend_corrected_persist_check:mismatch',
+        sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId, parsed,
+        ...(persisted !== parsed ? { previousValue: String(persisted ?? '') } : {}),
+      });
+    });
     // Codex MEDIUM-4: clip for this field is being committed (stopped) — no longer active.
     // The next announceField will re-set it after its own startClip().
     activeClipRef.current = null;
@@ -1712,15 +1737,18 @@ export function useVoiceSession() {
       const alertKind: 'trend' | 'range' = v.trigger === 'pct' ? 'range' : 'trend';
       // changeNum = 변화량 숫자만(팝업 changeText.replace와 동일 규칙) — 추세 발화/표시에 쓴다.
       const changeNum = changeText.replace(/[^0-9.]/g, '');
-      // range는 설정된 임계 %를 우선 표시(팝업의 `threshold ?? changeNum`과 동일). 미설정 시 실제 변동%.
+      // v0.24.0 입력탭(민구 요청) — 범위 알람은 설정 임계가 아니라 **실제로 벗어난 편차%를 부호와 함께**
+      //   안내한다("+##%"/"-##%"). 증가=+, 감소=−. 헤드라인은 정수 반올림. 미산출(드뭄) 시 설정 임계 폴백.
       const rangeThreshold = col?.pctThreshold;
-      const rangeNum = rangeThreshold != null ? String(rangeThreshold) : changeNum;
+      const rangePct = changeNum ? Math.round(Number(changeNum)) : rangeThreshold;
+      const rangeSign = v.direction === 'up' ? '+' : '-';
       // v0.20.0 입력탭#6 — 문구 단축(목적+값만, "~합니다/하세요"·"직전 조사보다" 제거).
-      //  추세: "추세 알람 증가|감소 NN"(NN=절대 변화량) · 범위: "범위 알람 ±NN%"(NN=설정 임계 %).
+      //  추세: "추세 알람 증가|감소 NN"(NN=절대 변화량) · 범위: "범위 알람 +|-NN%"(NN=실제 편차%).
       // self-confirm 환각 방어(끝에 '확인해주세요' 없음, v0.13.0 R7)는 유지 — 문구가 명령어로 끝나지 않음.
+      // **팝업 라벨(AnomalyAlertPopup)과 글자 동일**하게 맞춘다(시각·청각 일치, 1711 규약).
       const alertText =
         alertKind === 'range'
-          ? `범위 알람 ±${rangeNum}%`
+          ? `범위 알람 ${rangeSign}${rangePct}%`
           : `추세 알람 ${v.direction === 'up' ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
       // 시각 팝업: 이전값→현재값과 변화량을 띄운다(발화만으론 스쳐 지나가 확인이 어렵다는 요청).
       // v0.12.0 AREA2 V2 — 어떤 샘플·행/직전 회차의 비교인지 식별정보를 함께 싣는다(별도 재계산).

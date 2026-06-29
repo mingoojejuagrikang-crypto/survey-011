@@ -44,6 +44,12 @@ const MERGE_GAP_MS = 150;
  *  직결 자리의 진폭 불연속(클릭/팝)이 "부자연" 체감의 1차 원인이라, 짧은 램프로 이음새를 부드럽게
  *  한다. 단일 범위(트림 효과 미미·단일 발화)는 concatRanges를 타지 않아 바이트 불변이 보존된다. */
 const SPLICE_FADE_MS = 3;
+/** v0.24.0 CLIP-BLANK-2: 조용한/노이즈 클립에서 robustPeak·thr이 노이즈 수준으로 붕괴하면 초반
+ *  노이즈·TTS잔향이 약한 세그먼트로 검출돼, buildKeptRanges의 min(seg.start)를 실제 값 발화보다 한참
+ *  앞으로 앵커시켜 긴 앞 공백을 남긴다(2026-06 실기기 51/287클립, 최악 10.8s). 가장 강한 세그먼트(값
+ *  발화는 또렷이 크다) 대비 이 비율 미만의 약한 세그먼트를 버려 트림 앵커가 실제 값에 붙게 한다.
+ *  단일/동급-강도 세그먼트(정상 클립·소수 재발화 등)는 전부 살아남아 기존 동작이 보존된다. */
+const SEG_KEEP_RATIO = 0.25;
 
 /** AudioRecorder의 PCM 링버퍼에서 추출한 프리롤 구간(mono). */
 export interface PrerollPcm {
@@ -174,9 +180,11 @@ export function findSpeechSegments(
   const thr = Math.max(ABS_FLOOR, peak * REL_THRESHOLD);
   const win = Math.max(1, Math.floor((sampleRate * WIN_MS) / 1000));
   const mergeGap = Math.floor((sampleRate * MERGE_GAP_MS) / 1000);
-  const segs: { start: number; end: number }[] = [];
+  // 세그먼트마다 내부 최대 윈도 RMS(peak)를 함께 추적한다 — 약한(노이즈) 세그먼트 솎기에 쓴다.
+  const segs: { start: number; end: number; peak: number }[] = [];
   let curStart = -1;
   let curEnd = -1;
+  let curPeak = 0;
   for (let i = 0; i < length; i += win) {
     const end = Math.min(length, i + win);
     let sum = 0;
@@ -186,17 +194,31 @@ export function findSpeechSegments(
       if (curStart < 0) {
         curStart = i;
         curEnd = end;
+        curPeak = rms;
       } else if (i - curEnd <= mergeGap) {
         curEnd = end; // 짧은 갭 → 같은 발화로 이어붙임
+        if (rms > curPeak) curPeak = rms;
       } else {
-        segs.push({ start: curStart, end: curEnd }); // 긴 갭 → 세그먼트 분리
+        segs.push({ start: curStart, end: curEnd, peak: curPeak }); // 긴 갭 → 세그먼트 분리
         curStart = i;
         curEnd = end;
+        curPeak = rms;
       }
     }
   }
-  if (curStart >= 0) segs.push({ start: curStart, end: curEnd });
-  return segs;
+  if (curStart >= 0) segs.push({ start: curStart, end: curEnd, peak: curPeak });
+  // v0.24.0 CLIP-BLANK-2 — 약한 세그먼트 솎기. 가장 강한 세그먼트(값 발화) 대비 SEG_KEEP_RATIO 미만의
+  // 약한 세그먼트(초반 노이즈·TTS잔향)를 버려 앞 공백을 차단한다. 세그먼트가 2개 이상일 때만 적용하고,
+  // 모두 약하면(예외 방지) 원본을 그대로 둔다. 단일/동급 세그먼트는 영향 없음(기존 동작 보존).
+  let kept = segs;
+  if (segs.length > 1) {
+    let maxPeak = 0;
+    for (const s of segs) if (s.peak > maxPeak) maxPeak = s.peak;
+    const keepThr = maxPeak * SEG_KEEP_RATIO;
+    const strong = segs.filter((s) => s.peak >= keepThr);
+    if (strong.length > 0) kept = strong;
+  }
+  return kept.map(({ start, end }) => ({ start, end }));
 }
 
 /** v0.21.0 CLIP-MIDSPEECH-1 — **모든 세그먼트를 감싸는 단일 포괄 범위**를 만든다.
