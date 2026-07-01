@@ -352,28 +352,71 @@ function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Column) =>
         )}
         {available.map((v) => {
           const sel = selected.includes(v);
+          // 선택 순번(1부터) = 터치 순서 = 행별 자동입력 순서(auto.selected 순서를 autoValue가 소비).
+          const order = sel ? selected.indexOf(v) + 1 : 0;
           return (
             <button
               key={v}
+              type="button"
               onClick={() => toggle(v)}
+              aria-pressed={sel}
+              aria-label={
+                sel
+                  ? `${v}, 선택됨 · 자동 입력 ${order}번째. 누르면 해제`
+                  : `${v}, 누르면 선택`
+              }
+              data-testid={`opt-chip-${col.id}-${v}`}
               style={{
                 border: `1px solid ${sel ? T.blue : T.line}`,
                 background: sel ? T.blueGlow : 'rgba(255,255,255,0.04)',
                 color: sel ? T.text : T.textDim,
                 fontSize: 14, fontWeight: 700,
-                padding: '8px 12px',
+                // 선택 시 좌측 뱃지 공간 확보(왼쪽 패딩 축소).
+                padding: sel ? '6px 12px 6px 6px' : '8px 12px',
                 borderRadius: 999,
                 cursor: 'pointer',
                 display: 'flex', alignItems: 'center', gap: 6,
                 whiteSpace: 'nowrap',
               }}
             >
-              {sel ? I.check(14, T.text) : null}
+              {sel ? (
+                <span
+                  aria-hidden="true"
+                  data-testid={`opt-badge-${col.id}-${v}`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22, borderRadius: '50%',
+                    background: T.blue, color: '#fff',
+                    fontSize: 13, fontWeight: 800, lineHeight: 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  {order}
+                </span>
+              ) : null}
               {v}
             </button>
           );
         })}
       </div>
+
+      {/* v0.25.0 입력탭#1(Vance) — 터치(선택) 순서 = 행별 자동입력 순서 라이브 미리보기.
+          autoValue(col,row)로 파생(단일 컬럼 순환) — length 불변, ttsAnnounce/persist 무관. */}
+      {col.input === 'auto' && selected.length >= 2 && (
+        <div
+          data-testid={`opt-preview-${col.id}`}
+          style={{
+            fontSize: 12.5, color: T.textDim, lineHeight: 1.5,
+            wordBreak: 'keep-all', overflowWrap: 'anywhere',
+          }}
+        >
+          <span style={{ color: T.textMute, fontWeight: 700 }}>자동 입력: </span>
+          {Array.from(
+            { length: Math.min(selected.length + 1, 5) },
+            (_, i) => `${i + 1}행 ${autoValue(col, i + 1)}`,
+          ).join(' · ') + '…'}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 6 }}>
         <input
@@ -501,6 +544,7 @@ function ColumnCard({
           데이터 타입
         </span>
         <button
+          data-testid={`type-btn-${col.id}`}
           style={{
             height: 32, borderRadius: 999, padding: '0 12px',
             border: 'none', background: typ.bg, color: typ.fg,

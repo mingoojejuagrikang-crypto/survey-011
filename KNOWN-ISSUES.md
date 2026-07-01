@@ -122,6 +122,7 @@
 - **⚙️ 후속(v0.18.0, 배지 표시 삭제 — 민구 결정):** 수차례 수정에도 입력장치 배지가 현장에서 정상 동작 안 함(비대칭 미반영 등) → **시각 배지만 제거**. `VoiceScreen.tsx`의 `InputDeviceBadge` 컴포넌트·렌더·`getActiveInputLabel` 폴링 제거. **복구 로직은 불가침으로 보존** — `audioRecorder.ts`의 `recoverStream`/`attachDeviceListeners`/`handleDeviceChange`/`refreshActiveInputLabel`·`getActiveInputLabel` 메서드는 그대로 둠(CLIP-LOSS-1 클립 복구가 의존). `src/lib/inputDevice.ts`/`classifyInputDevice`는 `tests/inputDevice.spec.ts`가 참조하므로 **삭제하지 않음**(미참조 조건 미충족). 즉 "어떤 마이크로 듣는지" 표시는 사라졌지만 BT↔내장 전환 시 클립 복구 동작은 유지.
 - **⚠️ 후속(v0.14.0 D):** v0.13.0 후 민구 보고 — BT→스피커폰→BT 재전환 시 **2번째 BT 복귀가 배지에 반영 안 됨**(비대칭). 비파괴 enumerate는 같은 deviceId/라벨이면 변화를 못 잡는 한계. v0.14.0에서 `handleDeviceChange`가 **유휴 중(녹음 아님) 장치변경 시 스트림 재획득**(recoverStream)으로 실제 활성 장치를 다시 잡아 배지를 갱신([CLIP-LOSS-1]와 동일 경로). 녹음 중엔 비파괴 라벨 갱신 유지(클립 보호). 비대칭 원인은 실기기 재검증 필요.
 - **⚙️ 후속(v0.19.0 W7, 입력장치 실시간 로깅 — 민구 요청):** v0.18.0 로그가 **BT·스피커폰을 실제로 썼는데도 두 세션 모두 "iPhone 마이크"**로만 기록(B-1 갭) → 분석 시 입력 경로 식별 불가. 라벨이 실제 변할 때만(`old !== new`) `audioRecorder.ts`가 `session`/`input_device_changed:<reason>:<oldCat>→<newCat>` 이벤트 방출(refreshActiveInputLabel·recoverStream 전이점, `classifyInputDevice` 카테고리 동봉). 신규 이벤트 타입은 안 만들어 **log-replay 호환**. **한계(명시):** iOS는 STT(Web Speech)가 자체 오디오 캡처라 클립 레코더(getUserMedia)의 `track.label`이 STT 실제 경로와 다를 수 있어, **BT 연결돼도 "내장"으로 찍힐 수 있음** — 계측 신호는 늘지만 BT/내장 완전 구분은 [IOS-5]/AUDIO-ROUTE-1(네이티브 셸) 영역. **실기기 검증:** 세션 중 BT↔스피커폰 전환 시 이벤트 출현 여부 + device.json `audioInputDevices` 열거 대조.
+- **🔴 2026-06-30 v0.24.0 실기기 2세션 — BT/스피커폰 구분 불가 재확인:** 민구가 S1 BT·S2 스피커폰(일부 BT)을 썼으나 양 세션 `session:input_device`=`"iPhone 마이크"`+동일 deviceId, `input_device_changed` **0건**. 클립 레코더 track.label이 STT 실경로와 달라 BT 미반영 — 텔레메트리로 입력경로 식별 불가([STT-13]/W7 한계, AUDIO-ROUTE-1 네이티브 셸 영역).
 
 ---
 
@@ -215,6 +216,7 @@
 - **해결(v0.24.0):** `findSpeechSegments`에 **약한 세그먼트 솎기**(`SEG_KEEP_RATIO=0.25`) — 세그먼트별 내부 최대 RMS를 추적해, 가장 강한 세그먼트(값 발화는 또렷이 큼) 대비 25% 미만의 약한 세그먼트를 버린다(2개↑일 때만, 전부 약하면 원본 유지). 단일/동급 세그먼트(정상·소수 재발화)는 불변 → `tests/audioTrim.spec.ts` 20 passed. 효과: 앞 공백 사례 **63→16건, 값 잘림 0건**(287 클립 스윕으로 ratio 결정 — 0.3↑은 값 잘림 6↑건 유발해 0.25 채택). 회귀: 하네스 `clip-regression`이 실제 audioTrim에 누적 raw 클립을 돌려 RED→GREEN·known-good 비퇴행 고정.
 - **출처:** `2026-06-29 v0.23.0 실기기 제보` + `survey-011-test-harness` 287클립 분석 → **survey-011 v0.24.0**
 - **현재 상태:** ✅해결 — 다음 실기기에서 민구 클립 청취로 체감 확인. 잔여 16건은 대부분 0.4~0.8s(pad+soft 온셋, 비치명적).
+- **✅ 2026-06-30 v0.24.0 실기기 2세션 측정 확정:** 값클립 71개(S1 35·S2 36) silencedetect → 앞공백 **max 0.31/0.32s, 0/71 ≥0.6s**(v0.21+ 18%·최악 10.8s 대비 소멸), 잔여 ~0.30s=의도 PAD_FRONT. **값잘림 회귀 0**(`clip_trim_failed` 0/0; 최단 0.70s="100"류 단발). 출처 `Deliverables/2026-06-30-survey-011-v0240-log-analysis.md`.
 - **연관:** [CLIP-MIDSPEECH-1](단일범위 통합)과 같은 `audioTrim` 검출부. **데이터-1(소수점 정수부 클립 유실)은 v0.21+ 287클립에서 0건 재현** — CLIP-MIDSPEECH-1 단일범위(splice 0)가 이미 유실 메커니즘 제거. 회귀 가드(`valueDrop` 단언)로만 유지.
 
 ### [VALUE-PERSIST-1] 이상치 교정값 미반영 의혹 — 인시던트 데이터 미재현, 진단 우선(v0.24.0)
@@ -223,6 +225,7 @@
 - **잠재 경합(이론):** 값 커밋마다 fire-and-forget `persistSession()`이 겹쳐 돌 때 `await saveSession`→`upsertSession` 순서가 뒤집히면 옛 스냅샷이 last-writer-wins로 교정값을 덮을 수 있음(교정 간격 수 초라 이번 미발생).
 - **조치(v0.24.0, 방어+가시화):** ① `persistSession` **단조 가드**(`persistSeqRef`/`persistAppliedSeqRef`) — 더 오래된 스냅샷이 최신 dataStore upsert를 덮지 못하게. ② trend 교정 커밋 직후 committed vs persisted 비교 로깅(`trend_corrected_persist_check:ok|mismatch`) → 다음 실기기 재현 시 근인 즉시 포착.
 - **현재 상태:** ⚠️주시(진단 우선) — 추측 수정 금지(데이터 정상). 다음 실기기 mismatch 로그로 확정.
+- **✅ 2026-06-30 v0.24.0 실기기 2세션 — 미재현·가드 정상:** `trend_corrected_persist_check` **ok×17(S1 4·S2 13)·mismatch 0**. 교차검증: 정정행 persisted=최종 committed(S1 r8c8 `1600→16→166.6` persist=166.6 등). 단조가드 안전·레이스 미발현, mismatch 0=미발생(미포착 아님). 다음 mismatch 시에만 재오픈.
 
 ### [STT-DEC-NONBUG] 소수점 복구값 오커밋 의혹 — 1차 증거로 반증(코드 변경 없음)
 - **의혹(v0.20.0 분석 1차 패스):** `decimal_fraction_recovered:311.1`이 로그됐으나 셀엔 `하나`가 커밋된 듯 보임(A r16c7, B r11c7=`하나`, B r15c7=`아홉`) → 복구값이 stray STT 단어에 덮이는 레이스 의심.
@@ -683,6 +686,7 @@
 - **해결:** v0.23.0 — ① 세션시작 메타에 `recognitionTolerance` 박제 + 허용범위 다이얼 변경 시 `setting_changed:recognitionTolerance=<v>` 로깅. ② 저신뢰 재질문에 신규 이벤트 `stt_rejected_low_confidence`(`confidence`+`extra:tolerance:<v>`). ③ 재질문 시 화면에 사유 큐(`sessionStore.reaskReason`: low_confidence/parse_failed) 표시(`ReaskCue`).
 - **출처:** `2026-06-26 v0.22.0 실기기 로그`(2세션 `setting_changed:recognitionTolerance` 0건; 저신뢰 5건/파싱실패 7건; firsthand 코드 확인). Playwright `v023-voice.spec.ts` B2.
 - **현재 상태:** ✅수정됨(v0.23.0 `useVoiceSession.ts`·`logger.ts`·`sessionStore.ts`·`VoiceScreen.tsx`·`ReaskCue.tsx`). **🟡 2026-06-29 v0.23.0 실기기 부분확정:** 저신뢰 로깅 작동 — `stt_rejected_low_confidence` 3건 모두 `confidence`(0.074·0.269·0.462)+`tolerance:0.5` 동봉, 3건 다 conf<0.5 게이트 정상. 세션메타 `recognitionTolerance:0.5` 스냅샷 ✅. `stt_parse_failed` 유형 세분(decimal_fraction_lost×3·multi_numeric×3·extraneous_token×1) ✅. **검증 갭:** 이번 세션 `setting_changed:recognitionTolerance` 0건(민구가 다이얼 미변경) → 변경 로깅 경로·설정값↔신뢰도 대조는 **다음 실기기에서 허용범위 1회 변경 후 완결** 필요.
+- **✅ 2026-06-30 v0.24.0 실기기 2세션 — 검증 완료:** `setting_changed:recognitionTolerance` **양 세션 각 5회**(S1 0.55→0.8→0.65→0.75→0.8 / S2 0.9→0.85→0.5→0.4→0.55), 게이트가 **라이브 tolerance 추종**(S1 conf 0.777 거부@0.8 / S2 0.893 거부@0.9). 직전 갭 해소. **⚠️관찰(F1, Vance 후보):** 다이얼↑(0.8~0.9)=게이트 더 엄격→적정신뢰도(0.78~0.89) 거부 다발, "허용범위↑=관대" 직관과 반대 → 민구 멘탈모델 확인 선행(추측수정 금지).
 
 ### [LOG-UPLOAD-SELECTED-1] 다중세션 "시트에 추가" 시 일부 세션 로그만 Drive 업로드
 - **증상:** 민구 "복수 세션을 시트에 추가 시 일부 세션 로그 파일만 업로드되는 듯". v0.21.0 테스트에서 스피커폰 세션 로그가 Drive에 누락된 바 있음.
@@ -690,6 +694,7 @@
 - **해결:** v0.23.0 — 로그 업로드 대상을 **선택한 모든 세션(행 보유)**으로 확장(`uploadIds = ids.filter(hasRows)`). 세션별 백업 성공을 `backedUpOk` Set으로 추적, `backupOk`(autoDelete 게이트)는 여전히 `successIds.every(backedUpOk)`로 데이터 유실 방지 불변식 보존. 사용자 메시지에 **"로그 N/N 세션 백업"** + 실패 세션 수 명시.
 - **출처:** `2026-06-26 v0.22.0 실기기 로그`(이번엔 2세션 모두 업로드 성공이나 근인=successIds 게이팅 코드 확인; 06-25 `drive_upload:partial:user_drive,admin_drive` 흔적). firsthand 코드 확인.
 - **현재 상태:** ✅수정됨(v0.23.0 `DataScreen.tsx`). **⚪ 2026-06-29 v0.23.0 미검증:** 단일 세션이라 "새 행 0 세션 + 신규 세션 동반 선택" 시나리오 자체가 미발생 → 선택업로드/`N/N` 표기 **다음 실기기에서 2개+ 세션 동시선택**으로 검증 필요. **🟡 partial 라벨 inconclusive:** 세션종료 자동 export가 `drive_upload:partial:user_drive,admin_drive`(핸들러 `DataScreen.tsx:258` = 그 export의 양 레그 에러)로 찍혔으나 4.3초 뒤 2차 export(`_1782708326230.zip`)가 admin 취합폴더 정상 안착 → 로그는 자기 업로드 성공을 기록 못 해 "전송실패-후-재시도성공 vs 실제 부분실패" 판별 불가. 차기 로그에서 단일세션 자동 export의 partial 빈도·레그 패턴 누적 관측(06-25·06-26·06-29 연속 관측).
+- **🟡 2026-06-30 v0.24.0 실기기 2세션 — 다중세션 업로드 기능적 성공 + partial 4연속:** 2세션 함께 export·**둘 다 Drive 안착**(rclone 수확)=동시선택 업로드 성공. 단 export 시점 `drive_upload:partial:user_drive,admin_drive`×3 또 기록(**06-25/26/29/30 4연속**) — 데이터는 도달하나 라벨이 진짜 실패와 외관 동일. "로그 N/N 세션 백업" 토스트는 미계측(육안 필요). 라벨 정밀화(레그별 성공/실패 분리) 백로그 F2.
 
 ---
 

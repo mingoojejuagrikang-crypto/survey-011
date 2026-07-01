@@ -3,13 +3,13 @@ import type { HelpItem } from './helpCopy';
 
 /** v0.23.0 설정탭#4(Vance) — `?` 도움말 아이콘 버튼. 접근성: 진짜 <button>, aria-label, ≥44px 터치
  *  타깃(장갑 손가락). 탭하면 호출자가 SettingsHelpModal을 연다. */
-export function HelpButton({ onOpen, label }: { onOpen: () => void; label?: string }) {
+export function HelpButton({ onOpen, label, testid = 'help-button' }: { onOpen: () => void; label?: string; testid?: string }) {
   return (
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); onOpen(); }}
       aria-label={label ?? '도움말 보기'}
-      data-testid="help-button"
+      data-testid={testid}
       style={{
         flexShrink: 0,
         width: 44, height: 44, borderRadius: '50%',
@@ -30,16 +30,17 @@ export function HelpButton({ onOpen, label }: { onOpen: () => void; label?: stri
  *  사용자가 `?`를 눌러 명시적으로 열기 때문에(자동 노출 아님) 기존 Playwright 흐름을 막지 않는다.
  *  배경/✕ 탭으로 닫힌다. 긴 문구도 잘리지 않게 박스 내부 스크롤(maxHeight 80% + overflowY). */
 export function SettingsHelpModal({
-  title, items, onClose,
+  title, items, onClose, testid = 'settings-help-modal',
 }: {
   title: string;
   items: HelpItem[];
   onClose: () => void;
+  testid?: string;
 }) {
   return (
     <div
       onClick={onClose}
-      data-testid="settings-help-modal"
+      data-testid={testid}
       role="dialog"
       aria-modal="true"
       aria-label={title}

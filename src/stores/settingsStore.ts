@@ -66,6 +66,21 @@ const mirroredStorage: StateStorage = {
   },
 };
 
+// ── v0.25.0 F1(민구 확정) — 인식 허용범위 다이얼 의미 "높을수록 관대" ─────────────────────────────
+// 종전: 다이얼 값(recognitionTolerance)이 곧 최소 신뢰도 → "높을수록 엄격"이라 다이얼을 올릴수록
+// 적정 신뢰도(0.78~0.89)까지 다발 거부됐다(로그 F1). 민구 멘탈모델은 "높일수록 관대(더 많이 수용)".
+// 저장값·다이얼 위치·persist(version 11)·기본값(0.60)은 그대로 두고 **게이트 방향만 반전**한다 —
+// 기존 사용자의 다이얼 위치가 마이그레이션 없이 곧바로 의도대로(위=관대) 동작한다(다이얼을 올려둔
+// 사용자는 이제 그 위치가 관대). 대역[0.40~0.90]은 동일, 방향만 뒤집힌다: minConf = (min+max) − tol.
+// 값 게이트(useVoiceSession)와 신뢰도 색 임계(VoiceScreen)가 이 한 함수를 공유 → 시각·게이트 항상 일치.
+export const RECOGNITION_TOLERANCE_MIN = 0.4;
+export const RECOGNITION_TOLERANCE_MAX = 0.9;
+/** 허용범위 다이얼 값 → 실제 최소 신뢰도(반전). step 0.05·대역이 정수 배수라 2자리 반올림으로
+ *  부동소수 잔여(0.4+0.9−0.6 = 0.7000000000000001)를 제거한다(로그 문자열·색 임계 안정). */
+export function minConfidenceForTolerance(tolerance: number): number {
+  return Math.round((RECOGNITION_TOLERANCE_MIN + RECOGNITION_TOLERANCE_MAX - tolerance) * 100) / 100;
+}
+
 interface SettingsState {
   googleConnected: boolean;
   userEmail: string | null;
@@ -82,9 +97,10 @@ interface SettingsState {
   totalRows: number;
   /** TTS playback rate (0.5 ~ 2.0) */
   ttsRate: number;
-  /** v0.20.0 — 음성인식 최소 신뢰도(인식 허용범위). 사용자 조절 가능 다이얼(입력탭). 범위 0.40~0.90,
-   *  기본 0.60. 장갑 손가락 조작용 가로 다이얼이 이 값을 제어한다. Mack이 useVoiceSession.ts에서
-   *  하드코딩 0.65 대신 이 값을 읽는다(Wave 2). 낮을수록 소음환경에서 더 관대(더 많이 수용). */
+  /** v0.20.0 — 음성인식 허용범위 다이얼(입력탭). 사용자 조절, 범위 0.40~0.90, 기본 0.60. 장갑 손가락
+   *  조작용 가로 다이얼이 이 값을 제어한다. v0.25.0 F1(민구 확정): **높을수록 더 관대(더 많이 수용)**.
+   *  저장값 자체는 다이얼 위치이고, 실제 최소 신뢰도로는 minConfidenceForTolerance()가 반전 변환한다
+   *  (게이트=useVoiceSession, 색 임계=VoiceScreen 공유). 낮을수록 엄격(적게 수용). */
   recognitionTolerance: number;
   /** Which auto column's value is used as the session label suffix. null = auto-pick. */
   sessionLabelColId: string | null;

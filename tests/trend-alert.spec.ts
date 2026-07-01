@@ -154,7 +154,7 @@ const MOCK_INIT_SCRIPT = `
 
 // ─── Helpers ────────────────────────────────────────────────────
 
-async function stubSheets(page: Page, opts: { fail?: boolean } = {}): Promise<{ gets: number }> {
+async function stubSheets(page: Page, opts: { fail?: boolean; rows?: string[][] } = {}): Promise<{ gets: number }> {
   const counter = { gets: 0 };
   await page.route('**://sheets.googleapis.com/**', async (route) => {
     if (route.request().method() === 'GET') {
@@ -162,7 +162,7 @@ async function stubSheets(page: Page, opts: { fail?: boolean } = {}): Promise<{ 
       if (opts.fail) {
         await route.fulfill({ status: 500, body: 'stub failure' });
       } else {
-        await route.fulfill({ json: { values: [HEADERS, ...SHEET_ROWS] } });
+        await route.fulfill({ json: { values: [HEADERS, ...(opts.rows ?? SHEET_ROWS)] } });
       }
       return;
     }
@@ -171,8 +171,12 @@ async function stubSheets(page: Page, opts: { fail?: boolean } = {}): Promise<{ 
   return counter;
 }
 
-async function setupAndStart(page: Page, opts: { sheetsFail?: boolean } = {}) {
-  await stubSheets(page, { fail: opts.sheetsFail });
+// v0.25.0 기능3(WS-3) — settings/sheetRows 오버라이드 옵션 추가(기존 호출은 기본값 = 무변경).
+async function setupAndStart(
+  page: Page,
+  opts: { sheetsFail?: boolean; settings?: Record<string, unknown>; sheetRows?: string[][] } = {},
+) {
+  await stubSheets(page, { fail: opts.sheetsFail, rows: opts.sheetRows });
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(
@@ -183,7 +187,7 @@ async function setupAndStart(page: Page, opts: { sheetsFail?: boolean } = {}) {
       }));
       localStorage.setItem(storeKey, JSON.stringify(settings));
     },
-    { settings: SETTINGS, storeKey: STORE_KEY },
+    { settings: opts.settings ?? SETTINGS, storeKey: STORE_KEY },
   );
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(500);
@@ -355,6 +359,37 @@ test('% 변동률 단독 알람 — 종경 pctThreshold 15, 방향 무관 발화
   const events = await getTrendEvents(page);
   expect(events.filter((e) => e.extra === 'trend_alert_fired')).toHaveLength(2); // 증가 1 + 감소 1
   expect(events.filter((e) => e.extra === 'trend_alert_confirmed')).toHaveLength(2);
+});
+
+test('기능3(WS-3) — 추세+범위 동시 발동(both) → 범위 우선 발화·팝업 "범위 알람 +20%"(추세 아님)', async ({ page }) => {
+  // 횡경(c8)에 trendRule 'increase' + pctThreshold 15를 동시 부여 → 직전 100.0 → 120은 커짐(방향 발동)
+  //   AND +20%(범위 발동) = trigger:'both'. 종전엔 'both'가 추세로 떨어졌으나(무커버리지) v0.25.0 기능3은
+  //   범위 우선 → 음성·팝업 모두 "범위 알람 +20%"(글자 동일 계약). 순수 direction만 추세 유지(위 테스트들).
+  const COLUMNS_BOTH = COLUMNS.map((c) =>
+    c.id === 'c8' ? { ...c, trendRule: 'increase', pctThreshold: 15 } : c,
+  );
+  const SETTINGS_BOTH = { ...SETTINGS, state: { ...SETTINGS.state, columns: COLUMNS_BOTH } };
+  await setupAndStart(page, { settings: SETTINGS_BOTH });
+
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '120', 500); // 100.0 → 120: +20% AND 증가 = both
+
+  const tts = await getTtsLog(page);
+  // 범위 우선(부호·정수 반올림) — "범위 알람 +20%".
+  expect(tts.some((t) => t.includes('범위 알람 +20%'))).toBe(true);
+  // 핵심 계약: both가 추세로 떨어지지 않는다(범위 우선).
+  expect(tts.some((t) => t.includes('추세 알람'))).toBe(false);
+  expect(await getActiveChipName(page)).toContain('횡경'); // advance 중단(알람 대기)
+
+  // 팝업도 kind='range'로 동일 문구 — 시각·청각 일치.
+  const popup = page.locator('[data-testid="anomaly-alert"]');
+  await expect(popup).toBeVisible();
+  await expect(popup).toContainText('범위 알람 +20%');
+
+  await fireStt(page, '확인', 500);
+  const events = await getTrendEvents(page);
+  expect(events.filter((e) => e.extra === 'trend_alert_fired')).toHaveLength(1);
+  expect(events.filter((e) => e.extra === 'trend_alert_confirmed')).toHaveLength(1);
 });
 
 test('이상치 → 새 값 발화 → 재입력+재검증(재알림) → 통과 값은 정상 진행 + corrected 로깅', async ({ page }) => {

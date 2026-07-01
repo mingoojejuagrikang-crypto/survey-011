@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useSettingsStore } from '../stores/settingsStore';
+import { useSettingsStore, minConfidenceForTolerance } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { recountSynced } from './sessionSync';
@@ -1350,7 +1350,10 @@ export function useVoiceSession() {
     // settingsStore.recognitionTolerance(기본 0.60, 범위 0.40~0.90)로 이전한다. 장갑 낀 손가락용
     // 가로 다이얼(Vance)이 이 값을 쓴다. **값 게이트만** 바꾼다 — 위 명령 게이트(commandMinConfidence,
     // 기본 0.7)와 lone-syllable 동음이의 가드, 아래 `confidence > 0` 미보고 센티넬은 그대로 둔다.
-    const minConfidence = useSettingsStore.getState().recognitionTolerance;
+    // v0.25.0 F1(민구 확정) — 다이얼은 "높을수록 관대". 저장값(recognitionTolerance)은 다이얼 위치이고,
+    // 실제 최소 신뢰도는 minConfidenceForTolerance()가 반전 변환한다(대역 동일, 방향만 반전).
+    const recognitionTolerance = useSettingsStore.getState().recognitionTolerance;
+    const minConfidence = minConfidenceForTolerance(recognitionTolerance);
 
     // T-3 (single-syllable homophone, "이"→2): on a MEASUREMENT column (int/float) a lone
     // Sino-Korean syllable that doubles as a common non-number word ("이","사","오","일"…) was
@@ -1376,12 +1379,15 @@ export function useVoiceSession() {
 
     // Low confidence — re-ask
     if (confidence > 0 && confidence < minConfidence) {
-      // v0.23.0 입력탭#2 — 저신뢰 재질문을 명시 이벤트로 로깅(이전엔 무로깅). confidence + 활성 허용범위를
-      // 함께 박제해 차기 분석이 "설정값 vs 실제 신뢰도"를 정량 대조할 수 있게 한다(설정값 미로깅 갭 해소).
+      // v0.23.0 입력탭#2 — 저신뢰 재질문을 명시 이벤트로 로깅(이전엔 무로깅). confidence + 다이얼 값 +
+      // 실제 게이트를 함께 박제해 차기 분석이 "설정값 vs 실제 신뢰도"를 정량 대조하게 한다(갭 해소).
+      // v0.25.0 F1 — 다이얼 값(tolerance)과 반전된 실제 임계(minConf)를 둘 다 싣는다. 반전 이후엔
+      // `confidence < minConf` 불변식이 이벤트 자체로 읽혀야 하고(예 conf 0.65 < minConf 0.70), 다이얼
+      // 값만 두면 "0.65인데 tolerance 0.60에서 거부"처럼 모순으로 보인다(Trace가 반전식을 몰라도 명료).
       logger.log({
         type: 'stt_rejected_low_confidence', text, confidence,
         sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
-        colName: awaiting.name, extra: `tolerance:${minConfidence}`,
+        colName: awaiting.name, extra: `tolerance:${recognitionTolerance},minConf:${minConfidence}`,
       });
       recorderRef.current?.startClip(); // restart clip
       useSessionStore.getState().setRecognized('');
@@ -1726,15 +1732,18 @@ export function useVoiceSession() {
       // 또는 둘 다(both) → 절대값 차이로 안내. 절대차는 부동소수 잔여(2.2000002)를 막기 위해 컬럼
       // 소수자리수로 반올림한다(float=col.decimals||1, int=0). both는 방향 우선 = 절대값.
       const decForDiff = col?.type === 'float' ? (col.decimals ?? 1) : 0;
+      // v0.20.0 입력탭#6 — 알람 종류 + 표시 임계. AnomalyAlertPopup(Vance)이 같은 kind/threshold를 읽어
+      // "범위 알람 ±NN%" / "추세 알람 감소 NN"을 그리므로, 아래 TTS 문구를 **팝업 라벨과 글자까지 동일**
+      // 하게 맞춘다(시각·청각 일치). alertKind는 음성(alertText)·팝업(kind)을 동시에 가른다(글자 동일 계약).
+      // v0.25.0 기능3(WS-3, 민구 요청) — 추세와 범위가 **동시 발동**(trigger:'both')하면 범위 우선.
+      // 순수 'direction'만 추세, 'pct'·'both'는 범위 → 시각·청각이 함께 "범위 알람 +##%"로 일치한다.
+      const alertKind: 'trend' | 'range' = v.trigger === 'direction' ? 'trend' : 'range';
+      // 표시값: 범위=실제 편차%(v.pctText; prev≠0이면 항상 산출, pctFired는 prev≠0 필요라 범위 분기는
+      // 항상 유효) · 추세=절대 변화량(부동소수 잔여 방지로 컬럼 소수자리 반올림). 팝업 changeText도 동일 값.
       const changeText =
-        v.trigger === 'pct'
+        alertKind === 'range'
           ? (v.pctText ? `${v.pctText}%` : '')
           : Math.abs(v.next - v.prev).toFixed(decForDiff);
-      // v0.20.0 입력탭#6 — 알람 종류 + 표시 임계. 'pct' 트리거=변동률 **범위 알람**(threshold=설정 %),
-      // 'direction'/'both'=추세 **방향 알람**(증가/감소 + 절대 변화량). AnomalyAlertPopup(Vance)이
-      // 같은 kind/threshold를 읽어 "범위 알람 ±NN%" / "추세 알람 감소 NN"을 그리므로, 아래 TTS 문구를
-      // **팝업 라벨과 글자까지 동일**하게 맞춘다(시각·청각 일치).
-      const alertKind: 'trend' | 'range' = v.trigger === 'pct' ? 'range' : 'trend';
       // changeNum = 변화량 숫자만(팝업 changeText.replace와 동일 규칙) — 추세 발화/표시에 쓴다.
       const changeNum = changeText.replace(/[^0-9.]/g, '');
       // v0.24.0 입력탭(민구 요청) — 범위 알람은 설정 임계가 아니라 **실제로 벗어난 편차%를 부호와 함께**
@@ -2185,7 +2194,28 @@ export function useVoiceSession() {
     // 다음 행 진행 시 persistSession에서 자연스럽게 반영됨.
   }, []);
 
-  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, goNextRow, pause, resume, commitTouchValue, lastConfidenceRef, getActiveInputLabel, micLost, reconnectMic };
+  // v0.25.0 기능2(WS-2, 민구 요청) — 입력탭 진입(마운트) 시 마이크 prewarm(첫 클립 유실 완화책 1).
+  // 기존 start()의 init() 폴백은 **그대로 두고** 위에 얹는 best-effort 배선이다(제거 아님 → 회귀 0).
+  // recorderRef.current를 여기서 채우면 이후 start()/reconnectMic이 같은 인스턴스를 재사용하고,
+  // init()은 멱등(this.stream 있으면 즉시 true)이라 재획득하지 않는다(동시호출은 audioRecorder의
+  // initPromise가 직렬화 → getUserMedia 1회). iOS standalone에선 마운트 효과가 탭 클릭 콜스택 밖이라
+  // 첫 획득이 NotAllowedError일 수 있으나([CLIP-DEVICECHANGE-1] 동일 실패모드), 거부돼도 start()가
+  // 재시도(폴백)하고 micLost/"마이크 재연결"은 불변. 효과/안전은 다음 실기기 로그 mic_prewarm_* 분포로 확정.
+  const prewarmMic = useCallback(async () => {
+    if (!recorderRef.current) recorderRef.current = new AudioRecorder();
+    const rec = recorderRef.current;
+    const t0 = Date.now();
+    logger.log({ type: 'app', extra: 'mic_prewarm_attempt' });
+    let ok = false;
+    try { ok = await rec.init(); } catch { ok = false; }
+    if (ok) {
+      logger.log({ type: 'app', extra: 'mic_prewarm_ok', durationMs: Date.now() - t0 });
+    } else {
+      logger.log({ type: 'app', extra: `mic_prewarm_denied:${rec.getLastInitError() ?? 'unknown'}` });
+    }
+  }, []);
+
+  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, goNextRow, pause, resume, commitTouchValue, lastConfidenceRef, getActiveInputLabel, micLost, reconnectMic, prewarmMic };
 }
 
 // ─── helpers ─────────────────────────────────────────────────

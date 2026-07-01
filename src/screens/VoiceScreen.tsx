@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { T } from '../tokens';
 import { I } from '../components/icons';
-import { useSettingsStore } from '../stores/settingsStore';
+import { useSettingsStore, minConfidenceForTolerance } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { computeTotalRows, nestedAutoValue, computeRowFromAutoChange, buildCyclingValues } from '../lib/autoValue';
 import { useWakeLock, lockPortrait } from '../lib/wakeLock';
@@ -42,6 +42,11 @@ export function VoiceScreen() {
     }, 300);
     return () => clearInterval(interval);
   }, [sess.phase, voiceSession.lastConfidenceRef]);
+
+  // v0.25.0 기능2(WS-2) — 입력탭 진입(마운트) 시 마이크 prewarm(첫 클립 유실 완화). best-effort:
+  //   실패/거부해도 start()의 init()이 재시도(폴백)하므로 회귀 없음. prewarmMic은 useVoiceSession의
+  //   useCallback([])라 안정 참조 → 마운트당 정확히 1회 발동(탭 진입=마운트, App.tsx 조건부 렌더).
+  useEffect(() => { void voiceSession.prewarmMic(); }, [voiceSession.prewarmMic]);
 
   const totalRows = s.tableGenerated ? computeTotalRows(s.columns) : 0;
   const voiceCols = s.columns.filter((c) => c.input === 'voice');
@@ -471,8 +476,10 @@ function ActiveState({
                 style={{
                   fontSize: 11, fontWeight: 700,
                   // v0.20.0 입력탭#1 — 신뢰도 색 임계를 사용자 조절 허용범위(recognitionTolerance)에
-                  //   맞춘다(하드코딩 0.65 제거). 허용범위 미만이면 amber(불안), 이상이면 green.
-                  color: confidence < s.recognitionTolerance ? T.amber : T.green,
+                  //   맞춘다(하드코딩 0.65 제거). v0.25.0 F1 — 다이얼이 "높을수록 관대"로 반전됐으므로
+                  //   실제 최소 신뢰도(minConfidenceForTolerance)로 색을 가른다(값 게이트와 동일 임계 공유
+                  //   → 색과 실제 수용/거부가 항상 일치). 임계 미만이면 amber(불안), 이상이면 green.
+                  color: confidence < minConfidenceForTolerance(s.recognitionTolerance) ? T.amber : T.green,
                   fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                   letterSpacing: -0.2,
                 }}
@@ -861,7 +868,7 @@ function ActiveControlDials() {
         step={0.05}
         accent={T.green}
         valueLabel={`${tolPct}%`}
-        ariaValueText={`인식 허용범위 ${tolPct} 퍼센트`}
+        ariaValueText={`인식 허용범위 ${tolPct} 퍼센트, 높을수록 관대하게 인식`}
         onChange={(v) => {
           s.set({ recognitionTolerance: v });
           logTolerance(v); // 디바운스 — 드래그 한 번에 settled 값 한 줄만 로깅(감사 가능).

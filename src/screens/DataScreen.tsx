@@ -10,7 +10,7 @@ import { downloadCsv, csvToBlob, downloadBlob, sessionsToCsv, sessionsToCsvZip }
 import { deleteSession as dbDeleteSession, saveSession, loadAudioClip, resetDb } from '../lib/db';
 import type { Column, Session } from '../types';
 import { exportLogZip, exportLogZipsPerSession, downloadZip } from '../lib/exportLog';
-import { uploadLogToBothDrives, LOG_FOLDER_ID } from '../lib/driveUpload';
+import { uploadLogToBothDrives } from '../lib/driveUpload';
 import { hydrateSessions } from '../lib/hydrate';
 import { getAccessToken, signIn } from '../lib/googleAuth';
 import {
@@ -21,6 +21,35 @@ import {
 } from '../lib/recoverFromDrive';
 import { logger } from '../lib/logger';
 import { LoginRequiredModal } from '../components/LoginRequiredModal';
+import { HelpButton, SettingsHelpModal } from '../components/settings/SettingsHelp';
+import type { HelpItem } from '../components/settings/helpCopy';
+
+/** v0.25.0 데이터탭#4(Vance) — 작은 인라인 안내를 헤더 `?` on-demand 큰 팝업으로 이전.
+ *  현장 기술자(장갑·소음·햇빛) 기준으로 짧고 정확하게. SettingsHelpModal(safe-area·스크롤) 재사용. */
+const DATA_GUIDE: HelpItem[] = [
+  {
+    title: '이 화면은',
+    body:
+      '조사한 세션(측정 기록)이 카드로 쌓입니다. 카드를 눌러 값을 펼쳐 보고, 잘못 들어간 값은 그 자리에서 고칠 수 있어요.',
+  },
+  {
+    title: '시트에 올리기 — 동기화',
+    body:
+      '‘동기화’를 누르면 고른 세션이 구글 시트에 추가되거나(같은 행은) 갱신됩니다. ' +
+      '시트에 새로 반영되는 세션은 그 음성 로그도 Drive에 자동으로 백업돼요.',
+  },
+  {
+    title: '기기로 내보내기',
+    body:
+      '‘내보내기’로 CSV(엑셀에서 열림)나 음성 로그를 이 기기에 저장하거나, 공유 버튼으로 다른 앱(엑셀·파일·메일)으로 바로 보낼 수 있어요.',
+  },
+  {
+    title: '자동 백업과 복구',
+    body:
+      'Drive에 백업된 음성 로그는 나중에 세션을 되살릴 때 쓰입니다. ' +
+      '일부만 올라간 경우 안내 메시지의 ‘자세히’에서 어떤 목적지가 실패했는지 확인하세요.',
+  },
+];
 
 /** v0.6.0 — human label for a sync result that may both append and update rows in place.
  *  "N행 추가", "M행 갱신", or "N행 추가, M행 갱신" depending on what happened. */
@@ -90,6 +119,8 @@ export function DataScreen() {
   // 동기화·Drive 백업·세션 복구)에서 reason 문구와 함께 마운트한다. `resume`은 재로그인 성공 직후
   // 다시 실행할 직전 동작 클로저 — 사용자가 하던 일을 잃지 않고 이어가게 한다(graceful resume).
   const [loginPrompt, setLoginPrompt] = useState<{ reason: string; resume: () => void } | null>(null);
+  // v0.25.0 데이터탭#4 — 헤더 `?`로 여는 안내 팝업(상시 노출 아님).
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const lastSelectedIdsRef = useRef<string[]>([]);
 
@@ -254,9 +285,14 @@ export function DataScreen() {
               // 세션별 업로드 결과 계측 — 어느 세션 zip이 어느 목적지에서 실패했는지 정량 확인.
               logger.log({
                 type: 'app',
+                // v0.25.0 데이터탭 F2(Vance) — '일부 실패' 라벨 오해 소지 제거: 실패 레그(fail=)와
+                // 성공 레그(ok=)를 분리 표기(빈 레그는 '-'). 접두 'drive_upload:partial:'는 유지(그렙 호환).
                 extra: dual.errors.length === 0
                   ? 'drive_upload:ok'
-                  : `drive_upload:partial:${dual.errors.map((e) => e.split(':')[0]).join(',')}`,
+                  : `drive_upload:partial:fail=${dual.errors.map((e) => e.split(':')[0]).join(',') || '-'}:ok=${
+                      [dual.userDriveId ? '본인 Drive' : null, dual.adminDriveId ? '관리자 Drive' : null]
+                        .filter(Boolean).join(',') || '-'
+                    }`,
                 text: z.filename,
                 parsed: z.sessionId,
               });
@@ -417,7 +453,16 @@ export function DataScreen() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ScreenHeader sub={`${sessions.length}개 세션`} />
+      <ScreenHeader
+        sub={`${sessions.length}개 세션`}
+        right={
+          <HelpButton
+            onOpen={() => setGuideOpen(true)}
+            label="데이터 탭 안내 보기"
+            testid="data-guide-button"
+          />
+        }
+      />
 
       {/* Action bar */}
       <div style={{ padding: '0 16px 10px', display: 'flex', gap: 8, flexShrink: 0 }}>
@@ -482,24 +527,6 @@ export function DataScreen() {
         </button>
       </div>
 
-
-      {/* 시트 추가 시 로그 자동 백업 안내 */}
-      <div
-        style={{
-          padding: '0 16px 6px',
-          fontSize: 11, color: T.textMute, lineHeight: 1.4, flexShrink: 0,
-        }}
-      >
-        시트 추가 시 해당 세션의 음성 로그도 Drive에 자동 백업됩니다.{' '}
-        <span
-          style={{
-            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            fontSize: 10, color: T.textMute,
-          }}
-        >
-          ({LOG_FOLDER_ID.slice(0, 12)}…)
-        </span>
-      </div>
 
       {(busy || msg) && (
         <div
@@ -638,6 +665,16 @@ export function DataScreen() {
           reason={loginPrompt.reason}
           onLogin={handleLoginPromptLogin}
           onClose={() => setLoginPrompt(null)}
+        />
+      )}
+
+      {/* v0.25.0 데이터탭#4 — 헤더 `?`로 여는 큰 안내 팝업(작은 인라인 안내 대체). */}
+      {guideOpen && (
+        <SettingsHelpModal
+          title="데이터 탭 안내"
+          items={DATA_GUIDE}
+          onClose={() => setGuideOpen(false)}
+          testid="data-guide-modal"
         />
       )}
 

@@ -122,6 +122,13 @@ registerProcessor('preroll-capture', PrerollCaptureProcessor);
 
 export class AudioRecorder {
   private stream: MediaStream | null = null;
+  /** v0.25.0 기능2(prewarm) — 진행 중 init() Promise 공유(동시 획득 직렬화). prewarm(입력탭 마운트)과
+   *  start()의 init()이 겹치면 this.stream이 아직 없어 getUserMedia가 두 번 호출된다(스트림 누수·
+   *  리스너 이중등록·iOS Safari 동시호출 거부). 진행 중 Promise를 공유해 정확히 1회만 획득하고,
+   *  정착(성공/실패) 시 클리어한다 — 실패 시 다음 호출이 재획득하는 폴백을 보존. */
+  private initPromise: Promise<boolean> | null = null;
+  /** v0.25.0 기능2 — 마지막 init() 실패 사유(DOMException.name 등). prewarm 텔레메트리 `_denied`가 읽는다. */
+  private lastInitError: string | null = null;
   /** Active (recording) slot — only this one can be stopped via stopClip(). */
   private active: ClipSlot | null = null;
   /** Settings of the audio track actually granted by getUserMedia, captured at init().
@@ -355,35 +362,56 @@ export class AudioRecorder {
 
   async init(): Promise<boolean> {
     if (this.stream) return true;
-    try {
-      // 소음 환경(비닐하우스 등) 대응: 브라우저 내장 DSP 활성화 — 추가 지연 없음(1초 제약 무관).
-      // echoCancellation은 이제 항상 ON(이어피스 기본) — TTS 에코가 마이크로 되먹임되는 것도 줄여줌.
-      // (v0.15.0 A6: 스피커폰 소프트 half-duplex 모드 및 post-TTS 가드는 삭제됨 — 이어폰 barge-in 기본.)
-      // autoGainControl은 소음 환경(빗소리 등)에서 무음 구간 게인을 키워 노이즈를 증폭할 수 있어 끔.
-      this.stream = await this.acquireStream();
-      // Capture which input device was actually granted (built-in vs external mic like Shokz).
-      // Numeric/string metadata only — device.json already enumerates the same deviceId+label set,
-      // so this introduces no new PII category, it just records which of the known devices was used.
+    // v0.25.0 기능2(prewarm) — 동시 init() 직렬화. prewarm(입력탭 마운트)과 start()의 init()이 겹치면
+    // this.stream이 아직 없어 getUserMedia가 두 번 호출된다(스트림 누수·리스너 이중등록·iOS 동시거부).
+    // 진행 중 Promise를 공유해 정확히 1회만 획득하고, 정착 시 finally에서 클리어한다(실패 후 재획득
+    // 폴백 보존 + dispose 후 재-init(StrictMode 이중마운트·재개) 시 정상 재획득). ⚠️ 핫마이크 주의:
+    // acquireStream 대기 중 dispose()가 끼어들면 갓 켠 스트림이 잠깐 살 수 있다(빠른 탭 이탈, 창 ms급).
+    // "disposed면 재-init 차단" 하드가드는 StrictMode 이중마운트에서 같은 인스턴스 재사용을 영구
+    // 차단해 클립 녹음을 깨므로 채택하지 않음 — 다음 실기기 로그의 워치아이템으로 관찰(핸드오프).
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = (async (): Promise<boolean> => {
       try {
-        const track = this.stream.getAudioTracks()[0];
-        if (track) {
-          const settings = track.getSettings();
-          this.activeInput = {
-            deviceId: settings.deviceId ?? '',
-            label: track.label ?? '',
-          };
-        }
-      } catch { /* getSettings unsupported — leave activeInput null */ }
+        // 소음 환경(비닐하우스 등) 대응: 브라우저 내장 DSP 활성화 — 추가 지연 없음(1초 제약 무관).
+        // echoCancellation은 이제 항상 ON(이어피스 기본) — TTS 에코가 마이크로 되먹임되는 것도 줄여줌.
+        // (v0.15.0 A6: 스피커폰 소프트 half-duplex 모드 및 post-TTS 가드는 삭제됨 — 이어폰 barge-in 기본.)
+        // autoGainControl은 소음 환경(빗소리 등)에서 무음 구간 게인을 키워 노이즈를 증폭할 수 있어 끔.
+        this.stream = await this.acquireStream();
+        // Capture which input device was actually granted (built-in vs external mic like Shokz).
+        // Numeric/string metadata only — device.json already enumerates the same deviceId+label set,
+        // so this introduces no new PII category, it just records which of the known devices was used.
+        try {
+          const track = this.stream.getAudioTracks()[0];
+          if (track) {
+            const settings = track.getSettings();
+            this.activeInput = {
+              deviceId: settings.deviceId ?? '',
+              label: track.label ?? '',
+            };
+          }
+        } catch { /* getSettings unsupported — leave activeInput null */ }
 
-      // v0.13.0 R8 — 입력장치 변경(BT 해제 등)을 배지에 라이브 반영하기 위한 구독 등록.
-      this.attachDeviceListeners();
+        // v0.13.0 R8 — 입력장치 변경(BT 해제 등)을 배지에 라이브 반영하기 위한 구독 등록.
+        this.attachDeviceListeners();
 
-      // W6: 프리롤 캡처는 best-effort — 어떤 실패도 init 성공(현행 녹음 동작)을 막지 않는다.
-      await this.initPrerollCapture();
-      return true;
-    } catch {
-      return false;
-    }
+        // W6: 프리롤 캡처는 best-effort — 어떤 실패도 init 성공(현행 녹음 동작)을 막지 않는다.
+        await this.initPrerollCapture();
+        this.lastInitError = null;
+        return true;
+      } catch (e) {
+        // v0.25.0 기능2 — prewarm 텔레메트리 `_denied`가 읽도록 실패 사유(NotAllowedError 등)를 보존.
+        this.lastInitError = (e as Error)?.name || 'unknown';
+        return false;
+      } finally {
+        this.initPromise = null;
+      }
+    })();
+    return this.initPromise;
+  }
+
+  /** v0.25.0 기능2 — 마지막 init() 실패 사유(DOMException.name). 성공 시 null. prewarm이 `_denied`에 싣는다. */
+  getLastInitError(): string | null {
+    return this.lastInitError;
   }
 
   /** AudioContext + Worklet(폴백 ScriptProcessor)으로 PCM 링버퍼를 구성. 실패 시 프리롤 없이 진행. */
