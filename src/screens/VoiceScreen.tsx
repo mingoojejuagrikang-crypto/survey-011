@@ -476,9 +476,9 @@ function ActiveState({
                 style={{
                   fontSize: 11, fontWeight: 700,
                   // v0.20.0 입력탭#1 — 신뢰도 색 임계를 사용자 조절 허용범위(recognitionTolerance)에
-                  //   맞춘다(하드코딩 0.65 제거). v0.25.0 F1 — 다이얼이 "높을수록 관대"로 반전됐으므로
-                  //   실제 최소 신뢰도(minConfidenceForTolerance)로 색을 가른다(값 게이트와 동일 임계 공유
-                  //   → 색과 실제 수용/거부가 항상 일치). 임계 미만이면 amber(불안), 이상이면 green.
+                  //   맞춘다(하드코딩 0.65 제거). 방향과 무관하게 항상 실제 최소 신뢰도
+                  //   (minConfidenceForTolerance, v0.26.0 현재 직접 매핑=높을수록 엄격)로 색을 가른다
+                  //   (값 게이트와 동일 임계 공유 → 색과 실제 수용/거부가 항상 일치). 임계 미만 amber.
                   color: confidence < minConfidenceForTolerance(s.recognitionTolerance) ? T.amber : T.green,
                   fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                   letterSpacing: -0.2,
@@ -768,7 +768,7 @@ function ActiveState({
  *  라벨(상단)·큰 값 표시(우측)·굵은 트랙으로 원거리·장갑 가독. 컨트롤바에 두 개를 수평 배치한다.
  *  값 포맷은 valueLabel로 주입(% 또는 x). 변경 콜백은 onChange(연속), 마지막 변경 후 샘플은 호출자. */
 function Dial({
-  label, value, min, max, step, accent, valueLabel, ariaValueText, onChange, testId,
+  label, value, min, max, step, accent, valueLabel, ariaValueText, hint, onChange, testId,
 }: {
   label: string;
   value: number;
@@ -778,6 +778,9 @@ function Dial({
   accent: string;
   valueLabel: string;
   ariaValueText?: string;
+  /** v0.26.0 F1 — 다이얼 방향 의미를 화면에 명시하는 한 줄 캡션(예: "높을수록 엄격").
+   *  허용범위 방향이 두 번 뒤집힌 이력이 있어, 눈에 보이는 문구로 오해 재발을 막는다. */
+  hint?: string;
   onChange: (v: number) => void;
   testId?: string;
 }) {
@@ -824,6 +827,11 @@ function Dial({
           touchAction: 'none',
         }}
       />
+      {hint && (
+        <span style={{ fontSize: 10, color: T.textMute, whiteSpace: 'nowrap', lineHeight: 1.2 }}>
+          {hint}
+        </span>
+      )}
     </div>
   );
 }
@@ -868,7 +876,8 @@ function ActiveControlDials() {
         step={0.05}
         accent={T.green}
         valueLabel={`${tolPct}%`}
-        ariaValueText={`인식 허용범위 ${tolPct} 퍼센트, 높을수록 관대하게 인식`}
+        ariaValueText={`인식 허용범위 ${tolPct} 퍼센트, 높을수록 엄격하게 인식`}
+        hint="높을수록 엄격 (확실한 발음만 인정)"
         onChange={(v) => {
           s.set({ recognitionTolerance: v });
           logTolerance(v); // 디바운스 — 드래그 한 번에 settled 값 한 줄만 로깅(감사 가능).
@@ -884,6 +893,7 @@ function ActiveControlDials() {
         accent={T.blue}
         valueLabel={`${s.ttsRate.toFixed(2)}x`}
         ariaValueText={`안내 속도 ${s.ttsRate.toFixed(2)}배`}
+        hint="높을수록 빠르게 안내"
         onChange={(v) => {
           s.set({ ttsRate: v });
           sampleTts(v);

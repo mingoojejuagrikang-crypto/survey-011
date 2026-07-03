@@ -75,6 +75,7 @@
 - **해결·회피:** 이상치 필터링 또는 사용자 확인 등 UX 보완 필요.
 - **출처:** `2026-06-05 세션`
 - **현재 상태:** ⚠️주시
+- **`2026-07-02 v0.25.0 실기기 재발`(×2+유사계열):** S1 r5 c7 의도 99.9가 "59.9"로 연속 2회 인식(conf 0.947/0.872) — 둘 다 커밋됐으나 **범위알람이 즉시 포착**해 99.9로 정정. 같은 세션에서 유사 계열("95.5"↔55.5 의도, "8.8"↔88.8 의도)도 전부 범위알람 정정. STT 엔진 한계 잔존이나 **범위알람이 실전 방어선으로 작동** 확인(침묵 유실 0).
 
 ### [STT-9] 저신뢰(confidence) "수정" 발화가 임계값에 걸려 거부됨 (T-12 잔존)
 - **증상:** "수정"이라고 말했으나 STT confidence가 낮게 산출되어 명령이 거부됨. v0.4.3에서 수정 명령 전용 임계값을 0.55로 낮췄으나(T-12), 이후에도 드물게 재발.
@@ -123,6 +124,7 @@
 - **⚠️ 후속(v0.14.0 D):** v0.13.0 후 민구 보고 — BT→스피커폰→BT 재전환 시 **2번째 BT 복귀가 배지에 반영 안 됨**(비대칭). 비파괴 enumerate는 같은 deviceId/라벨이면 변화를 못 잡는 한계. v0.14.0에서 `handleDeviceChange`가 **유휴 중(녹음 아님) 장치변경 시 스트림 재획득**(recoverStream)으로 실제 활성 장치를 다시 잡아 배지를 갱신([CLIP-LOSS-1]와 동일 경로). 녹음 중엔 비파괴 라벨 갱신 유지(클립 보호). 비대칭 원인은 실기기 재검증 필요.
 - **⚙️ 후속(v0.19.0 W7, 입력장치 실시간 로깅 — 민구 요청):** v0.18.0 로그가 **BT·스피커폰을 실제로 썼는데도 두 세션 모두 "iPhone 마이크"**로만 기록(B-1 갭) → 분석 시 입력 경로 식별 불가. 라벨이 실제 변할 때만(`old !== new`) `audioRecorder.ts`가 `session`/`input_device_changed:<reason>:<oldCat>→<newCat>` 이벤트 방출(refreshActiveInputLabel·recoverStream 전이점, `classifyInputDevice` 카테고리 동봉). 신규 이벤트 타입은 안 만들어 **log-replay 호환**. **한계(명시):** iOS는 STT(Web Speech)가 자체 오디오 캡처라 클립 레코더(getUserMedia)의 `track.label`이 STT 실제 경로와 다를 수 있어, **BT 연결돼도 "내장"으로 찍힐 수 있음** — 계측 신호는 늘지만 BT/내장 완전 구분은 [IOS-5]/AUDIO-ROUTE-1(네이티브 셸) 영역. **실기기 검증:** 세션 중 BT↔스피커폰 전환 시 이벤트 출현 여부 + device.json `audioInputDevices` 열거 대조.
 - **🔴 2026-06-30 v0.24.0 실기기 2세션 — BT/스피커폰 구분 불가 재확인:** 민구가 S1 BT·S2 스피커폰(일부 BT)을 썼으나 양 세션 `session:input_device`=`"iPhone 마이크"`+동일 deviceId, `input_device_changed` **0건**. 클립 레코더 track.label이 STT 실경로와 달라 BT 미반영 — 텔레메트리로 입력경로 식별 불가([STT-13]/W7 한계, AUDIO-ROUTE-1 네이티브 셸 영역).
+- **🟢 2026-07-02 v0.25.0 실기기 — BT 라벨 첫 포착(부분 해소):** S2 세션메타 `session:input_device`가 **`OpenDots ONE by Shokz`**(deviceId 24A69DAA…)로 기록됨 — 06-30 "BT 써도 iPhone 마이크로만 기록" 갭과 대비, BT/내장이 세션 라벨 수준에서 처음 구분됨(S1은 iPhone 마이크). 원인은 v0.25.0 기능2 mic prewarm이 세션 시작 전 getUserMedia를 선점해 실제 활성 장치를 잡는 영향으로 **추정(확인 필요)** — STT(Web Speech) 실경로와의 일치 여부는 여전히 미보증([STT-13] 한계 자체는 유지).
 
 ---
 
@@ -397,6 +399,7 @@
 - **출처:** `2026-06-11 실기기 로그` (단일 세션 1건: row1 c7 `clip_empty`)
 - **현재 상태:** ⚠️주시(가드는 들어갔으나 **레이스에 덮이는 실기기 증거 발견**, 2026-06-12) — 빈 캡처(`clip_empty`) 감지 시 `unlinkBrokenPointer`가 셀 audioClip 포인터를 **메모리(pendingClipsRef)와 이미 영속화된 세션 양쪽에서** 회수하되, 포인터가 여전히 우리 clipKey와 같을 때만 해제(이후 restart/modify가 재지정한 경우 보존)한다. 데이터탭이 404 재생버튼을 더는 렌더하지 않음. 값(audit-trail 외 측정값)은 원래부터 영향 없음. (이전: 06-11 백로그 CLIP-EMPTY(P2)) (`src/lib/useVoiceSession.ts`, `src/lib/audioRecorder.ts` `stopClip` 빈 버퍼 가드)
 - **레이스(2026-06-12 발견):** 값 커밋이 포인터 사전등록 + fire-and-forget `persistSession()`을 먼저 실행하므로(첫 await 전에 포인터 포함 행을 동기 빌드), 그 persist가 in-flight인 동안 `clip_empty`→`unlinkBrokenPointer()`가 실행되면 **늦은 `upsertSession`/`saveSession`이 unlink를 되덮어 포인터가 부활**한다. 06-11 v0.6.0 실기기 로그 row8 c7에서 관측(수확된 sessions.json에 포인터 잔존). 해결은 [CLIP-VAL-1] ③(tombstone 또는 persist 직렬화)과 동일 — **v0.7.0에서 tombstone으로 봉합**([CLIP-VAL-1] ✅ 참조, 회귀 `tests/clip-modify-rerecord.spec.ts`).
+- **🟢 2026-07-02 v0.25.0 실기기 — 기능2(mic prewarm) 효과 1차 확인(n=2):** `mic_prewarm_attempt`×3 → `_ok`×3(100%, denied 0; 소요 3394/394/1556ms), **`clip_empty` 0건**(양 세션) — v0.24.0(06-30 S1 r1c7 clip_empty)과 대비, 세션 첫 클립 유실 증상 소멸. 양 세션 r1c7 클립 실제 저장(트림 41KB/35KB + raw). 귀속 특이점: 경계에 걸친 prewarm은 attempt=`__app__`·ok=세션ID로 갈릴 수 있어 분석 시 ts로 짝지을 것(`useVoiceSession.ts:2208-2214`).
 
 ### [CLIP-VAL-1] 수정 재녹음 중 빈 캡처 → 이전 값 음성이 새 값 셀의 재생버튼으로 남음 (3중 결함)
 - **증상:** row8 횡경(c7) 값은 155.5(시트 1560 일치)인데 데이터탭 재생버튼은 **이전 값 177.7 발화**를 재생. 사용자가 시트 비고에 "음성클립과 값 불일치"를 직접 남김.
@@ -665,6 +668,15 @@
 - **해결:** v0.22.0 — 항목명 ellipsis→줄바꿈 허용(`whiteSpace:normal`·`wordBreak:keep-all`·`overflowWrap:anywhere`), 큰 숫자 `maxWidth:100%`+줄바꿈+clamp 하한 축소. CommandHelpPopup·ModifyReentry 동일 점검. z-index 불변(PausedCard 우선순위 보존).
 - **출처:** `2026-06-25 v0.21.0 민구 제보` + 375px 시뮬레이션 실측(잘림 0 확인).
 - **현재 상태:** ✅수정됨(v0.22.0 `AnomalyAlertPopup.tsx`·`CommandHelpPopup.tsx`·`VoiceScreen.tsx`).
+- **⚠️ 2026-07-02 v0.25.0 실기기 — 재오픈 후보(화면 미특정):** 민구 "화면 잘림 문제가 아직 개선되지 않았다" 재제보. 단 **어느 화면인지 미상**이고 로그 단서 0(비고 c9 전 행 공란·TTS 텍스트 미로깅·클립 오디오 전용) — 이 항목(알람팝업)인지 다른 표면(v0.25.0 신규: 데이터탭 큰팝업 `DataScreen.tsx:712,877,1120` maxHeight 78~82vh · 옵션 순번뱃지 `SettingsScreen.tsx` · `SettingsHelp.tsx`)인지 판별 불가. v0.22.0 검증은 375px **시뮬**이라 실기기 402px + iOS 텍스트 크기 확대(Dynamic Type) 조합은 미검증. **화면 특정(민구 1문답: 화면+스크린샷+텍스트크기) 전 코드 수정 금지.**
+- **🟢 2026-07-03 자율 화면 스윕(402×874·375×812, Larry/Vance) — 유력 표면 실측·수정:** 전 탭+전 팝업 강제오픈 스크린샷 스윕에서 **CommandHelpPopup(？명령어)이 "잘려 보임" 실측** — `maxHeight:90%+overflowY:auto`라 기술상 스크롤이지만 스크롤 단서가 전혀 없어 마지막 항목(재시작·종료)이 화면 중간에서 끊겨 사용자에겐 잘림으로 보인다(타이포 21px·gap 15로 10개 항목이 90vh 초과). **v0.26.0 수정:** 타이포 압축(pill 16·설명 15·gap 9)으로 375×812에서 전 항목+하단 닫기 한 화면 수용 + 목록만 스크롤 컨테이너화. 가드: `v026-tolerance-strict.spec.ts` T4. 그 외 표면(알람카드·데이터탭 큰팝업·재질문 큐·기능4 안내팝업)은 두 뷰포트 모두 잘림 0 실측. **민구 재확인 필요:** 제보된 잘림이 이 팝업이었는지(아니라면 iOS 텍스트 확대 조합 의심).
+
+### [MIC-BANNER-POPUP-OVERLAP-1] 마이크 재연결 배너가 ？명령어 팝업 상단(✕ 닫기)을 가림
+- **증상:** 마이크 유실 배너(role=alert, 상단 고정)가 떠 있는 동안 CommandHelpPopup 상단 ✕ 닫기가 배너에 덮여 탭 불가(배너가 포인터를 가로챔). 백드롭 탭으로는 닫히지만 사용자가 모를 수 있음.
+- **원인:** 배너와 팝업이 화면 상단을 공유, 배너 z-index가 팝업(z 50) 위.
+- **해결·회피:** v0.26.0 — CommandHelpPopup에 **하단 전폭 "닫기" 버튼**(`cmd-help-close`, minHeight 48) 추가로 배너와 안 겹치는 닫기 경로 확보(장갑 친화 겸용). 배너 z-index 정책 자체는 불변(마이크 유실 안내가 최우선이라는 의도 존중).
+- **출처:** `2026-07-03 자율 화면 스윕` — Playwright 클릭이 배너 interception으로 실패하며 실측(mock 환경에서 배너 상시 유지 특성으로 발견; 실기기서도 마이크 유실+팝업 동시 상황이면 동일).
+- **현재 상태:** ✅완화됨(v0.26.0 `CommandHelpPopup.tsx`). 근본(배너-팝업 상단 경합 레이아웃 정책)은 ⚠️주시.
 
 ### [SESSION-LABEL-OPTIONS-1] 세션명 디폴트가 단일선택 옵션 상수를 누락
 - **증상:** 세션명 기본값이 "생성일 + 고정값"으로 요청됐는데 실제론 날짜 단독(`2026-06-25-2`)으로 남음 — 농가명·라벨 등 세션 식별값이 빠짐.
@@ -687,6 +699,8 @@
 - **출처:** `2026-06-26 v0.22.0 실기기 로그`(2세션 `setting_changed:recognitionTolerance` 0건; 저신뢰 5건/파싱실패 7건; firsthand 코드 확인). Playwright `v023-voice.spec.ts` B2.
 - **현재 상태:** ✅수정됨(v0.23.0 `useVoiceSession.ts`·`logger.ts`·`sessionStore.ts`·`VoiceScreen.tsx`·`ReaskCue.tsx`). **🟡 2026-06-29 v0.23.0 실기기 부분확정:** 저신뢰 로깅 작동 — `stt_rejected_low_confidence` 3건 모두 `confidence`(0.074·0.269·0.462)+`tolerance:0.5` 동봉, 3건 다 conf<0.5 게이트 정상. 세션메타 `recognitionTolerance:0.5` 스냅샷 ✅. `stt_parse_failed` 유형 세분(decimal_fraction_lost×3·multi_numeric×3·extraneous_token×1) ✅. **검증 갭:** 이번 세션 `setting_changed:recognitionTolerance` 0건(민구가 다이얼 미변경) → 변경 로깅 경로·설정값↔신뢰도 대조는 **다음 실기기에서 허용범위 1회 변경 후 완결** 필요.
 - **✅ 2026-06-30 v0.24.0 실기기 2세션 — 검증 완료:** `setting_changed:recognitionTolerance` **양 세션 각 5회**(S1 0.55→0.8→0.65→0.75→0.8 / S2 0.9→0.85→0.5→0.4→0.55), 게이트가 **라이브 tolerance 추종**(S1 conf 0.777 거부@0.8 / S2 0.893 거부@0.9). 직전 갭 해소. **⚠️관찰(F1, Vance 후보):** 다이얼↑(0.8~0.9)=게이트 더 엄격→적정신뢰도(0.78~0.89) 거부 다발, "허용범위↑=관대" 직관과 반대 → 민구 멘탈모델 확인 선행(추측수정 금지).
+- **🟡 2026-07-02 v0.25.0 실기기 — F1 반전 배포 결과(→ v0.26.0 원복 확정):** v0.25.0이 다이얼을 "높을수록 관대"로 반전(minConf = 0.4+0.9−tolerance). 실기기 2세션: 다이얼 **0.55 방치**(변경 0회, 직전 세션 종료 위치) → 실효 minConf **0.75로 점프**. 거부 8건 전부 `tolerance:0.55,minConf:0.75` 동봉·conf<0.75 정합(게이트 배선 정확). 부작용 실증: 0.55~0.75 대역 거부 3건 중 **정답값 "100"@0.62 거부 1건**(반전이 추가한 순수 마찰; "8.8"@0.639·"3000"@0.575는 오답이라 우연히 유익). 거부율 자체는 8/87(9.2%)로 폭증 없음. **교훈: 게이트 방향 반전은 기존 다이얼 위치의 의미를 뒤집는다**(마이그레이션 없는 반전 = 사용자가 안 만졌는데 임계 이동). 민구 최종 결정 — **원래 방향(높을수록 엄격) 복귀 + 다이얼 캡션/aria에 방향 명시**(v0.26.0, `settingsStore.minConfidenceForTolerance` 단일 지점).
+- **✅ 2026-07-03 v0.26.0 원복 구현:** `minConfidenceForTolerance = tolerance` 직접 매핑(다이얼 90%=minConf 0.90 가장 엄격), 다이얼 캡션 "높을수록 엄격 (확실한 발음만 인정)"+aria 동기 명시(방향 오해 재발 방지), 대역·기본값·persist 불변. 방향 고정 전용 스펙 `v026-tolerance-strict.spec.ts` T1~T3 신설(이 스펙이 깨지면 방향이 또 바뀐 것). 참고: 07-03 실 STT 시뮬(Tier3 무인)서 실측 신뢰도 0.70~0.85 관측 — 다이얼 85%+ 설정 시 정상 발화도 거부될 수 있어 **기본 60% 유지 권장**.
 
 ### [LOG-UPLOAD-SELECTED-1] 다중세션 "시트에 추가" 시 일부 세션 로그만 Drive 업로드
 - **증상:** 민구 "복수 세션을 시트에 추가 시 일부 세션 로그 파일만 업로드되는 듯". v0.21.0 테스트에서 스피커폰 세션 로그가 Drive에 누락된 바 있음.
@@ -695,6 +709,7 @@
 - **출처:** `2026-06-26 v0.22.0 실기기 로그`(이번엔 2세션 모두 업로드 성공이나 근인=successIds 게이팅 코드 확인; 06-25 `drive_upload:partial:user_drive,admin_drive` 흔적). firsthand 코드 확인.
 - **현재 상태:** ✅수정됨(v0.23.0 `DataScreen.tsx`). **⚪ 2026-06-29 v0.23.0 미검증:** 단일 세션이라 "새 행 0 세션 + 신규 세션 동반 선택" 시나리오 자체가 미발생 → 선택업로드/`N/N` 표기 **다음 실기기에서 2개+ 세션 동시선택**으로 검증 필요. **🟡 partial 라벨 inconclusive:** 세션종료 자동 export가 `drive_upload:partial:user_drive,admin_drive`(핸들러 `DataScreen.tsx:258` = 그 export의 양 레그 에러)로 찍혔으나 4.3초 뒤 2차 export(`_1782708326230.zip`)가 admin 취합폴더 정상 안착 → 로그는 자기 업로드 성공을 기록 못 해 "전송실패-후-재시도성공 vs 실제 부분실패" 판별 불가. 차기 로그에서 단일세션 자동 export의 partial 빈도·레그 패턴 누적 관측(06-25·06-26·06-29 연속 관측).
 - **🟡 2026-06-30 v0.24.0 실기기 2세션 — 다중세션 업로드 기능적 성공 + partial 4연속:** 2세션 함께 export·**둘 다 Drive 안착**(rclone 수확)=동시선택 업로드 성공. 단 export 시점 `drive_upload:partial:user_drive,admin_drive`×3 또 기록(**06-25/26/29/30 4연속**) — 데이터는 도달하나 라벨이 진짜 실패와 외관 동일. "로그 N/N 세션 백업" 토스트는 미계측(육안 필요). 라벨 정밀화(레그별 성공/실패 분리) 백로그 F2.
+- **🟢 2026-07-02 v0.25.0 — partial 4연속의 사후 입증 + 신규 라벨 검증은 다음 export로:** 07-02 zip의 누적 이력에서 06-30 `partial:user_drive,admin_drive`×3 **뒤 13~21초 내 `drive_upload:ok`×3** 확인 — 4연속 partial은 "재시도 성공이 그 zip 스냅샷 밖"이었던 오해로 종결. v0.25.0 F2 레그 분리 라벨(`drive_upload:ok`/`partial:fail=<legs>:ok=<legs>`, `DataScreen.tsx:289-303`)은 배포됐으나 **export zip은 자기 업로드 결과를 담을 수 없는 구조**(스냅샷이 업로드 완료 전 생성, 07-02 자기 이벤트 0건)라 실기기 검증은 다음 export 로그에서.
 
 ---
 

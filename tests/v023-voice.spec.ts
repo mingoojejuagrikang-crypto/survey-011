@@ -386,9 +386,9 @@ test('B2 — 저신뢰도(conf<허용범위) 발화 → 사유 큐 low_confidenc
   const events = await loadLogEvents(page);
   const lowConf = events.find((e) => e.type === 'stt_rejected_low_confidence');
   expect(lowConf).toBeTruthy();
-  // v0.25.0 F1(다이얼 "높을수록 관대" 반전): extra는 다이얼 값(tolerance) + 반전된 실제 임계(minConf)를
-  // 함께 싣는다. 기본 0.60 → minConfidenceForTolerance(0.6)=0.40+0.90−0.60=0.70. conf 0.3 < 0.7 → 거부.
-  expect(lowConf?.extra).toBe('tolerance:0.6,minConf:0.7'); // 설정값 vs 신뢰도 대조 근거(반전 명시)
+  // v0.26.0 F1 재변경(민구 최종 결정: 높을수록 엄격, 직접 매핑): extra는 다이얼 값(tolerance)과
+  // 실제 임계(minConf)를 함께 싣는다. 기본 0.60 → minConfidenceForTolerance(0.6)=0.60. conf 0.3<0.6 거부.
+  expect(lowConf?.extra).toBe('tolerance:0.6,minConf:0.6'); // 설정값 vs 신뢰도 대조 근거(방향 명시)
 
   // 성공 커밋 → 사유 큐 해제.
   await fireSttConf(page, '105.0', 0.95, 700);

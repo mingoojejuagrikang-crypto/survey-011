@@ -1350,8 +1350,8 @@ export function useVoiceSession() {
     // settingsStore.recognitionTolerance(기본 0.60, 범위 0.40~0.90)로 이전한다. 장갑 낀 손가락용
     // 가로 다이얼(Vance)이 이 값을 쓴다. **값 게이트만** 바꾼다 — 위 명령 게이트(commandMinConfidence,
     // 기본 0.7)와 lone-syllable 동음이의 가드, 아래 `confidence > 0` 미보고 센티넬은 그대로 둔다.
-    // v0.25.0 F1(민구 확정) — 다이얼은 "높을수록 관대". 저장값(recognitionTolerance)은 다이얼 위치이고,
-    // 실제 최소 신뢰도는 minConfidenceForTolerance()가 반전 변환한다(대역 동일, 방향만 반전).
+    // v0.26.0 F1 재변경(민구 최종 결정) — 다이얼은 "높을수록 엄격". 저장값(recognitionTolerance)은
+    // 다이얼 위치이고, 실제 최소 신뢰도 변환은 minConfidenceForTolerance()가 단독 소유한다(이력 그쪽).
     const recognitionTolerance = useSettingsStore.getState().recognitionTolerance;
     const minConfidence = minConfidenceForTolerance(recognitionTolerance);
 
@@ -1704,30 +1704,6 @@ export function useVoiceSession() {
     const trendViolation = evaluateTrend(col, awaiting.row, awaiting.colId, parsed);
     if (trendViolation) {
       const v = trendViolation;
-      logger.log({
-        type: 'trend', extra: 'trend_alert_fired',
-        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
-        colName: awaiting.name, text, parsed, confidence, previousValue: String(v.prev),
-      });
-      // value 이벤트는 정상 커밋과 동일하게 남긴다 — 분석 파이프라인이 위반 여부와 무관하게 본다.
-      logger.log({
-        type: 'value',
-        sessionId: sessionIdRef.current,
-        row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
-        text, parsed, confidence,
-        durationMs: commitLatencyMs, // v0.20.0 Phase 5 #4 — 발화 확정→커밋 반응속도(ms)
-        ...(awaiting.isModify && awaiting.previousValue != null
-          ? { previousValue: awaiting.previousValue }
-          : {}),
-      });
-      // 응답 대기 상태 무장 — 새 값 발화가 기존 수정(isModify) 의미론으로 재커밋되도록
-      // previousValue=방금 커밋된 값과 함께 세팅한다.
-      awaitingFieldRef.current = {
-        row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
-        isModify: true, previousValue: parsed, trendConfirm: true,
-      };
-      // 응답 발화('확인'/새 값) 클립 시작 — announceField 패턴(TTS 이전 시작, barge-in 수록).
-      armClipForCell(awaiting.row, awaiting.colId);
       // v0.9.0 발화 문구 분기(민구 요청): 변동률(pct) 트리거 → 기존 % 유지; 증가/감소(direction)
       // 또는 둘 다(both) → 절대값 차이로 안내. 절대차는 부동소수 잔여(2.2000002)를 막기 위해 컬럼
       // 소수자리수로 반올림한다(float=col.decimals||1, int=0). both는 방향 우선 = 절대값.
@@ -1759,6 +1735,34 @@ export function useVoiceSession() {
         alertKind === 'range'
           ? `범위 알람 ${rangeSign}${rangePct}%`
           : `추세 알람 ${v.direction === 'up' ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
+      // v0.26.0(Trace 권장, 2세션 연속 계측 갭) — 어떤 종류/트리거/문구로 알람이 나갔는지 extra에 동봉.
+      //   직전까지는 extra='trend_alert_fired'뿐이라 기능3(both→범위 우선) 라우팅을 로그로 검증할 수
+      //   없었다. 파서 호환을 위해 'trend_alert_fired' 접두는 유지하고 ':k=v' 목록을 덧붙인다.
+      logger.log({
+        type: 'trend',
+        extra: `trend_alert_fired:trigger=${v.trigger},kind=${alertKind},dir=${v.direction},change=${changeText || '?'},text=${alertText}`,
+        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        colName: awaiting.name, text, parsed, confidence, previousValue: String(v.prev),
+      });
+      // value 이벤트는 정상 커밋과 동일하게 남긴다 — 분석 파이프라인이 위반 여부와 무관하게 본다.
+      logger.log({
+        type: 'value',
+        sessionId: sessionIdRef.current,
+        row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
+        text, parsed, confidence,
+        durationMs: commitLatencyMs, // v0.20.0 Phase 5 #4 — 발화 확정→커밋 반응속도(ms)
+        ...(awaiting.isModify && awaiting.previousValue != null
+          ? { previousValue: awaiting.previousValue }
+          : {}),
+      });
+      // 응답 대기 상태 무장 — 새 값 발화가 기존 수정(isModify) 의미론으로 재커밋되도록
+      // previousValue=방금 커밋된 값과 함께 세팅한다.
+      awaitingFieldRef.current = {
+        row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
+        isModify: true, previousValue: parsed, trendConfirm: true,
+      };
+      // 응답 발화('확인'/새 값) 클립 시작 — announceField 패턴(TTS 이전 시작, barge-in 수록).
+      armClipForCell(awaiting.row, awaiting.colId);
       // 시각 팝업: 이전값→현재값과 변화량을 띄운다(발화만으론 스쳐 지나가 확인이 어렵다는 요청).
       // v0.12.0 AREA2 V2 — 어떤 샘플·행/직전 회차의 비교인지 식별정보를 함께 싣는다(별도 재계산).
       const alertExtra = getAnomalyAlertData(awaiting.row);
