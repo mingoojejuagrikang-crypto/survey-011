@@ -1,4 +1,5 @@
 import { T } from '../../tokens';
+import { useFitScale } from './useFitScale';
 
 /** v0.9.0 이상치 알람 팝업 — 발화만으론 스쳐 지나가 확인이 어렵다는 요청. 이전값→현재값과 변화량
  *  (절대차 또는 %)을 상단에 띄우고, '확인'/'유지'/새 값 입력 또는 다음 필드 진입 시 해제(store에서).
@@ -16,9 +17,13 @@ import { T } from '../../tokens';
  *     으로 즉시 반영한다(정정 재측정이 정상으로 판명된 경우). 빨강(이상치)↔초록(정정완료) 구분.
  *  v0.23.0 입력탭#1(중앙 흡수, Vance): 기존 position:fixed; inset:0 오버레이를 **제거**하고, 카드만
  *   반환한다. ActiveState의 중앙 흡수영역(grid row3, 1fr, overflow:hidden)이 직접 자식으로 렌더해
- *   중앙 정렬한다. 흡수영역의 가용 높이에 카드를 맞춰(maxHeight:100% + minHeight:0 + overflowY:auto)
- *   짧은 기기/긴 음수소수(-355.5 등)에서도 부모 overflow:hidden에 **잘리지 않고** 내부 스크롤한다.
- *   (이전: min(70vh,520px) 캡 — 375px 세로에서 70vh가 트랙보다 커 부모에 클립되던 잔여 위험 제거.) */
+ *   중앙 정렬한다.
+ *  v0.27.0 입력탭(무스크롤·반응형, Vance — 민구 07-03 결정): 사용자는 양손 측정 중이라 카드 내부
+ *   스크롤이 불가능하다. ① 고정 px 폰트·간격을 전부 clamp(min, vh/vw, max)로 뷰포트 비례화(기기
+ *   크기·iOS 텍스트 확대에 자동 대응), ② useFitScale이 흡수영역 높이를 실측해 넘칠 때만 --fit-lo
+ *   (하위 우선순위: 직전값·식별정보·안내문)를 먼저·더 크게, --fit-hi(상위: 현재값·알람 라벨)를
+ *   완만하게 줄여 **스크롤 잔여 0**(scrollHeight ≤ clientHeight)을 보장한다. overflowY:auto는 훅
+ *   미작동 시 최후 폴백일 뿐 정상 경로에선 스크롤이 생기지 않는다. ellipsis 잘림은 계속 금지. */
 export function AnomalyAlertPopup({
   a,
 }: {
@@ -60,37 +65,49 @@ export function AnomalyAlertPopup({
       `추세 알람 ${up ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
   // R2 — corrected(정정 후 정상)면 GREEN, 그 외(이상치 대기)는 RED 통일(V3).
   const accent = corrected ? T.green : T.red;
+  // v0.27.0 — 무스크롤 가드: 콘텐츠가 흡수영역 높이를 넘으면 폰트를 실측 기반으로 줄인다.
+  const fitRef = useFitScale<HTMLDivElement>([
+    a.colName, a.prev, a.next, a.changeText, a.sampleKey, a.prevDate, a.status, a.kind,
+  ]);
   return (
     <div
+      ref={fitRef}
       data-testid="anomaly-alert"
       data-status={corrected ? 'corrected' : 'pending'}
       aria-live="assertive"
       style={{
         // v0.23.0 입력탭#1 — 중앙 흡수: 흡수영역(1fr, overflow:hidden) 가용 높이에 맞춘다.
-        //   maxHeight:100% + minHeight:0 + overflowY:auto로 짧은 기기/긴 값에서도 부모에 잘리지
-        //   않고 내부 스크롤. 폭은 흡수영역 패딩 안에서 채우되 가독 상한(min(620px,96vw)) 유지.
+        //   v0.27.0 — 무스크롤: 패딩·간격도 vh 비례. overflowY:auto는 훅 폴백으로만 잔존.
         width: '100%', maxWidth: 'min(620px, 96vw)',
         maxHeight: '100%', minHeight: 0, overflowY: 'auto',
-        padding: '24px 30px', borderRadius: 18,
+        padding: 'clamp(12px, 2.6vh, 24px) clamp(16px, 5vw, 30px)', borderRadius: 18,
         background: corrected ? 'rgba(18,34,22,0.96)' : 'rgba(34,18,18,0.96)',
         border: `2px solid ${accent}`,
         boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
-        display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
+        display: 'flex', flexDirection: 'column', gap: 'clamp(4px, 0.8vh, 8px)', alignItems: 'center',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-        <span style={{ fontSize: 20, fontWeight: 800, color: T.text }}>
+        {/* 헤더 항목명 = 식별정보(P4) → --fit-lo. 줄바꿈 허용(잘림 금지). */}
+        <span
+          style={{
+            fontSize: 'calc(clamp(16px, 2.4vh, 21px) * var(--fit-lo, 1))', fontWeight: 800, color: T.text,
+            maxWidth: '100%', wordBreak: 'keep-all', overflowWrap: 'anywhere', textAlign: 'center', lineHeight: 1.25,
+          }}
+        >
           {a.colName}
         </span>
-        <span style={{ fontSize: 19, fontWeight: 800, color: accent }}>
+        {/* 알람 라벨 = 변화(P2, 현재값 다음 우선) → --fit-hi(완만 축소). */}
+        <span style={{ fontSize: 'calc(clamp(16px, 2.3vh, 20px) * var(--fit-hi, 1))', fontWeight: 800, color: accent }}>
           {alarmLabel}
         </span>
       </div>
       {/* V2 — 어떤 샘플/행을 보는지. 샘플키 미상이면 '행 N' 폴백. 긴 키도 박스 안에서 줄바꿈.
-          v0.18.0 1d — 원거리 가독: 샘플 식별 줄을 키우고 대비 보강(textDim→text). */}
+          v0.18.0 1d — 원거리 가독: 샘플 식별 줄을 키우고 대비 보강(textDim→text). P4 → --fit-lo. */}
       <div
         style={{
-          fontSize: 'clamp(15px, 4.4vw, 17px)', color: T.text, fontWeight: 700, textAlign: 'center',
+          fontSize: 'calc(clamp(13px, min(4.4vw, 2.1vh), 17px) * var(--fit-lo, 1))',
+          color: T.text, fontWeight: 700, textAlign: 'center',
           lineHeight: 1.4, maxWidth: '100%', wordBreak: 'break-all', overflowWrap: 'anywhere',
         }}
       >
@@ -100,39 +117,42 @@ export function AnomalyAlertPopup({
           넘쳐 박스를 벗어나지 못하게 한다(필요시 줄바꿈). 자식 컬럼은 minWidth:0로 축소 허용. */}
       <div
         style={{
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center', flexWrap: 'wrap', gap: 12,
+          display: 'flex', alignItems: 'flex-end', justifyContent: 'center', flexWrap: 'wrap',
+          gap: 'clamp(8px, 1.4vh, 12px)',
           maxWidth: '100%',
           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
         }}
       >
-        {/* V2 — 직전 값을 그 회차 날짜로 라벨링(prevDate 있을 때만 날짜 표기). */}
+        {/* V2 — 직전 값을 그 회차 날짜로 라벨링(prevDate 있을 때만 날짜 표기). P4 → --fit-lo. */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
           <span
             style={{
-              fontSize: 13, fontWeight: 700, color: T.textDim, letterSpacing: -0.2,
+              fontSize: 'calc(clamp(11px, 1.6vh, 13px) * var(--fit-lo, 1))', fontWeight: 700,
+              color: T.textDim, letterSpacing: -0.2,
               fontFamily: 'system-ui, sans-serif',
             }}
           >
             직전{a.prevDate ? ` (${a.prevDate})` : ''}
           </span>
-          {/* v0.18.0 1d — 직전값 대비 보강(textDim→text 인접 대비 위해 크기 유지·굵게). */}
+          {/* v0.18.0 1d — 직전값 대비 보강. P3(직전값) → --fit-lo(현재값보다 먼저 축소). */}
           <span
             style={{
-              fontSize: 'clamp(30px, 8vw, 36px)', fontWeight: 800, color: T.textDim,
+              fontSize: 'calc(clamp(24px, min(8vw, 4.4vh), 36px) * var(--fit-lo, 1))', fontWeight: 800, color: T.textDim,
               maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.05,
             }}
           >
             {a.prev}
           </span>
         </div>
-        <span style={{ fontSize: 26, color: T.textDim, paddingBottom: 4 }}>→</span>
+        <span style={{ fontSize: 'calc(clamp(18px, 3.2vh, 26px) * var(--fit-lo, 1))', color: T.textDim, paddingBottom: 4 }}>→</span>
         {/* R3 — hero 현재값 위에 항목명 라벨(accent색)을 붙여 정수값도 어느 항목인지 즉시 식별.
             v0.22.0 입력탭#2(P2 잘림): 긴 항목명("과실 횡경 평균값" 등)이 ellipsis로 …잘리던 문제 →
             줄바꿈 허용(whiteSpace:normal + wordBreak:keep-all/overflowWrap:anywhere)으로 전부 표시. */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
           <span
             style={{
-              fontSize: 13, fontWeight: 800, color: accent, letterSpacing: -0.2,
+              fontSize: 'calc(clamp(11px, 1.6vh, 13px) * var(--fit-lo, 1))', fontWeight: 800,
+              color: accent, letterSpacing: -0.2,
               fontFamily: 'system-ui, sans-serif', maxWidth: 'min(280px, 60vw)',
               whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere',
               textAlign: 'center', lineHeight: 1.25,
@@ -140,12 +160,12 @@ export function AnomalyAlertPopup({
           >
             {a.colName}
           </span>
-          {/* v0.22.0 입력탭#2(P2 잘림): 큰 현재값이 길면(소수·음수 등) 가로로 넘쳐 박스를 벗어나던
-              문제 → maxWidth:100% + overflowWrap:anywhere로 줄바꿈 보장, clamp 하한↓로 좁은 기기에서
-              축소도 함께(잘림 0). */}
+          {/* 현재값 = P1(최우선 정보) → --fit-hi(가장 늦게·완만하게 축소). vh 상한 결합으로 짧은
+              화면(가로모드 포함)에서도 CSS 단계에서 이미 비례 축소된다. 줄바꿈 허용(잘림 0). */}
           <span
             style={{
-              fontSize: 'clamp(34px, 11vw, 60px)', fontWeight: 900, color: T.text, letterSpacing: -0.5,
+              fontSize: 'calc(clamp(32px, min(11vw, 7.4vh), 60px) * var(--fit-hi, 1))',
+              fontWeight: 900, color: T.text, letterSpacing: -0.5,
               maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
               textAlign: 'center', lineHeight: 1.05,
             }}
@@ -154,7 +174,8 @@ export function AnomalyAlertPopup({
           </span>
         </div>
       </div>
-      <div style={{ fontSize: 15, color: corrected ? T.green : T.textDim, fontWeight: 600 }}>
+      {/* 안내문 = P5(최하위) → --fit-lo. */}
+      <div style={{ fontSize: 'calc(clamp(12px, 1.8vh, 15px) * var(--fit-lo, 1))', color: corrected ? T.green : T.textDim, fontWeight: 600 }}>
         {corrected ? '✓ 정정되었습니다' : "'확인' 또는 새 값으로 정정"}
       </div>
     </div>

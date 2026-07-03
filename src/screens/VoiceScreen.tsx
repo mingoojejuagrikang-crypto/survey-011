@@ -17,6 +17,7 @@ import { PausedCard } from '../components/voice/PausedCard';
 import { ModifyIndicatorPill } from '../components/voice/ModifyIndicatorPill';
 import { ReaskCue, type ReaskReason } from '../components/voice/ReaskCue';
 import { heroFontSize } from '../components/voice/heroLayout';
+import { useFitScale } from '../components/voice/useFitScale';
 import type { Column } from '../types';
 
 export function VoiceScreen() {
@@ -938,24 +939,25 @@ function VoiceHero({
   const statusAccent = T.green;
   // v0.20.0 입력탭#5 — listening일 때 패널 자체가 은은히 점멸(점3개 제거). transform 미사용 호흡.
   const isListening = event === 'listening';
+  // v0.27.0 무스크롤(민구 07-03) — 양손 측정 중 스크롤 불가. 넘칠 때만 useFitScale이 폰트를 줄여
+  //   스크롤 잔여 0 보장(항목명·값=--fit-hi 완만, 샘플 라벨·상태문=--fit-lo 먼저).
+  const fitRef = useFitScale<HTMLDivElement>([event, col.name, value, sampleParts, reaskReason]);
 
   return (
     <div
+      ref={fitRef}
       aria-live="polite"
       style={{
         // v0.18.0 1a — 반투명 패널: 다른 팝업과 동일한 frame + 2px 상태색 border + shadow.
         maxWidth: 'min(560px, 94vw)', width: '100%',
-        // v0.21.0 입력탭#2 — 잘림 방지: 흡수영역(1fr, overflow:hidden) 안에서 패널이 가용높이를
-        //   넘으면 하드 클립되던 문제. 패널 자체 maxHeight:100% + 내부 overflowY:auto로, 짧은
-        //   기기/긴 값에서도 항목명·값이 잘리지 않고 패널 내부에서 스크롤되게 한다(다른 중앙
-        //   오버레이의 min(70vh,520px)+overflowY:auto 가드와 동일 전략). minHeight:0은 flex
-        //   자식이 컨테이너를 넘기지 않게(축소 허용) 하는 표준 가드.
+        // v0.21.0 입력탭#2 잘림 방지 가드 유지 — 단 v0.27.0부터 overflowY:auto는 폴백일 뿐,
+        //   정상 경로에선 useFitScale이 축소해 내부 스크롤이 생기지 않는다(무스크롤 원칙).
         maxHeight: '100%', minHeight: 0, overflowY: 'auto',
-        padding: '18px 24px', borderRadius: 18,
+        padding: 'clamp(12px, 2.2vh, 20px) clamp(16px, 4.4vw, 24px)', borderRadius: 18,
         background: HERO_PANEL.bg,
         border: `2px solid ${HERO_PANEL.border}`,
         boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'clamp(6px, 1.2vh, 10px)',
         textAlign: 'center', minWidth: 0,
         // v0.20.0 입력탭#5 — 패널 자체 점멸(듣는 중 신호). opacity+box-shadow만(scale 금지 — 94vw가
         //   overflow:hidden 1fr 구역에서 잘림). 다른 상태(confirm/complete)는 점멸하지 않는다.
@@ -971,9 +973,10 @@ function VoiceHero({
 
       {event === 'complete' ? (
         <>
-          <span style={{ fontSize: 'clamp(48px, 16vw, 72px)', lineHeight: 1, color: T.green }} aria-hidden>✓</span>
-          <span style={{ fontSize: 24, fontWeight: 800, color: T.text, letterSpacing: -0.4 }}>행 입력 완료</span>
-          <span style={{ fontSize: 14, color: T.textDim, fontWeight: 500 }}>다음 행으로 이동합니다…</span>
+          {/* v0.27.0 — vh 상한 결합 + fit 스케일(상태 심볼·제목=hi, 보조문=lo). */}
+          <span style={{ fontSize: 'calc(clamp(40px, min(16vw, 8.8vh), 72px) * var(--fit-hi, 1))', lineHeight: 1, color: T.green }} aria-hidden>✓</span>
+          <span style={{ fontSize: 'calc(clamp(18px, 3vh, 26px) * var(--fit-hi, 1))', fontWeight: 800, color: T.text, letterSpacing: -0.4 }}>행 입력 완료</span>
+          <span style={{ fontSize: 'calc(clamp(12px, 1.7vh, 15px) * var(--fit-lo, 1))', color: T.textDim, fontWeight: 500 }}>다음 행으로 이동합니다…</span>
         </>
       ) : event === 'listening' ? (
         // v0.21.0 입력탭#3 — "측정값을 말씀해 주세요" 정적 안내문구 + 데이터형 배지(TypeBadge) 삭제.
@@ -984,9 +987,10 @@ function VoiceHero({
         <>
           <span
             style={{
-              fontSize: 'clamp(34px, 13vw, 76px)', fontWeight: 900,
+              // v0.27.0 — vh 상한 결합(짧은 화면 자동 축소) + --fit-hi(최우선 정보라 가장 늦게 축소).
+              fontSize: 'calc(clamp(30px, min(13vw, 9.4vh), 76px) * var(--fit-hi, 1))', fontWeight: 900,
               color: T.text, letterSpacing: -1, lineHeight: 1.05,
-              wordBreak: 'keep-all', textAlign: 'center', maxWidth: '100%',
+              wordBreak: 'keep-all', overflowWrap: 'anywhere', textAlign: 'center', maxWidth: '100%',
             }}
           >
             {col.name}
@@ -1003,7 +1007,7 @@ function VoiceHero({
             style={{
               // v0.24.0 입력탭 — 잘림 방지: nowrap/ellipsis 제거 → 흡수영역 폭(maxWidth:100%) 안에서
               //   줄바꿈(keep-all). 긴 항목명도 '…'로 안 잘리고 패널 내부에서 흐른다.
-              fontSize: 'clamp(18px, 5.4vw, 24px)', fontWeight: 800,
+              fontSize: 'calc(clamp(16px, min(5.4vw, 3vh), 24px) * var(--fit-lo, 1))', fontWeight: 800,
               color: T.text, lineHeight: 1.25,
               letterSpacing: -0.3, wordBreak: 'keep-all', overflowWrap: 'anywhere',
               maxWidth: '100%', textAlign: 'center',
@@ -1018,7 +1022,8 @@ function VoiceHero({
               // v0.24.0 입력탭 — 잘림 방지: nowrap/ellipsis/고정 88vw 제거 → 흡수영역(maxWidth:100%) 안에서
               //   줄바꿈(긴 값·문자형도 '…'로 안 잘리고 영역 내부 스크롤로 안착). heroFontSize 길이별 축소 유지.
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-              fontSize: heroFontSize(value),
+              // v0.27.0 — 값 = 최우선 정보(--fit-hi, 가장 늦게 축소). heroFontSize는 vh 상한 결합.
+              fontSize: `calc(${heroFontSize(value)} * var(--fit-hi, 1))`,
               fontWeight: 800, lineHeight: 1.1,
               color: T.text,
               letterSpacing: -2,
@@ -1029,7 +1034,7 @@ function VoiceHero({
             {value || '—'}
           </span>
           {/* 상태 라벨 */}
-          <span style={{ fontSize: 'clamp(15px, 4.4vw, 19px)', fontWeight: 800, color: statusAccent, letterSpacing: -0.2 }}>
+          <span style={{ fontSize: 'calc(clamp(13px, min(4.4vw, 2.3vh), 19px) * var(--fit-lo, 1))', fontWeight: 800, color: statusAccent, letterSpacing: -0.2 }}>
             ✓ 정상
           </span>
         </>
@@ -1053,10 +1058,13 @@ function SampleLabelHeader({ parts }: { parts: AnnounceLabelPart[] }) {
     >
       {parts.map((p, i) => (
         <span key={p.col.id} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
-          {i > 0 && <span style={{ fontSize: 14, color: T.textMute, fontWeight: 600 }} aria-hidden>·</span>}
+          {i > 0 && <span style={{ fontSize: 'calc(14px * var(--fit-lo, 1))', color: T.textMute, fontWeight: 600 }} aria-hidden>·</span>}
           <span
             style={{
-              fontSize: p.changed ? 'clamp(15px, 4.4vw, 18px)' : 'clamp(14px, 4vw, 16px)',
+              // v0.27.0 — 샘플 라벨은 식별정보(하위 우선) → --fit-lo(먼저 축소).
+              fontSize: p.changed
+                ? 'calc(clamp(13px, min(4.4vw, 2.2vh), 18px) * var(--fit-lo, 1))'
+                : 'calc(clamp(12px, min(4vw, 2vh), 16px) * var(--fit-lo, 1))',
               fontWeight: p.changed ? 800 : 600,
               color: p.changed ? T.green : T.textDim,
               letterSpacing: -0.2,

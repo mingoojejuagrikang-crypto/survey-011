@@ -29,7 +29,8 @@ export function ReaskCue({ reason }: { reason: ReaskReason }) {
         padding: '6px 14px', borderRadius: 999,
         background: 'rgba(255,179,0,0.14)', border: `1px solid ${T.amber}`,
         color: T.amber, fontWeight: 800,
-        fontSize: 'clamp(14px, 4.2vw, 17px)', letterSpacing: -0.2, lineHeight: 1.25,
+        // v0.27.0 무스크롤 — hero(useFitScale 카드) 내부라 --fit-lo를 상속받아 넘칠 때 함께 축소.
+        fontSize: 'calc(clamp(13px, min(4.2vw, 2.1vh), 17px) * var(--fit-lo, 1))', letterSpacing: -0.2, lineHeight: 1.25,
         // 긴 사유도 좁은 기기에서 줄바꿈(잘림 0).
         wordBreak: 'keep-all', overflowWrap: 'anywhere', textAlign: 'center',
       }}

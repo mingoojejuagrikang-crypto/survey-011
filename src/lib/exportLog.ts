@@ -3,6 +3,8 @@ import { logger } from './logger';
 import { loadAudioClip, loadAllAudioClipKeys, loadLogEvents, loadAllSessions } from './db';
 import { getCurrentEmail } from './googleAuth';
 import { buildSessionsSnapshot } from './sessionSnapshot';
+import { attachClipsManifest, type ManifestSourceEvent } from './clipsManifest';
+import type { Session } from '../types';
 
 /** Export logs + audio clips as a ZIP.
  *  - `sessionIds` undefined → include ALL events and clips (used by manual LOG button)
@@ -38,10 +40,13 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
   // "세션 복구" 2단계가 Drive의 이 zip만으로 세션+클립을 복원한다(별도 백업 업로드 없음 —
   // 클립은 아래 clips/를 그대로 공유, 중복 없음). 실패해도 zip 자체는 유효(구버전 zip과 동일 취급)
   // 하지만 [REVIEW-1] "빈 catch 금지" — 실패는 반드시 로깅한다.
+  // v0.27.0: scoped 세션은 아래 clips-manifest 생성에도 재사용하므로 블록 밖으로 승격.
+  // 로드 실패 시 빈 배열 유지 — manifest는 committedValue:null로 정직하게 비운다(추측 금지).
+  let scopedSessions: Session[] = [];
   try {
     const allSessions = await loadAllSessions();
-    const scoped = filterSet ? allSessions.filter((s) => filterSet.has(s.id)) : allSessions;
-    zip.file('sessions.json', buildSessionsSnapshot(scoped, deviceWithUser.appVersion));
+    scopedSessions = filterSet ? allSessions.filter((s) => filterSet.has(s.id)) : allSessions;
+    zip.file('sessions.json', buildSessionsSnapshot(scopedSessions, deviceWithUser.appVersion));
   } catch (e) {
     logger.log({ type: 'app', extra: `export_sessions_json_failed:${String((e as Error)?.message ?? e)}` });
   }
@@ -61,6 +66,16 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
       }
     }
   } catch { /* IDB unavailable */ }
+
+  // v0.27.0: clips-manifest.json — 클립 감사(SOP-003 §3) 자동화용 매핑(클립 파일 ↔ 커밋값 ↔
+  // confidence ↔ 종류). zip에 실제로 담긴 clips/*만 스캔하므로 목록과 파일이 어긋날 수 없다.
+  // additive-only: 기존 엔트리(device/events/sessions/clips)는 불변. 실패해도 export는 성공해야
+  // 하며 [REVIEW-1] "빈 catch 금지" — 실패는 manifest_error로 로깅한다.
+  try {
+    attachClipsManifest(zip, scopedSessions, events as ManifestSourceEvent[], deviceWithUser.appVersion);
+  } catch (e) {
+    logger.log({ type: 'app', extra: `manifest_error:${String((e as Error)?.message ?? e)}` });
+  }
 
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
 }
