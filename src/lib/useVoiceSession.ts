@@ -23,7 +23,12 @@ interface PendingCommandClip {
   /** Save the utterance under (targetRow:targetColId):cmd<n> and return that cmdKey (or null if
    *  empty/already saved). Used by the direct-modify path to re-link the corrected cell's pointer. */
   saveFor: (targetRow: number, targetColId: string) => string | null;
-  /** Save against the awaiting cell (cascade/restart path — no pointer re-link needed). */
+  /** Save against the cell that was awaiting when '수정' was said. Correct ONLY when that awaiting
+   *  cell IS the correction target — true for "redo current field" (no previous field to go back
+   *  to) and for a repeated '수정' while already in modify mode (awaiting was already re-pointed to
+   *  the target by the earlier enterModifyMode call). The plain cascade path (bare "수정" with the
+   *  target being a DIFFERENT, previous field) must use `saveFor(targetRow, target.id)` instead —
+   *  see [CLIP-CORRECTION-1]. */
   saveDefault: () => void;
 }
 
@@ -249,8 +254,9 @@ export function useVoiceSession() {
     return {
       // Key the saved clip + return the cmdKey for the cell being corrected.
       saveFor,
-      // Cascade/restart path doesn't re-link a pointer — save against the awaiting cell as before
-      // (analysis still gets the utterance; the cell is re-recorded so no pointer is needed).
+      // Save against the (row, colId) this closure captured — the awaiting cell at preserve-time.
+      // Callers only use this when awaiting === target (see PendingCommandClip.saveDefault doc);
+      // the plain-cascade path uses `saveFor(targetRow, target.id)` directly instead.
       saveDefault: () => { saveFor(row, colId); },
     };
   }, []);
@@ -751,9 +757,17 @@ export function useVoiceSession() {
       }
     }
 
-    // Cascade re-record path (no usable inline value): the target cell is re-recorded fresh, so no
-    // pointer re-link is needed — save the '수정' utterance against the awaiting cell for analysis.
-    pendingCmd?.saveDefault();
+    // Cascade re-record path (no usable inline value): target/targetRow are already resolved above
+    // (the cell the user is about to re-answer) and don't change for the rest of this correction.
+    // v0.28.0 [CLIP-CORRECTION-1] fix: this used to call saveDefault(), which files the '수정'
+    // command clip under the AWAITING cell (the field that was about to be prompted when '수정' was
+    // said) — a DIFFERENT column from the one being corrected. clips-manifest/audit then can't find
+    // "what triggered this correction" under the corrected column (Sonar 2026-07-06 desktop repro,
+    // sonar-a4-direct2.js: cmd clip landed on c9 while the correction target was c8). Re-key it to
+    // the target cell instead, mirroring the direct-modify path above (L690) — same invariant
+    // (command clip lives under the cell it corrects), just without the pointer re-link (the
+    // target's own value clip is re-recorded fresh under its bare key below, so no relink needed).
+    pendingCmd?.saveFor(targetRow, target.id);
 
     // Snapshot the existing row before clearing in-memory. persistSession() includes this backup
     // if stop() fires before re-completion. If persistSession fire-and-forget hasn't flushed yet

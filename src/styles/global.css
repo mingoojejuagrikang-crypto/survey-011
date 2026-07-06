@@ -142,6 +142,17 @@ input::placeholder {
 /* prevent iOS bounce, keep PWA feel */
 html { -webkit-text-size-adjust: 100%; }
 
+/* v0.28.0 [이상치 카드 375×667 무스크롤 수정, 2026-07-06 Sonar 재현 QA] — AnomalyAlertPopup의
+   현재값 라벨(.aa-hero-dup-label)은 헤더 줄의 colName과 100% 중복이다(R3: 시선이 현재값에 있을 때
+   항목명을 재확인시키려는 의도적 중복). 375×667급 최소 높이 화면에서는 폰트 하한을 건 뒤에도
+   남는 잔여 초과분을 해소하기 위해 이 중복 줄만 숨긴다(정보 손실 없음 — 항목명은 헤더에 유지).
+   순수 뷰포트 높이 조건(측정된 overflow 아님)이라 되튐(oscillation) 없음. */
+@media (max-height: 700px) {
+  .aa-hero-dup-label { display: none; }
+  /* "직전 (날짜)" 라벨 — 아래 숫자(비교값 자체)는 유지, 부가 설명 문구만 숨긴다. */
+  .aa-prev-label { display: none; }
+}
+
 /* v0.20.0 입력탭#1·#2 — Dial: 장갑 손가락용 큰 thumb. 네이티브 range를 유지(role=slider/키보드)하되
    thumb를 28px·흰색·테두리로 키워 장갑·원거리 조작성을 확보한다. 트랙 채움색은 인라인 gradient. */
 .dial-range { -webkit-appearance: none; appearance: none; outline: none; }

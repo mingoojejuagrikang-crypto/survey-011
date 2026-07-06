@@ -109,6 +109,14 @@ async function stubDriveApi(page: Page, opts: { listFails?: boolean } = {}): Pro
 }
 
 async function bootApp(page: Page, { signedIn }: { signedIn: boolean }) {
+  // 2026-07-06 Sonar 데스크탑 재현 QA(C1) — 이 스펙의 zip fixture들은 NOW(고정 앵커) 기준
+  // 상대 오프셋(ISO(n)일 전)으로 createdTime을 만드는데, 앱의 실제 필터(DataScreen.tsx의
+  // `since = Date.now() - chip.days*86400_000`, recoverFromDrive.ts의 inRange)는 **실제
+  // 벽시계 시각**을 본다. 시간이 흐르면 zip-legacy(ISO(6)="NOW"의 6일 전)가 실제 "최근 30일"
+  // 창 밖으로 밀려나 W8(로그인 상태) 테스트가 결정론적으로 실패했다(회귀 아님, 테스트 픽스처
+  // 드리프트). session-local-date.spec.ts와 동일한 패턴으로 페이지의 시계를 NOW에 고정해
+  // fixture 앵커와 앱이 보는 "현재 시각"을 동기화한다 — 실행 시점과 무관하게 항상 통과.
+  await page.clock.setFixedTime(new Date(NOW));
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate((withToken) => {
     localStorage.clear();

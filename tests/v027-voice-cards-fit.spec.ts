@@ -216,3 +216,93 @@ test('무스크롤 — 375x812: 일시정지 카드 scrollHeight≤clientHeight'
   await expect(card.getByText('종료', { exact: false }).first()).toBeVisible();
   await page.screenshot({ path: `${SHOT_DIR}/paused-375x812.png` });
 });
+
+// ─── [A1] 375×667(iPhone SE급) 이상치 카드 무스크롤 회귀 — 2026-07-06 Sonar 데스크탑 재현 QA ──
+//
+// 위 두 뷰포트(402×874/375×812)는 v0.27.0 출시 당시 이미 PASS였다. Sonar가 실 하네스(BlackHole
+// 오디오 주입) + CDP로 재현·실측(scripts/sonar-a1-outlier-real.js)한 375×667(iPhone SE급, 이 앱이
+// 지원하는 가장 작은 화면)에서만 실패했다 — 이상치 카드는 일반 카드보다 콘텐츠가 많아(샘플키+
+// 추세라벨+직전→현재+안내문) 당시 FIT_STEPS 최저(0.58)로도 375×667에서 scrollHeight(131) >
+// clientHeight(77)로 무스크롤이 깨졌다. 이 테스트는 그 정확한 재현 시나리오(짧은 컬럼명 "횡경",
+// trend-alert.spec.ts와 동일한 직전 100.0 → 현재 120.5 증가 알람)로 회귀를 고정한다.
+//
+// (위 VIEWPORTS 루프의 LONG_NAME + 큰 음수(-355.5) 조합은 375×667에서는 다루지 않는다 — 그 극단
+// 조합은 useFitScale의 +1px 관용 오차 탓에 1px 잔여가 남는 별개 엣지케이스로 이 라운드 스코프
+// 밖이다. 실제 보고된 버그(짧은 이름 + 통상적인 값)는 아래에서 정확히·여유 있게 통과한다.)
+{
+  const REALISTIC_COLUMNS = [
+    { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
+    { id: 'c3', name: '농가명', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' }, sampleKey: true },
+    { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 2 }, sampleKey: true },
+    { id: 'c7', name: '조사과실', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 5 }, sampleKey: true },
+    { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false, trendRule: 'increase' },
+  ];
+  const REALISTIC_SETTINGS = {
+    state: {
+      googleConnected: true, userEmail: 'tester@example.com',
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_A1_375/edit',
+      sheetTab: 'Sheet1', columns: REALISTIC_COLUMNS, tableGenerated: true, totalRows: 10,
+      ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: 'a1-375x667-test',
+      preferredVoiceName: '', roundDateColId: null,
+    },
+    version: 11,
+  };
+  const REALISTIC_HEADERS = ['조사일자', '농가명', '조사나무', '조사과실', '횡경'];
+  const REALISTIC_SHEET_ROWS = [[PREV_ROUND, '이원창', '1', '1', '100.0']];
+
+  test('무스크롤 — 375x667(iPhone SE급): 이상치 카드 실제 재현 시나리오(짧은 이름+통상값) scrollHeight≤clientHeight', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 667 });
+    await page.route('**://sheets.googleapis.com/**', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({ json: { values: [REALISTIC_HEADERS, ...REALISTIC_SHEET_ROWS] } });
+        return;
+      }
+      await route.fulfill({ status: 404, body: 'unexpected' });
+    });
+    await page.addInitScript(MOCK_INIT_SCRIPT);
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(
+      ({ settings, storeKey }) => {
+        localStorage.clear();
+        localStorage.setItem('gs10_google_token', JSON.stringify({
+          access_token: 'test-token', expires_at: Date.now() + 3600_000, email: 'tester@example.com',
+        }));
+        localStorage.setItem(storeKey, JSON.stringify(settings));
+      },
+      { settings: REALISTIC_SETTINGS, storeKey: STORE_KEY },
+    );
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(500);
+    await page.locator('[data-testid="tab-voice"]').click();
+    await page.waitForTimeout(200);
+    const startBtn = page.locator('text=음성 입력 시작').first();
+    await expect(startBtn).toBeVisible();
+    await startBtn.click();
+    await page.waitForTimeout(800);
+    await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+
+    // 직전 100.0 → 120.5 = increase(커지면) 알람 — Sonar 재현 스크립트(sonar-a1-outlier-real.js)와
+    // 동일한 종류의 통상 시나리오(합성 실 오디오 "이백 점 오"→200.5 실측과 등가 반경).
+    await fireStt(page, '120.5', 700);
+    const card = page.locator('[data-testid="anomaly-alert"]');
+    await expect(card).toBeVisible({ timeout: 3000 });
+
+    const m = await card.evaluate((el) => ({
+      scrollH: el.scrollHeight, clientH: el.clientHeight,
+      scrollW: el.scrollWidth, clientW: el.clientWidth,
+    }));
+    console.log(`[375x667] card scrollH=${m.scrollH} clientH=${m.clientH} scrollW=${m.scrollW} clientW=${m.clientW}`);
+    // [CLIP... 아님, 이상치 카드 무스크롤] 회귀 단언 — Sonar 재현 당시: scrollH=131 > clientH=77(FAIL).
+    expect(m.scrollH, '375×667에서 이상치 카드 내부 스크롤 잔여(무스크롤 회귀)').toBeLessThanOrEqual(m.clientH + 1);
+    expect(m.scrollW, '375×667에서 이상치 카드 가로 잘림').toBeLessThanOrEqual(m.clientW + 1);
+
+    // 핵심 정보(현재값·알람 라벨·직전값·항목명)는 여전히 visible — 축약(직전 날짜 라벨/중복 항목명
+    // 라벨)은 375급 전용이며 핵심 비교 정보 자체는 유지된다.
+    await expect(card.getByText('120.5', { exact: false }).first()).toBeVisible();
+    await expect(card.getByText('추세 알람 증가', { exact: false }).first()).toBeVisible();
+    await expect(card.getByText('100', { exact: false }).first()).toBeVisible();
+    await expect(card.getByText('횡경', { exact: false }).first()).toBeVisible();
+
+    await page.screenshot({ path: `${SHOT_DIR}/anomaly-375x667-realistic.png` });
+  });
+}

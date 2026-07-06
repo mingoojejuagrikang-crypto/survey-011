@@ -369,6 +369,13 @@
 - **해결·회피(v0.18.0 1f, 비강제 프롬프트):** `registerType:'prompt'` + `injectRegister:null`로 전환하고 `src/lib/pwaUpdate.ts`에서 `virtual:pwa-register`의 `registerSW({onNeedRefresh,onRegisteredSW})`를 `main.tsx`에서 **수동 1회** 등록(이중 등록 방지). ① 능동 체크 = standalone 실행 + `visibilitychange`(포그라운드) 시 `registration.update()`. ② 비강제 배너(`src/components/UpdateBanner.tsx`, App 상단 고정) = 새 SW waiting 시에만 노출, 탭 시 `updateSW(true)`(skipWaiting+1회 리로드). ③ Settings footer에 현재 버전 + "업데이트 확인/새로고침" 버튼(`UpdateControl`). **음성 측정 중 강제 리로드 금지** — 적용은 사용자 탭 시점에만. 진행 세션은 v0.4.4 증분 persist로 영속화돼 리로드해도 유실 없음. **autoUpdate의 silent 강제 리로드 제거가 핵심 변경.**
 - **미검증(실기기 대기):** iOS standalone에서 (a) 새 버전 배포 후 실행/포그라운드 시 배너 실제 노출, (b) `registration.update()`가 새 SW를 실제 탐지하는지 — 다음 실기기 세션에서 이전→신 버전 전환 실증 필요.
 
+### [ENV-10] `recover-drive.spec.ts` W8("로그인 상태") 테스트가 시간 경과로 결정론적으로 깨짐 — 테스트 픽스처의 달력 드리프트(앱 회귀 아님)
+- **증상:** `tests/recover-drive.spec.ts`의 W8("로그인 상태: 모달 목록 조회 → 선택 복구...") 케이스가 `expect(locator('text=구버전 로그 1개 제외')).toBeVisible()`에서 timeout으로 실패. 3회 연속 단독 실행해도 매번 동일 지점에서 동일하게 실패(전형적 "플래키"와 다른 100% 결정론적 실패).
+- **원인(2026-07-06 Sonar 데스크탑 재현 QA로 특정):** 이 스펙의 zip fixture(`zip-legacy`)는 파일 내 고정 앵커 `const NOW = Date.parse('2026-06-11T12:00:00Z')` 기준 상대 오프셋(`ISO(6)` = NOW의 6일 전 = 2026-06-05T12:00Z)으로 `createdTime`을 만든다. 그러나 앱이 실제로 "최근 30일" 필터를 계산하는 기준(`src/screens/DataScreen.tsx:1064` `since = Date.now() - chip.days*86400_000`, `src/lib/recoverFromDrive.ts:128-134` `inRange`)은 **실제 벽시계 시각**이다. 테스트 작성 시점(대략 2026-06-11 전후 추정)엔 통과했겠지만, 실제 날짜가 흘러 `zip-legacy`의 고정 offset이 진짜 "최근 30일" 창 밖으로 밀려난 시점부터는 **매 실행마다** 실패하도록 되어 있었다(`zip-legacy`가 legacy로 "분류돼 배제"된 게 아니라 애초에 기간 필터에서 통째로 걸러짐 — DOM엔 `구버전 로그 N개 제외`도 `failedZips`도 안 뜸). 코드베이스에 이미 정답 패턴이 있었다: `tests/session-local-date.spec.ts`가 `page.clock.setFixedTime(...)`로 이런 드리프트를 원천 차단하는데, `recover-drive.spec.ts`는 이 패턴을 안 썼다(`NOW` 상수만 파일 안에 정의해두고 앱이 실제로 참조하는 `Date.now()`는 고정하지 않음).
+- **해결:** `recover-drive.spec.ts`의 `bootApp()`(모든 W6/W8 테스트가 공유하는 부팅 헬퍼) 맨 앞에 `await page.clock.setFixedTime(new Date(NOW))`를 추가 — `session-local-date.spec.ts`와 동일 패턴으로, zip fixture의 고정 앵커와 앱이 보는 "현재 시각"을 동기화한다. **앱 코드(`recoverFromDrive.ts`/`DataScreen.tsx`)는 무변경** — 순수 테스트 픽스처 버그이며 "최근 30일은 실제 시각 기준"이라는 앱 로직 자체는 의도대로 정상 동작 중이었다(회귀 아님).
+- **검증:** 단독 실행 3회 연속 전부 통과(결정론적 수정 확인) + 전체 회귀(`npx playwright test`, 479 passed) 통과.
+- **출처:** `2026-07-06 v0.27.0 데스크탑 재현 QA(Sonar 2차 라운드)`, `~/projects/survey-011-test-harness/qa-antigravity/results/c1-w8-flaky-results.md` → **survey-011 v0.28.0** 수정.
+- **현재 상태:** ✅수정됨(`tests/recover-drive.spec.ts` `bootApp()`). 방치 시 `zip-new`(ISO(2))도 며칠 내로 같은 방식으로 30일 창 밖으로 밀려나 더 이른 단계에서 실패했을 것 — 이번 수정으로 실행 시점과 무관하게 항상 통과.
 
 ---
 
@@ -506,6 +513,12 @@
 - **현재 상태:** ✅수정됨(v0.22.0 `AnomalyAlertPopup.tsx`·`CommandHelpPopup.tsx`·`VoiceScreen.tsx`).
 - **⚠️ 2026-07-02 v0.25.0 실기기 — 재오픈 후보(화면 미특정):** 민구 "화면 잘림 문제가 아직 개선되지 않았다" 재제보. 단 **어느 화면인지 미상**이고 로그 단서 0(비고 c9 전 행 공란·TTS 텍스트 미로깅·클립 오디오 전용) — 이 항목(알람팝업)인지 다른 표면(v0.25.0 신규: 데이터탭 큰팝업 `DataScreen.tsx:712,877,1120` maxHeight 78~82vh · 옵션 순번뱃지 `SettingsScreen.tsx` · `SettingsHelp.tsx`)인지 판별 불가. v0.22.0 검증은 375px **시뮬**이라 실기기 402px + iOS 텍스트 크기 확대(Dynamic Type) 조합은 미검증. **화면 특정(민구 1문답: 화면+스크린샷+텍스트크기) 전 코드 수정 금지.**
 - **🟢 2026-07-03 자율 화면 스윕(402×874·375×812, Larry/Vance) — 유력 표면 실측·수정:** 전 탭+전 팝업 강제오픈 스크린샷 스윕에서 **CommandHelpPopup(？명령어)이 "잘려 보임" 실측** — `maxHeight:90%+overflowY:auto`라 기술상 스크롤이지만 스크롤 단서가 전혀 없어 마지막 항목(재시작·종료)이 화면 중간에서 끊겨 사용자에겐 잘림으로 보인다(타이포 21px·gap 15로 10개 항목이 90vh 초과). **v0.26.0 수정:** 타이포 압축(pill 16·설명 15·gap 9)으로 375×812에서 전 항목+하단 닫기 한 화면 수용 + 목록만 스크롤 컨테이너화. 가드: `v026-tolerance-strict.spec.ts` T4. 그 외 표면(알람카드·데이터탭 큰팝업·재질문 큐·기능4 안내팝업)은 두 뷰포트 모두 잘림 0 실측. **민구 재확인 필요:** 제보된 잘림이 이 팝업이었는지(아니라면 iOS 텍스트 확대 조합 의심).
+- **🔴→✅ 2026-07-06 v0.27.0 데스크탑 재현 QA(Sonar 2차 라운드) — 이 팝업(AnomalyAlertPopup)의 별개 확인된 버그, 375×667 전용, 수정 완료:** 07-03 스윕이 확인한 402×874/375×812와 **다른, 더 작은 뷰포트** 375×667(iPhone SE급 — 이 앱이 지원하는 최소 화면)에서 Sonar가 실 하네스(BlackHole 오디오 주입) + CDP로 직접 재현·실측(`scripts/sonar-a1-outlier-real.js`): 이상치 카드는 일반 카드보다 콘텐츠가 많아(샘플키+추세라벨+직전→현재+안내문) `useFitScale.ts`의 공용 FIT_STEPS 최저(0.58)로도 375×667에서 다 안 들어감(실측 `scrollHeight=131` vs `clientHeight=77`, 내부 스크롤 발생·하단 컨트롤과 겹침). 412×915/430×932는 기존대로 PASS(재확인) — **375×667만의 좁은 breakpoint 버그.**
+  - **해결(v0.28.0):** 이 카드 전용으로 (a) `useFitScale`에 호출자별 확장 축소 단계를 넘길 수 있는 선택적 파라미터 추가(공용 `FIT_STEPS`·다른 카드는 무변경 — 이미 첫 단계에서 fit되는 카드는 회귀 위험 0), (b) 패딩·행간격도 `--fit-lo`에 연동(하한 有)해 극단 압축 시 여백까지 함께 줄게 함, (c) GL-005 우선순위 하위 요소(P4 "직전 (날짜)" 라벨, P5 hero 위 중복 항목명 라벨)를 `max-height:700px` 미디어쿼리로만 숨김(측정 기반 토글이 아니라 뷰포트 높이 고정 조건이라 되튐 없음 — 정보 손실은 없음, 핵심 비교 숫자는 유지), (d) 현재값(P1) 폰트 하한은 기존 `v027-voice-cards-fit.spec.ts`가 이미 단언하는 GL-005 가독 하한(≥26px)을 그대로 유지 — "현재값은 항상 크게"(민구 원칙) 불변.
+  - **회귀 테스트:** `tests/v027-voice-cards-fit.spec.ts`에 375×667 전용 케이스 추가(짧은 컬럼명+통상값의 실제 재현 시나리오) — `scrollHeight≤clientHeight` 무스크롤 + 핵심 정보(현재값·알람라벨·직전값·항목명) visible 단언. 기존 402×874/375×812(긴 항목명+큰 음수 워스트케이스) 케이스도 재확인 통과(무변경 확인).
+  - **알려진 잔여 한계(범위 밖):** 이 라운드가 검증한 "긴 항목명+큰 음수" 워스트케이스를 375×667에도 동시 적용하면(둘 다 극단) `useFitScale`의 +1px 관용오차 탓에 1px 잔여가 남는 조합이 있다(예: scrollHeight 128 vs clientHeight 127) — 이번에 실제 보고된 버그(통상적인 컬럼명·값)에서는 발생하지 않으며, 별도 관측 대상으로만 남긴다.
+  - **출처:** `2026-07-06 v0.27.0 데스크탑 재현 QA(Sonar 2차 라운드)`, `Deliverables/2026-07-06-qa-desktop-repro-round2-reviewed.md` → **survey-011 v0.28.0** 수정.
+  - **현재 상태:** ✅수정됨(`src/components/voice/useFitScale.ts`, `src/components/voice/AnomalyAlertPopup.tsx`, `src/styles/global.css`). 실기기(iPhone SE 등 375급 실단말) 확인은 다음 실기기 세션 대기.
 
 ### [DEPLOY-PAGES-STUCK-1] gh-pages "Published" ≠ 라이브 반영 — GitHub Pages 빌드 무통보 스턱/실패
 - **증상:** `npm run deploy`(gh-pages)가 "Published"를 찍고 gh-pages 브랜치 push도 성공했는데, 라이브는 이전 버전 번들을 계속 서빙. v0.26.0 배포(07-03 04:29Z)에서 Pages 빌드가 "building" 스턱 후 "Page build failed"(duration 0, 즉시 실패)로 종료 — 로컬엔 아무 오류도 안 보임.
@@ -514,12 +527,13 @@
 - **출처:** `2026-07-03 v0.26.0 배포`(민구 실기기에서 미반영 확인 → 진단·재빌드로 정상화, 라이브 `index-C54ez99l.js` 확인).
 - **현재 상태:** ✅해소(재빌드로 정상화). 재발 시 위 절차. 배포 후 라이브 해시 확인을 표준 단계로 승격(⚠️주시).
 
-### [CLIP-CORRECTION-1] 정정(재커밋) 발화가 클립에 미수록 — final·아카이브 클립 모두 원 발화만 보존 (n=1)
-- **증상:** 07-02 S1 r18c8 — 사용자가 166.6 커밋 후 366.6으로 정정, **시트값은 366.6 정상**. 그러나 클립 감사(whisper 전사 + raw 재전사 + 이벤트 3각 대조)에서 final 클립·:a1 클립 모두 원 발화(166.6)만 담고 있고 **정정 발화(366.6, conf 0.99)를 담은 클립이 없음**. 데이터 무결성 문제 아님 — 클립 감사 품질 문제([CLIP-VAL-1] 계열 잔존, 그 항목은 v0.7.0 3중 수정 후 아카이브).
-- **원인(미확정):** 정정 재커밋 경로에서 armClipForCell 재무장이 이 케이스를 못 덮었거나, 정정 발화가 직전 클립 종료 후·다음 arming 전 틈에 떨어졌을 가능성. n=1이라 단정 금지.
-- **해결·회피:** 관측 단계. 다음 실기기 로그에서 정정 발생 셀의 클립을 클립 감사(SOP-003 §3)로 재확인 — 재발 시 정정 경로 arming 타이밍 진단 착수.
-- **출처:** `2026-07-03 클립 감사`(`Deliverables/2026-07-03-clip-audit-reviewed.md`), 07-02 S1 sess_…851856 r18c8.
-- **현재 상태:** ⚠️주시(n=1, 재발 관측 대상).
+### [CLIP-CORRECTION-1] 정정(재커밋) 발화가 클립에 미수록 → 근본원인 특정: 명령 클립이 정정 대상이 아닌 다음 대기 컬럼에 오태깅
+- **증상:** 07-02 S1 r18c8 — 사용자가 166.6 커밋 후 366.6으로 정정, **시트값은 366.6 정상**. 그러나 클립 감사(whisper 전사 + raw 재전사 + 이벤트 3각 대조)에서 final 클립·:a1 클립 모두 원 발화(166.6)만 담고 있고 **정정 발화(366.6, conf 0.99)를 담은 클립이 없음**(n=1 관측). 데이터 무결성 문제 아님 — 클립 감사 품질 문제([CLIP-VAL-1] 계열 잔존, 그 항목은 v0.7.0 3중 수정 후 아카이브).
+- **근본원인(2026-07-06 Sonar 데스크탑 재현 QA로 코드 레벨 특정):** `src/lib/useVoiceSession.ts`의 `enterModifyMode`에 두 경로가 있다 — ① **direct-modify**("수정 <값>" 한 발화로 값까지 결합, L677~) 경로는 v0.6.0 CLIP-CMD 수정으로 명령 클립을 **정정 대상 셀**(`targetRow:target.id`)로 올바르게 재연결한다(L690 `pendingCmd.saveFor(targetRow, target.id)`). ② **cascade** 경로("수정"만 먼저 말하고 새 값을 별도 발화로 나중에 말함, 훨씬 흔한 패턴)는 CLIP-CMD 수정이 안 닿아 있었다 — `pendingCmd.saveDefault()`(L756, 수정 전)가 명령 클립을 "수정"이 발화된 **시점에 대기 중이던 다음 컬럼**(`awaiting.row/colId` — 정정 대상이 아니라 그다음 프롬프트될 필드)의 키로 저장했다. 즉 클립이 사라진 게 아니라 **정정 대상 컬럼 기준으로 찾으면 "없다"로 보이는, 엉뚱한 컬럼에 파일링**된 것 — 07-02 n=1 관측과 정확히 일치하는 재현(`~/projects/survey-011-test-harness/qa-antigravity/scripts/sonar-a4-direct2.js`로 재현 가능, clips-manifest.json에서 cmd 클립 colId가 c9(대기 컬럼)로 찍히고 c8(정정 대상)엔 없음을 직접 확인).
+- **해결(v0.28.0):** cascade 경로(L756)의 `pendingCmd?.saveDefault()`를 `pendingCmd?.saveFor(targetRow, target.id)`로 교체 — direct-modify 경로와 동일한 불변식(명령 클립 = 정정 대상 셀)을 적용한다. target/targetRow는 그 시점에 이미 확정돼 있고(재질문·재수정 중에도 같은 셀을 향해 재답함) 값이 실제로 커밋될 값 클립은 별도 bare 키로 새로 녹음되므로 포인터 재연결은 불필요 — cmd 클립 자체만 올바른 컬럼으로 재배치하면 된다. `preserveCommandClip`/`PendingCommandClip.saveDefault`의 JSDoc도 "awaiting===target일 때만 안전"으로 갱신.
+- **회귀 테스트:** `tests/clip-modify-rerecord.spec.ts`에 `[CLIP-CORRECTION-1]` 신규 케이스 추가(cascade "수정"만 발화 → 별도 발화로 재입력 → 명령 클립이 정정 대상 컬럼(c8)에 저장되고 대기 컬럼(c9)엔 없음을 단언). 기존 "②③ cmd 클립이 없는 빈 캡처" 케이스는 수정 후 cmd 클립이 이제 c8에도 정상 생성되므로, "cmd 클립 자체가 없는" 시나리오(수정 발화 자체도 빈 캡처)로 갱신해 원래 검증 의도(재연결 대상 부재 시 unlink)를 보존했다. 인접 "①②③" 케이스의 cmd 인덱스(cmd1→cmd2)도 이 수정으로 인한 정당한 재번호 매김에 맞춰 갱신.
+- **출처:** `2026-07-03 클립 감사`(`Deliverables/2026-07-03-clip-audit-reviewed.md`), 07-02 S1 sess_…851856 r18c8 → **2026-07-06 v0.27.0 데스크탑 재현 QA(Sonar 2차 라운드)**로 근본원인 특정·수정.
+- **현재 상태:** ✅수정됨(`src/lib/useVoiceSession.ts` L756 부근, `tests/clip-modify-rerecord.spec.ts`). 실기기 재현(다음 실기기 세션의 클립 감사)으로 최종 확인 대기.
 
 ### [MIC-BANNER-POPUP-OVERLAP-1] 마이크 재연결 배너가 ？명령어 팝업 상단(✕ 닫기)을 가림
 - **증상:** 마이크 유실 배너(role=alert, 상단 고정)가 떠 있는 동안 CommandHelpPopup 상단 ✕ 닫기가 배너에 덮여 탭 불가(배너가 포인터를 가로챔). 백드롭 탭으로는 닫히지만 사용자가 모를 수 있음.
