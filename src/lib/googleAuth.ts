@@ -131,7 +131,12 @@ let pending: {
 // A7: standalone PWA에서 GIS tokenClient 콜백이 미발화하면 signIn() promise가 영구 hang →
 // "Google 로그인 중…"에 고착. 모듈 싱글톤(tokenClient/pending)이라 reload 없는 standalone에선
 // 프로세스 kill(재부팅)만이 해소였다. 타임아웃으로 reject + 싱글톤 리셋해 재시도를 가능케 한다.
-const SIGNIN_TIMEOUT_MS = 15_000;
+//
+// v0.29.0 (Mack, 2026-07-07 A5 실기기 finding) — 15초는 실제 2FA 소요시간(관측 ~60초, OTP 앱 전환
+// 포함 시 더 길 수 있음)보다 짧아, 정상 진행 중인 로그인을 "지연 취소"로 오분류했다. 120초로 완화해
+// 대부분의 2FA 흐름을 타임아웃 창 안에 담는다 — 그래도 유한한 상한이므로 "느린 사용자"엔 여전히
+// 이론상 한계가 남는다(그 잔여 케이스는 아래 late-success 재조정 경로가 커버한다).
+const SIGNIN_TIMEOUT_MS = 120_000;
 
 // 마지막 sign-in 시작 시각. pending이 (타임아웃으로) 비워진 뒤 지각 콜백이 도착해도 실제 소요ms를
 // 산출해 auth_token_settled에 싣기 위함 — standalone 콜백 wedge가 "영구 미발화"인지 "지각 발화"인지
@@ -160,8 +165,14 @@ function notifyTokenSettled(value: { email: string; token: string }): void {
   }
 }
 
-/** pending을 단 한 번만 settle하는 게이트. 콜백/타임아웃/error_callback 어느 경로든 여기로 모인다.
- *  settled 가드로 늦게 도착한 콜백을 안전하게 무시하고, 타이머를 정리한다. */
+/** pending(= 이번 signIn() 호출의 promise)을 단 한 번만 settle하는 게이트. 콜백/타임아웃/
+ *  error_callback 어느 경로든 여기로 모인다. settled 가드로 늦게 도착한 콜백의 이중 resolve/reject를
+ *  안전하게 무시하고, 타이머를 정리한다.
+ *  v0.29.0 — notifyTokenSettled 호출은 여기서 빠졌다(호출부인 tokenClient 콜백으로 이동, storeToken
+ *  직후 무조건 호출). 이유: pending이 이미 타임아웃으로 비워진 뒤 도착한 지각 성공 콜백은 이 함수에서
+ *  no-op(아래 가드)이 되어, 구독자 알림까지 함께 누락되는 게 버그였다(A5 finding #1). settlePending은
+ *  이제 "이번 signIn() promise를 resolve/reject할지"만 결정하고, "토큰이 실제로 확정됐다"는 알림은
+ *  pending 상태와 무관하게 항상 나간다. */
 function settlePending(outcome:
   | { ok: true; value: { email: string; token: string } }
   | { ok: false; error: Error }): void {
@@ -172,9 +183,6 @@ function settlePending(outcome:
   pending = null;
   if (outcome.ok) {
     p.resolve(outcome.value);
-    // v0.22.0 P1 — 토큰 확정을 구독자에게 알림(지각 토큰 시 과거값 재프리페치 트리거). resolve 후
-    // 호출해 storeToken이 이미 끝난 상태(getAccessToken()이 새 토큰을 반환)에서 구독자가 동작하게 한다.
-    notifyTokenSettled(outcome.value);
   } else {
     p.reject(outcome.error);
   }
@@ -207,15 +215,26 @@ function ensureTokenClient(): boolean {
         return;
       }
       const expires_at = Date.now() + (resp.expires_in || 3600) * 1000;
+      let value: { email: string; token: string };
       try {
         const email = await fetchEmail(resp.access_token);
         storeToken({ access_token: resp.access_token, expires_at, email });
-        settlePending({ ok: true, value: { email, token: resp.access_token } });
+        value = { email, token: resp.access_token };
       } catch {
         // Even if email lookup fails, we still have a usable token.
         storeToken({ access_token: resp.access_token, expires_at });
-        settlePending({ ok: true, value: { email: '연결됨', token: resp.access_token } });
+        value = { email: '연결됨', token: resp.access_token };
       }
+      // v0.29.0 (Mack, A5 finding #1) — notify subscribers UNCONDITIONALLY, before settlePending.
+      // storeToken() above already ran — the token is genuinely in localStorage — regardless of
+      // whether `pending` is still live. Previously this call lived inside settlePending's ok
+      // branch, which is a no-op once `pending` has already been cleared (timeout fired first,
+      // `pending = null`). That silently dropped the late-arriving-but-successful case: the UI
+      // never heard about it and only recovered on a Settings-tab remount (getStoredToken() read
+      // at mount). Calling it here — decoupled from the settle-once gate — lets subscribers
+      // (SettingsScreen, useVoiceSession) reconcile even after signIn()'s promise already rejected.
+      notifyTokenSettled(value);
+      settlePending({ ok: true, value });
     },
     error_callback: (err) => {
       // popup_failed_to_open: browser blocked the popup (lost gesture / blocker). With warm-up

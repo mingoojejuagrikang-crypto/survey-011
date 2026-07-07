@@ -9,6 +9,7 @@ import {
   getCurrentEmail,
   getStoredToken,
   isConfigured as isGoogleConfigured,
+  onTokenSettled,
   signIn as googleSignIn,
   signOut as googleSignOut,
   warmupGoogleAuth,
@@ -1016,6 +1017,23 @@ export function SettingsScreen() {
     // (avoids the "popup_failed_to_open" that required a second click).
     void warmupGoogleAuth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // v0.29.0 (Mack, 2026-07-07 A5 finding #1) — late-success reconciliation. signIn()'s own
+  // SIGNIN_TIMEOUT_MS can fire and reject BEFORE a slow real-world 2FA flow (~60s+ observed)
+  // actually completes; the onGoogleClick catch block below then shows "로그인 응답이 지연되어
+  // 취소되었습니다" even though the GIS callback lands moments later with a genuine token
+  // (storeToken already ran — localStorage has it). Without this subscription the UI stayed
+  // wrong ("로그인 실패") until the user remounted the tab (reload / tab-away-and-back), because
+  // googleConnected only re-synced from getStoredToken() at mount. Subscribing here closes that
+  // gap reactively — no remount needed — using the already-existing onTokenSettled broadcast
+  // (googleAuth.ts now fires it for late arrivals too, decoupled from the timed-out promise).
+  useEffect(() => {
+    const unsubscribe = onTokenSettled(({ email }) => {
+      setError(null);
+      useSettingsStore.getState().set({ googleConnected: true, userEmail: email });
+    });
+    return unsubscribe;
   }, []);
 
   const onGoogleClick = async () => {

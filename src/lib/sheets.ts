@@ -72,6 +72,26 @@ export async function fetchHeaderAndSample(
 }
 
 /**
+ * Fetch JUST the header row (row 1) of a sheet tab — unbounded columns (no A1:Z clamp, unlike
+ * fetchHeaderAndSample which also pulls up to `sampleRows` data rows for type inference).
+ *
+ * [SYNC-3] fix — sync.ts calls this ONCE per syncSelected() batch (not per session/row) to build a
+ * name-based column mapping (columnMapping.ts) before every append/update, so values land in the
+ * sheet's ACTUAL current column position instead of the local session's positional column order.
+ */
+export async function fetchHeaderRow(spreadsheetId: string, sheetTitle: string): Promise<string[]> {
+  const range = encodeURIComponent(`${quoteSheetTitle(sheetTitle)}!1:1`);
+  const r = await authFetch(`${API}/${spreadsheetId}/values/${range}`);
+  if (!r.ok) {
+    let body = '';
+    try { body = await r.text(); } catch { /* ignore */ }
+    throw new Error(`헤더 조회 실패 (HTTP ${r.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+  }
+  const d = (await r.json()) as { values?: string[][] };
+  return d.values?.[0] ?? [];
+}
+
+/**
  * Fetch unique values of a single column (by zero-based index), frequency-sorted.
  * Used to surface options for text columns.
  */

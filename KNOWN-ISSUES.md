@@ -327,12 +327,16 @@
 - **출처:** `survey-011 v0.6.0` Codex 교차점검(C1); 회귀 `tests/sync-skip-rows.spec.ts`("C1 — synced-without-sheetRow … 재append 안 함").
 - **현재 상태:** ⚠️주시(수용된 엣지 — 발생 빈도 극저, 데이터 무손실) (`src/lib/sync.ts` pass-1 no-range 분기)
 
-### [SYNC-3] 컬럼 스키마 순서 변경 시 기존 synced 행 한계
-- **증상:** 세션 생성 후 설정에서 **컬럼 순서를 바꾸면**, 이미 `synced`로 시트에 올라간 행들은 시트의 열 순서(append 당시 순서)와 로컬 열 순서가 어긋날 수 있다. 동기화는 행을 `synced`로 보고 다시 손대지 않으므로 기존 시트 행은 옛 순서 그대로 남는다.
-- **원인:** 행 단위 재동기화는 값 변경(dirty)만 추적하고, **열 매핑 변화는 추적하지 않는다.** sheetRow는 위치만 가리키고 열 순서 메타는 행에 없다.
-- **해결·회피:** 코드 수정 없음(C6 — 문서화만). 운용 회피: **세션을 만들고 동기화하기 시작했으면 그 세션의 컬럼 순서를 바꾸지 말 것.** 순서를 꼭 바꿔야 하면 새 세션으로 분리하거나 시트를 수동 정리한다.
-- **출처:** `survey-011 v0.6.0` Codex 교차점검(C6, 한계 인정).
-- **현재 상태:** ⚠️주시(설계상 한계 — 운용으로 회피) (`src/lib/sync.ts`)
+### [SYNC-3] 컬럼 스키마 순서/구성 변경 시 값이 위치기반으로 밀려 엉뚱한 열에 안착
+- **증상(원 보고, v0.6.0):** 세션 생성 후 설정에서 **컬럼 순서를 바꾸면**, 이미 `synced`로 시트에 올라간 행들은 시트의 열 순서(append 당시 순서)와 로컬 열 순서가 어긋날 수 있었다.
+- **증상(실사용 재현·재오픈, 2026-07-07 v0.28.0 A5, Sonar 실 Google 계정 업로드 테스트):** 로컬 세션이 구스키마(6컬럼)로 만들어진 채 실 10컬럼 시트(컬럼이 나중에 추가/변경됨)로 동기화하니, 값이 실제 헤더와 무관하게 A,B,C… 순서로 밀려 들어가 C,D,E열은 비고 F,G,H열에 안착 — **침묵 오정렬**(에러 없이 조용히 엉뚱한 열에 저장). 민구가 실사용에서 컬럼을 나중에 추가/변경한다고 확인해 "운용 회피"만으로는 부족해졌다.
+- **원인(코드 확인):** `sync.ts`가 append/update 직전 값 배열을 **로컬 세션의 컬럼 순서(`session.columns.map(c=>c.id)`)만으로** 만들었다 — 실제 시트의 헤더 행과 전혀 대조하지 않는 순수 위치기반(positional) 쓰기였다. 로컬 스키마가 시트의 실제 현재 헤더와 다르면(순서만 다르거나, 시트에 컬럼이 추가/삭제됐거나), 값이 이름과 무관하게 물리적 위치로만 안착해 조용히 틀린 열에 들어갔다. 행 단위 재동기화는 값 변경(dirty)만 추적하고 **열 매핑 변화는 추적하지 않았다** — sheetRow는 위치만 가리키고 열 순서 메타는 행에 없었다.
+- **해결(v0.29.0, Mack) — 근본 수정, 문서화 아님:** append/update 직전 `sync.ts`가 `sheets.ts`의 신규 `fetchHeaderRow()`로 **시트의 실제 현재 헤더 행을 syncSelected() 배치당 1회** 읽고(세션/행마다가 아니라 "시트에 추가" 클릭당 1회 — API 호출 비용 상한), 신규 `src/lib/columnMapping.ts`(`mapColumnsToHeader`/`buildRowForMapping`, 순수 함수)로 **로컬 컬럼을 이름 기준**으로 그 헤더에 매핑한다(순서 아님). 값은 각 컬럼의 **실제 헤더 위치**에 안착 — 시트 컬럼이 재배치·삽입돼도 이름만 같으면 정확히 맞아 들어간다. 로컬 컬럼명이 시트 헤더에 없으면("신규 컬럼") 그 값은 **아무 위치에도 쓰지 않고**(위치 추측 금지) `sync_column_missing_in_sheet` 텔레메트리 + `report.columnWarnings`로 사용자에게 경고(DataScreen 배너에 표면화) — "침묵 오정렬"을 없애는 게 핵심이므로 조용히 다른 열에 넣거나 조용히 버리지 않는다. 로컬 컬럼이 헤더와 **단 하나도** 매칭되지 않으면(총체적 스키마 불일치) 세션 전체를 명시적 실패로 보고한다(빈 값으로 "성공" 처리하지 않음 — 그 자체가 또 다른 침묵 오염이므로). 헤더 조회 자체가 실패하면(네트워크 등) 검증되지 않은 위치기반 쓰기로 되돌아가는 대신 배치 전체를 중단한다(정확성 > 가용성).
+- **비용/캐싱 설계:** 헤더는 **호출마다** 새로 읽는다(세션 간 캐시 없음) — 오래된 캐시가 정확히 이 버그를 재도입할 위험이 있어 "정확성이 성능보다 우선" 원칙에 따름. 추가 비용은 "시트에 추가" 클릭당 GET 1회로 상한.
+- **잔여 한계(정직하게 명시):** 이 수정은 **이제부터의 쓰기(append/update)만** 보장한다 — 이 수정 이전에 이미 잘못 안착한 과거 시트 행은 소급 복구되지 않는다(그 행들이 실제 어떤 매핑으로 쓰였는지 사후에 알 방법이 없음). 또한 UPDATE 경로는 로컬이 관리하는 최상위 매칭 컬럼까지의 범위를 한 번에 PUT하므로, 그 범위 **안쪽 인터스티셜 위치**에 이 앱이 추적하지 않는 시트 전용 컬럼이 있다면(드묾 — 통상 이 앱이 append한 행은 이 앱만 갱신) 그 자리는 빈 문자열로 재기록된다(신규 append 행에선 원래 비어있어 무해, 기존 행 UPDATE에서는 수용된 한계로 문서화).
+- **회귀 테스트:** `tests/columnMapping.spec.ts`(순수 함수, DOM 무의존 — (a)스키마 완전일치 (b)시트가 로컬보다 컬럼多 (c)순서만 다름·이름 동일 (d)로컬에 없는 컬럼 (e)총체적 불일치 5×2=11케이스), `tests/sync-header-mapping.spec.ts`(전체 앱 e2e로 (b)(c) + 총체적 불일치 시 명시적 실패 3케이스), 기존 `tests/sync-skip-rows.spec.ts`/`tests/sync-token-expiry.spec.ts`는 헤더 GET stub을 로컬 스키마와 정확히 일치하게 갱신해 **기존 동작(스키마 일치 케이스) 무회귀** 확인.
+- **출처:** `survey-011 v0.6.0` Codex 교차점검(C6, 원 보고) → `2026-07-07 v0.28.0 A5 업로드 테스트(Sonar, 실 Google 계정)`(재오픈, 실사용 재현) → **survey-011 v0.29.0** 근본 수정.
+- **현재 상태:** ✅수정됨(`src/lib/columnMapping.ts` 신설, `src/lib/sheets.ts` `fetchHeaderRow`, `src/lib/sync.ts` append/update 경로 이름기반 매핑 전환, `src/screens/DataScreen.tsx` columnWarnings 배너) — 실기기에서 실제 컬럼 추가/변경된 프로덕션 시트로 재검증 권장(단위/e2e는 전부 통과).
 
 ---
 
@@ -434,7 +438,14 @@
 - **원인(Trace 로그분석 + 코드 추적 확정):** `onGoogleClick`(`SettingsScreen.tsx:847`)이 `await googleSignIn()`만 기다리는데, `googleSignIn()`(`googleAuth.ts:135-166`)은 GIS `tokenClient`의 **콜백으로만 settle**된다. standalone PWA에서 그 콜백이 미발화하면 promise가 **영구 hang** → `onGoogleClick`의 `finally{ setLoading(null) }`이 안 돌아 "로그인 중…"에 고착. `tokenClient`/`pending`이 **module-level 싱글톤**이라 reload 없는 standalone에선 **프로세스 kill(재부팅)만이 해소** = 증상 정확 일치. (eviction[AUTH-8]과 **별개 레이어** — eviction은 IDB 미러로 방어, 본 항목은 콜백 wedge.)
 - **해결·회피(v0.15.0 A7):** ① `signIn()`에 **15s 타임아웃**(`SIGNIN_TIMEOUT_MS`) — 미발화 시 reject + `resetTokenClient()`로 `tokenClient` 싱글톤 폐기(재시도 시 새 클라이언트 생성, 재부팅 불필요). ② `settlePending()` 단일 settle 게이트(`settled` 가드) — 늦게 온 콜백 안전 무시. ③ `onGoogleClick` `finally`로 로딩해제 항상 보장. ④ **인증 계측 5종**(`auth_signin_start`/`auth_token_settled:ms=,late=`/`auth_signin_timeout:ms=15000`/`auth_tokenclient_reset`/`auth_signin_error:<type>`) — `late=true`로 standalone 콜백이 '영구 미발화'인지 '지각 발화'인지 다음 로그로 판별.
 - **출처:** `2026-06-19 v0.14.0 실기기 로그`(민구 제보 + Trace 분석) → **survey-011 v0.15.0** 수정.
-- **현재 상태:** ⚠️주시 (`src/lib/googleAuth.ts` settlePending/resetTokenClient/타임아웃·계측, `src/screens/SettingsScreen.tsx` onGoogleClick) — 다음 실기기에서 ① 타임아웃 후 재시도가 **재부팅 없이** 성공하는지 ② `auth_token_settled` 부재(영구 wedge)/`late=true`(지각) 여부 device 확인 필요. **이론적 race:** 타임아웃 reset 후 옛 클라이언트 지각 콜백이 새 pending을 settle할 가능성(낮음, `late` 플래그로 관측).
+- **✅ 후속 수정(v0.29.0, Mack) — 15s 타임아웃이 실제 2FA보다 짧았고, A7 자체의 settle-게이트가 지각 성공의 구독자 알림까지 함께 삼켰다:**
+  - **증상(출처: `2026-07-07 v0.28.0 A5 업로드 테스트(Sonar, 실 Google 계정)`):** 실 2FA가 ~60초 걸린 실행에서, 설정 탭에 "로그인 응답이 지연되어 취소되었습니다" 오류가 표시됐다. 그런데 `localStorage`(`gs10_google_token`)를 직접 열어보면 토큰이 **정상 저장돼 있었다** — UI는 실패로 믿지만 실제 인증 상태는 성공. 설정 탭을 재마운트(새로고침/탭 이동)해야만 `googleConnected`가 뒤늦게 true로 동기화됐다.
+  - **원인(코드 추적 확정):** ① `SIGNIN_TIMEOUT_MS=15_000`(v0.15.0 A7)이 관측된 실제 2FA 소요시간(~60초, OTP 앱 전환 포함 시 더 김)보다 짧아 진행 중인 정상 로그인을 조기에 "지연 취소"로 오분류했다. ② 더 근본적으로, A7 자체가 심어둔 잠복 결함: 타임아웃이 먼저 발화하면 `settlePending()`이 `pending=null`로 비우는데, 그 **뒤에** 도착하는 GIS 콜백은 `storeToken(...)`을 무조건 실행해 토큰을 실제로 저장하지만, 뒤이은 `settlePending({ok:true,...})` 호출은 `if (!p || p.settled) return`(이미 null) 가드에 막혀 **완전 no-op**이 된다 — v0.22.0 P1이 만든 `notifyTokenSettled` 구독 메커니즘조차 **이 경로에선 정의상 한 번도 발화할 수 없었다**(호출 자체가 이 가드 안쪽에 있었으므로). 그 결과 원래 `signIn()` 호출자는 reject된 promise만 보고 "로그인 실패" 토스트를 띄우고, 토큰이 실제로 있다는 사실은 재마운트가 `getStoredToken()`을 다시 읽을 때까지 아무도 몰랐다.
+  - **해결(v0.29.0):** ① `SIGNIN_TIMEOUT_MS` 15s → **120s**로 완화(현실적 2FA 상한). ② `notifyTokenSettled` 호출을 `settlePending`의 settle-게이트 **밖으로 분리** — `tokenClient` 콜백에서 `storeToken()` 직후 pending 상태(이미 타임아웃으로 settle됐는지)와 **무관하게 항상** 호출한다. `settlePending()`은 이제 "이번 `signIn()` promise를 resolve/reject할지"만 결정하고, "토큰이 실제로 확정됐다"는 알림은 별도로 나간다. ③ `SettingsScreen.tsx`가 `onTokenSettled`를 구독해 리마운트 없이 `googleConnected`/`userEmail`을 반응적으로 갱신(기존엔 mount effect에서만 `getStoredToken()`을 1회 읽었음).
+  - **잔여 한계(정직하게 명시):** 120s도 유한한 상한이므로 이론상 이보다 더 느린 2FA는 여전히 최초 타임아웃 배너를 볼 수 있다 — 다만 이제는 그 뒤 지각 성공이 도착하면 리마운트 없이 자동으로 정정된다(늦게라도 정직하게 복구). 원 `signIn()` 호출자의 promise 자체는 이미 reject된 채로 남는다(JS promise는 재resolve 불가) — 현재 `onTokenSettled` 구독자는 `SettingsScreen`과 `useVoiceSession`(과거값 재프리페치용) 둘뿐이니, `signIn()`을 직접 await하는 다른 호출부가 추가되면 그쪽도 late-success 반영을 위해 별도로 구독해야 한다.
+  - **회귀:** `tests/auth-signin-timeout.spec.ts` — `page.clock`으로 120s 가상 경과 후 지각 콜백이 리마운트 없이 반영되는지, 그리고 타임아웃 전 정상 도착하는 흔한 케이스가 무회귀인지 둘 다 검증.
+  - **출처:** `2026-07-07 v0.28.0 A5 업로드 테스트(Sonar, 실 Google 계정)` → **survey-011 v0.29.0** 수정.
+- **현재 상태:** ✅수정됨(`src/lib/googleAuth.ts` SIGNIN_TIMEOUT_MS/notifyTokenSettled 분리, `src/screens/SettingsScreen.tsx` onTokenSettled 구독) — 실기기에서 ① 실제 60초+ 2FA가 120s 창 안에서 타임아웃 없이 완료되는지 ② 만에 하나 120s를 넘겨도 지각 성공이 리마운트 없이 반영되는지 device 확인 권장.
 
 ### [CLIP-LOSS-1] 입력장치 변경(BT↔스피커폰)이 MediaRecorder를 죽여 이후 클립 연속 소실
 - **증상:** 한 세션 중반부터 음성 클립이 연속으로 통째 소실(값 인식·시트 기록은 정상, 클립만 없음). v0.13.0 로그 세션 `8409` row 11~18(18개 연속) 트림·raw 모두 부재.

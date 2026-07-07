@@ -84,6 +84,15 @@ async function stubSheets(
       await route.fulfill({ json: { updatedRange: url } });
       return;
     }
+    if (req.method() === 'GET') {
+      // [SYNC-3] fix — syncSelected() now fetches the sheet's header row ONCE per batch
+      // (fetchHeaderRow) to name-map local columns before append/update. Header here matches
+      // SETTINGS.state.columns exactly (same names, same order) so every existing assertion in
+      // this file — which was written for the old purely-positional write — stays valid: name-
+      // based mapping degenerates to the same positions when the schema already matches 1:1.
+      await route.fulfill({ json: { values: [['조사나무', '횡경']] } });
+      return;
+    }
     await route.fulfill({ status: 404, body: 'unexpected: ' + url });
   });
   return calls;

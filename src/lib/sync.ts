@@ -1,11 +1,12 @@
 import { useDataStore } from '../stores/dataStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
-import { appendRows, updateRow, parseSpreadsheetId } from './sheets';
+import { appendRows, updateRow, parseSpreadsheetId, fetchHeaderRow } from './sheets';
 import { saveSession } from './db';
 import { getAccessToken } from './googleAuth';
 import { logger } from './logger';
 import { hasSyncState, recountSynced, legacySyncedIndexSet } from './sessionSync';
+import { mapColumnsToHeader, buildRowForMapping, type ColumnMapping } from './columnMapping';
 import type { Session, SessionRow } from '../types';
 
 // Re-export so existing importers of recountSynced from sync.ts keep working (SSOT now in sessionSync).
@@ -36,6 +37,11 @@ export interface SyncReport {
   failures: SyncFailure[];
   /** Session IDs that were actually pushed to the sheet — only these are safe to auto-delete. */
   successIds: string[];
+  /** [SYNC-3] — human-readable notes when a session's local column name(s) were NOT found in the
+   *  sheet's current header (columnMapping.ts). Those columns' values were intentionally skipped
+   *  (never written anywhere) rather than guessed by position — surfaced here so the caller can
+   *  warn the user instead of staying silent. Empty when every local column matched by name. */
+  columnWarnings: string[];
   /** v0.20.0 Phase 2 — structured "needs (re)login" signal so DataScreen can mount the
    *  LoginRequiredModal WITHOUT brittle string-matching on `message`/`reason`. Set true when:
    *   ① the preflight access-token is null (not logged in / token expired before sync), or
@@ -68,6 +74,7 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
   const data = useDataStore.getState();
   const report: SyncReport = {
     ok: 0, failed: 0, rows: 0, updatedRows: 0, fallbackAppended: 0, failures: [], successIds: [],
+    columnWarnings: [],
   };
 
   if (sessionIds.length === 0) {
@@ -90,6 +97,23 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     return report;
   }
   const sheetTab = settings.sheetTab;
+
+  // [SYNC-3] fix — fetch the sheet's ACTUAL current header ONCE per syncSelected() batch (not per
+  // session/row — bounds the added API cost to +1 call per "시트에 추가" click regardless of how
+  // many sessions are selected). Every session in this batch maps its local columns against this
+  // SAME header snapshot: correctness > a cross-call cache (a stale cache could reintroduce the
+  // exact silent-misalignment bug this fix removes if the sheet's columns changed since the last
+  // sync). On fetch failure we abort the WHOLE batch rather than falling back to the old blind
+  // positional write — writing without a verified mapping is exactly the bug being fixed.
+  let headers: string[];
+  try {
+    headers = await fetchHeaderRow(spreadsheetId, sheetTab);
+  } catch (err) {
+    const msg = (err as Error).message || '알 수 없는 오류';
+    report.message = `시트 헤더 조회 실패로 동기화를 중단했습니다: ${msg}`;
+    if (isAuthFailure(msg)) report.needsLogin = true;
+    return report;
+  }
 
   for (const id of sessionIds) {
     // Read fresh each iteration so concurrent edits (voice/touch) to this or other sessions are
@@ -125,7 +149,30 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     const isActivelyRecording =
       recordingId === id && (recordingPhase === 'active' || recordingPhase === 'paused');
 
-    const colIds = session.columns.map((c) => c.id);
+    // [SYNC-3] fix — map local columns to the sheet's ACTUAL header by NAME (not by local
+    // declaration order/position). A column whose name isn't in the header is "missing in sheet":
+    // its value is never written anywhere (no positional guess) — reported via columnWarnings
+    // instead of silently landing in someone else's column.
+    const mapping: ColumnMapping = mapColumnsToHeader(session.columns, headers);
+    if (mapping.missingNames.length > 0) {
+      logger.log({
+        type: 'app', extra: `sync_column_missing_in_sheet:${mapping.missingNames.join(',')}`, sessionId: session.id,
+      });
+      report.columnWarnings.push(
+        `${session.date}${session.label ? ' ' + session.label : ''}: 시트에 없는 열 ${mapping.missingNames.length}개(${mapping.missingNames.join(', ')})는 업로드되지 않았습니다.`,
+      );
+    }
+    if (mapping.indexForColId.size === 0 && session.columns.length > 0) {
+      // Total schema mismatch — not even one local column name exists in the current sheet
+      // header. Writing a fully-blank row here would be its own silent-corruption footgun, so
+      // this session is reported as a hard failure instead of a "successful" blank append.
+      report.failed++;
+      report.failures.push({
+        sessionId: session.id, sessionDate: session.date, sessionLabel: session.label,
+        reason: '로컬 세션의 컬럼과 일치하는 시트 헤더가 하나도 없습니다. 시트 헤더 또는 세션 스키마를 확인하세요.',
+      });
+      continue;
+    }
     // Mutable working copy of rows; passes update sheetRow/syncState in place.
     let rows = [...session.rows];
 
@@ -158,7 +205,7 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     let failReason = '';
 
     if (appendTargets.length > 0) {
-      const matrix = appendTargets.map((row) => colIds.map((colId) => row.values[colId] ?? ''));
+      const matrix = appendTargets.map((row) => buildRowForMapping(row.values, mapping));
       try {
         const res = await appendRows(spreadsheetId, sheetTab, matrix);
         if (res.firstSheetRow != null) {
@@ -206,7 +253,7 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
         .filter((r) => r.syncState === 'dirty' && r.sheetRow !== undefined)
         .sort((a, b) => a.index - b.index);
       for (const row of updateTargets) {
-        const values = colIds.map((colId) => row.values[colId] ?? '');
+        const values = buildRowForMapping(row.values, mapping);
         try {
           await updateRow(spreadsheetId, sheetTab, row.sheetRow!, values);
           pushedAnything = true;

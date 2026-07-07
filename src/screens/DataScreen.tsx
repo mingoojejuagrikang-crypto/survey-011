@@ -245,6 +245,12 @@ export function DataScreen() {
       } else {
         setMsg('추가할 새 데이터가 없습니다.');
       }
+      // [SYNC-3] — 로컬 컬럼이 시트 헤더에 없어 일부 값이 비워진 세션이 있으면, 성공/실패 메시지와
+      // 별개로 반드시 표면화한다(침묵 오정렬 방지 — report.message가 이미 다른 문구를 쓴 경우에도
+      // 덧붙인다). 위 4가지 분기 중 어떤 것이 실행됐든 이 경고는 추가된다.
+      if (report.columnWarnings.length > 0) {
+        setMsg((prev) => `${prev ? `${prev} ` : ''}⚠ ${report.columnWarnings.join(' / ')}`);
+      }
 
       // 2) 로그 백업: 사용자 본인 드라이브 + 관리자 폴더 양쪽 업로드 (v0.10 멀티유저).
       // v0.10.1 Codex HIGH 수정: 관리자 폴더 설정 시 admin 업로드도 성공해야 backupOk → autoDelete 차단.

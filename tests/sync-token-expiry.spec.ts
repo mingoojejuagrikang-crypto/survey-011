@@ -67,6 +67,13 @@ async function stubSheets(page: Page): Promise<SheetCall[]> {
       await route.fulfill({ json: { updates: { updatedRange: `Sheet1!A${first}:B${last}`, updatedRows: body.values.length } } });
       return;
     }
+    if (req.method() === 'GET') {
+      // [SYNC-3] fix — syncSelected() fetches the sheet header once per batch before appending.
+      // Header matches SETTINGS.state.columns (조사나무, 횡경) exactly so existing assertions
+      // below (which predate the header-mapping fix) keep holding.
+      await route.fulfill({ json: { values: [['조사나무', '횡경']] } });
+      return;
+    }
     await route.fulfill({ status: 404, body: 'unexpected' });
   });
   return calls;
