@@ -1,12 +1,13 @@
 /**
  * v0.6.0 — skip 행 Sheets 업로드 + 행 단위 재동기화 e2e.
  *
- * Sheets API(values:append / values PUT)를 page.route로 stub해 실제 네트워크 없이 검증:
+ * Sheets API(values:append / values:batchUpdate)를 page.route로 stub해 실제 네트워크 없이 검증:
  *   1. skip 행(complete:false placeholder)도 row.index 순서대로 공백인 채 append되고, append 응답
  *      updatedRange로 각 행 sheetRow/syncState='synced'가 기록된다.
- *   2. 업로드된 행을 데이터탭에서 수정 → syncState 'dirty' → 재동기화 시 같은 sheetRow를 PUT로
- *      UPDATE(중복 append 금지). 성공 메시지에 "N행 갱신".
- *   3. updateRow 404 → sheetRow 초기화 후 append 폴백 + sync_row_mismatch 텔레메트리.
+ *   2. 업로드된 행을 데이터탭에서 수정 → syncState 'dirty' → 재동기화 시 같은 sheetRow를
+ *      values:batchUpdate로 UPDATE(중복 append 금지, [SYNC-3] follow-up: 매핑된 컬럼마다 개별
+ *      단일-셀 range — 연속범위 PUT 아님). 성공 메시지에 "N행 갱신".
+ *   3. batchUpdate 404 → sheetRow 초기화 후 append 폴백 + sync_row_mismatch 텔레메트리.
  *   4. 구버전 세션(syncState 없음, syncedRows>0): index<=syncedRows는 synced 취급, 이후만 append.
  *
  * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
@@ -49,8 +50,10 @@ function makeSession() {
 
 interface SheetCall { method: string; url: string; body: unknown }
 
-/** Sheets API stub. appends 기록 + updatedRange 응답, PUT(updateRow) 기록.
- *  updateFails=true면 PUT을 404로 응답해 폴백 경로를 유발. */
+/** Sheets API stub. appends 기록 + updatedRange 응답, batchUpdate(updateCellsSparse) 기록.
+ *  updateFails=true면 batchUpdate를 404로 응답해 폴백 경로를 유발.
+ *  [SYNC-3] follow-up — the UPDATE path now sends `values:batchUpdate` (sparse per-cell POST),
+ *  not a single-range PUT (updateRow) — stub matches on `:batchUpdate` instead of method PUT. */
 async function stubSheets(
   page: Page,
   opts: { updateFails?: boolean; appendNoRange?: boolean } = {},
@@ -79,9 +82,10 @@ async function stubSheets(
       });
       return;
     }
-    if (req.method() === 'PUT') {
+    if (url.includes(':batchUpdate')) {
       if (opts.updateFails) { await route.fulfill({ status: 404, body: 'not found' }); return; }
-      await route.fulfill({ json: { updatedRange: url } });
+      const data = (body as { data: { range: string }[] }).data ?? [];
+      await route.fulfill({ json: { spreadsheetId: 'stub', totalUpdatedCells: data.length } });
       return;
     }
     if (req.method() === 'GET') {
@@ -211,15 +215,20 @@ test('업로드된 행 수정 → dirty → 재동기화 시 같은 sheetRow를 
   const dirty = await readSession(page) as { rows: { index: number; syncState?: string }[] };
   expect(dirty.rows.find((r) => r.index === 1)!.syncState).toBe('dirty');
 
-  // 재동기화 → PUT(update), append 0회
+  // 재동기화 → batchUpdate(update, sparse per-cell), append 0회
   await runSync(page);
   const appends = calls.filter((c) => c.url.includes(':append'));
-  const puts = calls.filter((c) => c.method === 'PUT');
+  const batchUpdates = calls.filter((c) => c.url.includes(':batchUpdate'));
   expect(appends).toHaveLength(0); // 중복 append 금지
-  expect(puts).toHaveLength(1);
-  // updateRow가 A1 range를 encodeURIComponent하므로 ':'는 '%3A'로 인코딩된다.
-  expect(decodeURIComponent(puts[0].url)).toContain('A2:B2'); // 1행 = sheetRow 2
-  expect((puts[0].body as { values: string[][] }).values[0]).toEqual(['1', '99.9']);
+  expect(batchUpdates).toHaveLength(1); // ONE HTTP request carries both mapped cells
+  // [SYNC-3] follow-up — each mapped column gets its OWN single-cell range in the batchUpdate
+  // `data` array (not a single contiguous A2:B2 PUT) — this is what makes an interstitial column
+  // physically unnamable in the request. c6(조사나무)=index0=A, c8(횡경)=index1=B, row=2.
+  const body = batchUpdates[0].body as { data: { range: string; values: string[][] }[] };
+  expect(body.data).toHaveLength(2);
+  const byRange = Object.fromEntries(body.data.map((d) => [d.range, d.values[0][0]]));
+  expect(byRange['Sheet1!A2:A2']).toBe('1');
+  expect(byRange['Sheet1!B2:B2']).toBe('99.9');
   await expect(page.locator('text=갱신')).toBeVisible();
 
   // synced로 복귀
@@ -244,7 +253,7 @@ test('update 404 → sheetRow 초기화 후 append 폴백 + sync_row_mismatch', 
   await page.locator('[data-testid="session-detail-close"]').click();
   await page.waitForTimeout(200);
 
-  // 재동기화: PUT 404 → 다음 sync에서 append. 첫 sync는 PUT만 시도(폴백 안내), sheetRow 초기화.
+  // 재동기화: batchUpdate 404 → 다음 sync에서 append. 첫 sync는 batchUpdate만 시도(폴백 안내), sheetRow 초기화.
   await runSync(page);
   const sess1 = await readSession(page) as { rows: { index: number; sheetRow?: number; syncState?: string }[] };
   const row1a = sess1.rows.find((r) => r.index === 1)!;

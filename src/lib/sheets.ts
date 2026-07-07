@@ -370,6 +370,14 @@ function rowA1Range(sheetTitle: string, sheetRow: number, colCount: number): str
  * Overwrite a single existing sheet row in place (v0.6.0 row-level re-sync).
  * PUT values/{range}?valueInputOption=USER_ENTERED. Throws on non-2xx so the
  * caller can fall back to append on 404/400 (e.g. the row was deleted in-sheet).
+ *
+ * [SYNC-3] follow-up (v0.29.x) — sync.ts's UPDATE pass no longer calls this. A single contiguous
+ * range PUT necessarily overwrites EVERY cell from A to the row's furthest mapped column,
+ * including any sheet-only interstitial column in between that this app doesn't track — that
+ * column's existing value would be silently blanked. See `updateCellsSparse` below, which
+ * replaces this call site. Left in place (still exported, still correct for what it does) in
+ * case a future caller genuinely wants a dense contiguous-range overwrite; not removed as dead
+ * code because removing an exported helper is out of scope for this fix.
  */
 export async function updateRow(
   spreadsheetId: string,
@@ -385,6 +393,53 @@ export async function updateRow(
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ values: [values] }),
+    },
+  );
+  if (!r.ok) {
+    const t = await r.text().catch(() => `HTTP ${r.status}`);
+    throw new Error(`행 갱신 실패 (${r.status}): ${t}`);
+  }
+}
+
+/**
+ * [SYNC-3] follow-up — update ONLY the given cells of a single existing sheet row, via
+ * `spreadsheets.values.batchUpdate` (ONE HTTP request, many individual single-cell ranges).
+ *
+ * Why this exists: `updateRow` PUTs one contiguous range (A{row}:{lastMappedCol}{row}), so any
+ * sheet-only interstitial column *inside* that span that this app doesn't track gets overwritten
+ * with '' (buildRowForMapping's dense, blank-padded array has no way to "skip" a cell mid-range).
+ * `values.batchUpdate` accepts a `data` array of `{range, values}` entries, each targeting its OWN
+ * cell — so a request built from only the mapped columns is physically incapable of naming (and
+ * therefore touching) any column that isn't one of them. Interstitial columns aren't merely left
+ * unmodified as a side effect; they never appear anywhere in the request.
+ *
+ * `cells` should come from `columnMapping.ts`'s `buildSparseCellsForMapping` — one entry per
+ * mapped column, each carrying its 0-based header index and the value to write there.
+ *
+ * Throws on non-2xx (same 400/404 semantics as `updateRow`) so the caller can fall back to append
+ * when the in-sheet row is gone/moved.
+ */
+export async function updateCellsSparse(
+  spreadsheetId: string,
+  sheetTitle: string,
+  sheetRow: number,
+  cells: { colIndex: number; value: string }[],
+): Promise<void> {
+  if (cells.length === 0) return; // nothing mapped — no-op, never send an empty batchUpdate
+  const quotedTitle = quoteSheetTitle(sheetTitle);
+  const data = cells.map(({ colIndex, value }) => {
+    const colLetter = colToA1(colIndex + 1); // colIndex is 0-based; colToA1 expects 1-based
+    return {
+      range: `${quotedTitle}!${colLetter}${sheetRow}:${colLetter}${sheetRow}`,
+      values: [[value]],
+    };
+  });
+  const r = await authFetch(
+    `${API}/${spreadsheetId}/values:batchUpdate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ valueInputOption: 'USER_ENTERED', data }),
     },
   );
   if (!r.ok) {

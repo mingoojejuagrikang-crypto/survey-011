@@ -47,12 +47,16 @@ export function mapColumnsToHeader(columns: Pick<Column, 'id' | 'name'>[], heade
 /**
  * Build one sheet row's value array from a mapping, sized to exactly cover the columns this app
  * actually manages (0 .. highest matched header index) — no further. Any header column at or
- * beyond that span that ISN'T one of our mapped columns gets written as '' (harmless for a brand
- * new appended row; for an UPDATE of an existing app-owned row it's an accepted, documented
- * limitation — see KNOWN-ISSUES [SYNC-3] — rather than adding per-cell batchUpdate complexity).
- * Trailing header columns beyond our own furthest mapped column are left completely untouched
- * (the array simply doesn't extend that far), which is the common case (new unrelated columns
- * appended to the right of this app's block).
+ * beyond that span that ISN'T one of our mapped columns gets written as '' — this DENSE, blank-
+ * padded shape is intended for APPEND only (a brand-new row has no prior data to lose, so a blank
+ * interstitial cell is harmless). Trailing header columns beyond our own furthest mapped column
+ * are left completely untouched (the array simply doesn't extend that far), which is the common
+ * case (new unrelated columns appended to the right of this app's block).
+ *
+ * Do NOT use this for UPDATE of an existing row — a sheet-only interstitial column inside the
+ * matched span would be silently blanked. The UPDATE path uses `buildSparseCellsForMapping`
+ * instead (see below), which never represents an unmapped column at all. See KNOWN-ISSUES
+ * [SYNC-3] for the incident this distinction closes.
  *
  * Returns an empty array when the mapping has zero matches (no local column name found anywhere
  * in the header) — callers MUST treat that as a hard failure (see sync.ts), not a "successful"
@@ -71,4 +75,35 @@ export function buildRowForMapping(
     row[idx] = values[colId] ?? '';
   }
   return row;
+}
+
+/** One (header column index, value) pair for a sparse, per-cell write. */
+export interface SparseCell {
+  /** 0-based index in the sheet's header row (same space as ColumnMapping.indexForColId). */
+  colIndex: number;
+  value: string;
+}
+
+/**
+ * [SYNC-3] follow-up — build the list of (colIndex, value) pairs for ONLY the columns this app
+ * actually maps, for the UPDATE path (sync.ts -> sheets.ts's updateCellsSparse).
+ *
+ * Unlike buildRowForMapping (which returns a DENSE array padded with '' at every unmapped
+ * position *within the matched span* — harmless for a brand-new appended row, but a silent
+ * data-loss risk for an UPDATE of an existing row if a sheet-only interstitial column sits inside
+ * that span), this returns a SPARSE list that names EXACTLY the mapped column indices. Any
+ * interstitial/unmapped index is simply absent from the returned list — there is no "blank slot"
+ * to accidentally write. The caller builds a Sheets `values.batchUpdate` request from exactly this
+ * list, so an interstitial column is not merely "written with its old value" — it is never named
+ * in the request at all, making it physically impossible for that write to touch it.
+ */
+export function buildSparseCellsForMapping(
+  values: Record<string, string>,
+  mapping: ColumnMapping,
+): SparseCell[] {
+  const cells: SparseCell[] = [];
+  for (const [colId, idx] of mapping.indexForColId) {
+    cells.push({ colIndex: idx, value: values[colId] ?? '' });
+  }
+  return cells;
 }

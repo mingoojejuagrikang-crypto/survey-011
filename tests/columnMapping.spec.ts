@@ -11,7 +11,7 @@
  *  Plus: missing local column (not in sheet), and total mismatch (zero matches) hard-fail signal.
  */
 import { test, expect } from '@playwright/test';
-import { mapColumnsToHeader, buildRowForMapping } from '../src/lib/columnMapping';
+import { mapColumnsToHeader, buildRowForMapping, buildSparseCellsForMapping } from '../src/lib/columnMapping';
 
 const col = (id: string, name: string) => ({ id, name });
 
@@ -119,5 +119,60 @@ test.describe('buildRowForMapping', () => {
     const m = mapColumnsToHeader(columns, headers);
     const row = buildRowForMapping({ c1: '1' }, m);
     expect(row).toEqual([]);
+  });
+});
+
+test.describe('buildSparseCellsForMapping ([SYNC-3] follow-up — UPDATE path)', () => {
+  test('interstitial (sheet-only) columns between mapped columns are NEVER represented', () => {
+    // Local 6 columns map to header indices 0,1,5,6,7,8 (A,B,F,G,H,I). Header indices 2,3,4
+    // (C,D,E) are sheet-only interstitial columns this app doesn't track at all.
+    const columns = [
+      col('c0', 'A'), col('c1', 'B'), col('c2', 'F'), col('c3', 'G'), col('c4', 'H'), col('c5', 'I'),
+    ];
+    const headers = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+    const m = mapColumnsToHeader(columns, headers);
+    const values = { c0: 'a1', c1: 'b1', c2: 'f1', c3: 'g1', c4: 'h1', c5: 'i1' };
+    const cells = buildSparseCellsForMapping(values, m);
+
+    // Exactly 6 cells — one per mapped column. No entry for indices 2, 3, 4 (interstitial) AT ALL
+    // — contrast with buildRowForMapping, which would produce a DENSE array padding those
+    // positions with ''. A sparse list has no such slot to accidentally blank.
+    expect(cells).toHaveLength(6);
+    const indices = cells.map((c) => c.colIndex).sort((a, b) => a - b);
+    expect(indices).toEqual([0, 1, 5, 6, 7, 8]);
+    expect(indices).not.toContain(2);
+    expect(indices).not.toContain(3);
+    expect(indices).not.toContain(4);
+
+    const byIdx = Object.fromEntries(cells.map((c) => [c.colIndex, c.value]));
+    expect(byIdx[0]).toBe('a1');
+    expect(byIdx[1]).toBe('b1');
+    expect(byIdx[5]).toBe('f1');
+    expect(byIdx[6]).toBe('g1');
+    expect(byIdx[7]).toBe('h1');
+    expect(byIdx[8]).toBe('i1');
+  });
+
+  test('contrast with buildRowForMapping — the dense array DOES pad interstitial positions with \'\' (why sparse exists)', () => {
+    const columns = [col('c0', 'A'), col('c1', 'F')];
+    const headers = ['A', 'B', 'C', 'F']; // B, C are interstitial
+    const m = mapColumnsToHeader(columns, headers);
+    const dense = buildRowForMapping({ c0: 'a1', c1: 'f1' }, m);
+    // Dense array necessarily fills index 1 (B) and 2 (C) with '' — this is exactly what a
+    // contiguous-range PUT of this array would write over any existing sheet-only value there.
+    expect(dense).toEqual(['a1', '', '', 'f1']);
+
+    const sparse = buildSparseCellsForMapping({ c0: 'a1', c1: 'f1' }, m);
+    // Sparse list only ever names the 2 mapped indices — 1 and 2 never appear.
+    expect(sparse).toHaveLength(2);
+    expect(sparse.map((c) => c.colIndex).sort((a, b) => a - b)).toEqual([0, 3]);
+  });
+
+  test('zero matches -> empty cell list (mirrors buildRowForMapping\'s empty-array hard-failure signal)', () => {
+    const columns = [col('c1', '조사나무')];
+    const headers = ['완전히다른헤더'];
+    const m = mapColumnsToHeader(columns, headers);
+    const cells = buildSparseCellsForMapping({ c1: '1' }, m);
+    expect(cells).toEqual([]);
   });
 });

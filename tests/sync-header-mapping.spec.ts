@@ -23,7 +23,9 @@ const BASE = 'http://localhost:5175';
 interface SheetCall { method: string; url: string; body: unknown }
 
 /** Sheets API stub. GET returns `headerRow` (the sheet's REAL header, independent of local
- *  session.columns order/count) — append/PUT recorded like sync-skip-rows.spec.ts. */
+ *  session.columns order/count) — append recorded like sync-skip-rows.spec.ts. UPDATE goes
+ *  through `values:batchUpdate` (sparse per-cell POST, [SYNC-3] follow-up) — recorded too so
+ *  tests can assert exactly which cells a given sync touched. */
 async function stubSheets(page: Page, headerRow: string[]): Promise<SheetCall[]> {
   const calls: SheetCall[] = [];
   let nextAppendRow = 2;
@@ -41,6 +43,11 @@ async function stubSheets(page: Page, headerRow: string[]): Promise<SheetCall[]>
       await route.fulfill({
         json: { updates: { updatedRange: `Sheet1!A${first}:Z${last}`, updatedRows: rows.length } },
       });
+      return;
+    }
+    if (url.includes(':batchUpdate')) {
+      const data = (body as { data: { range: string }[] }).data ?? [];
+      await route.fulfill({ json: { spreadsheetId: 'stub', totalUpdatedCells: data.length } });
       return;
     }
     if (req.method() === 'GET') {
@@ -178,4 +185,61 @@ test('로컬 컬럼명이 시트 헤더에 하나도 없음 — 침묵 성공 �
 
   // Must NOT report a silent success — the failure banner (실패 count) surfaces instead.
   await expect(page.locator('text=실패').first()).toBeVisible();
+});
+
+test('[SYNC-3] follow-up — UPDATE 경로는 인터스티셜(시트 전용) 컬럼을 절대 건드리지 않음 (batchUpdate sparse per-cell)', async ({ page }) => {
+  // 재현 조건: 로컬 6컬럼이 실 9컬럼 헤더에서 A,B,F,G,H,I에 매핑되고, C,D,E는 이 앱이 추적하지 않는
+  // 시트 전용 인터스티셜 컬럼(민구 확인: 사용자가 앱이 만든 행에 나중에 시트에서 직접 값을
+  // 채워넣고, 그 후 앱에서 같은 행을 수정해 재동기화하는 워크플로가 실제로 있다/있을 수 있다).
+  // 이 행은 이미 한 번 synced(sheetRow=2)된 뒤 로컬에서 값이 바뀐(dirty) 상태 — 즉 APPEND가 아니라
+  // UPDATE 경로를 정확히 태운다(연속범위 PUT이었다면 C2:E2가 빈 문자열로 재기록됐을 자리).
+  const columns = [
+    { id: 'c0', name: 'A', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '' } },
+    { id: 'c1', name: 'B', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '' } },
+    { id: 'c2', name: 'F', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '' } },
+    { id: 'c3', name: 'G', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '' } },
+    { id: 'c4', name: 'H', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '' } },
+    { id: 'c5', name: 'I', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '' } },
+  ];
+  const headerRow = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']; // C,D,E = interstitial, sheet-only
+  const calls = await stubSheets(page, headerRow);
+
+  const values: Record<string, string> = { c0: 'a1', c1: 'b1', c2: 'f1', c3: 'g1', c4: 'h1', c5: 'i1' };
+  const session = {
+    id: 'sess-interstitial-1',
+    date: '2026-07-07',
+    label: '인터스티셜보호테스트',
+    columns,
+    rows: [{ index: 1, values, complete: true, sheetRow: 2, syncState: 'dirty' }],
+    completedRows: 1,
+    syncedRows: 1,
+    startedAt: 1783000000000,
+    finishedAt: 1783000600000,
+  };
+  await seedAndBoot(page, settingsWithColumns(columns), session);
+  await runSync(page);
+
+  const appends = calls.filter((c) => c.url.includes(':append'));
+  const batchUpdates = calls.filter((c) => c.url.includes(':batchUpdate'));
+  // Row already has a sheetRow and is 'dirty' — this MUST take the UPDATE path, not append.
+  expect(appends).toHaveLength(0);
+  expect(batchUpdates).toHaveLength(1);
+
+  const body = batchUpdates[0].body as { data: { range: string; values: string[][] }[] };
+  // Exactly 6 cells named — one per mapped column. The interstitial C2/D2/E2 do not appear in the
+  // request AT ALL — not written blank, not written anything: physically absent from `data`.
+  expect(body.data).toHaveLength(6);
+  const ranges = body.data.map((d) => d.range);
+  expect(ranges).not.toContain('Sheet1!C2:C2');
+  expect(ranges).not.toContain('Sheet1!D2:D2');
+  expect(ranges).not.toContain('Sheet1!E2:E2');
+  const byRange = Object.fromEntries(body.data.map((d) => [d.range, d.values[0][0]]));
+  expect(byRange['Sheet1!A2:A2']).toBe('a1');
+  expect(byRange['Sheet1!B2:B2']).toBe('b1');
+  expect(byRange['Sheet1!F2:F2']).toBe('f1');
+  expect(byRange['Sheet1!G2:G2']).toBe('g1');
+  expect(byRange['Sheet1!H2:H2']).toBe('h1');
+  expect(byRange['Sheet1!I2:I2']).toBe('i1');
+
+  await expect(page.locator('text=갱신')).toBeVisible();
 });

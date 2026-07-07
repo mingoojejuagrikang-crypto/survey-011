@@ -1,12 +1,12 @@
 import { useDataStore } from '../stores/dataStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
-import { appendRows, updateRow, parseSpreadsheetId, fetchHeaderRow } from './sheets';
+import { appendRows, updateCellsSparse, parseSpreadsheetId, fetchHeaderRow } from './sheets';
 import { saveSession } from './db';
 import { getAccessToken } from './googleAuth';
 import { logger } from './logger';
 import { hasSyncState, recountSynced, legacySyncedIndexSet } from './sessionSync';
-import { mapColumnsToHeader, buildRowForMapping, type ColumnMapping } from './columnMapping';
+import { mapColumnsToHeader, buildRowForMapping, buildSparseCellsForMapping, type ColumnMapping } from './columnMapping';
 import type { Session, SessionRow } from '../types';
 
 // Re-export so existing importers of recountSynced from sync.ts keep working (SSOT now in sessionSync).
@@ -65,9 +65,11 @@ function isAuthFailure(message: string): boolean {
  *     skip placeholders (complete:false) — are appended in row.index order in one request.
  *     Each row gets its sheetRow from the append's updatedRange + syncState='synced'.
  *     If updatedRange can't be parsed, rows are left un-synced (retried next sync).
- *   Pass 2 (update): rows with syncState === 'dirty' && sheetRow !== undefined are PUT in place.
- *     A 404/400 update failure resets that row's sheetRow → it appends next sync (fallback) and
- *     emits a `sync_row_mismatch` event.
+ *   Pass 2 (update): rows with syncState === 'dirty' && sheetRow !== undefined are written in place
+ *     via a sparse, per-cell `values.batchUpdate` (updateCellsSparse) — one targeted range per
+ *     mapped column, never a contiguous full-row PUT, so sheet-only interstitial columns between
+ *     mapped columns are never touched ([SYNC-3] follow-up). A 404/400 update failure resets that
+ *     row's sheetRow → it appends next sync (fallback) and emits a `sync_row_mismatch` event.
  */
 export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
   const settings = useSettingsStore.getState();
@@ -253,9 +255,13 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
         .filter((r) => r.syncState === 'dirty' && r.sheetRow !== undefined)
         .sort((a, b) => a.index - b.index);
       for (const row of updateTargets) {
-        const values = buildRowForMapping(row.values, mapping);
+        // [SYNC-3] follow-up — sparse, per-cell write (updateCellsSparse) instead of a contiguous
+        // range PUT (updateRow). Only the columns this app maps are named in the request, so a
+        // sheet-only interstitial column sitting between two mapped columns is never touched —
+        // not even represented in the request, let alone overwritten with ''.
+        const cells = buildSparseCellsForMapping(row.values, mapping);
         try {
-          await updateRow(spreadsheetId, sheetTab, row.sheetRow!, values);
+          await updateCellsSparse(spreadsheetId, sheetTab, row.sheetRow!, cells);
           pushedAnything = true;
           updated++;
           rows = rows.map((r) => (r.index === row.index ? { ...r, syncState: 'synced' as const } : r));
