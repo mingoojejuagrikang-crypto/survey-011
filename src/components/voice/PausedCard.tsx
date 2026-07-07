@@ -25,6 +25,7 @@ export function PausedCard() {
         background: 'rgba(40,32,12,0.96)', border: `2px solid ${T.amber}`,
         boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
         display: 'flex', flexDirection: 'column', gap: 'clamp(6px, 1.2vh, 10px)', alignItems: 'center',
+        animation: 'card-breathe-amber 2.6s ease-in-out infinite',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -41,11 +42,8 @@ export function PausedCard() {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
         {/* 후속 명령 안내 = 하위 우선 → --fit-lo(먼저 축소). 줄바꿈 허용(잘림 금지). */}
-        <span style={{ fontSize: 'calc(clamp(13px, 2vh, 16px) * var(--fit-lo, 1))', color: T.textDim, fontWeight: 600, textAlign: 'center', lineHeight: 1.5 }}>
-          <b style={{ color: T.amber }}>"재시작"</b> 이라고 말하면 이어서 진행
-        </span>
-        <span style={{ fontSize: 'calc(clamp(13px, 2vh, 16px) * var(--fit-lo, 1))', color: T.textDim, fontWeight: 600, textAlign: 'center', lineHeight: 1.5 }}>
-          <b style={{ color: T.amber }}>"종료"</b> 라고 말하면 저장하고 끝냅니다
+        <span style={{ fontSize: 'max(11px, calc(clamp(13px, 2vh, 16px) * var(--fit-lo, 1)))', color: T.textDim, fontWeight: 700, textAlign: 'center', lineHeight: 1.35 }}>
+          <b style={{ color: T.amber }}>"재시작"</b>으로 이어서 · <b style={{ color: T.amber }}>"종료"</b>로 저장
         </span>
       </div>
     </div>

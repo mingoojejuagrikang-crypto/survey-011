@@ -86,6 +86,8 @@ export function AnomalyAlertPopup({
   const fitRef = useFitScale<HTMLDivElement>([
     a.colName, a.prev, a.next, a.changeText, a.sampleKey, a.prevDate, a.status, a.kind,
   ], ANOMALY_FIT_STEPS);
+  const sample = a.sampleKey || `행 ${a.row}`;
+  const prevLabel = `직전 ${a.prev}${a.prevDate ? `(${a.prevDate})` : ''}`;
   return (
     <div
       ref={fitRef}
@@ -107,116 +109,51 @@ export function AnomalyAlertPopup({
         boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
         display: 'flex', flexDirection: 'column',
         gap: 'max(1px, calc(clamp(4px, 0.8vh, 8px) * var(--fit-lo, 1)))', alignItems: 'center',
+        animation: corrected ? 'card-breathe-green 2.4s ease-in-out infinite' : 'card-breathe-red 2.2s ease-in-out infinite',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-        {/* 헤더 항목명 = 식별정보(P4) → --fit-lo. 줄바꿈 허용(잘림 금지). */}
-        <span
-          style={{
-            // v0.28.0 — max(하한, ...)로 절대 최소 크기 보장(ANOMALY_FIT_STEPS가 더 낮은 단계까지
-            // 가도 이 아래로는 안 줄어든다). 하한 값은 각 요소의 정보 우선순위(GL-005)에 맞춰
-            // 낮을수록(P5에 가까울수록) 더 작게 잡았다.
-            fontSize: 'max(10px, calc(clamp(16px, 2.4vh, 21px) * var(--fit-lo, 1)))', fontWeight: 800, color: T.text,
-            maxWidth: '100%', wordBreak: 'keep-all', overflowWrap: 'anywhere', textAlign: 'center', lineHeight: 1.15,
-          }}
-        >
-          {a.colName}
-        </span>
-        {/* 알람 라벨 = 변화(P2, 현재값 다음 우선) → --fit-hi(완만 축소). */}
-        <span style={{ fontSize: 'max(12px, calc(clamp(16px, 2.3vh, 20px) * var(--fit-hi, 1)))', fontWeight: 800, color: accent, lineHeight: 1.15 }}>
-          {alarmLabel}
-        </span>
-      </div>
-      {/* V2 — 어떤 샘플/행을 보는지. 샘플키 미상이면 '행 N' 폴백. 긴 키도 박스 안에서 줄바꿈.
-          v0.18.0 1d — 원거리 가독: 샘플 식별 줄을 키우고 대비 보강(textDim→text). P4 → --fit-lo. */}
+      {/* v0.30.0 — 두 줄 구조: ① 항목·샘플·알람라벨 ② 직전값→현재값. 확인류 안내문구는
+          비프음+배경 호흡으로 대체해 카드 전체를 현장 거리에서 읽히는 정보만 남긴다. */}
       <div
         style={{
-          fontSize: 'max(9px, calc(clamp(13px, min(4.4vw, 2.1vh), 17px) * var(--fit-lo, 1)))',
-          color: T.text, fontWeight: 700, textAlign: 'center',
-          lineHeight: 1.25, maxWidth: '100%', wordBreak: 'break-all', overflowWrap: 'anywhere',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+          flexWrap: 'wrap', maxWidth: '100%',
+          fontSize: 'max(11px, calc(clamp(15px, 2.35vh, 20px) * var(--fit-lo, 1)))',
+          color: T.text, fontWeight: 850, textAlign: 'center', lineHeight: 1.16,
+          wordBreak: 'keep-all', overflowWrap: 'anywhere',
         }}
       >
-        샘플: {a.sampleKey || `행 ${a.row}`}
+        <span>{a.colName}</span>
+        <span style={{ color: T.textMute }} aria-hidden>·</span>
+        <span>{sample}</span>
+        <span style={{ color: T.textMute }} aria-hidden>·</span>
+        <span style={{ color: accent }}>{alarmLabel}</span>
       </div>
-      {/* v0.22.0 입력탭#2(P2 잘림): 직전값→현재값 행. flexWrap + maxWidth로 긴 값이 가로로
-          넘쳐 박스를 벗어나지 못하게 한다(필요시 줄바꿈). 자식 컬럼은 minWidth:0로 축소 허용.
-          v0.28.0 — gap도 --fit-lo에 연동(하한 有), 375×667 무스크롤 예산 확보. */}
       <div
         style={{
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center', flexWrap: 'wrap',
+          display: 'flex', alignItems: 'baseline', justifyContent: 'center', flexWrap: 'wrap',
           gap: 'max(4px, calc(clamp(8px, 1.4vh, 12px) * var(--fit-lo, 1)))',
-          maxWidth: '100%',
+          maxWidth: '100%', lineHeight: 1.05,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
         }}
       >
-        {/* V2 — 직전 값을 그 회차 날짜로 라벨링(prevDate 있을 때만 날짜 표기). P4 → --fit-lo.
-            v0.28.0 — 이 라벨("직전 (날짜)")은 실제 비교값(바로 아래 숫자, P3)의 부가 설명일 뿐
-            그 자체가 핵심 정보는 아니다. 375급(≤700px)에서는 라벨을 숨기고 숫자만 남긴다 —
-            "직전값 vs 현재값 비교"라는 카드의 핵심 목적은 숫자만으로 유지된다. */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
-          <span
-            className="aa-prev-label"
-            style={{
-              fontSize: 'max(9px, calc(clamp(11px, 1.6vh, 13px) * var(--fit-lo, 1)))', fontWeight: 700,
-              color: T.textDim, letterSpacing: -0.2,
-              fontFamily: 'system-ui, sans-serif',
-            }}
-          >
-            직전{a.prevDate ? ` (${a.prevDate})` : ''}
-          </span>
-          {/* v0.18.0 1d — 직전값 대비 보강. P3(직전값) → --fit-lo(현재값보다 먼저 축소). */}
-          <span
-            style={{
-              fontSize: 'max(15px, calc(clamp(24px, min(8vw, 4.4vh), 36px) * var(--fit-lo, 1)))', fontWeight: 800, color: T.textDim,
-              maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center', lineHeight: 1.0,
-            }}
-          >
-            {a.prev}
-          </span>
-        </div>
-        <span style={{ fontSize: 'max(12px, calc(clamp(18px, 3.2vh, 26px) * var(--fit-lo, 1)))', color: T.textDim, paddingBottom: 4 }}>→</span>
-        {/* R3 — hero 현재값 위에 항목명 라벨(accent색)을 붙여 정수값도 어느 항목인지 즉시 식별.
-            v0.22.0 입력탭#2(P2 잘림): 긴 항목명("과실 횡경 평균값" 등)이 ellipsis로 …잘리던 문제 →
-            줄바꿈 허용(whiteSpace:normal + wordBreak:keep-all/overflowWrap:anywhere)으로 전부 표시.
-            v0.28.0 — 이 라벨은 헤더 줄({a.colName}, 위쪽)의 **중복**이다(375급에서 폰트 하한을
-            건 뒤에도 남는 잔여 초과분은 이 중복 줄 하나만큼의 여백에서 나온다). 매우 짧은
-            화면(≤700px, class="aa-hero-dup-label")에서만 CSS로 숨긴다 — 정보 손실 없음(항목명은
-            헤더에 이미 표시), 측정 기반 토글이 아니라 뷰포트 높이 고정 조건이라 되튐(oscillation)
-            없음. 412/915·430/932(기존 PASS)는 이 media query 밖이라 그대로 보인다. */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0, maxWidth: '100%' }}>
-          <span
-            className="aa-hero-dup-label"
-            style={{
-              fontSize: 'max(9px, calc(clamp(11px, 1.6vh, 13px) * var(--fit-lo, 1)))', fontWeight: 800,
-              color: accent, letterSpacing: -0.2,
-              fontFamily: 'system-ui, sans-serif', maxWidth: 'min(280px, 60vw)',
-              whiteSpace: 'normal', wordBreak: 'keep-all', overflowWrap: 'anywhere',
-              textAlign: 'center', lineHeight: 1.25,
-            }}
-          >
-            {a.colName}
-          </span>
-          {/* 현재값 = P1(최우선 정보) → --fit-hi(가장 늦게·완만하게 축소). vh 상한 결합으로 짧은
-              화면(가로모드 포함)에서도 CSS 단계에서 이미 비례 축소된다. 줄바꿈 허용(잘림 0).
-              v0.28.0 — 하한 26px: v027-voice-cards-fit.spec.ts의 기존 GL-005 가독 하한(hero
-              폰트 ≥26px, 402×874/375×812에서 이미 단언됨)과 동일 기준을 375×667에도 그대로
-              적용 — "현재값은 항상 크게 유지"(민구 원칙)를 이 카드의 다른 어떤 요소보다 높은
-              floor로 못박는다. */}
-          <span
-            style={{
-              fontSize: 'max(26px, calc(clamp(32px, min(11vw, 7.4vh), 60px) * var(--fit-hi, 1)))',
-              fontWeight: 900, color: T.text, letterSpacing: -0.5,
-              maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
-              textAlign: 'center', lineHeight: 1.0,
-            }}
-          >
-            {a.next}
-          </span>
-        </div>
-      </div>
-      {/* 안내문 = P5(최하위) → --fit-lo. */}
-      <div style={{ fontSize: 'max(8px, calc(clamp(12px, 1.8vh, 15px) * var(--fit-lo, 1)))', color: corrected ? T.green : T.textDim, fontWeight: 600, lineHeight: 1.15 }}>
-        {corrected ? '✓ 정정되었습니다' : "'확인' 또는 새 값으로 정정"}
+        <span style={{
+          fontSize: 'max(13px, calc(clamp(18px, min(5.6vw, 3.5vh), 28px) * var(--fit-lo, 1)))',
+          color: T.textDim, fontWeight: 800, maxWidth: '100%', overflowWrap: 'anywhere',
+        }}>
+          {prevLabel}
+        </span>
+        <span style={{ fontSize: 'max(13px, calc(clamp(18px, 3vh, 24px) * var(--fit-lo, 1)))', color: T.textDim }}>→</span>
+        <span
+          style={{
+            fontSize: 'max(26px, calc(clamp(36px, min(12vw, 8.2vh), 64px) * var(--fit-hi, 1)))',
+            fontWeight: 950, color: T.text, letterSpacing: -0.5,
+            maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
+            textAlign: 'center',
+          }}
+        >
+          {a.next}
+        </span>
       </div>
     </div>
   );

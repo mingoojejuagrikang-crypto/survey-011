@@ -339,6 +339,14 @@
 - **출처:** `survey-011 v0.6.0` Codex 교차점검(C6, 원 보고) → `2026-07-07 v0.28.0 A5 업로드 테스트(Sonar, 실 Google 계정)`(재오픈, 실사용 재현) → **survey-011 v0.29.0** 근본 수정(이름기반 매핑) → **survey-011 v0.29.x** 후속수정(민구 확인 기반, UPDATE 경로 인터스티셜 컬럼 절대 미접촉).
 - **현재 상태:** ✅수정됨(`src/lib/columnMapping.ts` `mapColumnsToHeader`/`buildRowForMapping`/신규 `buildSparseCellsForMapping`, `src/lib/sheets.ts` `fetchHeaderRow`/신규 `updateCellsSparse`, `src/lib/sync.ts` append 경로는 이름기반 매핑 유지·update 경로는 `updateCellsSparse` sparse per-cell 전환, `src/screens/DataScreen.tsx` columnWarnings 배너) — APPEND·UPDATE 양쪽 모두 실기기에서 실제 컬럼 추가/변경 + 인터스티셜 컬럼이 있는 프로덕션 시트로 재검증 권장(단위/e2e는 전부 통과).
 
+### [SYNC-4] 재로그인 자동 재연결이 컬럼 ID를 새로 만들어 입력 중 값이 빈칸으로 동기화될 수 있음
+- **증상:** 음성 입력 중 Google 재로그인/시트 자동 재연결이 발생하면, 이미 말해 둔 값이 앱 세션 안에는 남아 있는데 이후 시트 동기화에서 같은 항목을 빈 문자열로 읽어 시트에 덮어쓸 수 있었다. UI 표시 문제가 아니라 프로덕션 시트 값이 영구 손상될 수 있는 데이터 유실 경로다.
+- **원인:** `SettingsScreen`의 재연결 경로가 `inferColumns()` 결과로 `useSettingsStore.columns`를 교체하는데, 기존 `inferColumns()`가 `Date.now()` 기반 컬럼 ID를 매번 새로 만들었다. 음성 세션 값은 구 ID 아래 저장되고, 이후 `persistSession`/`sync`는 새 컬럼 ID로 값을 조회해 `''`를 쓰게 된다. [AUTH-7]의 재로그인 후 자동 재연결 완화가 만든 부작용이다.
+- **해결(v0.30.0, Mack):** `inferColumns()`의 ID를 헤더명+중복순번 기반 결정적 해시로 바꾸고, 재분석 시 기존 컬럼명과 신규 컬럼명이 양쪽 모두 유일한 경우 `preserveInferredColumnIds()`로 기존 ID를 보존한다. 이렇게 하면 구버전 `Date.now()` ID로 이미 시작한 활성 세션도 같은 이름의 항목 값을 계속 주소 지정할 수 있고, 신규 세션은 결정적 ID를 쓴다. 중복 헤더명은 이름만으로 안전하게 매칭할 수 없으므로 보존하지 않고 새 결정적 ID를 쓴다.
+- **회귀 테스트:** `tests/sheets-infer-columns.spec.ts` — 동일 헤더의 결정적 ID, 구 ID 보존, 중복 헤더명 보존 금지. 기존 이름기반 시트 매핑 회귀 `tests/columnMapping.spec.ts`도 함께 통과.
+- **출처:** `2026-07-07 v0.29.0 실기기 점검 후속 CODEX-HANDOFF.md` 문제 A → **survey-011 v0.30.0**.
+- **현재 상태:** ✅수정됨(`src/lib/sheets.ts` `inferColumns`/`preserveInferredColumnIds`, `src/screens/SettingsScreen.tsx` `loadHeaders`) — 실기기에서 재로그인/자동 재연결을 일부러 발생시키는 장시간 입력 시나리오로 최종 검증 권장.
+
 ---
 
 ## ⑤ 빌드 / 테스트 / 배포 환경 (이번 세션 직격탄)

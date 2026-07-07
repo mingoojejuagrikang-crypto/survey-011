@@ -19,6 +19,7 @@ import {
   fetchSpreadsheetMeta,
   fetchColumnUniqueValues,
   inferColumns,
+  preserveInferredColumnIds,
   parseSpreadsheetId,
 } from '../lib/sheets';
 import { computeTotalRows, nestedAutoValue, buildCyclingValues, autoValue } from '../lib/autoValue';
@@ -401,24 +402,6 @@ function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Column) =>
         })}
       </div>
 
-      {/* v0.25.0 입력탭#1(Vance) — 터치(선택) 순서 = 행별 자동입력 순서 라이브 미리보기.
-          autoValue(col,row)로 파생(단일 컬럼 순환) — length 불변, ttsAnnounce/persist 무관. */}
-      {col.input === 'auto' && selected.length >= 2 && (
-        <div
-          data-testid={`opt-preview-${col.id}`}
-          style={{
-            fontSize: 12.5, color: T.textDim, lineHeight: 1.5,
-            wordBreak: 'keep-all', overflowWrap: 'anywhere',
-          }}
-        >
-          <span style={{ color: T.textMute, fontWeight: 700 }}>자동 입력: </span>
-          {Array.from(
-            { length: Math.min(selected.length + 1, 5) },
-            (_, i) => `${i + 1}행 ${autoValue(col, i + 1)}`,
-          ).join(' · ') + '…'}
-        </div>
-      )}
-
       <div style={{ display: 'flex', gap: 6 }}>
         <input
           value={newOption}
@@ -460,7 +443,6 @@ function ColumnCard({
   onRemove,
   onMoveUp,
   onMoveDown,
-  onHelp,
   isFirst,
   isLast,
 }: {
@@ -470,8 +452,6 @@ function ColumnCard({
   onRemove: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
-  /** v0.23.0 설정탭#4 — `?` 도움말 팝업 열기(모달 상태는 SettingsScreen이 소유). */
-  onHelp: () => void;
   isFirst: boolean;
   isLast: boolean;
 }) {
@@ -565,8 +545,6 @@ function ColumnCard({
         >
           {TYPE_LABELS[col.type]} {I.chevDown(12, typ.fg)}
         </button>
-        {/* v0.23.0 설정탭#4(Vance) — 카드별 `?` 도움말. 인라인 설명을 팝업으로 이전(아래 추세 설명 삭제). */}
-        <HelpButton onOpen={onHelp} label={`${col.name || '항목'} 설정 도움말`} />
         <button
           onClick={onRemove}
           style={{
@@ -1087,7 +1065,10 @@ export function SettingsScreen() {
     try {
       setLoading('컬럼 분석 중...');
       const { headers, sample } = await fetchHeaderAndSample(spreadsheetId, sheetTitle);
-      const inferred = inferColumns(headers, sample);
+      const inferred = preserveInferredColumnIds(
+        inferColumns(headers, sample),
+        useSettingsStore.getState().columns,
+      );
       // For 'options' columns, fetch a richer set of unique values
       const enriched = await Promise.all(
         inferred.map(async (c, i) => {
@@ -1246,7 +1227,10 @@ export function SettingsScreen() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <ScreenHeader sub="오늘의 측정 항목과 시트 연결" />
+      <ScreenHeader
+        sub="오늘의 측정 항목과 시트 연결"
+        right={<HelpButton onOpen={() => setHelpOpen(true)} label="설정 도움말" testid="settings-help-button" />}
+      />
 
       <div
         style={{
@@ -1674,7 +1658,6 @@ export function SettingsScreen() {
                 onRemove={() => s.removeColumn(c.id)}
                 onMoveUp={() => s.reorderColumns(idx, idx - 1)}
                 onMoveDown={() => s.reorderColumns(idx, idx + 1)}
-                onHelp={() => setHelpOpen(true)}
                 isFirst={idx === 0}
                 isLast={idx === s.columns.length - 1}
               />
@@ -1993,6 +1976,7 @@ function TablePreviewModal({
   const isGate = !!onConfirm;
   const voiceCount = columns.filter((c) => c.input === 'voice').length;
   const autoCount = columns.filter((c) => c.input === 'auto').length;
+  const touchCount = columns.filter((c) => c.input === 'touch').length;
 
   return (
     <div
@@ -2066,6 +2050,7 @@ function TablePreviewModal({
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               <SummaryPill label="음성입력" value={voiceCount} accent />
               <SummaryPill label="자동입력" value={autoCount} />
+              <SummaryPill label="수동입력" value={touchCount} />
               <SummaryPill label="전체 항목" value={columns.length} />
               <SummaryPill label="총 행수" value={totalRows} />
             </div>

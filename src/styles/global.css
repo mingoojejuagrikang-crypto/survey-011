@@ -120,6 +120,23 @@ input::placeholder {
   50% { opacity: 1; box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 22px 2px rgba(0,200,83,0.30); }
 }
 
+@keyframes card-breathe-red {
+  0%, 100% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 rgba(255,82,82,0.18); filter: saturate(1); }
+  50% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 24px rgba(255,82,82,0.45); filter: saturate(1.22); }
+}
+@keyframes card-breathe-green {
+  0%, 100% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 rgba(0,200,83,0.16); filter: saturate(1); }
+  50% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 24px rgba(0,200,83,0.42); filter: saturate(1.18); }
+}
+@keyframes card-breathe-amber {
+  0%, 100% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 rgba(255,193,7,0.16); filter: saturate(1); }
+  50% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 24px rgba(255,193,7,0.38); filter: saturate(1.18); }
+}
+@keyframes card-breathe-blue {
+  0%, 100% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 rgba(41,121,255,0.16); filter: saturate(1); }
+  50% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 24px rgba(41,121,255,0.38); filter: saturate(1.18); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* No scale spring for motion-sensitive users — fade only. */
   @keyframes value-burst {
@@ -136,6 +153,12 @@ input::placeholder {
   @keyframes panel-pulse {
     0%, 100% { opacity: 0.94; }
     50% { opacity: 1; }
+  }
+  [data-testid="anomaly-alert"],
+  [data-testid="modify-indicator"],
+  [data-testid="paused-card"] {
+    animation: none !important;
+    filter: none !important;
   }
 }
 
@@ -161,12 +184,15 @@ html { -webkit-text-size-adjust: 100%; }
   width: 28px; height: 28px; border-radius: 50%;
   background: #FFFFFF; border: 3px solid rgba(0,0,0,0.35);
   box-shadow: 0 2px 8px rgba(0,0,0,0.5); cursor: pointer; margin-top: 0;
+  box-sizing: border-box;
 }
 .dial-range::-moz-range-thumb {
   width: 28px; height: 28px; border-radius: 50%;
   background: #FFFFFF; border: 3px solid rgba(0,0,0,0.35);
   box-shadow: 0 2px 8px rgba(0,0,0,0.5); cursor: pointer;
+  box-sizing: border-box;
 }
 .dial-range::-webkit-slider-runnable-track { height: 12px; border-radius: 999px; background: transparent; }
 .dial-range::-moz-range-track { height: 12px; border-radius: 999px; background: transparent; }
+.dial-range::-moz-range-progress { height: 12px; border-radius: 999px; background: transparent; }
 .dial-range:focus-visible { box-shadow: 0 0 0 3px rgba(41,121,255,0.5); }

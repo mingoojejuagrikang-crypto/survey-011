@@ -786,6 +786,8 @@ function Dial({
   testId?: string;
 }) {
   const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  const thumbPx = 28;
+  const fillStop = `calc(${pct}% * (100% - ${thumbPx}px) / 100 + ${thumbPx / 2}px)`;
   return (
     <div
       data-testid={testId}
@@ -822,7 +824,7 @@ function Dial({
           width: '100%', height: 34, margin: 0,
           accentColor: accent,
           // 굵은 트랙 — 장갑 손가락이 끌기 쉽게(min 44px 터치 타깃은 height로 확보).
-          background: `linear-gradient(90deg, ${accent} 0%, ${accent} ${pct}%, ${T.lineStrong} ${pct}%, ${T.lineStrong} 100%)`,
+          background: `linear-gradient(90deg, ${accent} 0%, ${accent} ${fillStop}, ${T.lineStrong} ${fillStop}, ${T.lineStrong} 100%)`,
           borderRadius: 999,
           cursor: 'pointer',
           touchAction: 'none',

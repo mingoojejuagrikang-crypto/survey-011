@@ -133,7 +133,11 @@ function guessType(value: string): DataType {
  *  - Otherwise → 'text', input 'auto', ttsAnnounce false.
  */
 export function inferColumns(headers: string[], sample: string[][]): Column[] {
+  const seenNames = new Map<string, number>();
   return headers.map((name, ci) => {
+    const normalizedName = normalizeHeaderName(name || `열 ${ci + 1}`);
+    const occurrence = (seenNames.get(normalizedName) ?? 0) + 1;
+    seenNames.set(normalizedName, occurrence);
     const samples = sample.map((row) => row[ci]).filter(Boolean);
     let type: DataType = 'text';
     if (samples.length) {
@@ -208,7 +212,7 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
     if (trimmed === '비고') input = 'touch';
 
     return {
-      id: `c${ci}_${Date.now()}`,
+      id: stableColumnId(name || `열 ${ci + 1}`, occurrence),
       name: name || `열 ${ci + 1}`,
       type,
       input,
@@ -216,6 +220,49 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
       auto,
       decimals,
     };
+  });
+}
+
+function normalizeHeaderName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ');
+}
+
+function stableColumnId(name: string, occurrence: number): string {
+  const key = `${normalizeHeaderName(name)}#${occurrence}`;
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `c${(hash >>> 0).toString(36)}`;
+}
+
+/**
+ * Keep live/local session values addressable when the same sheet is re-analyzed.
+ *
+ * Pre-v0.30 columns used `Date.now()` IDs. If reconnecting the same sheet replaces every ID,
+ * already-entered row values remain under the old IDs and later sync reads blanks. Preserve an
+ * existing ID only when that column name is unique on both sides; duplicates fall back to the new
+ * deterministic ID because name-only preservation would be ambiguous.
+ */
+export function preserveInferredColumnIds(inferred: Column[], existing: Column[]): Column[] {
+  const existingByName = new Map<string, Column[]>();
+  const inferredCounts = new Map<string, number>();
+  for (const c of existing) {
+    const key = normalizeHeaderName(c.name);
+    existingByName.set(key, [...(existingByName.get(key) ?? []), c]);
+  }
+  for (const c of inferred) {
+    const key = normalizeHeaderName(c.name);
+    inferredCounts.set(key, (inferredCounts.get(key) ?? 0) + 1);
+  }
+  return inferred.map((c) => {
+    const key = normalizeHeaderName(c.name);
+    const candidates = existingByName.get(key) ?? [];
+    if (candidates.length === 1 && inferredCounts.get(key) === 1) {
+      return { ...c, id: candidates[0].id };
+    }
+    return c;
   });
 }
 

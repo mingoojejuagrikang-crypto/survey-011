@@ -9,6 +9,7 @@ import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, wa
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip } from './db';
+import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import { getCachedIndex, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
@@ -1793,6 +1794,7 @@ export function useVoiceSession() {
         kind: alertKind, // v0.20.0 입력탭#6 — 팝업이 추세/범위 표시를 가르는 신호.
         ...(rangeThreshold != null ? { threshold: rangeThreshold } : {}),
       });
+      playBeep('alert');
       useSessionStore.getState().setLastTts(alertText);
       await say(alertText);
       return; // advance 중단 — 해소는 handleFinal 상단의 trendConfirm 분기
@@ -1812,7 +1814,10 @@ export function useVoiceSession() {
           next: formatForTts(parsed),
           status: 'corrected',
         });
+        playBeep('corrected');
       }
+    } else if (awaiting.isModify) {
+      playBeep('modify');
     }
 
     const echoText = awaiting.isModify

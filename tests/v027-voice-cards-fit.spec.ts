@@ -5,7 +5,7 @@
  *  콘텐츠가 흡수영역(grid row3, overflow:hidden) 높이 안에 **항상 전부** 들어와야 한다:
  *    - scrollHeight ≤ clientHeight + 1 (내부 스크롤 잔여 0)
  *    - scrollWidth  ≤ clientWidth  + 1 (가로 잘림 0 — v023 B1 인변량 유지)
- *    - 전 정보 요소(항목명·샘플·직전값·현재값·알람 라벨·안내문)가 뷰포트 안에서 visible
+ *    - 전 핵심 정보 요소(항목명·샘플·직전값·현재값·알람 라벨)가 뷰포트 안에서 visible
  *  v023-voice.spec.ts B1 패턴 확장: 긴 항목명 + 큰 음수소수(-355.5), 402×874(iPhone 16 Pro급)와
  *  375×812 두 뷰포트. 스크린샷은 Larry 육안 검수용으로 scratchpad에 저장.
  *
@@ -160,15 +160,14 @@ for (const vp of VIEWPORTS) {
     expect(m.scrollH).toBeLessThanOrEqual(m.clientH + 1);
     expect(m.scrollW).toBeLessThanOrEqual(m.clientW + 1);
 
-    // ② 전 정보 요소가 visible + 뷰포트 안(정보 우선순위 전 계층: 현재값 > 알람 라벨 > 직전값 >
-    //    식별정보(샘플·항목명) > 안내문). ellipsis 잘림 금지 — 요소 박스가 카드/뷰포트 안에 있어야 한다.
+    // ② 전 핵심 정보 요소가 visible + 뷰포트 안(현재값 > 알람 라벨 > 직전값 > 식별정보).
+    //    v0.30.0부터 확인류 안내문은 비프음+배경 호흡으로 대체된다.
     const infoTexts = [
       '-355.5',                 // P1 현재값
       '추세 알람 감소',           // P2 변화(알람 라벨)
       '100',                    // P3 직전값(카드는 원본 표기 "100"으로 표시 — trend-alert.spec 동일)
-      '샘플:',                   // P4 식별(샘플)
+      '이원창',                   // P4 식별(샘플)
       LONG_NAME,                // P4 식별(항목명 — 헤더/hero 라벨 2곳)
-      "'확인' 또는 새 값으로 정정", // P5 안내문
     ];
     const cardBox = (await card.boundingBox())!;
     for (const t of infoTexts) {

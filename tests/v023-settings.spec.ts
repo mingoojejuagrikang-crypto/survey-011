@@ -3,7 +3,7 @@
  *   A1 — 이상값 범위 입력 옆에 "%" 단위가 **항상** 보인다(placeholder 의존 제거).
  *   A2 — 자동입력 컬럼의 자동값 행에 선두 라벨 "입력값"이 입력방식/음성확인과 정렬돼 노출.
  *   A3 — 날짜 컬럼은 라디오 대신 SegmentToggle(오늘|지정) — 별도 스펙(v54-scenarios)에서 검증.
- *   A4 — 카드별 `?` → 설명 팝업(COLUMN_HELP) + 첫 진입 1회 dismissible 안내 배너(localStorage).
+ *   A4 — 상단 `?` → 설명 팝업(COLUMN_HELP) + 첫 진입 1회 dismissible 안내 배너(localStorage).
  *
  * 375px 시뮬레이션(GL-005): `?` 설명 팝업이 좁은 기기에서 잘리지 않는다(scrollWidth ≤ clientWidth).
  */
@@ -47,12 +47,12 @@ test('A4 — 첫 진입 안내 배너가 보이고, ✕로 닫으면 localStorag
   console.log('✓ 재진입 후 배너 미노출(1회성)');
 });
 
-test('A4 — 카드 `?` → 설명 팝업이 열리고 375px에서 잘리지 않음', async ({ page }) => {
+test('A4 — 상단 `?` → 설명 팝업이 열리고 375px에서 잘리지 않음', async ({ page }) => {
   await goToSettings(page);
 
-  // 첫 카드의 `?` 도움말 버튼 클릭.
-  const firstCard = page.locator('[data-testid^="col-card-"]').first();
-  await firstCard.locator('[data-testid="help-button"]').click();
+  // 카드별 중복 `?`는 제거되고 상단 헤더의 단일 도움말 버튼만 남는다.
+  await expect(page.locator('[data-testid="help-button"]')).toHaveCount(0);
+  await page.locator('[data-testid="settings-help-button"]').click();
   await page.waitForTimeout(300);
 
   const modal = page.locator('[data-testid="settings-help-modal"]');
