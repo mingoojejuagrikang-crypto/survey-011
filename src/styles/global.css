@@ -175,24 +175,3 @@ html { -webkit-text-size-adjust: 100%; }
   /* "직전 (날짜)" 라벨 — 아래 숫자(비교값 자체)는 유지, 부가 설명 문구만 숨긴다. */
   .aa-prev-label { display: none; }
 }
-
-/* v0.20.0 입력탭#1·#2 — Dial: 장갑 손가락용 큰 thumb. 네이티브 range를 유지(role=slider/키보드)하되
-   thumb를 28px·흰색·테두리로 키워 장갑·원거리 조작성을 확보한다. 트랙 채움색은 인라인 gradient. */
-.dial-range { -webkit-appearance: none; appearance: none; outline: none; }
-.dial-range::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none;
-  width: 28px; height: 28px; border-radius: 50%;
-  background: #FFFFFF; border: 3px solid rgba(0,0,0,0.35);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.5); cursor: pointer; margin-top: 0;
-  box-sizing: border-box;
-}
-.dial-range::-moz-range-thumb {
-  width: 28px; height: 28px; border-radius: 50%;
-  background: #FFFFFF; border: 3px solid rgba(0,0,0,0.35);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.5); cursor: pointer;
-  box-sizing: border-box;
-}
-.dial-range::-webkit-slider-runnable-track { height: 12px; border-radius: 999px; background: transparent; }
-.dial-range::-moz-range-track { height: 12px; border-radius: 999px; background: transparent; }
-.dial-range::-moz-range-progress { height: 12px; border-radius: 999px; background: transparent; }
-.dial-range:focus-visible { box-shadow: 0 0 0 3px rgba(41,121,255,0.5); }

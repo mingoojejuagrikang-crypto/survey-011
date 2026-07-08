@@ -162,11 +162,8 @@ async function fireStt(page: Page, transcript: string, waitMs = 300) {
 async function waitForActiveChip(page: Page, colName: string, timeout = 4000) {
   await page.waitForFunction(
     (name) => {
-      const spans = Array.from(document.querySelectorAll('span'))
-        .filter((s) => s.textContent?.trim() === '▶');
-      if (!spans.length) return false;
-      const p = spans[0].closest('div[style]');
-      return (p?.textContent || '').includes(name);
+      const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+      return (chip?.dataset.colName ?? '').includes(String(name));
     },
     colName,
     { timeout },
@@ -225,7 +222,7 @@ async function startSession(page: Page) {
   await expect(startBtn).toBeVisible();
   await startBtn.click();
   await page.waitForTimeout(600);
-  await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────

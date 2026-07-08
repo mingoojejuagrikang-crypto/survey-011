@@ -20,6 +20,7 @@ export function CommandHelpPopup({ onClose }: { onClose: () => void }) {
       }}
     >
       <div
+        data-testid="command-help-popup"
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%', maxWidth: 'min(600px, 96vw)', maxHeight: '90%',
@@ -42,13 +43,9 @@ export function CommandHelpPopup({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div style={{ fontSize: 14, color: T.textMute, marginBottom: 12, lineHeight: 1.45 }}>
-          각 기능은 아래 <b>한 단어</b>로만 동작합니다. 그대로 말씀하세요.
-          {/* v0.27.0 발화 가이드(클립 감사 실측) — 값 앞뒤 군더더기("이건", "~mm요")·한 자리 숫자
-              단음절("칠")이 재질문을 유발하는 습관으로 확인됨. 예방 문구 한 줄(T4 한 화면 수용 유지). */}
+          <span style={{ color: T.amber, fontWeight: 800 }}>도움말 중 입력 정지</span>
           <br />
-          <span style={{ color: T.amber, fontWeight: 700 }}>
-            숫자는 값만 또박또박 (한 자리는 '일곱'처럼), 명령은 한 단어로
-          </span>
+          명령은 아래 단어로 동작합니다.
         </div>
         {/* 목록만 스크롤 컨테이너 — 넘치는 기기(가로모드·텍스트 확대)에서도 하단 닫기 버튼은 항상 보인다. */}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 9 }}>

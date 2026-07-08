@@ -199,7 +199,7 @@ async function setupAndStart(
   await expect(startBtn).toBeVisible();
   await startBtn.click();
   await page.waitForTimeout(800); // start() 프리페치(stub GET) 정착 여유
-  await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 }
 
 async function fireStt(page: Page, transcript: string, waitMs = 300) {
@@ -216,23 +216,16 @@ async function getTtsLog(page: Page): Promise<string[]> {
 
 async function getActiveChipName(page: Page): Promise<string> {
   return page.evaluate(() => {
-    const spans = Array.from(document.querySelectorAll('span'))
-      .filter((s) => s.textContent?.trim() === '▶');
-    if (!spans.length) return '';
-    const p = spans[0].closest('div[style]');
-    if (!p) return '';
-    return (p.textContent || '').replace('▶', '').trim().split('\n')[0].trim();
+    const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+    return chip?.dataset.colName ?? '';
   });
 }
 
 async function waitForActiveChip(page: Page, colName: string, timeout = 5000) {
   await page.waitForFunction(
     (name) => {
-      const spans = Array.from(document.querySelectorAll('span'))
-        .filter((s) => s.textContent?.trim() === '▶');
-      if (!spans.length) return false;
-      const p = spans[0].closest('div[style]');
-      return (p?.textContent || '').includes(name);
+      const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+      return (chip?.dataset.colName ?? '').includes(String(name));
     },
     colName,
     { timeout },
@@ -308,9 +301,9 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   // v0.9.0 시각 팝업: 이전값(100)→현재값(120.5)과 항목명을 화면에 표시.
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible();
-  await expect(popup).toContainText('횡경');
   await expect(popup).toContainText('100');
   await expect(popup).toContainText('120.5');
+  await expect(popup).toContainText('확인 또는 수정');
 
   // "확인" → 커밋된 값 유지, 종경으로 진행.
   await fireStt(page, '확인', 500);

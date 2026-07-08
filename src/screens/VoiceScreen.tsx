@@ -1,15 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { T } from '../tokens';
 import { I } from '../components/icons';
-import { useSettingsStore, minConfidenceForTolerance } from '../stores/settingsStore';
+import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
-import { computeTotalRows, nestedAutoValue, computeRowFromAutoChange, buildCyclingValues } from '../lib/autoValue';
+import { computeTotalRows, nestedAutoValue, computeRowFromAutoChange } from '../lib/autoValue';
 import { useWakeLock, lockPortrait } from '../lib/wakeLock';
 import { useVoiceSession } from '../lib/useVoiceSession';
 import { isSpeechSupported, speak } from '../lib/speech';
 import { logger } from '../lib/logger';
-import { PRIMARY_COMMANDS } from '../lib/voiceCommands';
-import { getSampleLabelParts, type AnnounceLabelPart } from '../lib/announceColumns';
 import { buildSessionLabel } from '../lib/sessionLabel';
 import { AnomalyAlertPopup } from '../components/voice/AnomalyAlertPopup';
 import { CommandHelpPopup } from '../components/voice/CommandHelpPopup';
@@ -24,7 +22,6 @@ export function VoiceScreen() {
   const s = useSettingsStore();
   const sess = useSessionStore();
   const voiceSession = useVoiceSession();
-  const [confidence, setConfidence] = useState<number | null>(null);
   // v0.23.0 입력탭#3(쿨다운 피드백, Vance) — 재연결 버튼 탭 후 audioRecorder의 RECOVER_COOLDOWN_MS
   //   (~3s) 동안 두 번째 탭이 무반응처럼 보이던 문제. 탭 즉시 로컬 "reconnecting" 상태를 켜고
   //   쿨다운 창 동안 버튼을 비활성+"재연결 중…" 스피너로 보인다. audioRecorder 로직(복구 타이밍)은
@@ -32,17 +29,6 @@ export function VoiceScreen() {
   const [reconnecting, setReconnecting] = useState(false);
 
   useWakeLock(sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused');
-
-  // Sync confidence display from voice session refs.
-  // v0.18.0 — 입력기기 배지 표시 제거(민구 결정). getActiveInputLabel 폴링도 함께 제거.
-  // hook의 getActiveInputLabel/복구 로직(audioRecorder.ts)은 불가침이라 그대로 둔다 — 표시만 삭제.
-  useEffect(() => {
-    if (sess.phase !== 'active') return;
-    const interval = setInterval(() => {
-      setConfidence(voiceSession.lastConfidenceRef.current);
-    }, 300);
-    return () => clearInterval(interval);
-  }, [sess.phase, voiceSession.lastConfidenceRef]);
 
   // v0.25.0 기능2(WS-2) — 입력탭 진입(마운트) 시 마이크 prewarm(첫 클립 유실 완화). best-effort:
   //   실패/거부해도 start()의 init()이 재시도(폴백)하므로 회귀 없음. prewarmMic은 useVoiceSession의
@@ -87,7 +73,6 @@ export function VoiceScreen() {
         currentColId={currentCol?.id}
         completing={sess.phase === 'complete'}
         paused={sess.phase === 'paused'}
-        confidence={confidence}
         reaskReason={(sess.reaskReason ?? null) as ReaskReason}
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
@@ -95,6 +80,8 @@ export function VoiceScreen() {
         onPrevRow={() => voiceSession.gotoAdjacentRow(-1)}
         onNextRow={() => voiceSession.goNextRow()}
         onTouchCommit={(r, colId, v) => voiceSession.commitTouchValue(r, colId, v)}
+        onCommandHelpOpen={() => voiceSession.suspendRecognitionForUi('command_help')}
+        onCommandHelpClose={() => voiceSession.resumeRecognitionForUi('command_help')}
         onTogglePause={() => {
           if (sess.phase === 'paused') voiceSession.resume();
           else voiceSession.pause();
@@ -177,18 +164,15 @@ function MicReconnectBanner({
           boxShadow: '0 8px 28px rgba(0,0,0,0.5)',
         }}
       >
-        <span style={{ fontSize: 26, flexShrink: 0 }} aria-hidden>🎙️</span>
+        <span style={{ flexShrink: 0, display: 'flex', color: T.red }} aria-hidden>{I.mic(24, T.red)}</span>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span
             style={{
-              fontSize: 17, fontWeight: 900, color: T.red, letterSpacing: -0.3,
+              fontSize: 18, fontWeight: 900, color: T.red, letterSpacing: -0.3,
               wordBreak: 'keep-all', overflowWrap: 'anywhere', lineHeight: 1.2,
             }}
           >
-            마이크 연결이 끊겼습니다
-          </span>
-          <span style={{ fontSize: 13, color: T.textDim, fontWeight: 600, lineHeight: 1.3 }}>
-            아래 버튼을 눌러 다시 연결하세요
+            마이크 연결 끊김
           </span>
         </div>
         <button
@@ -207,7 +191,7 @@ function MicReconnectBanner({
             display: 'flex', alignItems: 'center', gap: 8,
             boxShadow: reconnecting ? 'none' : '0 4px 14px rgba(255,82,82,0.4)',
           }}
-          title={reconnecting ? '재연결 중…' : '마이크 재연결'}
+          title={reconnecting ? '재연결 중…' : '재연결'}
         >
           {reconnecting ? (
             <>
@@ -224,7 +208,7 @@ function MicReconnectBanner({
               재연결 중…
             </>
           ) : (
-            <>{I.mic(22, '#fff')} 마이크 재연결</>
+            <>재연결</>
           )}
         </button>
       </div>
@@ -362,8 +346,9 @@ type HeroEvent = 'listening' | 'confirm' | 'complete';
 
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
-  totalRows, columns, voiceCols, currentColId, completing, paused, confidence, reaskReason,
+  totalRows, columns, voiceCols, currentColId, completing, paused, reaskReason,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
+  onCommandHelpOpen, onCommandHelpClose,
 }: {
   totalRows: number;
   columns: Column[];
@@ -371,7 +356,6 @@ function ActiveState({
   currentColId?: string;
   completing: boolean;
   paused: boolean;
-  confidence: number | null;
   reaskReason: ReaskReason;
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
@@ -380,14 +364,17 @@ function ActiveState({
   onNextRow: () => void;
   onTogglePause: () => void;
   onTouchCommit: (row: number, colId: string, value: string) => void;
+  onCommandHelpOpen: () => void;
+  onCommandHelpClose: () => void;
 }) {
   const sess = useSessionStore();
-  const s = useSettingsStore();
   const row = sess.activeRow;
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
   const [editingColId, setEditingColId] = useState<string | null>(null);
   const [cmdHelpOpen, setCmdHelpOpen] = useState(false);
+  const cmdHelpSuspendedRef = useRef(false);
+  const [confirmExitOpen, setConfirmExitOpen] = useState(false);
 
   // ── A-hero 파생 (v0.17.0) — 전부 store 신호에서 읽기만 한다(useVoiceSession 무수정).
   //    hero 이벤트: complete > confirm > listening. 정정(correct)은 hero가 아니라
@@ -399,16 +386,6 @@ function ActiveState({
     : currentValue
     ? 'confirm'
     : 'listening';
-
-  // ── v0.18.0 1b — 범용 샘플 식별 라벨 파트. announceColumns.ts의 순수 셀렉터로 산출(읽기 전용,
-  //    컬럼명 하드코딩 없음). 현 행/직전 행의 auto값을 buildCyclingValues로 view에서 파생하고,
-  //    순차변화(changed) 파트는 hero에서 굵게/액센트로 강조한다. 첫 행(row 1)은 prevValues=null로
-  //    넘겨 getSampleLabelParts가 "전부 변화"로 보지 않게 한다(buildCyclingValues(…,0) 호출 금지).
-  const sampleLabelParts = useMemo<AnnounceLabelPart[]>(() => {
-    const curValues = buildCyclingValues(columns, row);
-    const prevValues = row > 1 ? buildCyclingValues(columns, row - 1) : null;
-    return getSampleLabelParts(columns, curValues, prevValues);
-  }, [columns, row]);
 
   // 직전값 캡처 — store에 prevValue가 없으므로 view 레이어 ref로 정정 직전의 값을 기억한다.
   //   매 렌더에서 필드별 "마지막 비어있지 않은 값"을 추적해 둔다(재프롬프트가 셀을 ''로 비우기
@@ -428,12 +405,31 @@ function ActiveState({
     if (v && c.id !== modCol) lastNonEmptyRef.current[c.id] = v;
   }
 
-  // ── v0.19.0 W5 — 칩 그리드를 3줄 캡(내부 스크롤)으로 고정하면 활성 컬럼이 스크롤 밖으로 나갈 수
-  //    있다("지금 어디" 표시 상실). 활성 칩을 ref로 잡아 currentColId/row 변경 시 가시영역으로
-  //    스크롤한다(block:nearest — 위/아래 인접 칩만 살짝, 화면 점프 없음).
+  const anomalyPending = !!sess.anomalyAlert && sess.anomalyAlert.status !== 'corrected';
+  const chipAccent = anomalyPending ? T.red : T.green;
+  const progressAccent = anomalyPending ? T.red : completing ? T.green : paused ? T.amber : T.blue;
+
+  const openCommandHelp = useCallback(() => {
+    if (!cmdHelpSuspendedRef.current) {
+      cmdHelpSuspendedRef.current = true;
+      onCommandHelpOpen();
+    }
+    setCmdHelpOpen(true);
+  }, [onCommandHelpOpen]);
+
+  const closeCommandHelp = useCallback(() => {
+    setCmdHelpOpen(false);
+    if (cmdHelpSuspendedRef.current) {
+      cmdHelpSuspendedRef.current = false;
+      onCommandHelpClose();
+    }
+  }, [onCommandHelpClose]);
+
+  // ── v0.19.0 W5 — 칩 영역이 스크롤 밖으로 나가면 "지금 어디" 표시가 사라진다.
+  //    활성 칩을 ref로 잡아 currentColId/row 변경 시 세로 그리드 안에서 가시영역으로 이동한다.
   const activeChipRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    activeChipRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    activeChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   }, [currentColId, row]);
 
   return (
@@ -451,6 +447,7 @@ function ActiveState({
         display: 'grid',
         gridTemplateRows: 'auto auto 1fr auto',
       }}
+      data-testid="voice-active-state"
     >
       {/* 1) Top: row indicator + progress */}
       <div style={{ padding: '10px 18px 4px' }}>
@@ -462,7 +459,7 @@ function ActiveState({
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             }}
           >
-            <span style={{ fontSize: 60, fontWeight: 800, color: T.text, letterSpacing: -3, lineHeight: 1 }}>
+            <span data-testid="active-row" style={{ fontSize: 60, fontWeight: 800, color: T.text, letterSpacing: -3, lineHeight: 1 }}>
               {row}
             </span>
             <span style={{ fontSize: 22, fontWeight: 700, color: T.textMute, letterSpacing: -0.5 }}>
@@ -470,38 +467,23 @@ function ActiveState({
             </span>
             <span style={{ fontSize: 14, color: T.textDim, marginLeft: 6 }}>행</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {/* v0.18.0 — 입력기기 배지 표시 제거(민구 결정). 복구 로직은 audioRecorder.ts에 보존. */}
-            {confidence !== null && confidence > 0 && confidence < 1 && !paused && (
-              <span
-                style={{
-                  fontSize: 11, fontWeight: 700,
-                  // v0.20.0 입력탭#1 — 신뢰도 색 임계를 사용자 조절 허용범위(recognitionTolerance)에
-                  //   맞춘다(하드코딩 0.65 제거). 방향과 무관하게 항상 실제 최소 신뢰도
-                  //   (minConfidenceForTolerance, v0.26.0 현재 직접 매핑=높을수록 엄격)로 색을 가른다
-                  //   (값 게이트와 동일 임계 공유 → 색과 실제 수용/거부가 항상 일치). 임계 미만 amber.
-                  color: confidence < minConfidenceForTolerance(s.recognitionTolerance) ? T.amber : T.green,
-                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                  letterSpacing: -0.2,
-                }}
-              >
-                {Math.round(confidence * 100)}%
-              </span>
-            )}
-            {/* v0.15.0 A5 — 상단 작은 'PAUSE' 표시 제거. 일시정지 상태는 화면 중앙 대형 카드
-                (PausedCard)로만 안내한다(다른 알람/안내와 톤·크기 통일). 녹음 중에만 REC 점등. */}
-            {!paused && (
-              <>
-                <div
-                  style={{
-                    width: 8, height: 8, borderRadius: '50%', background: T.red,
-                    animation: 'pulse-mic 1.2s ease-in-out infinite',
-                  }}
-                />
-                <span style={{ fontSize: 12, color: T.red, fontWeight: 700, letterSpacing: 0.7 }}>REC</span>
-              </>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={openCommandHelp}
+            aria-label="음성 명령어 도움말"
+            title="음성 명령어 도움말"
+            style={{
+              width: 44, height: 44, borderRadius: '50%',
+              border: `1px solid ${T.lineStrong}`,
+              background: T.card,
+              color: T.textDim,
+              fontSize: 22, fontWeight: 900,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer',
+            }}
+          >
+            ?
+          </button>
         </div>
         <div
           style={{
@@ -513,28 +495,37 @@ function ActiveState({
             style={{
               position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 2,
               width: `${pct}%`,
-              background: completing ? T.green : paused ? T.amber : T.blue,
+              background: progressAccent,
               transition: 'width 400ms ease-out, background 200ms',
-              boxShadow: completing ? `0 0 12px ${T.green}` : paused ? '0 0 8px rgba(255,179,0,0.4)' : `0 0 8px ${T.blueGlow}`,
+              boxShadow: anomalyPending
+                ? '0 0 12px rgba(255,82,82,0.5)'
+                : completing
+                ? `0 0 12px ${T.green}`
+                : paused
+                ? '0 0 8px rgba(255,179,0,0.4)'
+                : `0 0 8px ${T.blueGlow}`,
             }}
           />
         </div>
       </div>
 
-      {/* 2) Chip grid — v0.19.0 W5: 약 3줄 캡 + 내부 스크롤. 칩이 늘어도 이 구역 높이는 고정이라
-          아래 hero/컨트롤바를 밀지 않는다(버그A 차단). 활성 칩은 scrollIntoView로 항상 가시. */}
+      {/* 2) Chip grid — 항상 세로 3행 캡. 알람 중에는 활성 칩/진행색을 RED로 맞춰 상태 신호를 동기화한다. */}
       <div
+        data-testid="voice-chip-grid"
         style={{
-          maxHeight: 168,
+          maxHeight: 'calc((44px * 3) + (8px * 2) + 20px)',
+          overflowX: 'hidden',
           overflowY: 'auto',
           WebkitOverflowScrolling: 'touch',
           padding: '10px 12px',
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+          gridAutoRows: 'minmax(44px, auto)',
           gap: 8,
           borderTop: `1px solid ${T.line}`,
-          borderBottom: `1px solid ${T.line}`,
+          borderBottom: `1px solid ${anomalyPending ? 'rgba(255,82,82,0.42)' : T.line}`,
           alignContent: 'flex-start',
+          transition: 'border-color 180ms ease',
         }}
       >
         {columns.map((c) => {
@@ -554,6 +545,7 @@ function ActiveState({
               col={c}
               value={value}
               isActive={isActive}
+              activeTone={chipAccent}
               isDone={isDone}
               isEditing={isEditingThis}
               onActivate={() => {
@@ -602,7 +594,7 @@ function ActiveState({
       >
         {paused ? (
           // 일시정지 카드(최우선) — '재시작'/'종료' 음성명령 안내.
-          <PausedCard />
+          <PausedCard row={row} colName={currentCol?.name} />
         ) : sess.anomalyAlert ? (
           // 이상치/범위 알람 카드 — 직전값→현재값·변화량(긴 항목명/큰 음수소수 잘림 0).
           <AnomalyAlertPopup a={sess.anomalyAlert} />
@@ -620,138 +612,52 @@ function ActiveState({
             event={heroEvent}
             col={currentCol}
             value={currentValue}
-            sampleParts={sampleLabelParts}
             reaskReason={heroEvent === 'listening' ? reaskReason : null}
           />
         ) : null}
       </div>
 
-      {/* 4) 하단 컨트롤바 — 한자리 고정. 이전/다음·마이크·종료·명령어 칩·도움말·속도 슬라이더.
-          내용이 고정이라 row3(흡수영역)의 변화와 무관하게 Y가 불변(버그B의 '메뉴 이동' 해소). */}
+      {/* 4) 하단 컨트롤바 — 행동만 노출. 입력중에는 종료를 숨기고, 일시정지 후 확인을 거쳐 종료한다. */}
       <div
         style={{
           borderTop: `1px solid ${T.line}`,
           background: 'rgba(255,255,255,0.015)',
-          display: 'flex', flexDirection: 'column', gap: 8,
-          padding: '8px 16px 8px',
+          display: 'flex', flexDirection: 'column', gap: 10,
+          padding: '10px 16px 8px',
         }}
       >
-        {/* 행 이동 + 마이크(일시정지) + 종료 한 줄 */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
-          <button
-            onClick={onPrevRow}
-            disabled={paused}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 4,
-              padding: '9px 14px', borderRadius: 999, minHeight: 44,
-              border: `1px solid ${T.lineStrong}`, background: T.card,
-              color: paused ? T.textMute : T.textDim, fontSize: 14, fontWeight: 700,
-              cursor: paused ? 'default' : 'pointer', opacity: paused ? 0.5 : 1,
-            }}
-            title="이전 행으로 이동"
-          >
-            ◀ 이전
-          </button>
+        {paused ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(96px, 0.42fr)', gap: 18 }}>
+            <VoiceActionButton
+              label="재시작"
+              title="재시작"
+              icon={I.play(24, '#fff')}
+              tone="primary"
+              onClick={onTogglePause}
+            />
+            <VoiceActionButton
+              label="종료"
+              title="입력 종료"
+              icon={I.stop(20, T.red)}
+              tone="danger"
+              onClick={() => setConfirmExitOpen(true)}
+            />
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(78px, 0.62fr) minmax(124px, 1fr) minmax(78px, 0.62fr)', gap: 12 }}>
+            <VoiceActionButton label="이전" title="이전 행으로 이동" tone="secondary" onClick={onPrevRow} />
+            <VoiceActionButton
+              label="일시정지"
+              title="일시정지"
+              icon={I.pause(22, '#fff')}
+              tone="primary"
+              onClick={onTogglePause}
+            />
+            <VoiceActionButton label="다음" title="다음 행으로 이동" tone="secondary" onClick={onNextRow} />
+          </div>
+        )}
 
-          {/* Pause toggle (large mic) */}
-          <button
-            onClick={onTogglePause}
-            style={{
-              position: 'relative', width: 72, height: 72, borderRadius: '50%',
-              border: 'none', cursor: 'pointer', padding: 0, flexShrink: 0,
-              background: paused
-                ? `radial-gradient(circle at 30% 30%, #3A3E45, #2A2D32 60%, #1A1C1F)`
-                : `radial-gradient(circle at 30% 30%, #5a9bff, ${T.blue} 60%, #1755c9)`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              animation: paused ? 'none' : 'pulse-mic 1.4s ease-in-out infinite',
-              boxShadow: paused ? '0 4px 14px rgba(0,0,0,0.3)' : `0 0 32px ${T.blueGlow}, 0 6px 18px rgba(0,0,0,0.4)`,
-            }}
-            title={paused ? '재개' : '일시정지'}
-          >
-            {!paused && [0, 1, 2].map((i) => (
-              <div
-                key={i}
-                style={{
-                  position: 'absolute', inset: 0, borderRadius: '50%',
-                  border: `1.5px solid ${T.blue}`,
-                  animation: `ring-expand 2.4s ease-out ${i * 0.8}s infinite`,
-                }}
-              />
-            ))}
-            {paused
-              ? I.play(28, T.textDim)
-              : I.micFilled(28, '#fff')}
-          </button>
-
-          {/* End button */}
-          <button
-            onClick={onEnd}
-            style={{
-              width: 72, height: 72, borderRadius: '50%', flexShrink: 0,
-              border: `2px solid ${T.lineStrong}`,
-              background: 'rgba(255,82,82,0.08)',
-              color: T.red,
-              cursor: 'pointer',
-              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              gap: 2,
-            }}
-            title="입력 종료"
-          >
-            {I.stop(22, T.red)}
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4 }}>종료</span>
-          </button>
-
-          <button
-            onClick={onNextRow}
-            disabled={paused}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 4,
-              padding: '9px 14px', borderRadius: 999, minHeight: 44,
-              border: `1px solid ${T.lineStrong}`, background: T.card,
-              color: paused ? T.textMute : T.textDim, fontSize: 14, fontWeight: 700,
-              cursor: paused ? 'default' : 'pointer', opacity: paused ? 0.5 : 1,
-            }}
-            title="다음 행으로 이동"
-          >
-            다음 ▶
-          </button>
-        </div>
-
-        {/* 명령어 칩 + 전체 도움말 */}
-        <div
-          style={{
-            display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 6,
-            fontSize: 12, color: T.textMute,
-          }}
-        >
-          <span style={{ fontWeight: 700 }}>명령:</span>
-          {PRIMARY_COMMANDS.map((cmd) => (
-            <span
-              key={cmd.id}
-              style={{
-                padding: '2px 8px', borderRadius: 999,
-                background: 'rgba(255,255,255,0.05)',
-                color: T.textDim,
-              }}
-            >
-              {cmd.display}
-            </span>
-          ))}
-          {/* I-1: 전체 음성 명령어 도움말 팝업 */}
-          <button
-            onClick={() => setCmdHelpOpen(true)}
-            style={{
-              padding: '2px 9px', borderRadius: 999, cursor: 'pointer',
-              border: `1px solid ${T.lineStrong}`, background: 'transparent',
-              color: T.textDim, fontSize: 11, fontWeight: 700,
-            }}
-            title="음성 명령어 전체 보기"
-          >
-            ？ 명령어
-          </button>
-        </div>
-
-        <ActiveControlDials />
+        <ActiveControlSteppers />
       </div>
 
       {/* v0.23.0 입력탭#1 — 일시정지/이상치/수정 카드는 더 이상 여기(fixed 오버레이)에서 그리지
@@ -759,82 +665,117 @@ function ActiveState({
           대상이 아닌 ？명령어 도움말(CommandHelpPopup)뿐 — 전체 명령어 모달이라 흡수영역 한 칸에
           넣지 않고 화면 전체 모달을 유지한다.
           v0.18.0 1c — CenterValueBurst('항목:값' 팝업) 완전 제거(store의 valueBurst는 write-only). */}
-      {cmdHelpOpen && <CommandHelpPopup onClose={() => setCmdHelpOpen(false)} />}
+      {cmdHelpOpen && <CommandHelpPopup onClose={closeCommandHelp} />}
+      {confirmExitOpen && (
+        <ExitConfirmDialog
+          onCancel={() => setConfirmExitOpen(false)}
+          onConfirm={() => {
+            setConfirmExitOpen(false);
+            onEnd();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-/** v0.20.0 입력탭#1·#2 — 장갑 손가락용 가로 다이얼(재사용 프리미티브). 네이티브 input[type=range]
- *  위에 큰 트랙·큰 thumb를 styled해 role=slider/키보드 화살표/focus-visible를 보존한다(접근성 기본).
- *  라벨(상단)·큰 값 표시(우측)·굵은 트랙으로 원거리·장갑 가독. 컨트롤바에 두 개를 수평 배치한다.
- *  값 포맷은 valueLabel로 주입(% 또는 x). 변경 콜백은 onChange(연속), 마지막 변경 후 샘플은 호출자. */
-function Dial({
-  label, value, min, max, step, accent, valueLabel, ariaValueText, hint, onChange, testId,
+function VoiceActionButton({
+  label, title, tone, icon, onClick,
 }: {
   label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  accent: string;
-  valueLabel: string;
-  ariaValueText?: string;
-  /** v0.26.0 F1 — 다이얼 방향 의미를 화면에 명시하는 한 줄 캡션(예: "높을수록 엄격").
-   *  허용범위 방향이 두 번 뒤집힌 이력이 있어, 눈에 보이는 문구로 오해 재발을 막는다. */
-  hint?: string;
-  onChange: (v: number) => void;
-  testId?: string;
+  title: string;
+  tone: 'primary' | 'secondary' | 'danger';
+  icon?: ReactNode;
+  onClick: () => void;
 }) {
-  const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
-  const thumbPx = 28;
-  const fillStop = `calc(${pct}% * (100% - ${thumbPx}px) / 100 + ${thumbPx / 2}px)`;
+  const primary = tone === 'primary';
+  const danger = tone === 'danger';
   return (
-    <div
-      data-testid={testId}
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
       style={{
-        flex: 1, minWidth: 0,
-        display: 'flex', flexDirection: 'column', gap: 4,
+        width: '100%',
+        minWidth: 0,
+        minHeight: 64,
+        borderRadius: 18,
+        border: danger ? `2px solid rgba(255,82,82,0.55)` : `1px solid ${primary ? 'transparent' : T.lineStrong}`,
+        background: primary
+          ? `linear-gradient(180deg, #5A9BFF 0%, ${T.blue} 58%, #1859D5 100%)`
+          : danger
+          ? 'rgba(255,82,82,0.08)'
+          : T.card,
+        color: danger ? T.red : primary ? '#fff' : T.textDim,
+        fontSize: primary ? 22 : 18,
+        fontWeight: 900,
+        letterSpacing: -0.3,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        cursor: 'pointer',
+        boxShadow: primary ? `0 8px 28px ${T.blueGlow}` : 'none',
+        touchAction: 'manipulation',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 }}>
-        <span style={{ fontSize: 12, color: T.textMute, fontWeight: 700, whiteSpace: 'nowrap' }}>
-          {label}
-        </span>
-        <span
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="exit-confirm-title"
+      onClick={onCancel}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 55,
+        background: 'rgba(0,0,0,0.68)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: 420,
+          borderRadius: 22,
+          background: 'rgba(26,28,31,0.98)',
+          border: `1px solid ${T.lineStrong}`,
+          boxShadow: '0 18px 48px rgba(0,0,0,0.58)',
+          padding: '22px 18px 18px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 18,
+        }}
+      >
+        <div
+          id="exit-confirm-title"
           style={{
-            fontSize: 15, fontWeight: 800, color: accent,
-            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            letterSpacing: -0.3, whiteSpace: 'nowrap',
+            textAlign: 'center',
+            color: T.text,
+            fontSize: 24,
+            fontWeight: 900,
+            letterSpacing: -0.4,
+            lineHeight: 1.2,
           }}
         >
-          {valueLabel}
-        </span>
+          입력을 종료할까요?
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(96px, 0.46fr)', gap: 14 }}>
+          <VoiceActionButton label="계속 입력" title="계속 입력" tone="primary" onClick={onCancel} />
+          <VoiceActionButton label="종료" title="종료 확인" tone="danger" onClick={onConfirm} />
+        </div>
       </div>
-      <input
-        type="range"
-        className="dial-range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        aria-label={label}
-        aria-valuetext={ariaValueText ?? valueLabel}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        style={{
-          width: '100%', height: 34, margin: 0,
-          accentColor: accent,
-          // 굵은 트랙 — 장갑 손가락이 끌기 쉽게(min 44px 터치 타깃은 height로 확보).
-          background: `linear-gradient(90deg, ${accent} 0%, ${accent} ${fillStop}, ${T.lineStrong} ${fillStop}, ${T.lineStrong} 100%)`,
-          borderRadius: 999,
-          cursor: 'pointer',
-          touchAction: 'none',
-        }}
-      />
-      {hint && (
-        <span style={{ fontSize: 10, color: T.textMute, whiteSpace: 'nowrap', lineHeight: 1.2 }}>
-          {hint}
-        </span>
-      )}
     </div>
   );
 }
@@ -842,7 +783,11 @@ function Dial({
 /** v0.20.0 입력탭#1·#2 — 입력 컨트롤바: [인식 허용범위] · [안내 속도] 두 다이얼을 수평 배치.
  *  허용범위(recognitionTolerance) 0.40~0.90 → %로 표시. 속도(ttsRate) 0.5~2.0 → x로 표시·샘플 음성.
  *  두 다이얼은 375 폭에서도 한 줄에 들어가게 동일 flex(각 minWidth:0). */
-function ActiveControlDials() {
+function clampStep(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value * 100) / 100));
+}
+
+function ActiveControlSteppers() {
   const s = useSettingsStore();
   const ttsDebounceRef = useRef<number | null>(null);
   const sampleTts = (rate: number) => {
@@ -851,58 +796,164 @@ function ActiveControlDials() {
       void speak('이 속도로 안내합니다.', { interrupt: true, rate });
     }, 350);
   };
-  // v0.23.0 입력탭#2(허용범위 로깅, Vance) — Larry가 찾은 핵심 갭: 인식 허용범위(recognitionTolerance)
-  //   변경이 **한 번도 로깅되지 않아** "설정값 vs 인식률" 대조가 불가능했다. 다이얼 onChange는 드래그
-  //   중 step마다 발화하므로 그대로 로깅하면 수십 건 폭주 → debounce(드래그 한 번 = 로그 한 줄).
-  //   포맷은 SettingsScreen:1677의 fastRecognition 로깅과 동일(`setting_changed:<key>=<v>`).
-  const tolLogRef = useRef<number | null>(null);
-  const logTolerance = (v: number) => {
-    if (tolLogRef.current !== null) window.clearTimeout(tolLogRef.current);
-    tolLogRef.current = window.setTimeout(() => {
-      logger.log({ type: 'app', extra: `setting_changed:recognitionTolerance=${v}` });
-    }, 400);
+  const [open, setOpen] = useState(false);
+  const setTolerance = (next: number) => {
+    const value = clampStep(next, 0.4, 0.9);
+    s.set({ recognitionTolerance: value });
+    logger.log({ type: 'app', extra: `setting_changed:recognitionTolerance=${value}` });
+  };
+  const setTtsRate = (next: number) => {
+    const value = clampStep(next, 0.5, 2);
+    s.set({ ttsRate: value });
+    sampleTts(value);
   };
   const tolPct = Math.round(s.recognitionTolerance * 100);
+  const summary = `입력 조절 · 인식 ${tolPct}% · 안내 ${s.ttsRate.toFixed(2)}x`;
   return (
     <div
+      data-testid="input-control-panel"
       style={{
-        padding: '6px 12px 8px', flexShrink: 0,
-        display: 'flex', alignItems: 'flex-end', gap: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
       }}
     >
-      <Dial
-        testId="dial-tolerance"
-        label="인식 허용범위"
-        value={s.recognitionTolerance}
-        min={0.4}
-        max={0.9}
-        step={0.05}
-        accent={T.green}
-        valueLabel={`${tolPct}%`}
-        ariaValueText={`인식 허용범위 ${tolPct} 퍼센트, 높을수록 엄격하게 인식`}
-        hint="높을수록 엄격 (확실한 발음만 인정)"
-        onChange={(v) => {
-          s.set({ recognitionTolerance: v });
-          logTolerance(v); // 디바운스 — 드래그 한 번에 settled 값 한 줄만 로깅(감사 가능).
+      <button
+        type="button"
+        data-testid="input-control-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          minHeight: 42,
+          borderRadius: 14,
+          border: `1px solid ${T.lineStrong}`,
+          background: T.card,
+          color: T.textDim,
+          fontSize: 14,
+          fontWeight: 850,
+          letterSpacing: -0.2,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+          cursor: 'pointer',
+          touchAction: 'manipulation',
         }}
-      />
-      <Dial
-        testId="dial-tts-rate"
-        label="안내 속도"
-        value={s.ttsRate}
-        min={0.5}
-        max={2}
-        step={0.05}
-        accent={T.blue}
-        valueLabel={`${s.ttsRate.toFixed(2)}x`}
-        ariaValueText={`안내 속도 ${s.ttsRate.toFixed(2)}배`}
-        hint="높을수록 빠르게 안내"
-        onChange={(v) => {
-          s.set({ ttsRate: v });
-          sampleTts(v);
-        }}
-      />
+        title="입력 조절"
+      >
+        <span>{summary}</span>
+        <span aria-hidden style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }}>⌄</span>
+      </button>
+      {open && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <StepperControl
+            testId="stepper-tolerance"
+            label="인식"
+            value={`${tolPct}%`}
+            detail="높을수록 엄격"
+            accent={T.green}
+            minusLabel="인식 기준 낮추기"
+            plusLabel="인식 기준 높이기"
+            canMinus={s.recognitionTolerance > 0.4}
+            canPlus={s.recognitionTolerance < 0.9}
+            onMinus={() => setTolerance(s.recognitionTolerance - 0.05)}
+            onPlus={() => setTolerance(s.recognitionTolerance + 0.05)}
+          />
+          <StepperControl
+            testId="stepper-tts-rate"
+            label="안내"
+            value={`${s.ttsRate.toFixed(2)}x`}
+            detail="음성 속도"
+            accent={T.blue}
+            minusLabel="음성 안내 속도 낮추기"
+            plusLabel="음성 안내 속도 높이기"
+            canMinus={s.ttsRate > 0.5}
+            canPlus={s.ttsRate < 2}
+            onMinus={() => setTtsRate(s.ttsRate - 0.05)}
+            onPlus={() => setTtsRate(s.ttsRate + 0.05)}
+          />
+        </div>
+      )}
     </div>
+  );
+}
+
+function StepperControl({
+  testId, label, value, detail, accent, minusLabel, plusLabel, canMinus, canPlus, onMinus, onPlus,
+}: {
+  testId: string;
+  label: string;
+  value: string;
+  detail: string;
+  accent: string;
+  minusLabel: string;
+  plusLabel: string;
+  canMinus: boolean;
+  canPlus: boolean;
+  onMinus: () => void;
+  onPlus: () => void;
+}) {
+  return (
+    <div
+      data-testid={testId}
+      style={{
+        minWidth: 0,
+        borderRadius: 16,
+        border: `1px solid ${T.lineStrong}`,
+        background: 'rgba(255,255,255,0.035)',
+        padding: 8,
+        display: 'grid',
+        gridTemplateColumns: '48px minmax(0, 1fr) 48px',
+        alignItems: 'center',
+        gap: 8,
+      }}
+    >
+      <StepperButton label="−" title={minusLabel} disabled={!canMinus} onClick={onMinus} testId={`${testId}-minus`} />
+      <div style={{ minWidth: 0, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span style={{ fontSize: 12, color: T.textMute, fontWeight: 800, lineHeight: 1 }}>{label}</span>
+        <span style={{ fontSize: 20, color: accent, fontWeight: 950, lineHeight: 1.15, fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>
+          {value}
+        </span>
+        <span style={{ fontSize: 10, color: T.textMute, fontWeight: 650, lineHeight: 1.2, whiteSpace: 'nowrap' }}>{detail}</span>
+      </div>
+      <StepperButton label="+" title={plusLabel} disabled={!canPlus} onClick={onPlus} testId={`${testId}-plus`} />
+    </div>
+  );
+}
+
+function StepperButton({
+  label, title, disabled, onClick, testId,
+}: {
+  label: string;
+  title: string;
+  disabled: boolean;
+  onClick: () => void;
+  testId: string;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        width: 48,
+        height: 48,
+        borderRadius: 14,
+        border: `1px solid ${T.lineStrong}`,
+        background: disabled ? 'rgba(255,255,255,0.025)' : T.card,
+        color: disabled ? T.textMute : T.text,
+        fontSize: 26,
+        fontWeight: 950,
+        lineHeight: 1,
+        cursor: disabled ? 'default' : 'pointer',
+        touchAction: 'manipulation',
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -926,24 +977,21 @@ const HERO_PANEL = {
  *  - complete:  ✓ + "행 입력 완료".
  *  정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(직전값 취소선→새값). */
 function VoiceHero({
-  event, col, value, sampleParts, reaskReason,
+  event, col, value, reaskReason,
 }: {
   event: HeroEvent;
   col: Column;
   value: string;
-  sampleParts: AnnounceLabelPart[];
-  /** v0.23.0 입력탭#2 — listening일 때만 비-null. 재질문 사유(신뢰도 낮음 / 파싱 실패)를 항목명 아래
+  /** v0.23.0 입력탭#2 — listening일 때만 비-null. 재질문 사유(소리 불확실 / 파싱 실패)를 항목명 아래
    *  보조선으로 노출(상단 인식률 %와 구분). null이면 미표시. Mack이 sessionStore.reaskReason을 null로
    *  리셋하면 자동으로 사라진다. */
   reaskReason: ReaskReason;
 }) {
-  // confirm/complete = green(확정), listening = green 패널 + 거대 값 전 안내. 상태 라벨 색만 분기.
-  const statusAccent = T.green;
   // v0.20.0 입력탭#5 — listening일 때 패널 자체가 은은히 점멸(점3개 제거). transform 미사용 호흡.
   const isListening = event === 'listening';
   // v0.27.0 무스크롤(민구 07-03) — 양손 측정 중 스크롤 불가. 넘칠 때만 useFitScale이 폰트를 줄여
   //   스크롤 잔여 0 보장(항목명·값=--fit-hi 완만, 샘플 라벨·상태문=--fit-lo 먼저).
-  const fitRef = useFitScale<HTMLDivElement>([event, col.name, value, sampleParts, reaskReason]);
+  const fitRef = useFitScale<HTMLDivElement>([event, col.name, value, reaskReason]);
 
   return (
     <div
@@ -967,117 +1015,55 @@ function VoiceHero({
         willChange: isListening ? 'opacity, box-shadow' : undefined,
       }}
     >
-      {/* v0.18.0 1b — 범용 샘플 식별 라벨 헤더. announceColumns 셀렉터 산출 파트를 그대로 표시.
-          changed(순차변화) 파트는 굵게+초록 액센트로 강조해, 멀리서도 "지금 어느 샘플"인지 식별. */}
-      {sampleParts.length > 0 && (
-        <SampleLabelHeader parts={sampleParts} />
-      )}
-
-      {event === 'complete' ? (
-        <>
-          {/* v0.27.0 — vh 상한 결합 + fit 스케일(상태 심볼·제목=hi, 보조문=lo). */}
-          <span style={{ fontSize: 'calc(clamp(40px, min(16vw, 8.8vh), 72px) * var(--fit-hi, 1))', lineHeight: 1, color: T.green }} aria-hidden>✓</span>
-          <span style={{ fontSize: 'calc(clamp(18px, 3vh, 26px) * var(--fit-hi, 1))', fontWeight: 800, color: T.text, letterSpacing: -0.4 }}>행 입력 완료</span>
-          <span style={{ fontSize: 'calc(clamp(12px, 1.7vh, 15px) * var(--fit-lo, 1))', color: T.textDim, fontWeight: 500 }}>다음 행으로 이동합니다…</span>
-        </>
-      ) : event === 'listening' ? (
-        // v0.21.0 입력탭#3 — "측정값을 말씀해 주세요" 정적 안내문구 + 데이터형 배지(TypeBadge) 삭제.
-        //   듣는 중에는 "지금 어느 항목을 말해야 하는가"(항목명)가 유일한 시각 신호이므로, 항목명을
-        //   hero 가용공간 기준 최대 크기로 키운다(고정 clamp 상한 대신 vw 비중↑·상한↑). 장갑·원거리
-        //   가독 우선. 한 줄 유지(keep-all)하되 좁은 기기/긴 이름은 자동 축소(clamp 하한). TTS 음성
-        //   안내(say)는 그대로라 화면을 안 봐도 무엇을 말할지 들린다.
-        <>
-          <span
-            style={{
-              // v0.27.0 — vh 상한 결합(짧은 화면 자동 축소) + --fit-hi(최우선 정보라 가장 늦게 축소).
-              fontSize: 'calc(clamp(30px, min(13vw, 9.4vh), 76px) * var(--fit-hi, 1))', fontWeight: 900,
-              color: T.text, letterSpacing: -1, lineHeight: 1.05,
-              wordBreak: 'keep-all', overflowWrap: 'anywhere', textAlign: 'center', maxWidth: '100%',
-            }}
-          >
-            {col.name}
-          </span>
-          {/* v0.23.0 입력탭#2 — 재질문 사유 큐. 듣는 중(listening)일 때만, reaskReason 비-null이면
-              항목명 아래 보조선으로 노출(상단 인식률 %와 구분 — "왜 또 물어보지?" 해소). 4-way 상호
-              배타와 경쟁하지 않는 hero 하위 요소. Mack이 reaskReason=null로 리셋하면 자동 사라짐. */}
-          <ReaskCue reason={reaskReason} />
-        </>
-      ) : (
-        <>
-          {/* 측정 항목명 (배지 제거 — 항목명만, 샘플 라벨과 위계 구분 위해 값보다 작게) */}
-          <span
-            style={{
-              // v0.24.0 입력탭 — 잘림 방지: nowrap/ellipsis 제거 → 흡수영역 폭(maxWidth:100%) 안에서
-              //   줄바꿈(keep-all). 긴 항목명도 '…'로 안 잘리고 패널 내부에서 흐른다.
-              fontSize: 'calc(clamp(16px, min(5.4vw, 3vh), 24px) * var(--fit-lo, 1))', fontWeight: 800,
-              color: T.text, lineHeight: 1.25,
-              letterSpacing: -0.3, wordBreak: 'keep-all', overflowWrap: 'anywhere',
-              maxWidth: '100%', textAlign: 'center',
-            }}
-          >
-            {col.name}
-          </span>
-          {/* confirm: 거대 값 */}
-          <span
-            key={value}
-            style={{
-              // v0.24.0 입력탭 — 잘림 방지: nowrap/ellipsis/고정 88vw 제거 → 흡수영역(maxWidth:100%) 안에서
-              //   줄바꿈(긴 값·문자형도 '…'로 안 잘리고 영역 내부 스크롤로 안착). heroFontSize 길이별 축소 유지.
-              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-              // v0.27.0 — 값 = 최우선 정보(--fit-hi, 가장 늦게 축소). heroFontSize는 vh 상한 결합.
-              fontSize: `calc(${heroFontSize(value)} * var(--fit-hi, 1))`,
-              fontWeight: 800, lineHeight: 1.1,
-              color: T.text,
-              letterSpacing: -2,
-              wordBreak: 'break-word', overflowWrap: 'anywhere', maxWidth: '100%', textAlign: 'center',
-              animation: 'chip-pop 320ms ease-out',
-            }}
-          >
-            {value || '—'}
-          </span>
-          {/* 상태 라벨 */}
-          <span style={{ fontSize: 'calc(clamp(13px, min(4.4vw, 2.3vh), 19px) * var(--fit-lo, 1))', fontWeight: 800, color: statusAccent, letterSpacing: -0.2 }}>
-            ✓ 정상
-          </span>
-        </>
-      )}
+      <HeroStatusLine>{event === 'complete' ? '입력 완료' : event === 'confirm' ? '입력됨' : '듣는 중'}</HeroStatusLine>
+      <HeroPrimaryLine
+        mono={event !== 'listening'}
+        value={event === 'listening' ? col.name : event === 'complete' ? col.name : value || '—'}
+      />
+      {event === 'listening' && <ReaskCue reason={reaskReason} />}
     </div>
   );
 }
 
-/** v0.18.0 1b — 범용 샘플 식별 라벨 헤더. announceColumns의 파트를 ` · ` 구분으로 나열한다.
- *  순차변화(changed=true) 파트는 굵게+초록 액센트로 강조(= announceRowDiff가 호명하는 부분).
- *  컬럼명 하드코딩 없음. 측정 항목명보다 작게(위계 구분), 원거리 가독되게 충분히 크게. */
-function SampleLabelHeader({ parts }: { parts: AnnounceLabelPart[] }) {
+function HeroStatusLine({ children }: { children: ReactNode }) {
   return (
-    <div
+    <span style={{
+      fontSize: 'max(14px, calc(clamp(17px, min(4.6vw, 2.6vh), 24px) * var(--fit-lo, 1)))',
+      fontWeight: 900,
+      color: T.green,
+      letterSpacing: -0.2,
+      lineHeight: 1.12,
+      wordBreak: 'keep-all',
+      overflowWrap: 'anywhere',
+      textAlign: 'center',
+    }}>
+      {children}
+    </span>
+  );
+}
+
+function HeroPrimaryLine({ value, mono }: { value: string; mono: boolean }) {
+  return (
+    <span
+      key={value}
       style={{
-        display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'center',
-        gap: '2px 4px', maxWidth: '100%',
-        paddingBottom: 8, marginBottom: 2,
-        borderBottom: `1px solid rgba(0,200,83,0.22)`,
+        fontFamily: mono ? 'JetBrains Mono, ui-monospace, monospace' : undefined,
+        fontSize: mono
+          ? `calc(${heroFontSize(value)} * var(--fit-hi, 1))`
+          : 'calc(clamp(30px, min(13vw, 9.4vh), 76px) * var(--fit-hi, 1))',
+        fontWeight: 900,
+        lineHeight: 1.05,
+        color: T.text,
+        letterSpacing: mono ? -2 : -1,
+        wordBreak: mono ? 'break-word' : 'keep-all',
+        overflowWrap: 'anywhere',
+        maxWidth: '100%',
+        textAlign: 'center',
+        animation: 'chip-pop 320ms ease-out',
       }}
     >
-      {parts.map((p, i) => (
-        <span key={p.col.id} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
-          {i > 0 && <span style={{ fontSize: 'calc(14px * var(--fit-lo, 1))', color: T.textMute, fontWeight: 600 }} aria-hidden>·</span>}
-          <span
-            style={{
-              // v0.27.0 — 샘플 라벨은 식별정보(하위 우선) → --fit-lo(먼저 축소).
-              fontSize: p.changed
-                ? 'calc(clamp(13px, min(4.4vw, 2.2vh), 18px) * var(--fit-lo, 1))'
-                : 'calc(clamp(12px, min(4vw, 2vh), 16px) * var(--fit-lo, 1))',
-              fontWeight: p.changed ? 800 : 600,
-              color: p.changed ? T.green : T.textDim,
-              letterSpacing: -0.2,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {p.col.name} {p.value}
-          </span>
-        </span>
-      ))}
-    </div>
+      {value}
+    </span>
   );
 }
 
@@ -1086,16 +1072,18 @@ function SampleLabelHeader({ parts }: { parts: AnnounceLabelPart[] }) {
 
 // ─── chip with optional inline edit ────────────────────────────
 function ColumnChip({
-  col, value, isActive, isDone, isEditing, onActivate, onCommit, onCancel, containerRef,
+  col, value, isActive, activeTone, isDone, isEditing, onActivate, onCommit, onCancel, containerRef, compact = false,
 }: {
   col: Column;
   value: string;
   isActive: boolean;
+  activeTone: string;
   isDone: boolean;
   isEditing: boolean;
   onActivate: () => void;
   onCommit: (v: string) => void;
   onCancel: () => void;
+  compact?: boolean;
   // v0.19.0 W5 — 활성 칩에만 전달되어 칩 스크롤영역에서 scrollIntoView 대상이 된다.
   containerRef?: Ref<HTMLDivElement>;
 }) {
@@ -1111,7 +1099,6 @@ function ColumnChip({
     if (isActive && value) setPopKey((k) => k + 1);
   }, [value, isActive]);
 
-  const isVoice = col.input === 'voice';
   const isDate = col.type === 'date';
   const clickable = !isDate;
 
@@ -1119,8 +1106,9 @@ function ColumnChip({
   let border: string = 'transparent';
   let textColor: string = T.textDim;
   if (isActive) {
-    bg = 'rgba(0,200,83,0.18)';
-    border = T.green;
+    const redActive = activeTone === T.red;
+    bg = redActive ? 'rgba(255,82,82,0.16)' : 'rgba(0,200,83,0.18)';
+    border = activeTone;
     textColor = T.text;
   } else if (isDone) {
     bg = 'rgba(0,200,83,0.10)';
@@ -1141,9 +1129,12 @@ function ColumnChip({
   return (
     <div
       ref={containerRef}
+      data-testid="column-chip"
+      data-active={isActive ? 'true' : 'false'}
+      data-col-name={col.name}
       onClick={() => { if (clickable && !isEditing) onActivate(); }}
       style={{
-        display: 'flex', alignItems: 'center', gap: 6,
+        display: 'flex', alignItems: 'center', gap: 8,
         padding: '8px 10px',
         borderRadius: 12,
         fontSize: 'clamp(13px, 4vw, 16px)',
@@ -1155,6 +1146,8 @@ function ColumnChip({
         letterSpacing: -0.1,
         minHeight: 44,
         minWidth: 0,
+        flex: compact ? '0 0 clamp(180px, 48vw, 260px)' : undefined,
+        scrollSnapAlign: compact ? 'start' : undefined,
         // Active chip anchors the floating value badge and must draw over its
         // neighbours, so it unclips and lifts above sibling chips. Inactive
         // chips keep overflow:hidden for value/label ellipsis.
@@ -1165,13 +1158,9 @@ function ColumnChip({
         animation: isActive ? 'chip-pulse 1.2s ease-in-out infinite' : 'none',
       }}
     >
-      {isActive && (
-        <span style={{ color: T.green, fontSize: 14, fontWeight: 900, flexShrink: 0 }}>▶</span>
-      )}
-      {isDone && !isActive && I.check(12, T.green)}
       <span
         style={{
-          color: isActive ? T.green : T.textMute,
+          color: isActive ? activeTone : T.textMute,
           fontSize: 'clamp(11px, 3.4vw, 13px)',
           fontWeight: 700,
           whiteSpace: 'nowrap',

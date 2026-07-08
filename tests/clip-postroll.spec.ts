@@ -160,7 +160,7 @@ async function setupAndStart(page: Page, ttsDelayMs: number) {
   const startBtn = page.locator('text=음성 입력 시작').first();
   await expect(startBtn).toBeVisible();
   await startBtn.click();
-  await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 5000 });
   // recorder.init()(fake getUserMedia + 프리롤 그래프) 정착 — 첫 클립이 clip_no_stream으로
   // 비지 않게 시작 안내 TTS 구간 동안 기다린다.
   await page.waitForTimeout(1200);
@@ -177,11 +177,8 @@ async function fireStt(page: Page, transcript: string, waitMs: number) {
 async function waitForActiveChip(page: Page, colName: string, timeout = 15000) {
   await page.waitForFunction(
     (name) => {
-      const spans = Array.from(document.querySelectorAll('span'))
-        .filter((s) => s.textContent?.trim() === '▶');
-      if (!spans.length) return false;
-      const p = spans[0].closest('div[style]');
-      return (p?.textContent || '').includes(name);
+      const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+      return (chip?.dataset.colName ?? '').includes(String(name));
     },
     colName,
     { timeout },

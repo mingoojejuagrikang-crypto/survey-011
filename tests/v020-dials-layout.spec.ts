@@ -1,11 +1,11 @@
 /**
- * v0.20.0 입력탭#1·#2 — 두 다이얼(인식 허용범위 · 안내 속도) 수평 컨트롤바 레이아웃 검증 (Vance).
+ * 입력탭 — 접힌 입력 조절 패널 + 큰 스탭퍼 레이아웃 검증 (Vance).
  *
  * 검증:
- *   1) ActiveState 컨트롤바에 두 다이얼이 **한 줄**에 수평 배치된다(같은 Y, 좌우로 나뉨).
- *   2) 좁은 기기(375×812)에서도 두 다이얼이 한 줄을 유지하고 viewport 밖으로 새지 않는다(장갑 조작).
- *   3) 다이얼 thumb 터치 타깃이 충분히 크다(range 높이 ≥ 28, 트랙 가독 폭).
- *   4) 칩 구역 캡(maxHeight≈168) 회귀 없음 — 두 다이얼 추가가 v0.19.0 4구역 인변량을 깨지 않는다.
+ *   1) 기본 하단에는 접힌 `입력 조절 · 인식 N% · 안내 Nx` 버튼만 보인다.
+ *   2) 펼치면 인식/안내 스탭퍼가 두 칸으로 보이고, 각 +/- 버튼은 48px 터치 타깃이다.
+ *   3) 네이티브 range 슬라이더는 렌더되지 않는다.
+ *   4) 칩 구역 3줄 캡 회귀 없음.
  *
  * 음성/STT는 자동화 불가 → SpeechRecognition 스텁 + fake-media로 ActiveState 진입만 시키고
  * 레이아웃(픽셀 위치)만 검증한다(v019-active-layout 패턴 재사용).
@@ -68,10 +68,19 @@ test.use({
   },
 });
 
-async function assertTwoDialsOneRow(page: Page, vpWidth: number) {
-  const tol = page.locator('[data-testid="dial-tolerance"]');
-  const rate = page.locator('[data-testid="dial-tts-rate"]');
-  await expect(tol).toBeVisible({ timeout: 5000 });
+async function assertStepperPanel(page: Page, vpWidth: number) {
+  const toggle = page.locator('[data-testid="input-control-toggle"]');
+  await expect(toggle).toBeVisible({ timeout: 5000 });
+  await expect(toggle).toContainText('입력 조절');
+  await expect(toggle).toContainText('인식');
+  await expect(toggle).toContainText('안내');
+  await expect(page.locator('input[type="range"]')).toHaveCount(0);
+
+  await toggle.click();
+
+  const tol = page.locator('[data-testid="stepper-tolerance"]');
+  const rate = page.locator('[data-testid="stepper-tts-rate"]');
+  await expect(tol).toBeVisible();
   await expect(rate).toBeVisible();
 
   const tBox = await tol.boundingBox();
@@ -79,27 +88,27 @@ async function assertTwoDialsOneRow(page: Page, vpWidth: number) {
   expect(tBox).not.toBeNull();
   expect(rBox).not.toBeNull();
 
-  // 수평 배치: 허용범위가 왼쪽, 속도가 오른쪽(겹치지 않음).
+  // 수평 배치: 인식 스탭퍼가 왼쪽, 안내 스탭퍼가 오른쪽(겹치지 않음).
   expect(tBox!.x + tBox!.width).toBeLessThanOrEqual(rBox!.x + 1);
-  // 같은 줄: 두 다이얼의 top이 사실상 동일(±4px).
+  // 같은 줄: 두 스탭퍼의 top이 사실상 동일(±4px).
   expect(Math.abs(tBox!.y - rBox!.y)).toBeLessThanOrEqual(4);
-  // viewport 밖으로 새지 않음(우측 다이얼 오른쪽 끝이 화면 안).
+  // viewport 밖으로 새지 않음(우측 스탭퍼 오른쪽 끝이 화면 안).
   expect(rBox!.x + rBox!.width).toBeLessThanOrEqual(vpWidth + 1);
 
-  // range thumb 터치 타깃: range input 높이 ≥ 28(장갑 조작).
-  const rangeH = await page.locator('[data-testid="dial-tolerance"] input[type="range"]').evaluate(
+  // +/- 터치 타깃: 48px 이상.
+  const minusH = await page.locator('[data-testid="stepper-tolerance-minus"]').evaluate(
     (el) => (el as HTMLElement).getBoundingClientRect().height,
   );
-  expect(rangeH).toBeGreaterThanOrEqual(28);
+  expect(minusH).toBeGreaterThanOrEqual(48);
 }
 
-test('입력탭#1·#2 — 두 다이얼 수평 한 줄(414×896)', async ({ page }) => {
+test('입력탭 — 입력 조절 스탭퍼 패널(414×896)', async ({ page }) => {
   await setup(page, PHONE_414);
   await generateTable(page);
   await startVoice(page);
 
-  await expect(page.locator('button[title="입력 종료"]')).toBeVisible({ timeout: 5000 });
-  await assertTwoDialsOneRow(page, PHONE_414.width);
+  await expect(page.locator('[data-testid="voice-active-state"]')).toBeVisible({ timeout: 5000 });
+  await assertStepperPanel(page, PHONE_414.width);
 
   // 칩 구역 캡 회귀 없음(v0.19.0 4구역 인변량).
   const chipClientH = await page.evaluate(() => {
@@ -113,16 +122,16 @@ test('입력탭#1·#2 — 두 다이얼 수평 한 줄(414×896)', async ({ page
   expect(chipClientH).not.toBeNull();
   expect(chipClientH!).toBeLessThanOrEqual(170);
 
-  await page.screenshot({ path: '/tmp/v020-shots/dials-414.png' });
+  await page.screenshot({ path: '/tmp/v020-shots/steppers-414.png' });
 });
 
-test('입력탭#1·#2 — 좁은 기기에서도 한 줄 유지(375×812)', async ({ page }) => {
+test('입력탭 — 좁은 기기에서도 스탭퍼 한 줄 유지(375×812)', async ({ page }) => {
   await setup(page, PHONE_375);
   await generateTable(page);
   await startVoice(page);
 
-  await expect(page.locator('button[title="입력 종료"]')).toBeVisible({ timeout: 5000 });
-  await assertTwoDialsOneRow(page, PHONE_375.width);
+  await expect(page.locator('[data-testid="voice-active-state"]')).toBeVisible({ timeout: 5000 });
+  await assertStepperPanel(page, PHONE_375.width);
 
-  await page.screenshot({ path: '/tmp/v020-shots/dials-375.png' });
+  await page.screenshot({ path: '/tmp/v020-shots/steppers-375.png' });
 });

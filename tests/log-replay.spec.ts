@@ -182,23 +182,16 @@ async function getActiveRow(page: Page): Promise<number> {
 
 async function getActiveChipName(page: Page): Promise<string> {
   return page.evaluate(() => {
-    const arrowSpans = Array.from(document.querySelectorAll('span'))
-      .filter((s) => s.textContent?.trim() === '▶');
-    if (arrowSpans.length === 0) return '';
-    const parent = arrowSpans[0].closest('div[style]');
-    if (!parent) return '';
-    return (parent.textContent || '').replace('▶', '').trim().split('\n')[0].trim();
+    const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+    return chip?.dataset.colName ?? '';
   });
 }
 
 async function waitForActiveChip(page: Page, colName: string, timeout = 4000) {
   await page.waitForFunction(
     (name) => {
-      const spans = Array.from(document.querySelectorAll('span'))
-        .filter((s) => s.textContent?.trim() === '▶');
-      if (!spans.length) return false;
-      const p = spans[0].closest('div[style]');
-      return (p?.textContent || '').includes(name);
+      const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+      return (chip?.dataset.colName ?? '').includes(String(name));
     },
     colName,
     { timeout },
@@ -236,7 +229,7 @@ test('Log replay — 6행 STT 시퀀스 재생 (값/수정/스킵/노이즈 거�
   await expect(startBtn).toBeVisible();
   await startBtn.click();
   await page.waitForTimeout(600);
-  await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 
   // ── Row 1: normal input ──
   await waitForActiveChip(page, '횡경');
@@ -307,7 +300,7 @@ test('F001 — 동일 field 연속 STT race: 두 번째 무시', async ({ page }
   await expect(startBtn).toBeVisible();
   await startBtn.click();
   await page.waitForTimeout(600);
-  await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 
   await waitForActiveChip(page, '횡경');
 

@@ -91,7 +91,7 @@ test('chip switch diagnostic', async ({ page }) => {
   await page.waitForTimeout(800);
 
   // Check active state
-  await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
   console.log('✓ REC 표시 확인');
 
   // Check MockSTT
@@ -102,18 +102,17 @@ test('chip switch diagnostic', async ({ page }) => {
   const initialBody = await page.evaluate(() => document.body.innerText);
   console.log(`초기 body 포함 '횡경': ${initialBody.includes('횡경')}`);
 
-  // Check number of ▶ spans
-  const arrowCount = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('span')).filter(s => s.textContent?.trim() === '▶').length
+  // Check active chip marker
+  const activeChipCount = await page.evaluate(() =>
+    document.querySelectorAll('[data-testid="column-chip"][data-active="true"]').length
   );
-  console.log(`▶ span 개수: ${arrowCount}`);
+  console.log(`활성 칩 개수: ${activeChipCount}`);
 
   // Get active chip details
   const chipDetails = await page.evaluate(() => {
-    const spans = Array.from(document.querySelectorAll('span')).filter(s => s.textContent?.trim() === '▶');
-    if (!spans.length) return 'no ▶ found';
-    const parent = spans[0].closest('div');
-    return `▶ parent textContent: "${parent?.textContent?.replace(/\s+/g, ' ').trim()}"`;
+    const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+    if (!chip) return 'no active chip found';
+    return `active chip "${chip.dataset.colName ?? ''}" textContent: "${chip.textContent?.replace(/\s+/g, ' ').trim()}"`;
   });
   console.log(`칩 상세: ${chipDetails}`);
 
@@ -153,16 +152,15 @@ test('chip switch diagnostic', async ({ page }) => {
   console.log(`500ms 후 — body 포함 '종경 말씀': ${bodyAfter.includes('종경 말씀')}`);
   console.log(`500ms 후 — body 포함 '횡경 말씀': ${bodyAfter.includes('횡경 말씀')}`);
 
-  const arrowAfterCount = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('span')).filter(s => s.textContent?.trim() === '▶').length
+  const activeChipAfterCount = await page.evaluate(() =>
+    document.querySelectorAll('[data-testid="column-chip"][data-active="true"]').length
   );
-  console.log(`500ms 후 ▶ span 개수: ${arrowAfterCount}`);
+  console.log(`500ms 후 활성 칩 개수: ${activeChipAfterCount}`);
 
   const chipDetailsAfter = await page.evaluate(() => {
-    const spans = Array.from(document.querySelectorAll('span')).filter(s => s.textContent?.trim() === '▶');
-    if (!spans.length) return 'no ▶ found';
-    const parent = spans[0].closest('div');
-    return `▶ parent textContent: "${parent?.textContent?.replace(/\s+/g, ' ').trim()}"`;
+    const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+    if (!chip) return 'no active chip found';
+    return `active chip "${chip.dataset.colName ?? ''}" textContent: "${chip.textContent?.replace(/\s+/g, ' ').trim()}"`;
   });
   console.log(`500ms 후 칩 상세: ${chipDetailsAfter}`);
 

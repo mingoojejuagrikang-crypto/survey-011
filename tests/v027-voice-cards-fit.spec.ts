@@ -129,7 +129,7 @@ async function setupAndStart(page: Page, viewport: { width: number; height: numb
   await expect(startBtn).toBeVisible();
   await startBtn.click();
   await page.waitForTimeout(800);
-  await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 }
 
 async function fireStt(page: Page, transcript: string, waitMs = 400) {
@@ -160,14 +160,12 @@ for (const vp of VIEWPORTS) {
     expect(m.scrollH).toBeLessThanOrEqual(m.clientH + 1);
     expect(m.scrollW).toBeLessThanOrEqual(m.clientW + 1);
 
-    // ② 전 핵심 정보 요소가 visible + 뷰포트 안(현재값 > 알람 라벨 > 직전값 > 식별정보).
-    //    v0.30.0부터 확인류 안내문은 비프음+배경 호흡으로 대체된다.
+    // ② 새 3줄 구조의 핵심 정보가 visible + 뷰포트 안(현재값 > 알람 라벨 > 직전값 > 행동 안내).
     const infoTexts = [
       '-355.5',                 // P1 현재값
       '추세 알람 감소',           // P2 변화(알람 라벨)
       '100',                    // P3 직전값(카드는 원본 표기 "100"으로 표시 — trend-alert.spec 동일)
-      '이원창',                   // P4 식별(샘플)
-      LONG_NAME,                // P4 식별(항목명 — 헤더/hero 라벨 2곳)
+      '확인 또는 수정',
     ];
     const cardBox = (await card.boundingBox())!;
     for (const t of infoTexts) {
@@ -278,7 +276,7 @@ test('무스크롤 — 375x812: 일시정지 카드 scrollHeight≤clientHeight'
     await expect(startBtn).toBeVisible();
     await startBtn.click();
     await page.waitForTimeout(800);
-    await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 
     // 직전 100.0 → 120.5 = increase(커지면) 알람 — Sonar 재현 스크립트(sonar-a1-outlier-real.js)와
     // 동일한 종류의 통상 시나리오(합성 실 오디오 "이백 점 오"→200.5 실측과 등가 반경).
@@ -295,12 +293,11 @@ test('무스크롤 — 375x812: 일시정지 카드 scrollHeight≤clientHeight'
     expect(m.scrollH, '375×667에서 이상치 카드 내부 스크롤 잔여(무스크롤 회귀)').toBeLessThanOrEqual(m.clientH + 1);
     expect(m.scrollW, '375×667에서 이상치 카드 가로 잘림').toBeLessThanOrEqual(m.clientW + 1);
 
-    // 핵심 정보(현재값·알람 라벨·직전값·항목명)는 여전히 visible — 축약(직전 날짜 라벨/중복 항목명
-    // 라벨)은 375급 전용이며 핵심 비교 정보 자체는 유지된다.
+    // 핵심 정보(현재값·알람 라벨·직전값·행동 안내)는 여전히 visible.
     await expect(card.getByText('120.5', { exact: false }).first()).toBeVisible();
     await expect(card.getByText('추세 알람 증가', { exact: false }).first()).toBeVisible();
     await expect(card.getByText('100', { exact: false }).first()).toBeVisible();
-    await expect(card.getByText('횡경', { exact: false }).first()).toBeVisible();
+    await expect(card.getByText('확인 또는 수정', { exact: false }).first()).toBeVisible();
 
     await page.screenshot({ path: `${SHOT_DIR}/anomaly-375x667-realistic.png` });
   });

@@ -56,7 +56,7 @@ interface SessionState {
   modifyIndicator: { name: string; colId: string } | null;
   /** v0.23.0 입력탭#2(재질문 사유, Mack) — 직전 음성 입력이 왜 재질문됐는지. 'low_confidence'=신뢰도가
    *  허용범위 미만, 'parse_failed'=인식은 됐으나 숫자/값으로 파싱 불가(항목명·잡음 거부 포함). null=정상.
-   *  VoiceScreen(Vance)의 ReaskCue가 이 값으로 "신뢰도 낮음" vs "숫자 인식 실패"를 구분 표시한다.
+   *  VoiceScreen(Vance)의 ReaskCue가 이 값으로 "소리가 불확실" vs "숫자로 인식 실패"를 구분 표시한다.
    *  성공 커밋·다음 필드 진입 시 null로 리셋한다(큐가 남지 않도록). 상단 인식률 %와는 독립. */
   reaskReason: 'low_confidence' | 'parse_failed' | null;
   /** All row values, keyed by row index → col id → value */

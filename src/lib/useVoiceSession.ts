@@ -123,6 +123,13 @@ export function useVoiceSession() {
   // Ref to resume() — breaks the circular dependency between handleFinal and resume.
   // v0.20.0 Phase 5 #3 — resume이 해제 방식(source)을 받도록 시그니처 확장.
   const resumeRef = useRef<(source?: 'voice' | 'touch') => Promise<void>>(async () => {});
+  // UI modal hard-suspend. This is deliberately narrower than pause(): it stops STT delivery
+  // while a full-screen UI modal is open, but it does not change session phase or recorder state.
+  const uiSuspendRef = useRef<{ active: boolean; hadController: boolean; reason: string | null }>({
+    active: false,
+    hadController: false,
+    reason: null,
+  });
   // v0.22.0 P0 — 클립 레코더 스트림이 죽어 자동복구 불가(= 사용자 제스처로 재연결 필요)일 때 true.
   // 근인: iOS Safari가 제스처 밖 getUserMedia를 거부하므로, 스트림이 죽으면 자동 recoverStream을
   // 멈추고 이 플래그로 입력탭 "마이크 재연결" 버튼(Vance)을 노출한다. reconnectMic()이 제스처
@@ -1072,6 +1079,25 @@ export function useVoiceSession() {
     });
   }, []);
 
+  const suspendRecognitionForUi = useCallback((reason = 'ui_modal') => {
+    if (uiSuspendRef.current.active) return;
+    const hadController = !!ctrlRef.current;
+    uiSuspendRef.current = { active: true, hadController, reason };
+    logger.log({
+      type: 'command',
+      parsed: 'ui_suspend',
+      extra: reason,
+      sessionId: sessionIdRef.current,
+      row: useSessionStore.getState().activeRow,
+    });
+    earlyCommitStableRef.current = null;
+    lastInterimRef.current = null;
+    setActiveController(null);
+    ctrlRef.current?.stop();
+    ctrlRef.current = null;
+    cancelTts();
+  }, []);
+
   // ── final result handler ───────────────────────────────────
   const handleFinal = useCallback(async (textArg: string, alts: string[], confidence: number) => {
     // v0.20.0 Phase 5 #4 — 반응속도(발화 확정→값 커밋) 측정 시작점. STT final이 handleFinal에
@@ -1918,6 +1944,32 @@ export function useVoiceSession() {
     void handleFinal(t, [t], 0);
   }, [handleFinal]);
 
+  const resumeRecognitionForUi = useCallback((reason = 'ui_modal') => {
+    const suspended = uiSuspendRef.current;
+    if (!suspended.active) return;
+    uiSuspendRef.current = { active: false, hadController: false, reason: null };
+    logger.log({
+      type: 'command',
+      parsed: 'ui_resume',
+      extra: reason,
+      sessionId: sessionIdRef.current,
+      row: useSessionStore.getState().activeRow,
+    });
+    const phase = useSessionStore.getState().phase;
+    const shouldRestore =
+      suspended.hadController &&
+      (phase === 'active' || phase === 'complete' || phase === 'paused') &&
+      isSpeechSupported();
+    if (!shouldRestore || ctrlRef.current) return;
+    ctrlRef.current = new SpeechController({
+      onFinal: handleFinal,
+      onInterim: handleInterim,
+      onError: () => {},
+    });
+    setActiveController(ctrlRef.current);
+    ctrlRef.current.start();
+  }, [handleFinal, handleInterim]);
+
   // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async (label?: string) => {
     const s = useSettingsStore.getState();
@@ -2238,7 +2290,24 @@ export function useVoiceSession() {
     }
   }, []);
 
-  return { start, stop, restartFromCol, jumpToRow, gotoAdjacentRow, goNextRow, pause, resume, commitTouchValue, lastConfidenceRef, getActiveInputLabel, micLost, reconnectMic, prewarmMic };
+  return {
+    start,
+    stop,
+    restartFromCol,
+    jumpToRow,
+    gotoAdjacentRow,
+    goNextRow,
+    pause,
+    resume,
+    suspendRecognitionForUi,
+    resumeRecognitionForUi,
+    commitTouchValue,
+    lastConfidenceRef,
+    getActiveInputLabel,
+    micLost,
+    reconnectMic,
+    prewarmMic,
+  };
 }
 
 // ─── helpers ─────────────────────────────────────────────────

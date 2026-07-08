@@ -34,42 +34,26 @@ export function ModifyIndicatorPill({ name, prevValue, newValue }: { name: strin
         animation: committed ? 'card-breathe-amber 2.2s ease-in-out infinite' : 'card-breathe-blue 2.4s ease-in-out infinite',
       }}
     >
-      {/* 항목명 + 타입(읽기 일관) — 헤더는 보조 식별선 → --fit-lo. 줄바꿈 허용(잘림 금지). */}
       <span
         style={{
-          display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 6, flexWrap: 'wrap',
           fontSize: 'max(12px, calc(clamp(14px, 2.1vh, 18px) * var(--fit-lo, 1)))', fontWeight: 800, color: accent, letterSpacing: -0.2,
           maxWidth: '100%', textAlign: 'center', wordBreak: 'keep-all', overflowWrap: 'anywhere', lineHeight: 1.25,
         }}
       >
-        {committed ? (
-          <>
-            <span>{name}</span>
-            {prevValue && (
-              <>
-                <span style={{ color: T.textMute }} aria-hidden>·</span>
-                <span style={{ color: T.textMute, textDecoration: 'line-through' }}>{prevValue}</span>
-                <span style={{ color: T.textMute }} aria-hidden>→</span>
-              </>
-            )}
-          </>
-        ) : '수정'}
+        {committed ? '수정됨' : '수정'}
       </span>
       {committed ? (
-        <>
-          {/* 새값 = 최우선 정보 → --fit-hi(가장 늦게 축소). heroFontSize는 vh 상한 결합(heroLayout). */}
-          <span
-            style={{
-              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-              fontSize: `max(26px, calc(${heroFontSize(newValue || '')} * var(--fit-hi, 1)))`,
-              fontWeight: 800, color: T.amber, letterSpacing: -1, lineHeight: 1.05,
-              maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center',
-              animation: 'chip-pop 320ms ease-out',
-            }}
-          >
-            {newValue}
-          </span>
-        </>
+        <span
+          style={{
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            fontSize: `max(26px, calc(${heroFontSize(newValue || '')} * var(--fit-hi, 1)))`,
+            fontWeight: 850, color: T.amber, letterSpacing: -1, lineHeight: 1.05,
+            maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', textAlign: 'center',
+            animation: 'chip-pop 320ms ease-out',
+          }}
+        >
+          {newValue}
+        </span>
       ) : (
         // 재프롬프트 항목명 = 최우선(무엇을 다시 말할지) → --fit-hi. vh 상한 결합.
         <span
@@ -82,6 +66,35 @@ export function ModifyIndicatorPill({ name, prevValue, newValue }: { name: strin
           {name}
         </span>
       )}
+      {committed && prevValue ? (
+        <span
+          style={{
+            fontSize: 'max(12px, calc(clamp(14px, 2vh, 17px) * var(--fit-lo, 1)))',
+            color: T.textDim,
+            fontWeight: 800,
+            lineHeight: 1.25,
+            wordBreak: 'keep-all',
+            overflowWrap: 'anywhere',
+            textAlign: 'center',
+          }}
+        >
+          직전 입력 {prevValue}
+        </span>
+      ) : !committed ? (
+        <span
+          style={{
+            fontSize: 'max(13px, calc(clamp(15px, min(4vw, 2.3vh), 20px) * var(--fit-lo, 1)))',
+            color: T.textDim,
+            fontWeight: 800,
+            lineHeight: 1.2,
+            wordBreak: 'keep-all',
+            overflowWrap: 'anywhere',
+            textAlign: 'center',
+          }}
+        >
+          새 값 말하기
+        </span>
+      ) : null}
     </div>
   );
 }

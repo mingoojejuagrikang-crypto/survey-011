@@ -176,23 +176,16 @@ async function getActiveRow(page: Page): Promise<number> {
 
 async function getActiveChipName(page: Page): Promise<string> {
   return page.evaluate(() => {
-    const spans = Array.from(document.querySelectorAll('span'))
-      .filter((s) => s.textContent?.trim() === '▶');
-    if (!spans.length) return '';
-    const p = spans[0].closest('div[style]');
-    if (!p) return '';
-    return (p.textContent || '').replace('▶', '').trim().split('\n')[0].trim();
+    const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+    return chip?.dataset.colName ?? '';
   });
 }
 
 async function waitForActiveChip(page: Page, colName: string, timeout = 5000) {
   await page.waitForFunction(
     (name) => {
-      const spans = Array.from(document.querySelectorAll('span'))
-        .filter((s) => s.textContent?.trim() === '▶');
-      if (!spans.length) return false;
-      const p = spans[0].closest('div[style]');
-      return (p?.textContent || '').includes(name);
+      const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+      return (chip?.dataset.colName ?? '').includes(String(name));
     },
     colName,
     { timeout },
@@ -226,7 +219,7 @@ async function setupAndStart(page: Page) {
   await expect(startBtn).toBeVisible();
   await startBtn.click();
   await page.waitForTimeout(600);
-  await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 }
 
 async function inputRow(page: Page, h: string, j: string, nextRow?: number) {
@@ -591,19 +584,22 @@ test('D-2 RACE-7 — pause 중 탭 전환(언마운트)→재개→종료 후에
 
   // 일시정지 (마이크 버튼)
   await page.locator('button[title="일시정지"]').click();
-  await expect(page.locator('button[title="재개"]')).toBeVisible();
+  await expect(page.locator('button[title="재시작"]')).toBeVisible();
 
   // 데이터 탭으로 이동 → VoiceScreen(=useVoiceSession) 언마운트 → 다시 음성 탭(리마운트)
   await switchTab(page, 'data');
   await switchTab(page, 'voice');
 
   // 재개: 리마운트 후 store에서 복원된 sessionId로 이어가야 한다
-  await expect(page.locator('button[title="재개"]')).toBeVisible();
-  await page.locator('button[title="재개"]').click();
+  await expect(page.locator('button[title="재시작"]')).toBeVisible();
+  await page.locator('button[title="재시작"]').click();
   await page.waitForTimeout(400);
 
-  // 종료 → 최종 persist
+  // 종료 → 최종 persist. 활성 하단에는 종료가 없으므로 일시정지 패널에서 종료한다.
+  await page.locator('button[title="일시정지"]').click();
+  await expect(page.locator('[data-testid="paused-card"]')).toBeVisible();
   await page.locator('button[title="입력 종료"]').click();
+  await page.locator('button[title="종료 확인"]').click();
   await page.waitForTimeout(1500);
 
   // IDB의 모든 세션은 유효한 id와 유한한 startedAt을 가져야 한다.

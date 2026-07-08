@@ -86,8 +86,7 @@ export function AnomalyAlertPopup({
   const fitRef = useFitScale<HTMLDivElement>([
     a.colName, a.prev, a.next, a.changeText, a.sampleKey, a.prevDate, a.status, a.kind,
   ], ANOMALY_FIT_STEPS);
-  const sample = a.sampleKey || `행 ${a.row}`;
-  const prevLabel = `직전 ${a.prev}${a.prevDate ? `(${a.prevDate})` : ''}`;
+  const prevLabel = `직전${a.prevDate ? `(${a.prevDate})` : ''} ${a.prev}`;
   return (
     <div
       ref={fitRef}
@@ -112,49 +111,61 @@ export function AnomalyAlertPopup({
         animation: corrected ? 'card-breathe-green 2.4s ease-in-out infinite' : 'card-breathe-red 2.2s ease-in-out infinite',
       }}
     >
-      {/* v0.30.0 — 두 줄 구조: ① 항목·샘플·알람라벨 ② 직전값→현재값. 확인류 안내문구는
+      {/* 두 줄 구조: ① 알람라벨 ② 직전값→현재값. 확인류 안내문구는
           비프음+배경 호흡으로 대체해 카드 전체를 현장 거리에서 읽히는 정보만 남긴다. */}
       <div
         style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          flexWrap: 'wrap', maxWidth: '100%',
-          fontSize: 'max(11px, calc(clamp(15px, 2.35vh, 20px) * var(--fit-lo, 1)))',
+          maxWidth: '100%',
+          fontSize: 'max(16px, calc(clamp(20px, 3.2vh, 30px) * var(--fit-hi, 1)))',
           color: T.text, fontWeight: 850, textAlign: 'center', lineHeight: 1.16,
           wordBreak: 'keep-all', overflowWrap: 'anywhere',
         }}
       >
-        <span>{a.colName}</span>
-        <span style={{ color: T.textMute }} aria-hidden>·</span>
-        <span>{sample}</span>
-        <span style={{ color: T.textMute }} aria-hidden>·</span>
         <span style={{ color: accent }}>{alarmLabel}</span>
       </div>
       <div
         style={{
           display: 'flex', alignItems: 'baseline', justifyContent: 'center', flexWrap: 'wrap',
-          gap: 'max(4px, calc(clamp(8px, 1.4vh, 12px) * var(--fit-lo, 1)))',
+          gap: 'max(4px, calc(clamp(7px, 1.2vh, 10px) * var(--fit-lo, 1)))',
           maxWidth: '100%', lineHeight: 1.05,
-          fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+          fontSize: 'max(15px, calc(clamp(18px, min(4.8vw, 3.4vh), 24px) * var(--fit-hi, 1)))',
+          fontWeight: 900,
+          letterSpacing: -0.3,
+          wordBreak: 'keep-all',
+          overflowWrap: 'anywhere',
         }}
       >
         <span style={{
-          fontSize: 'max(13px, calc(clamp(18px, min(5.6vw, 3.5vh), 28px) * var(--fit-lo, 1)))',
-          color: T.textDim, fontWeight: 800, maxWidth: '100%', overflowWrap: 'anywhere',
+          color: T.textDim,
+          maxWidth: '100%',
+          overflowWrap: 'anywhere',
         }}>
           {prevLabel}
         </span>
-        <span style={{ fontSize: 'max(13px, calc(clamp(18px, 3vh, 24px) * var(--fit-lo, 1)))', color: T.textDim }}>→</span>
-        <span
-          style={{
-            fontSize: 'max(26px, calc(clamp(36px, min(12vw, 8.2vh), 64px) * var(--fit-hi, 1)))',
-            fontWeight: 950, color: T.text, letterSpacing: -0.5,
-            maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
-            textAlign: 'center',
-          }}
-        >
+        <span style={{ color: T.textDim }}>→</span>
+        <span style={{
+          color: T.text,
+          fontSize: 'max(26px, calc(clamp(32px, min(9vw, 6vh), 52px) * var(--fit-hi, 1)))',
+          letterSpacing: -0.8,
+        }}>
           {a.next}
         </span>
       </div>
+      {!corrected && (
+        <div
+          style={{
+            fontSize: 'max(13px, calc(clamp(15px, min(4vw, 2.3vh), 20px) * var(--fit-lo, 1)))',
+            color: T.textDim,
+            fontWeight: 850,
+            lineHeight: 1.2,
+            wordBreak: 'keep-all',
+            overflowWrap: 'anywhere',
+            textAlign: 'center',
+          }}
+        >
+          확인 또는 수정
+        </div>
+      )}
     </div>
   );
 }

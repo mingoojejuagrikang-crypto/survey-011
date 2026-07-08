@@ -181,7 +181,7 @@ test('persistSession은 UTC가 아닌 로컬 날짜를 session.date에 기록한
   await expect(startBtn).toBeVisible();
   await startBtn.click();
   await page.waitForTimeout(600);
-  await expect(page.locator('text=REC').first()).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 
   // 한 행 완료(c8, c9) → advance가 persistSession을 실행한다.
   await fireStt(page, '35.1', 800);
