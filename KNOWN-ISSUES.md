@@ -583,6 +583,31 @@
 
 ---
 
+## ⑨ 테스트 / 릴리스 회귀 함정
+
+### [TEST-UI-1] 입력탭 테스트가 시각 장식(`REC`, `▶`)에 붙으면 UI 정리 때 장기 타임아웃이 난다
+- **증상:** v0.31.0 입력탭 UI 재정리 중 Playwright가 `text=REC` 또는 활성 칩의 `▶` span을 기다리며 실패하거나, `v54-30rows` 장기 테스트가 행마다 3초씩 누적 대기해 3분 타임아웃이 발생했다.
+- **원인:** 테스트가 사용자가 보는 임시 시각 표현에 직접 결합되어 있었다. v0.31.0에서 `REC` 표시와 `▶` 활성칩 아이콘을 제거했지만, 일부 테스트 helper가 여전히 `document.querySelectorAll('span')`에서 `▶`를 찾아 활성 칩을 판별했다.
+- **해결·회피(v0.31.0):** UI 상태에는 안정적인 테스트 계약을 둔다. 활성 화면은 `data-testid="voice-active-state"`, 활성 행은 `data-testid="active-row"`, 칩은 `data-testid="column-chip"` + `data-active="true"` + `data-col-name="<컬럼명>"`로 확인한다. 새 입력탭 테스트를 작성할 때 시각 아이콘/텍스트 장식 대신 이 속성을 사용한다.
+- **출처:** `2026-07-08 survey-011 v0.31.0 입력탭 UI 재정리`, 커밋 `bbf6a1e`.
+- **현재 상태:** ✅수정됨(`src/screens/VoiceScreen.tsx`, `tests/*` 활성 칩 helper 갱신). 새 UI 테스트 작성 시 계속 준수.
+
+### [TEST-UI-2] 활성 상태 하단에는 `입력 종료` 버튼이 없다 — 종료 버튼 테스트는 일시정지 패널 경로로
+- **증상:** `v023-voice.spec.ts`, `correction-flow.spec.ts`가 활성 상태에서 `button[title="입력 종료"]`를 기다리다 실패했다.
+- **원인:** v0.31.0 입력탭 하단은 기본 상태에서 `이전` / `일시정지` / `다음`만 보인다. 종료는 실수 방지를 위해 일시정지 패널에서 `종료` 버튼을 누르고 확인 모달을 거치는 경로로 유지된다. 테스트가 이전 UI의 상시 종료 버튼을 전제로 했다.
+- **해결·회피(v0.31.0):** 활성 화면의 하단 기준점은 `input-control-toggle` 또는 `일시정지` 버튼으로 잡는다. 버튼 종료 경로를 검증할 때는 `일시정지` → `button[title="입력 종료"]` → `button[title="종료 확인"]` 순서로 테스트한다. 음성 종료 경로는 STT `"종료"` 명령으로 별도 검증한다.
+- **출처:** `2026-07-08 survey-011 v0.31.0 입력탭 UI 재정리`, 커밋 `bbf6a1e`.
+- **현재 상태:** ✅수정됨(`tests/v023-voice.spec.ts`, `tests/correction-flow.spec.ts`, `tests/v54-30rows.spec.ts`).
+
+### [TEST-STT-UI-1] 도움말 hard suspend 검증에서 총 1행 설정이면 `다음` 후 행 번호 변화가 없다
+- **증상:** 도움말 모달을 닫은 뒤 STT 복원 검증 테스트가 `다음` 발화 후 `active-row`가 1→2로 바뀌기를 기대했지만 실패했다.
+- **원인:** 테스트 fixture의 `totalRows`가 1이었다. 이 경우 앱은 정상적으로 `nextRow` 명령을 처리해도 2행으로 이동하지 않고 `end_reached_waiting` 안내로 남는다. 즉 실패는 STT resume 실패가 아니라 잘못된 테스트 오라클이었다.
+- **해결·회피(v0.31.0):** hard suspend/resume 검증은 행 번호 변화만 보지 말고 `logEvents`의 `ui_suspend`, `ui_resume`, 이후 `command parsed=nextRow text=다음` 기록을 확인한다. 행 이동 자체를 검증하려면 최소 2행 이상 fixture를 사용한다.
+- **출처:** `2026-07-08 survey-011 v0.31.0 입력탭 UI 재정리`, `tests/v026-tolerance-strict.spec.ts` T5 갱신.
+- **현재 상태:** ✅수정됨. 도움말 중 STT 명령 무시와 닫은 뒤 복원은 로그 기반으로 검증.
+
+---
+
 ## 확인 필요 (미검증)
 
 아래는 출처로 충분히 뒷받침되지 않았거나 survey-011 적용 여부를 직접 확인하지 못한 항목. **본문 항목으로 신뢰하지 말 것.** 검증 후 해당 카테고리로 승격하거나 폐기하라.
