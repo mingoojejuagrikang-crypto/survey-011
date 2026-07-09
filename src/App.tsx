@@ -63,7 +63,9 @@ export default function App() {
       {/* v0.18.0 1f — 비강제 "새 버전" 배너(상단 고정, 모든 탭 공통). 새 SW waiting 시에만 노출. */}
       <UpdateBanner />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        {tab === 'settings' && <SettingsScreen />}
+        {/* v0.32.0 설정탭 UX(Vance) B4 — 생성 완료 후 다음 단계(입력탭) 이동 버튼. 자동 탭 전환은
+            하지 않는다(민구 확정) — 사용자가 버튼으로 명시 이동. */}
+        {tab === 'settings' && <SettingsScreen onNavigateToInput={() => setTab('voice')} />}
         {tab === 'voice' && <VoiceScreen />}
         {tab === 'data' && <DataScreen />}
         {tab === 'review' && <ReviewScreen />}

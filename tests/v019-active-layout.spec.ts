@@ -79,9 +79,10 @@ test('W5 — ActiveState 진입 + 컨트롤바 한자리 고정(버그B)', async
   await generateTable(page);
   await startVoice(page);
 
-  // ActiveState에 들어왔는지(종료 버튼 존재) 확인.
-  const endBtn = page.locator('button[title="입력 종료"]');
-  await expect(endBtn).toBeVisible({ timeout: 5000 });
+  // ActiveState에 들어왔는지 확인 — v0.31.0부터 활성 하단에 종료 버튼이 없다([TEST-UI-2]).
+  // 기준점은 활성/일시정지 양쪽에 항상 렌더되는 input-control-toggle로 잡는다.
+  const controlAnchor = page.locator('[data-testid="input-control-toggle"]');
+  await expect(controlAnchor).toBeVisible({ timeout: 5000 });
 
   await page.screenshot({ path: '/tmp/v019-shots/after-active-hero.png' });
 
@@ -101,8 +102,8 @@ test('W5 — ActiveState 진입 + 컨트롤바 한자리 고정(버그B)', async
   console.log(`chip region: client=${chipMetrics!.clientHeight} scroll=${chipMetrics!.scrollHeight}`);
   expect(chipMetrics!.clientHeight).toBeLessThanOrEqual(170);
 
-  // 컨트롤바 기준점 = 종료 버튼의 화면상 Y(top).
-  const beforeBox = await endBtn.boundingBox();
+  // 컨트롤바 기준점 = input-control-toggle의 화면상 Y(top) — 양 상태에 공통 존재.
+  const beforeBox = await controlAnchor.boundingBox();
   expect(beforeBox).not.toBeNull();
   const yHeroShown = beforeBox!.y;
 
@@ -114,7 +115,7 @@ test('W5 — ActiveState 진입 + 컨트롤바 한자리 고정(버그B)', async
 
   await page.screenshot({ path: '/tmp/v019-shots/after-active-paused.png' });
 
-  const afterBox = await endBtn.boundingBox();
+  const afterBox = await controlAnchor.boundingBox();
   expect(afterBox).not.toBeNull();
   const yHeroHidden = afterBox!.y;
 

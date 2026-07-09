@@ -622,8 +622,11 @@ test('D-2 — fresh start→종료→reload 후 세션이 유효 id/startedAt으
 
   await inputRow(page, '11.1', '22.2', 2);
 
-  // 종료 → persist
+  // 종료 → persist. 활성 하단에는 종료가 없으므로 일시정지 패널에서 종료한다([TEST-UI-2]).
+  await page.locator('button[title="일시정지"]').click();
+  await expect(page.locator('[data-testid="paused-card"]')).toBeVisible();
   await page.locator('button[title="입력 종료"]').click();
+  await page.locator('button[title="종료 확인"]').click();
   await page.waitForTimeout(1500);
 
   // 리로드 → App이 IDB에서 hydrate (D-1 경로)

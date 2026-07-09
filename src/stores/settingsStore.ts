@@ -210,38 +210,56 @@ function migrateColumn(c: unknown): Column {
   });
 }
 
+/** 메서드를 제외한 설정 상태(기본값의 형태). */
+export type SettingsDefaults = Omit<
+  SettingsState,
+  'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns' | 'saveSheet' | 'removeSavedSheet'
+>;
+
+/**
+ * v0.32.0 설정탭 UX(Vance) — 설정 기본값 SSOT. create() 초기 상태와 설정탭 '초기화'가 공유한다.
+ * 상수가 아니라 **함수**인 이유: columns가 호출마다 fresh 배열/객체여야 하기 때문(초기 상태와
+ * 초기화 결과가 가변 참조를 공유하면 안 됨). structuredClone으로 MOCK_COLUMNS의 중첩 auto까지
+ * 새로 만든 뒤 기존과 동일하게 reconcileColumnFlags(c, c)로 샘플키 유추값을 부여한다.
+ */
+export function makeSettingsDefaults(): SettingsDefaults {
+  return {
+    googleConnected: false,
+    userEmail: null,
+    sheet: null,
+    sheetUrl: '',
+    sheetTab: '',
+    availableSheets: [],
+    savedSheets: [],
+    manualMode: false,
+    // 신규 설치 기본 컬럼에도 샘플키 유추값을 미리 부여(prev===next → undefined일 때만 유추).
+    columns: structuredClone(MOCK_COLUMNS).map((c) => reconcileColumnFlags(c, c)),
+    tableGenerated: false,
+    totalRows: 50,
+    ttsRate: 1.05,
+    recognitionTolerance: 0.6,
+    sessionLabelColId: null,
+    sessionAutoLabel: null,
+    sessionCustomLabel: null,
+    fastRecognition: false,
+    preferredVoiceName: '',
+    teamFolderId: null,
+    userLogFolderId: null,
+    roundDateColId: null,
+    // v0.10.0 — 비교탭 기본값(전부 자동/미선택 → 최근 회차·직전 baseline·후보 전체).
+    reviewFilters: [],
+    reviewTargetRound: null,
+    reviewBaselineBack: 1,
+    reviewGroupCols: null,
+    reviewMeasureCols: null,
+    reviewSelectedRows: null,
+  };
+}
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
-      googleConnected: false,
-      userEmail: null,
-      sheet: null,
-      sheetUrl: '',
-      sheetTab: '',
-      availableSheets: [],
-      savedSheets: [],
-      manualMode: false,
-      // 신규 설치 기본 컬럼에도 샘플키 유추값을 미리 부여(prev===next → undefined일 때만 유추).
-      columns: MOCK_COLUMNS.map((c) => reconcileColumnFlags(c, c)),
-      tableGenerated: false,
-      totalRows: 50,
-      ttsRate: 1.05,
-      recognitionTolerance: 0.6,
-      sessionLabelColId: null,
-      sessionAutoLabel: null,
-      sessionCustomLabel: null,
-      fastRecognition: false,
-      preferredVoiceName: '',
-      teamFolderId: null,
-      userLogFolderId: null,
-      roundDateColId: null,
-      // v0.10.0 — 비교탭 기본값(전부 자동/미선택 → 최근 회차·직전 baseline·후보 전체).
-      reviewFilters: [],
-      reviewTargetRound: null,
-      reviewBaselineBack: 1,
-      reviewGroupCols: null,
-      reviewMeasureCols: null,
-      reviewSelectedRows: null,
+      ...makeSettingsDefaults(),
 
       set: (partial) => set(partial),
       updateColumn: (id, next) =>

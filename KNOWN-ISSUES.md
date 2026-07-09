@@ -147,6 +147,14 @@
 - **🔴 2026-06-30 v0.24.0 실기기 2세션 — BT/스피커폰 구분 불가 재확인:** 민구가 S1 BT·S2 스피커폰(일부 BT)을 썼으나 양 세션 `session:input_device`=`"iPhone 마이크"`+동일 deviceId, `input_device_changed` **0건**. 클립 레코더 track.label이 STT 실경로와 달라 BT 미반영 — 텔레메트리로 입력경로 식별 불가([STT-13]/W7 한계, AUDIO-ROUTE-1 네이티브 셸 영역).
 - **🟢 2026-07-02 v0.25.0 실기기 — BT 라벨 첫 포착(부분 해소):** S2 세션메타 `session:input_device`가 **`OpenDots ONE by Shokz`**(deviceId 24A69DAA…)로 기록됨 — 06-30 "BT 써도 iPhone 마이크로만 기록" 갭과 대비, BT/내장이 세션 라벨 수준에서 처음 구분됨(S1은 iPhone 마이크). 원인은 v0.25.0 기능2 mic prewarm이 세션 시작 전 getUserMedia를 선점해 실제 활성 장치를 잡는 영향으로 **추정(확인 필요)** — STT(Web Speech) 실경로와의 일치 여부는 여전히 미보증([STT-13] 한계 자체는 유지).
 
+### [STT-14] TTS 연발 중 인식기 재시작 예약이 취소돼 STT가 **영구 사망** — "이전" 명령 후 앱 사용 불가
+- **증상(v0.31.0 실기기, 2026-07-09):** "이전" 음성 명령(conf 0.883, 정상 처리) 직후 수정 모드 재안내 TTS가 연달아 나온 뒤, **세션 종료까지 약 5분간 STT 이벤트 0건** — 어떤 음성 명령도 인식 안 됨. TTS·클립 레코더·터치 버튼은 전부 정상(사용자는 터치로만 진행하다 종료). `ui_suspend` 0건(v0.31.0 도움말 suspend와 무관), BT 끊김은 사망 4분 뒤(무관).
+- **원인(코드 확정, 2중 결함):** iOS는 TTS 재생 중 SpeechRecognition을 죽인다. 인식기 `end` 시 `onEnd`가 100ms 재시작을 예약하는데, **모든 TTS 발화 시작 시 호출되는 `muteForTts()`가 그 예약을 무조건 취소**하고 `unmuteForTts()`는 재예약하지 않음(`speech.ts`) — 죽은 인식기는 다시 `end`를 못 내므로 회복 경로가 없다. "이전"(reentry)은 유일하게 행 안내+필드별 재안내 **연속 TTS 버스트**를 내는 경로라 이 레이스에 집중 노출(단 취약점 자체는 모든 TTS 경로 공통). 보조 결함: `scheduleRestart()` 타이머 본문의 `rec.start()` 예외를 catch가 삼키고 재시도 없음("try again next tick" 주석과 달리 재시도 부재).
+- **해결·회피(v0.32.0):** ① `muteForTts()`가 예약을 취소하면 `restartPendingAfterTts`로 기억 → `unmuteForTts()`에서 재예약. ② start() 예외 시 backoff(×2, 상한 5s, 무제한 — 재시도 상한을 두면 사망 경로가 재생김) 실재시도. ③ **워치독**(4s 간격): active인데 인식기가 안 돌고 예약도 없으면 강제 재시작 — `stop()`에서 함께 해제되므로 v0.31.0 `suspendRecognitionForUi`와 충돌 불가. ④ stale-instance 가드(버려진 인식기의 늦은 이벤트가 이중 재시작 못 하게). ⑤ **lifecycle 텔레메트리 신설**(`stt`/`extra:lifecycle:*`): `restart_cancelled_by_mute`(사망 시그니처)·`restart_resched_after_tts`·`restart_retry`·`watchdog_restart`·`error:<code>`는 항상, start/end는 10s 스로틀. 회귀 `tests/speech-lifecycle.spec.ts`(유닛 6케이스).
+- **교훈(계측):** 이 사망은 기존 텔레메트리로 직접 관측 불가였다(인식기 lifecycle 이벤트 전무) — "STT 이벤트가 오래 없음"이라는 부재 증거로만 추론 가능했다. 다음 실기기 로그에서 `lifecycle:restart_cancelled_by_mute` → `restart_resched_after_tts`(정상 회복) 연쇄와 `watchdog_restart`(좀비 경로 발동) 빈도를 확인할 것.
+- **출처:** `2026-07-09 v0.31.0 실기기 로그`(sess_1783570914828) → **survey-011 v0.32.0** 수정
+- **현재 상태:** ✅수정됨(코드) — **실기기 검증 대기**(iOS 전용 레이스라 데스크탑/Playwright로 원버그 재현 불가, 가드·워치독 동작만 유닛으로 고정).
+
 ---
 
 ## ② 클립 · IndexedDB 영속화 (최대 광맥)
@@ -596,8 +604,8 @@
 - **증상:** `v023-voice.spec.ts`, `correction-flow.spec.ts`가 활성 상태에서 `button[title="입력 종료"]`를 기다리다 실패했다.
 - **원인:** v0.31.0 입력탭 하단은 기본 상태에서 `이전` / `일시정지` / `다음`만 보인다. 종료는 실수 방지를 위해 일시정지 패널에서 `종료` 버튼을 누르고 확인 모달을 거치는 경로로 유지된다. 테스트가 이전 UI의 상시 종료 버튼을 전제로 했다.
 - **해결·회피(v0.31.0):** 활성 화면의 하단 기준점은 `input-control-toggle` 또는 `일시정지` 버튼으로 잡는다. 버튼 종료 경로를 검증할 때는 `일시정지` → `button[title="입력 종료"]` → `button[title="종료 확인"]` 순서로 테스트한다. 음성 종료 경로는 STT `"종료"` 명령으로 별도 검증한다.
-- **출처:** `2026-07-08 survey-011 v0.31.0 입력탭 UI 재정리`, 커밋 `bbf6a1e`.
-- **현재 상태:** ✅수정됨(`tests/v023-voice.spec.ts`, `tests/correction-flow.spec.ts`, `tests/v54-30rows.spec.ts`).
+- **출처:** `2026-07-08 survey-011 v0.31.0 입력탭 UI 재정리`, 커밋 `bbf6a1e`; `2026-07-09 v0.32.0 세션` — 누락 2건 추가 수리(`v019-active-layout.spec.ts` W5는 컨트롤바 Y 앵커를 `input-control-toggle`로 교체, `correction-flow.spec.ts` D-2는 일시정지 패널 경로 적용).
+- **현재 상태:** ✅수정됨(`tests/v023-voice.spec.ts`, `tests/correction-flow.spec.ts`, `tests/v54-30rows.spec.ts`, `tests/v019-active-layout.spec.ts`).
 
 ### [TEST-STT-UI-1] 도움말 hard suspend 검증에서 총 1행 설정이면 `다음` 후 행 번호 변화가 없다
 - **증상:** 도움말 모달을 닫은 뒤 STT 복원 검증 테스트가 `다음` 발화 후 `active-row`가 1→2로 바뀌기를 기대했지만 실패했다.

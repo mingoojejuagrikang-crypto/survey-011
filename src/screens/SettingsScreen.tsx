@@ -3,7 +3,8 @@ import { T, TYPE_LABELS, TYPE_COLORS } from '../tokens';
 import { I, AuthMark } from '../components/icons';
 import { Chip } from '../components/Chip';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { useSettingsStore } from '../stores/settingsStore';
+import { makeSettingsDefaults, useSettingsStore } from '../stores/settingsStore';
+import { saveSheetsRecord } from '../lib/db';
 import type { Column, DataType } from '../types';
 import {
   getCurrentEmail,
@@ -949,11 +950,14 @@ function TypeReviewModal({
 /** S-2: a column whose saved type differs from the sheet's inferred data type. */
 interface TypeMismatch { id: string; name: string; saved: DataType; sheet: DataType; }
 
-export function SettingsScreen() {
+export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () => void } = {}) {
   const s = useSettingsStore();
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmedUrl, setConfirmedUrl] = useState<string>(s.sheetUrl);
+  // v0.32.0 설정탭 UX(Vance) B2/B3 — 설정 요약 팝업 + 초기화 확인 모달(설정탭 전용).
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
   // S-2: result of "타입 검토" (null = not run; checked = columns compared).
   const [typeReview, setTypeReview] = useState<{ mismatches: TypeMismatch[]; checked: number } | null>(null);
   const [tablePreviewOpen, setTablePreviewOpen] = useState(false);
@@ -1225,6 +1229,53 @@ export function SettingsScreen() {
     setGenerateGateOpen(false);
   };
 
+  /** v0.32.0 설정탭 UX(Vance) B3 — 전체 초기화. 컬럼·행수·세션명·다이얼·음성/검토 옵션·생성 상태를
+   *  기본값(makeSettingsDefaults SSOT)으로 되돌린다. Google 로그인·시트 URL·저장된 시트는 기본
+   *  **보존**(민구 확정) — 모달 체크박스로만 opt-in 삭제. 세션 데이터·클립·로그(IDB)는 건드리지 않는다. */
+  const onResetConfirm = async ({ clearLogin, clearSheets }: { clearLogin: boolean; clearSheets: boolean }) => {
+    const d = makeSettingsDefaults();
+    s.set({
+      columns: d.columns, // fresh copy — makeSettingsDefaults가 호출마다 새 객체를 만든다
+      tableGenerated: false,
+      totalRows: d.totalRows,
+      ttsRate: d.ttsRate,
+      recognitionTolerance: d.recognitionTolerance,
+      fastRecognition: d.fastRecognition,
+      manualMode: d.manualMode,
+      preferredVoiceName: d.preferredVoiceName,
+      sessionLabelColId: d.sessionLabelColId,
+      sessionAutoLabel: d.sessionAutoLabel,
+      sessionCustomLabel: d.sessionCustomLabel,
+      roundDateColId: d.roundDateColId,
+      reviewFilters: d.reviewFilters,
+      reviewTargetRound: d.reviewTargetRound,
+      reviewBaselineBack: d.reviewBaselineBack,
+      reviewGroupCols: d.reviewGroupCols,
+      reviewMeasureCols: d.reviewMeasureCols,
+      reviewSelectedRows: d.reviewSelectedRows,
+    });
+    setPreferredVoiceName(''); // 라이브 speech 모듈도 스토어 기본값과 동기화
+    setTypeReview(null);
+    if (clearLogin) {
+      await googleSignOut(); // 토큰 없으면 no-op(clearToken만) — 로그아웃 상태에서도 안전
+      s.set({ googleConnected: false, userEmail: null });
+    }
+    if (clearSheets) {
+      s.set({ sheetUrl: '', sheet: null, sheetTab: '', availableSheets: [], savedSheets: [] });
+      // 전용 IDB 레코드(onRehydrateStorage 복원 경로)도 함께 비운다 — 안 비우면 다음 부팅에서 되살아남.
+      void saveSheetsRecord({ savedSheets: [], sheetUrl: '', updatedAt: Date.now() });
+      setConfirmedUrl('');
+    }
+    // 첫 진입 안내 배너 재노출(초기화 = 처음부터 다시 시작하는 사용자).
+    try { localStorage.removeItem(SETTINGS_TIP_SEEN_KEY); } catch { /* private mode 등 */ }
+    setTipDismissed(false);
+    logger.log({
+      type: 'app',
+      extra: `settings_reset:login=${clearLogin ? 'cleared' : 'kept'},sheet=${clearSheets ? 'cleared' : 'kept'}`,
+    });
+    setResetOpen(false);
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <ScreenHeader
@@ -1287,6 +1338,36 @@ export function SettingsScreen() {
             </button>
           </div>
         )}
+
+        {/* v0.32.0 설정탭 UX(Vance) B2/B3 — 유틸리티 행(항상 첫 콘텐츠 행): 설정 요약 팝업 + 초기화.
+            버튼 문구에 '생성' 부분문자열 금지(기존 스펙의 hasText:'생성' .last() 헬퍼 보호). */}
+        <div style={{ padding: '8px 16px 10px', display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            data-testid="settings-summary-open"
+            onClick={() => setSummaryOpen(true)}
+            style={{
+              flex: 1, minHeight: 40, borderRadius: 12,
+              border: `1px solid ${T.lineStrong}`, background: T.card,
+              color: T.textDim, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
+              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            }}
+          >
+            {I.table(15, T.textDim)} 설정 요약
+          </button>
+          <button
+            type="button"
+            data-testid="settings-reset-open"
+            onClick={() => setResetOpen(true)}
+            style={{
+              minHeight: 40, padding: '0 16px', borderRadius: 12,
+              border: '1px solid rgba(255,82,82,0.40)', background: 'rgba(255,82,82,0.08)',
+              color: T.red, fontSize: 13, fontWeight: 800, letterSpacing: -0.2, cursor: 'pointer',
+            }}
+          >
+            초기화
+          </button>
+        </div>
 
         {/* Section 1 - Google + Sheet URL */}
         <div style={{ padding: '0 16px', flexShrink: 0 }}>
@@ -1917,19 +1998,36 @@ export function SettingsScreen() {
             </button>
           )}
         </div>
+        {/* v0.32.0 설정탭 UX(Vance) B4 — 생성 완료 후 다음 단계 안내 + 입력탭 이동(자동 전환 없음,
+            민구 확정). 캡션은 '생성됨'/'생성 예정' 부분문자열을 피한다(기존 text= 로케이터 보호). */}
+        {s.tableGenerated && (
+          <>
+            <div style={{ textAlign: 'center', fontSize: 12, color: T.textMute, lineHeight: 1.4 }}>
+              생성 완료 — 입력 탭에서 [음성 입력 시작]을 누르세요
+            </div>
+            <button
+              type="button"
+              data-testid="settings-go-input"
+              onClick={() => onNavigateToInput?.()}
+              style={{
+                width: '100%', height: 54, borderRadius: 28, border: 'none',
+                background: T.blue, color: '#fff',
+                fontSize: 17, fontWeight: 800, letterSpacing: -0.2,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                cursor: 'pointer',
+                boxShadow: `0 6px 18px ${T.blueGlow}`,
+              }}
+            >
+              입력탭으로 이동 →
+            </button>
+          </>
+        )}
       </div>
 
-      {/* 생성 후 '미리보기' — 닫기 전용(부수효과 없음). */}
-      {tablePreviewOpen && (
-        <TablePreviewModal
-          columns={s.columns}
-          totalRows={s.totalRows}
-          onClose={() => setTablePreviewOpen(false)}
-        />
-      )}
-
-      {/* v0.19.0 W3 — '최종 설정값 확인' 게이트. 요약/미리보기는 현재 columns에서 파생(stale 방지).
-          "확인(생성)" = onGenerateConfirm에서만 실제 생성, "취소" = 미생성. */}
+      {/* v0.19.0 W3 — '최종 설정값 확인' 게이트. 요약은 현재 columns에서 파생(stale 방지).
+          v0.32.0 B1 — 게이트는 무스크롤 요약 전용으로 재설계(테이블 본문 제거). 표가 필요하면
+          게이트 안의 "생성될 테이블 미리보기"로 아래 닫기 전용 미리보기를 게이트 위에 오버레이.
+          "확인(이대로 생성)" = onGenerateConfirm에서만 실제 생성, "취소" = 미생성. */}
       {generateGateOpen && (
         <TablePreviewModal
           columns={s.columns}
@@ -1937,7 +2035,55 @@ export function SettingsScreen() {
           sessionLabel={prospectiveSessionLabel()}
           regenerating={s.tableGenerated}
           onConfirm={onGenerateConfirm}
+          onOpenPreview={() => setTablePreviewOpen(true)}
           onClose={() => setGenerateGateOpen(false)}
+        />
+      )}
+
+      {/* 생성 후 '미리보기' — 닫기 전용(부수효과 없음). 게이트에서 열었을 때는 게이트 위에 겹쳐야
+          하므로 게이트보다 뒤(DOM 순서 = 위)에 마운트하고, 행수는 게이트가 열려 있으면 현재 columns
+          에서 파생(생성 전 stale totalRows 방지). '생성' 포함 버튼이 없어 hasText:'생성' .last()는
+          여전히 게이트 확인 버튼을 가리킨다. */}
+      {tablePreviewOpen && (
+        <TablePreviewModal
+          columns={s.columns}
+          totalRows={generateGateOpen ? computeTotalRows(s.columns) : s.totalRows}
+          onClose={() => setTablePreviewOpen(false)}
+        />
+      )}
+
+      {/* v0.32.0 설정탭 UX(Vance) B2 — 설정 요약 팝업(닫기 전용, 무스크롤). 로그인·시트 연결·컬럼
+          요약(SettingsSummary 공용)·다이얼/토글·생성 상태를 한 화면에 모은다. 설정탭 전용. */}
+      {summaryOpen && (() => {
+        const activeSheetId = parseSpreadsheetId(s.sheetUrl);
+        const sheetName = s.savedSheets.find((x) => x.sheetId === activeSheetId)?.name ?? null;
+        const sheetLabel = s.sheetUrl.trim()
+          ? `${sheetName ?? '시트'}${s.sheetTab ? ` · ${s.sheetTab}` : ''}`
+          : null;
+        return (
+          <SettingsSummaryModal
+            googleConnected={s.googleConnected}
+            userEmail={s.userEmail}
+            sheetLabel={sheetLabel}
+            columns={s.columns}
+            totalRows={computeTotalRows(s.columns)}
+            sessionLabel={prospectiveSessionLabel()}
+            recognitionTolerance={s.recognitionTolerance}
+            ttsRate={s.ttsRate}
+            fastRecognition={s.fastRecognition}
+            tableGenerated={s.tableGenerated}
+            generatedRows={s.totalRows}
+            onClose={() => setSummaryOpen(false)}
+          />
+        );
+      })()}
+
+      {/* v0.32.0 설정탭 UX(Vance) B3 — 초기화 확인 모달. 기본은 로그인·시트 보존, 체크박스로 opt-in
+          삭제. 버튼 문구에 '생성' 부분문자열 금지(초기화 실행/취소는 안전). */}
+      {resetOpen && (
+        <SettingsResetModal
+          onCancel={() => setResetOpen(false)}
+          onConfirm={(opts) => void onResetConfirm(opts)}
         />
       )}
 
@@ -1956,15 +2102,18 @@ export function SettingsScreen() {
 
 // ─── table preview modal ───────────────────────────────────────
 function TablePreviewModal({
-  columns, totalRows, onClose, onConfirm, sessionLabel, regenerating,
+  columns, totalRows, onClose, onConfirm, onOpenPreview, sessionLabel, regenerating,
 }: {
   columns: import('../types').Column[];
   totalRows: number;
   onClose: () => void;
-  /** v0.19.0 W3 — 주어지면 '최종 설정값 확인' 게이트 모드: 컬럼 구성·총 행수·세션 라벨 요약을
-   *  헤더에 표시하고, 푸터를 "취소 / 확인(생성)"으로 바꿔 확인 시에만 onConfirm을 호출한다.
-   *  미주입 시(생성 후 '미리보기')는 기존대로 닫기 전용. */
+  /** v0.19.0 W3 — 주어지면 '최종 설정값 확인' 게이트 모드. v0.32.0 B1 — 게이트는 **무스크롤 요약
+   *  전용**(테이블 본문 없음): SettingsSummary(카운트 pill + 세션명 + 압축 컬럼 목록)만 보여주고,
+   *  푸터를 "취소 / 이대로 생성"으로 바꿔 확인 시에만 onConfirm을 호출한다.
+   *  미주입 시(생성 후 '미리보기')는 기존대로 50행 테이블 + 닫기 전용. */
   onConfirm?: () => void;
+  /** v0.32.0 B1 — 게이트 안 "생성될 테이블 미리보기" 버튼. 닫기 전용 미리보기를 게이트 위에 연다. */
+  onOpenPreview?: () => void;
   sessionLabel?: string;
   regenerating?: boolean;
 }) {
@@ -1974,9 +2123,6 @@ function TablePreviewModal({
     c.type === 'date' ? 110 : c.type === 'text' || c.type === 'name' || c.type === 'options' ? 100 : 70,
   );
   const isGate = !!onConfirm;
-  const voiceCount = columns.filter((c) => c.input === 'voice').length;
-  const autoCount = columns.filter((c) => c.input === 'auto').length;
-  const touchCount = columns.filter((c) => c.input === 'touch').length;
 
   return (
     <div
@@ -1999,6 +2145,7 @@ function TablePreviewModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        data-testid={isGate ? 'gate-card' : 'table-preview-card'}
         style={{
           background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
           width: '100%', maxWidth: 480, maxHeight: '84vh',
@@ -2018,8 +2165,10 @@ function TablePreviewModal({
               {isGate ? (regenerating ? '재생성 — 설정값 확인' : '입력 테이블 생성 — 설정값 확인') : '테이블 미리보기'}
             </div>
             <div style={{ fontSize: 12, color: T.textMute, marginTop: 2 }}>
-              총 {totalRows}행
-              {totalRows > MAX_PREVIEW ? ` (처음 ${MAX_PREVIEW}행 표시)` : ''}
+              {/* v0.32.0 B1 — 게이트엔 테이블 본문이 없으므로 '(처음 N행 표시)'를 붙이지 않는다. */}
+              {isGate
+                ? `총 ${totalRows}행 생성`
+                : `총 ${totalRows}행${totalRows > MAX_PREVIEW ? ` (처음 ${MAX_PREVIEW}행 표시)` : ''}`}
             </div>
           </div>
           <button
@@ -2036,65 +2185,37 @@ function TablePreviewModal({
           </button>
         </div>
 
-        {/* v0.20.0 설정탭#1 — 게이트 요약을 카운트 Pill에서 **컬럼별 상세 행**으로 교체. 각 컬럼의
-            입력방식·값/범위(고정값/순차 from~to/선택옵션)·이상치 알람 조건(추세 증가/감소)·이상값
-            범위(%)를 한 줄씩 스캔 가능하게 보여준다. 현재 columns prop에서 파생(stale 없음). 게이트
-            헤더 스트립은 비스크롤이므로 컬럼이 많아도 모달을 넘지 않게 자체 maxHeight+overflowY. */}
+        {/* v0.32.0 설정탭 UX(Vance) B1 — 게이트 = 무스크롤 '설정값 확인'. 카운트 pill·세션명·컬럼
+            목록(SettingsSummary — 설정 요약 팝업과 공용)을 내부 스크롤 없이 전부 보여준다(≤12컬럼
+            1줄씩 / >12컬럼 2열 그리드로 밀도 전환). 50행 테이블 본문은 게이트에서 제거 — 필요하면
+            아래 "생성될 테이블 미리보기"로 닫기 전용 미리보기를 게이트 위에 연다. */}
         {isGate && (
           <div
             style={{
-              padding: '12px 16px', borderBottom: `1px solid ${T.line}`,
-              display: 'flex', flexDirection: 'column', gap: 8,
+              padding: '12px 16px',
+              display: 'flex', flexDirection: 'column', gap: 10,
             }}
           >
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              <SummaryPill label="음성입력" value={voiceCount} accent />
-              <SummaryPill label="자동입력" value={autoCount} />
-              <SummaryPill label="수동입력" value={touchCount} />
-              <SummaryPill label="전체 항목" value={columns.length} />
-              <SummaryPill label="총 행수" value={totalRows} />
-            </div>
-            {/* v0.21.0 설정탭#4 — 실제 저장될 세션명을 게이트 요약 상단(컬럼 목록 위)에 prominent하게
-                노출. prospectiveSessionLabel()(SettingsScreen)이 'YYYY-MM-DD 라벨'을 이미 계산 — 재사용.
-                기존엔 요약 하단에 묻혀 있어 컬럼이 많으면 스크롤 뒤에 가려졌다 → 헤더 직하로 승격. */}
-            {sessionLabel && (
-              <div
+            <SettingsSummary columns={columns} totalRows={totalRows} sessionLabel={sessionLabel} />
+            {onOpenPreview && (
+              <button
+                type="button"
+                onClick={onOpenPreview}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '8px 12px', borderRadius: 10,
-                  background: 'rgba(0,200,83,0.10)', border: '1px solid rgba(0,200,83,0.30)',
+                  minHeight: 44, borderRadius: 12,
+                  border: `1px solid ${T.lineStrong}`, background: 'transparent',
+                  color: T.textDim, fontSize: 14, fontWeight: 700, letterSpacing: -0.2,
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                 }}
               >
-                <span style={{ fontSize: 12, fontWeight: 700, color: T.textDim, flexShrink: 0 }}>
-                  세션명
-                </span>
-                <span
-                  style={{
-                    flex: 1, minWidth: 0, fontSize: 14, fontWeight: 800, color: T.text,
-                    fontFamily: 'JetBrains Mono, ui-monospace, monospace', letterSpacing: -0.2,
-                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right',
-                  }}
-                  title={sessionLabel}
-                >
-                  {sessionLabel}
-                </span>
-              </div>
+                {I.table(16, T.textDim)} 생성될 테이블 미리보기
+              </button>
             )}
-            <div
-              style={{
-                maxHeight: 196, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
-                display: 'flex', flexDirection: 'column', gap: 4,
-                border: `1px solid ${T.line}`, borderRadius: 10, padding: 4,
-                background: T.inputBg,
-              }}
-            >
-              {columns.map((c) => (
-                <ColumnDetailRow key={c.id} col={c} />
-              ))}
-            </div>
           </div>
         )}
 
+        {!isGate && (
         <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div style={{ minWidth: 'max-content' }}>
             {/* Header */}
@@ -2175,6 +2296,7 @@ function TablePreviewModal({
             })}
           </div>
         </div>
+        )}
 
         <div style={{ padding: '12px 16px', borderTop: `1px solid ${T.line}` }}>
           {isGate ? (
@@ -2199,7 +2321,9 @@ function TablePreviewModal({
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                 }}
               >
-                {I.check(18, '#06200F')} {regenerating ? '재생성' : '생성'}
+                {/* v0.32.0 B1 — '생성' → '이대로 생성'(요약을 확인하고 그대로 진행한다는 의미).
+                    '생성' 부분문자열은 유지 + 게이트 내 마지막 '생성' 버튼(hasText .last() 헬퍼 호환). */}
+                {I.check(18, '#06200F')} {regenerating ? '재생성' : '이대로 생성'}
               </button>
             </div>
           ) : (
@@ -2228,31 +2352,32 @@ const INPUT_LABELS: Record<Column['input'], string> = {
   touch: '수동',
 };
 
-/** v0.20.0 설정탭#1 — 게이트 컬럼별 상세 한 줄. 값/범위·알람조건·이상값 범위를 columns에서 파생. */
-function ColumnDetailRow({ col }: { col: Column }) {
-  // 값/범위: 고정값 → 그 값, 순차 → from~to, 옵션 → 선택값(개수), 음성/수동 → 입력대기 표시.
-  let valueText: string;
-  if (col.input === 'voice') {
-    valueText = '음성 입력';
-  } else if (col.input === 'touch') {
-    valueText = '직접 입력';
-  } else if (col.auto.kind === 'seq') {
-    valueText = `${col.auto.from} ~ ${col.auto.to}`;
-  } else if (col.type === 'date') {
+/** v0.32.0 — 컬럼의 값/범위 표기(ColumnDetailRow·ColumnGridCell 공용). 고정값 → 그 값,
+ *  순차 → from~to, 옵션 → 선택값들, 음성/수동 → 입력대기 표시. */
+function columnValueText(col: Column): string {
+  if (col.input === 'voice') return '음성 입력';
+  if (col.input === 'touch') return '직접 입력';
+  if (col.auto.kind === 'seq') return `${col.auto.from} ~ ${col.auto.to}`;
+  if (col.type === 'date') {
     // v0.21.0 설정탭#3 — 자동입력+날짜는 실제 치환될 날짜를 함께 보여준다. autoValue()(autoValue.ts)
     //   가 '오늘'→ISO 날짜 변환을 이미 보유 — 재사용. '오늘'(또는 빈값=오늘)이면 "오늘 (YYYY-MM-DD)"로,
     //   날짜 지정이면 그 날짜를 그대로 표시(이 분기는 col.auto.kind==='fixed' 전제).
     const resolved = autoValue(col, 1); // '오늘'/빈값 → 오늘 ISO, 지정일 → 그 날짜
     const isTodayDynamic =
       col.auto.kind === 'fixed' && (col.auto.value === '오늘' || col.auto.value === '');
-    valueText = isTodayDynamic ? `오늘 (${resolved})` : resolved || '(빈값)';
-  } else if (col.auto.kind === 'fixed') {
-    valueText = col.auto.value || '(빈값)';
-  } else if (col.auto.kind === 'options') {
-    valueText = col.auto.selected.length > 0 ? col.auto.selected.join(', ') : '(미선택)';
-  } else {
-    valueText = '';
+    return isTodayDynamic ? `오늘 (${resolved})` : resolved || '(빈값)';
   }
+  if (col.auto.kind === 'fixed') return col.auto.value || '(빈값)';
+  if (col.auto.kind === 'options') {
+    return col.auto.selected.length > 0 ? col.auto.selected.join(', ') : '(미선택)';
+  }
+  return '';
+}
+
+/** v0.20.0 설정탭#1 — 게이트 컬럼별 상세 한 줄. 값/범위·알람조건·이상값 범위를 columns에서 파생.
+ *  v0.32.0 B1 — 무스크롤 게이트에 맞춰 밀도 압축(패딩 4px·본문 12px). ≤12컬럼 경로 전용. */
+function ColumnDetailRow({ col }: { col: Column }) {
+  const valueText = columnValueText(col);
   const trendText =
     col.trendRule === 'increase' ? '증가' : col.trendRule === 'decrease' ? '감소' : null;
   const pctText =
@@ -2264,12 +2389,12 @@ function ColumnDetailRow({ col }: { col: Column }) {
     <div
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 8px', borderRadius: 8, background: 'rgba(255,255,255,0.02)',
+        padding: '4px 8px', borderRadius: 8, background: 'rgba(255,255,255,0.02)',
       }}
     >
       <span
         style={{
-          fontSize: 13, fontWeight: 800, color: T.text, flexShrink: 0,
+          fontSize: 12, fontWeight: 800, color: T.text, flexShrink: 0,
           maxWidth: 96, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}
         title={col.name}
@@ -2278,7 +2403,7 @@ function ColumnDetailRow({ col }: { col: Column }) {
       </span>
       <span
         style={{
-          fontSize: 11, fontWeight: 700, color: T.textMute, flexShrink: 0,
+          fontSize: 10, fontWeight: 700, color: T.textMute, flexShrink: 0,
           padding: '1px 7px', borderRadius: 999, border: `1px solid ${T.line}`,
         }}
       >
@@ -2286,7 +2411,7 @@ function ColumnDetailRow({ col }: { col: Column }) {
       </span>
       <span
         style={{
-          flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: T.textDim,
+          flex: 1, minWidth: 0, fontSize: 12, fontWeight: 700, color: T.textDim,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace', letterSpacing: -0.2,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right',
         }}
@@ -2297,7 +2422,7 @@ function ColumnDetailRow({ col }: { col: Column }) {
       {trendText && (
         <span
           style={{
-            fontSize: 11, fontWeight: 800, color: T.amber, flexShrink: 0,
+            fontSize: 10, fontWeight: 800, color: T.amber, flexShrink: 0,
             padding: '1px 7px', borderRadius: 999, background: 'rgba(255,179,0,0.12)',
           }}
         >
@@ -2307,7 +2432,7 @@ function ColumnDetailRow({ col }: { col: Column }) {
       {pctText && (
         <span
           style={{
-            fontSize: 11, fontWeight: 800, color: T.red, flexShrink: 0,
+            fontSize: 10, fontWeight: 800, color: T.red, flexShrink: 0,
             padding: '1px 7px', borderRadius: 999, background: 'rgba(255,82,82,0.12)',
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
           }}
@@ -2319,26 +2444,415 @@ function ColumnDetailRow({ col }: { col: Column }) {
   );
 }
 
-/** v0.19.0 W3 — 게이트 요약 칩(라벨 + 큰 숫자). 의미색 변경 없음(음성=blue accent). */
+/** v0.32.0 B1 — >12컬럼용 2열 그리드 셀(무스크롤 유지를 위한 고밀도 모드).
+ *  1행: 이름 + 입력방식 pill / 2행: 값·범위(ellipsis, title로 전체값). */
+function ColumnGridCell({ col }: { col: Column }) {
+  const valueText = columnValueText(col);
+  return (
+    <div
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0,
+        padding: '3px 6px', borderRadius: 8, background: 'rgba(255,255,255,0.02)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+        <span
+          style={{
+            flex: 1, minWidth: 0, fontSize: 11, fontWeight: 800, color: T.text,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}
+          title={col.name}
+        >
+          {col.name || '(이름없음)'}
+        </span>
+        <span
+          style={{
+            fontSize: 9, fontWeight: 700, color: T.textMute, flexShrink: 0,
+            padding: '0 6px', borderRadius: 999, border: `1px solid ${T.line}`,
+          }}
+        >
+          {INPUT_LABELS[col.input]}
+        </span>
+      </div>
+      <span
+        style={{
+          fontSize: 11, fontWeight: 700, color: T.textDim, minWidth: 0,
+          fontFamily: 'JetBrains Mono, ui-monospace, monospace', letterSpacing: -0.2,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}
+        title={valueText}
+      >
+        {valueText}
+      </span>
+    </div>
+  );
+}
+
+/** v0.32.0 설정탭 UX(Vance) B1/B2 공용 — 설정 요약 블록(무스크롤): 입력방식 카운트 pill + 세션명 +
+ *  컬럼 목록. 내부 스크롤 금지 — 컬럼 ≤12는 한 줄씩(ColumnDetailRow), >12는 2열 그리드로 밀도 전환.
+ *  게이트('설정값 확인')와 설정 요약 팝업이 같은 컴포넌트를 쓴다(표기 불일치 방지). */
+function SettingsSummary({ columns, totalRows, sessionLabel }: {
+  columns: Column[];
+  totalRows: number;
+  sessionLabel?: string | null;
+}) {
+  const voiceCount = columns.filter((c) => c.input === 'voice').length;
+  const autoCount = columns.filter((c) => c.input === 'auto').length;
+  const touchCount = columns.filter((c) => c.input === 'touch').length;
+  const dense = columns.length > 12;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <SummaryPill label="음성입력" value={voiceCount} accent />
+        <SummaryPill label="자동입력" value={autoCount} />
+        <SummaryPill label="수동입력" value={touchCount} />
+        <SummaryPill label="전체 항목" value={columns.length} />
+        <SummaryPill label="총 행수" value={totalRows} />
+      </div>
+      {sessionLabel && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '7px 12px', borderRadius: 10,
+            background: 'rgba(0,200,83,0.10)', border: '1px solid rgba(0,200,83,0.30)',
+          }}
+        >
+          <span style={{ fontSize: 12, fontWeight: 700, color: T.textDim, flexShrink: 0 }}>
+            세션명
+          </span>
+          <span
+            style={{
+              flex: 1, minWidth: 0, fontSize: 13, fontWeight: 800, color: T.text,
+              fontFamily: 'JetBrains Mono, ui-monospace, monospace', letterSpacing: -0.2,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right',
+            }}
+            title={sessionLabel}
+          >
+            {sessionLabel}
+          </span>
+        </div>
+      )}
+      <div
+        style={{
+          display: dense ? 'grid' : 'flex',
+          ...(dense
+            ? { gridTemplateColumns: '1fr 1fr', gap: 3 }
+            : { flexDirection: 'column' as const, gap: 3 }),
+          border: `1px solid ${T.line}`, borderRadius: 10, padding: 4,
+          background: T.inputBg,
+        }}
+      >
+        {columns.map((c) => (dense ? <ColumnGridCell key={c.id} col={c} /> : <ColumnDetailRow key={c.id} col={c} />))}
+      </div>
+    </div>
+  );
+}
+
+/** v0.19.0 W3 — 게이트 요약 칩(라벨 + 숫자). 의미색 변경 없음(음성=blue accent).
+ *  v0.32.0 B1 — 무스크롤 게이트/팝업에 맞춰 압축(패딩 4px·숫자 15px). */
 function SummaryPill({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
   return (
     <div
       style={{
-        display: 'flex', alignItems: 'baseline', gap: 6,
-        padding: '6px 12px', borderRadius: 10,
+        display: 'flex', alignItems: 'baseline', gap: 5,
+        padding: '4px 10px', borderRadius: 10,
         background: accent ? 'rgba(41,121,255,0.12)' : 'rgba(255,255,255,0.05)',
         border: `1px solid ${accent ? 'rgba(41,121,255,0.35)' : T.line}`,
       }}
     >
-      <span style={{ fontSize: 12, color: accent ? T.blue : T.textDim, fontWeight: 700 }}>{label}</span>
+      <span style={{ fontSize: 11, color: accent ? T.blue : T.textDim, fontWeight: 700 }}>{label}</span>
       <span
         style={{
-          fontSize: 18, fontWeight: 800, color: accent ? T.blue : T.text,
+          fontSize: 15, fontWeight: 800, color: accent ? T.blue : T.text,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace', letterSpacing: -0.5,
         }}
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+// ─── v0.32.0 설정탭 UX(Vance) — 설정 요약 팝업 + 초기화 확인 모달 ─────────────
+
+/** 요약 팝업의 상태 한 줄(라벨 + 값). ok=true면 값이 green, false면 dim. */
+function SummaryStatusRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+      <span style={{ fontSize: 12, fontWeight: 700, color: T.textDim, flexShrink: 0, width: 52 }}>
+        {label}
+      </span>
+      <span
+        style={{
+          flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700,
+          color: ok ? T.green : T.textMute, textAlign: 'right',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}
+        title={value}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/** v0.32.0 B2 — 설정 요약 팝업(설정탭 전용, 닫기 전용, 375×812 무스크롤). 로그인·시트 연결 상태,
+ *  SettingsSummary(게이트와 공용), 다이얼/토글 한 줄, 생성 상태를 한 화면에 모은다.
+ *  '생성됨' 문구는 이 팝업이 열려 있을 때만 DOM에 존재(조건부 마운트) — 기존 text=생성됨 로케이터는
+ *  액션바 버튼만 보는 흐름이라 충돌 없음. */
+function SettingsSummaryModal({
+  googleConnected, userEmail, sheetLabel, columns, totalRows, sessionLabel,
+  recognitionTolerance, ttsRate, fastRecognition, tableGenerated, generatedRows, onClose,
+}: {
+  googleConnected: boolean;
+  userEmail: string | null;
+  sheetLabel: string | null;
+  columns: Column[];
+  totalRows: number;
+  sessionLabel: string;
+  recognitionTolerance: number;
+  ttsRate: number;
+  fastRecognition: boolean;
+  tableGenerated: boolean;
+  generatedRows: number;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      onClick={onClose}
+      data-testid="settings-summary-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="설정 요약"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100,
+        background: 'rgba(0,0,0,0.6)',
+        backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        paddingTop: 'max(16px, env(safe-area-inset-top))',
+        paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
+        paddingLeft: 'max(16px, env(safe-area-inset-left))',
+        paddingRight: 'max(16px, env(safe-area-inset-right))',
+        animation: 'fade-up 200ms ease-out',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        data-testid="settings-summary-card"
+        style={{
+          background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 480, maxHeight: '84vh',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div
+          style={{
+            padding: '14px 16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            borderBottom: `1px solid ${T.line}`,
+          }}
+        >
+          <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>설정 요약</div>
+          <button
+            onClick={onClose}
+            aria-label="닫기"
+            style={{
+              width: 36, height: 36, borderRadius: 18,
+              border: 'none', background: 'rgba(255,255,255,0.06)',
+              color: T.textDim, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            {I.close(18, T.textDim)}
+          </button>
+        </div>
+
+        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <SummaryStatusRow
+              label="Google"
+              value={googleConnected ? `연결됨 · ${userEmail ?? ''}` : '미연결'}
+              ok={googleConnected}
+            />
+            <SummaryStatusRow label="시트" value={sheetLabel ?? '미연결'} ok={!!sheetLabel} />
+            <SummaryStatusRow
+              label="테이블"
+              value={tableGenerated ? `생성됨 · 총 ${generatedRows}행` : '미생성'}
+              ok={tableGenerated}
+            />
+          </div>
+          <SettingsSummary columns={columns} totalRows={totalRows} sessionLabel={sessionLabel} />
+          {/* 다이얼·토글 한 줄 요약(입력탭 다이얼 값 포함 — 설정을 한눈에). */}
+          <div
+            style={{
+              textAlign: 'center', fontSize: 12, fontWeight: 700, color: T.textDim,
+              fontFamily: 'JetBrains Mono, ui-monospace, monospace', letterSpacing: -0.2,
+            }}
+          >
+            인식 {Math.round(recognitionTolerance * 100)}% · 안내 {ttsRate}x · 빠른 인식 {fastRecognition ? 'ON' : 'OFF'}
+          </div>
+        </div>
+
+        <div style={{ padding: '12px 16px', borderTop: `1px solid ${T.line}` }}>
+          <button
+            onClick={onClose}
+            style={{
+              width: '100%', height: 48, borderRadius: 14, border: 'none',
+              background: T.blue, color: '#fff',
+              fontSize: 15, fontWeight: 800, cursor: 'pointer',
+              boxShadow: `0 4px 14px ${T.blueGlow}`,
+            }}
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 초기화 모달의 체크박스 행(44px 터치 타깃, 라벨 전체가 탭 영역). */
+function ResetOptionRow({ checked, onToggle, label, testid }: {
+  checked: boolean;
+  onToggle: () => void;
+  label: string;
+  testid: string;
+}) {
+  return (
+    <label
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10, minHeight: 44,
+        padding: '0 12px', borderRadius: 12, cursor: 'pointer',
+        background: checked ? 'rgba(255,82,82,0.10)' : T.inputBg,
+        border: `1px solid ${checked ? 'rgba(255,82,82,0.45)' : T.line}`,
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        data-testid={testid}
+        style={{ width: 18, height: 18, accentColor: T.red, flexShrink: 0, cursor: 'pointer' }}
+      />
+      <span style={{ fontSize: 14, fontWeight: 700, color: checked ? T.red : T.text, lineHeight: 1.4 }}>
+        {label}
+      </span>
+    </label>
+  );
+}
+
+/** v0.32.0 B3 — 초기화 확인 모달. 무엇이 초기화되고 무엇이 보존되는지 명시한 뒤 실행.
+ *  기본: Google 로그인·시트 URL·저장된 시트 **보존**(민구 확정) — 체크박스로만 opt-in 삭제.
+ *  버튼 문구는 '생성' 부분문자열 금지(hasText:'생성' .last() 헬퍼 보호) — 초기화 실행/취소는 안전. */
+function SettingsResetModal({ onCancel, onConfirm }: {
+  onCancel: () => void;
+  onConfirm: (opts: { clearLogin: boolean; clearSheets: boolean }) => void;
+}) {
+  const [clearLogin, setClearLogin] = useState(false);
+  const [clearSheets, setClearSheets] = useState(false);
+  return (
+    <div
+      onClick={onCancel}
+      data-testid="settings-reset-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="설정 초기화"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100,
+        background: 'rgba(0,0,0,0.6)',
+        backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        paddingTop: 'max(16px, env(safe-area-inset-top))',
+        paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
+        paddingLeft: 'max(16px, env(safe-area-inset-left))',
+        paddingRight: 'max(16px, env(safe-area-inset-right))',
+        animation: 'fade-up 200ms ease-out',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
+          width: '100%', maxWidth: 480, maxHeight: '84vh',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div style={{ padding: '14px 16px', borderBottom: `1px solid ${T.line}` }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: T.text }}>설정 초기화</div>
+          <div style={{ fontSize: 12, color: T.textMute, marginTop: 2 }}>
+            설정탭의 구성을 기본값으로 되돌립니다
+          </div>
+        </div>
+
+        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div
+            style={{
+              padding: '10px 12px', borderRadius: 12,
+              background: 'rgba(255,82,82,0.06)', border: '1px solid rgba(255,82,82,0.25)',
+              fontSize: 13, color: T.text, lineHeight: 1.6, wordBreak: 'keep-all',
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 800, color: T.red, marginBottom: 4 }}>
+              기본값으로 되돌아감
+            </div>
+            컬럼 구성 → 기본 10항목 · 행수 50 · 세션명 설정 · 빠른 인식 OFF ·
+            인식 허용범위 60% · 안내 속도 1.05x · 음성·검토 옵션 · 생성 상태 해제
+          </div>
+          <div
+            style={{
+              padding: '10px 12px', borderRadius: 12,
+              background: 'rgba(0,200,83,0.06)', border: '1px solid rgba(0,200,83,0.25)',
+              fontSize: 13, color: T.text, lineHeight: 1.6, wordBreak: 'keep-all',
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 800, color: T.green, marginBottom: 4 }}>
+              그대로 유지됨
+            </div>
+            Google 로그인 · 시트 URL·저장된 시트 (아래에서 함께 삭제 선택 가능) —
+            세션 데이터·클립·로그는 영향 없음
+          </div>
+          <ResetOptionRow
+            checked={clearLogin}
+            onToggle={() => setClearLogin((v) => !v)}
+            label="Google 로그인도 해제"
+            testid="settings-reset-clear-login"
+          />
+          <ResetOptionRow
+            checked={clearSheets}
+            onToggle={() => setClearSheets((v) => !v)}
+            label="시트 URL·저장된 시트도 삭제"
+            testid="settings-reset-clear-sheets"
+          />
+        </div>
+
+        <div style={{ padding: '12px 16px', borderTop: `1px solid ${T.line}`, display: 'flex', gap: 10 }}>
+          <button
+            onClick={onCancel}
+            autoFocus
+            style={{
+              flex: 1, height: 48, borderRadius: 14,
+              border: `1px solid ${T.lineStrong}`, background: 'transparent',
+              color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            취소
+          </button>
+          <button
+            onClick={() => onConfirm({ clearLogin, clearSheets })}
+            data-testid="settings-reset-confirm"
+            style={{
+              flex: 2, height: 48, borderRadius: 14, border: 'none',
+              background: T.red, color: '#fff',
+              fontSize: 15, fontWeight: 800, cursor: 'pointer',
+              boxShadow: '0 4px 14px rgba(255,82,82,0.32)',
+            }}
+          >
+            초기화 실행
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

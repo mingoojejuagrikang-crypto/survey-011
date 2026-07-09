@@ -86,9 +86,54 @@ export class SpeechController {
    *  스피커 잔향/리버브가 마이크로 새어 들어와 가짜 final로 수락되는 빈틈을 닫기 위해,
    *  useVoiceSession이 종료 후 짧은 가드 윈도우 동안 입력을 추가로 차단한다. 0 = TTS 종료 이력 없음. */
   private ttsEndedAt = 0;
+  /** P0(영구 인식사멸): muteForTts가 대기 중 재시작 타이머를 취소하면 true — TTS 종료
+   *  (unmuteForTts) 시 반드시 재예약해야 한다. 이 플래그가 없던 시절, iOS가 TTS 재생 중
+   *  인식기를 죽이면(end→100ms 타이머) 그 타이머를 mute가 취소한 채 아무도 되살리지 않아
+   *  세션 끝까지 STT 무음이었다(실기기 로그: "이전" 재진입 TTS 연발 → 5분 STT 0건). */
+  private restartPendingAfterTts = false;
+  /** 인식기 실제 가동 여부: 'start' 이벤트에 true, 'end'에 false. ('error' 후엔 스펙상
+   *  항상 'end'가 따라오므로 error에선 건드리지 않는다.) watchdog의 좀비 판정 근거. */
+  private recRunning = false;
+  /** 마지막 rec.start() 시도 시각(ms). watchdog이 "시도 후 응답 없음" 판정에 쓴다. */
+  private lastStartAttemptAt = 0;
+  /** 재시작 지연(ms). 기본 base에서 시작, start() throw마다 ×2(상한 5000), 'start' 성공 시 리셋. */
+  private restartDelayMs: number;
+  private readonly baseRestartDelayMs: number;
+  private readonly watchdogIntervalMs: number;
+  private watchdogTimer: number | null = null;
+  /** lifecycle 텔레메트리 스로틀 상태 (kind별 마지막 기록 시각 + 억제 카운트). */
+  private lifecycleLastLoggedAt: Record<string, number> = {};
+  private lifecycleSuppressed: Record<string, number> = {};
 
-  constructor(cb: SpeechCallbacks) {
+  constructor(cb: SpeechCallbacks, opts?: { restartDelayMs?: number; watchdogIntervalMs?: number }) {
     this.cb = cb;
+    this.baseRestartDelayMs = opts?.restartDelayMs ?? 100;
+    this.restartDelayMs = this.baseRestartDelayMs;
+    this.watchdogIntervalMs = opts?.watchdogIntervalMs ?? 4000;
+  }
+
+  /** 인식기 수명주기 텔레메트리. 사멸 시그니처(항상 기록)와 고빈도 이벤트(10초 스로틀 +
+   *  suppressed 카운트 동봉 — 2000엔트리 링버퍼 보호, v0.15.0 stt_early_commit의 전이-시에만
+   *  기록 패턴 계보)를 구분한다. row/colId는 의도적으로 붙이지 않는다(clipsManifest의
+   *  row+colId 조인을 오염시키지 않기 위해). */
+  private logLifecycle(kind: string, always = false) {
+    if (always) {
+      logger.log({ type: 'stt', extra: `lifecycle:${kind}` });
+      return;
+    }
+    const now = Date.now();
+    const last = this.lifecycleLastLoggedAt[kind] ?? 0;
+    if (now - last < 10_000) {
+      this.lifecycleSuppressed[kind] = (this.lifecycleSuppressed[kind] ?? 0) + 1;
+      return;
+    }
+    const suppressed = this.lifecycleSuppressed[kind] ?? 0;
+    this.lifecycleLastLoggedAt[kind] = now;
+    this.lifecycleSuppressed[kind] = 0;
+    logger.log({
+      type: 'stt',
+      extra: `lifecycle:${kind}${suppressed > 0 ? `,suppressed=${suppressed}` : ''}`,
+    });
   }
 
   /** Called when TTS utterance starts — marks STT muted but keeps recognition alive
@@ -100,6 +145,10 @@ export class SpeechController {
     if (this.restartingTimer !== null) {
       window.clearTimeout(this.restartingTimer);
       this.restartingTimer = null;
+      // P0: 취소한 재시작은 unmuteForTts에서 반드시 재예약한다 — 이 플래그 없이는
+      // 인식기 죽음+타이머 취소 조합이 영구 STT 사멸로 이어진다(사멸 시그니처, 항상 기록).
+      this.restartPendingAfterTts = true;
+      this.logLifecycle('restart_cancelled_by_mute', true);
     }
   }
 
@@ -108,6 +157,12 @@ export class SpeechController {
   unmuteForTts() {
     this.ttsMuted = false;
     this.ttsEndedAt = Date.now();
+    // P0: muteForTts가 취소했던 재시작을 여기서 되살린다.
+    if (this.active && this.restartPendingAfterTts) {
+      this.restartPendingAfterTts = false;
+      this.logLifecycle('restart_resched_after_tts', true);
+      this.scheduleRestart();
+    }
   }
 
   /** True while TTS is actively playing — used by handleFinal to filter value inputs. */
@@ -131,9 +186,11 @@ export class SpeechController {
     }
     this.active = true;
     this.bind();
+    this.startWatchdog();
     try {
+      this.lastStartAttemptAt = Date.now();
       this.rec.start();
-    } catch (e) {
+    } catch {
       // recognition already started — schedule restart
       this.scheduleRestart();
     }
@@ -143,9 +200,16 @@ export class SpeechController {
     this.active = false;
     this.ttsMuted = false;
     this.ttsEndedAt = 0;
+    this.restartPendingAfterTts = false;
+    this.recRunning = false;
+    this.restartDelayMs = this.baseRestartDelayMs;
     if (this.restartingTimer !== null) {
       window.clearTimeout(this.restartingTimer);
       this.restartingTimer = null;
+    }
+    if (this.watchdogTimer !== null) {
+      window.clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
     }
     try { this.rec?.abort(); } catch { /* ignore */ }
     this.rec = null;
@@ -165,6 +229,9 @@ export class SpeechController {
     const rec = this.rec;
 
     const onResult = (raw: Event) => {
+      // stale-instance 가드: 버려진 구 인식기 인스턴스의 늦은 이벤트가 중복 재시작(이중 start)을
+      // 예약하지 못하게, 현재 인스턴스가 아니면 무시한다(onError/onStart/onEnd 동일).
+      if (this.rec !== rec) return;
       const e = raw as SREvent;
       const r = e.results[e.results.length - 1];
       const final = r.isFinal;
@@ -198,11 +265,24 @@ export class SpeechController {
       else this.cb.onInterim?.(text);
     };
     const onError = (e: Event) => {
+      if (this.rec !== rec) return;
       const err = (e as unknown as { error?: string }).error || 'unknown';
+      this.logLifecycle(`error:${err}`, true);
       this.cb.onError?.(err);
     };
-    const onStart = () => this.cb.onStart?.();
+    const onStart = () => {
+      if (this.rec !== rec) return;
+      this.recRunning = true;
+      // 성공적으로 가동됐으니 백오프를 기본값으로 리셋.
+      this.restartDelayMs = this.baseRestartDelayMs;
+      this.logLifecycle('start');
+      this.cb.onStart?.();
+    };
     const onEnd = () => {
+      if (this.rec !== rec) return;
+      // 'error' 후엔 스펙상 항상 'end'가 따라오므로 recRunning은 여기서만 내린다.
+      this.recRunning = false;
+      this.logLifecycle('end');
       this.cb.onEnd?.();
       if (this.active) this.scheduleRestart();
     };
@@ -213,21 +293,55 @@ export class SpeechController {
     rec.addEventListener('end', onEnd);
   }
 
-  private scheduleRestart(delay = 100) {
+  private scheduleRestart(delay = this.restartDelayMs) {
     // v5.2: STT must keep running during TTS so command keywords still work.
     // ttsMuted is no longer a guard here — handleFinal filters non-command results during TTS.
     if (this.restartingTimer !== null) return;
     this.restartingTimer = window.setTimeout(() => {
       this.restartingTimer = null;
       if (!this.active) return;
-      try {
-        this.rec = createRecognition();
-        if (this.rec) {
-          this.bind();
-          this.rec.start();
-        }
-      } catch { /* try again next tick */ }
+      this.attemptStart();
     }, delay);
+    this.logLifecycle('restart_scheduled');
+  }
+
+  /** 인식기 재생성+start 본체 (scheduleRestart 타이머와 watchdog이 공유).
+   *  P0-2: 구 코드는 rec.start() throw를 빈 catch로 삼키고 재시도하지 않아("try again next
+   *  tick"이라는 주석과 달리 다음 tick이 없음) 두 번째 영구사멸 경로였다. 실패 시 백오프
+   *  (×2, 상한 5000ms)로 **무한** 재예약한다 — 재시도 상한을 두면 사멸 경로가 되살아난다. */
+  private attemptStart() {
+    try {
+      this.rec = createRecognition();
+      if (!this.rec) throw new Error('createRecognition failed');
+      this.bind();
+      this.lastStartAttemptAt = Date.now();
+      this.rec.start();
+    } catch {
+      this.restartDelayMs = Math.min(this.restartDelayMs * 2, 5000);
+      this.logLifecycle(`restart_retry:delay=${this.restartDelayMs}`, true);
+      this.scheduleRestart(this.restartDelayMs);
+    }
+  }
+
+  /** 최후 방어선 watchdog: "재시작 예약도, TTS 대기도 없는데 인식기가 죽어 있는" 상태 —
+   *  즉 어떤 이벤트도 다시 오지 않아 스스로 복구 불가능한 좀비 — 를 주기적으로 감지해 강제
+   *  부활시킨다. 의도적으로 visibilitychange 리스너는 두지 않는다: iOS에서 포그라운드 복귀
+   *  시 OS가 죽인 인식기는 다음 tick이 어차피 되살리고, 리스너는 해제 누수 표면만 늘린다. */
+  private startWatchdog() {
+    if (this.watchdogTimer !== null) return;
+    this.watchdogTimer = window.setInterval(() => this.watchdogTick(), this.watchdogIntervalMs);
+  }
+
+  private watchdogTick() {
+    if (!this.active) return;                    // 세션 꺼짐
+    if (this.ttsMuted) return;                   // TTS 재생 중 — unmute 경로가 처리
+    if (this.restartingTimer !== null) return;   // 이미 재시작 예약됨
+    if (this.restartPendingAfterTts) return;     // unmuteForTts가 재예약할 예정
+    if (this.recRunning) return;                 // 정상 가동 중
+    if (Date.now() - this.lastStartAttemptAt <= this.watchdogIntervalMs) return; // 시도 직후 유예
+    this.logLifecycle('watchdog_restart', true);
+    try { this.rec?.abort(); } catch { /* ignore */ }
+    this.attemptStart();
   }
 }
 

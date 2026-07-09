@@ -620,13 +620,20 @@ test('[설정] 테이블 미리보기 팝업 내용 검증', async ({ page }) =>
   await generateBtn.click();
   await page.waitForTimeout(400);
 
-  // 미리보기 팝업 내 "테이블 미리보기" 헤더
-  const previewHeader = page.locator('text=테이블 미리보기').first();
-  const previewVisible = await previewHeader.isVisible().catch(() => false);
-  if (!previewVisible) {
-    console.log('ℹ 미리보기 팝업 없음 (컬럼 설정 미완성) — 스킵');
+  // v0.32.0 설정탭 UX — 생성 클릭은 무스크롤 '설정값 확인' 게이트를 연다(테이블 본문 없음).
+  // 실제 테이블 미리보기는 게이트 안의 "생성될 테이블 미리보기" 버튼으로 게이트 위에 오버레이.
+  // (이 테스트는 v0.19.0 게이트 도입 이후 soft-skip으로 죽어 있었다 — 새 버튼으로 원래 의도 복원.)
+  const gatePreviewBtn = page.locator('button', { hasText: '생성될 테이블 미리보기' });
+  if (!(await gatePreviewBtn.isVisible().catch(() => false))) {
+    console.log('ℹ 게이트/미리보기 버튼 없음 (컬럼 설정 미완성) — 스킵');
     return;
   }
+  await gatePreviewBtn.click();
+  await page.waitForTimeout(300);
+
+  // 미리보기 팝업 내 "테이블 미리보기" 헤더(정확 일치 — 게이트 버튼 문구와 구분)
+  const previewHeader = page.getByText('테이블 미리보기', { exact: true });
+  await expect(previewHeader).toBeVisible({ timeout: 2000 });
   console.log('✓ 테이블 미리보기 팝업 열림');
 
   // 팝업 내 행 수 확인
@@ -636,14 +643,19 @@ test('[설정] 테이블 미리보기 팝업 내용 검증', async ({ page }) =>
     console.log('✓ 미리보기에 1~3행 데이터 표시 확인');
   }
 
-  // 확인 버튼으로 닫기
-  const confirmBtn = page.locator('text=확인').last();
+  // 확인 버튼으로 미리보기 닫기(게이트는 유지) → 게이트는 "취소"로 닫기
+  const confirmBtn = page.locator('[data-testid="table-preview-card"] button', { hasText: '확인' });
   await confirmBtn.click();
   await page.waitForTimeout(200);
 
   const previewAfterClose = await previewHeader.isVisible().catch(() => false);
   expect(previewAfterClose).toBe(false);
   console.log('✓ 확인 버튼으로 미리보기 팝업 닫힘');
+
+  await page.locator('[data-testid="gate-card"] button', { hasText: '취소' }).click();
+  await page.waitForTimeout(200);
+  expect(await page.locator('[data-testid="gate-card"]').isVisible().catch(() => false)).toBe(false);
+  console.log('✓ 게이트 취소로 닫힘(미생성)');
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
