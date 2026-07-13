@@ -149,7 +149,7 @@ type LogEv = { type?: string; extra?: string; ttsText?: string; confidence?: num
 async function loadLogEvents(page: Page): Promise<LogEv[]> {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 4);
+      const r = indexedDB.open('survey-011', 6);
       r.onsuccess = () => res(r.result);
       r.onerror = () => res(null);
     });
@@ -200,8 +200,10 @@ test('B1 — 이상치 카드가 중앙 흡수영역 안에 렌더 + 375px 긴�
   const card = page.locator('[data-testid="anomaly-alert"]');
   await expect(card).toBeVisible({ timeout: 3000 });
   await expect(card).toContainText('-355.5');
-  await expect(card).toContainText('확인 또는 수정');
-  console.log('✓ 이상치 카드 표시 + 음수소수/행동 안내 포함');
+  // v0.33.0 항목7 — "확인 또는 수정" 텍스트 힌트는 [확인][수정] 터치 버튼으로 대체.
+  await expect(card.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+  await expect(card.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
+  console.log('✓ 이상치 카드 표시 + 음수소수/행동 버튼 포함');
 
   const m = await absorbTrackMetrics(page, 'anomaly-alert');
   expect(m).not.toBeNull();

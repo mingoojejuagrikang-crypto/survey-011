@@ -12,7 +12,7 @@ test.setTimeout(60_000);
 
 const BASE = 'http://localhost:5175';
 const DB_NAME = 'survey-011';
-const DB_VERSION = 4;
+const DB_VERSION = 6; // 앱 db.ts DB_VERSION과 일치해야 함(낮으면 VersionError)
 
 // ─── Mock STT / TTS init script ──────────────────────────────────────────────
 
@@ -150,6 +150,8 @@ async function injectSessionAndReload(page: Page, sessionData: object) {
           logs.createIndex('bySessionId', 'sessionId');
         }
         if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv'); // v0.14.0 C
+        if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots'); // v0.33.0 10-B
+        if (!db.objectStoreNames.contains('feedbackQueue')) db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true }); // v0.33.0 항목11
       };
     });
   }, { dbName: DB_NAME, dbVersion: DB_VERSION, session: sessionData });

@@ -4,7 +4,9 @@ import { I, AuthMark } from '../components/icons';
 import { Chip } from '../components/Chip';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { makeSettingsDefaults, useSettingsStore } from '../stores/settingsStore';
-import { saveSheetsRecord } from '../lib/db';
+import { saveSheetsRecord, deletePastIndexBackup } from '../lib/db';
+import { prefetchPastIndex, resetPastIndexRetries } from '../lib/pastValues';
+import { ConnectionStatusCard } from '../components/ConnectionStatusCard';
 import type { Column, DataType } from '../types';
 import {
   getCurrentEmail,
@@ -28,11 +30,13 @@ import { buildSessionLabel, sessionConstantValue } from '../lib/sessionLabel';
 import { getPickerApiKey, openDrivePicker } from '../lib/drivePicker';
 import { getAccessToken } from '../lib/googleAuth';
 import { getKoreanVoices, refreshVoices, setPreferredVoiceName, speak, warmupTts } from '../lib/speech';
+import { previewBeep } from '../lib/beep';
+import { BEEP_VARIANTS, type BeepPolarity } from '../lib/beepVariants';
 import { logger } from '../lib/logger';
 import { isTrendEligible } from '../lib/columnFlags';
 import { usePwaUpdate, applyUpdate, checkForUpdateNow } from '../lib/pwaUpdate';
 import { HelpButton, SettingsHelpModal } from '../components/settings/SettingsHelp';
-import { COLUMN_HELP, FIRST_ENTRY_TIP, SETTINGS_TIP_SEEN_KEY } from '../components/settings/helpCopy';
+import { COLUMN_HELP, DATA_TYPE_HELP, FIRST_ENTRY_TIP, SETTINGS_TIP_SEEN_KEY } from '../components/settings/helpCopy';
 
 const TYPE_ORDER: DataType[] = ['date', 'text', 'int', 'float', 'options'];
 
@@ -853,6 +857,59 @@ function TtsVoiceSelector() {
   );
 }
 
+/** v0.33.0 항목10-C(Vance) — 비프음 선택. 긍정(값 수용)/부정(이상치 알람) 각 5칩, 탭 = 미리듣기 +
+ *  선택(민구 확정). 칩은 aria-pressed 토글(옵션 순번 칩 접근성 패턴), 44px 터치 타깃(장갑). */
+function BeepPicker() {
+  const s = useSettingsStore();
+  const rows: { polarity: BeepPolarity; label: string; selectedId: string; storeKey: 'beepPositiveId' | 'beepNegativeId' }[] = [
+    { polarity: 'positive', label: '확인음 (값 저장)', selectedId: s.beepPositiveId, storeKey: 'beepPositiveId' },
+    { polarity: 'negative', label: '경고음 (이상치)', selectedId: s.beepNegativeId, storeKey: 'beepNegativeId' },
+  ];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }} data-testid="beep-picker">
+      {rows.map((row) => (
+        <div key={row.polarity} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>{row.label}</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {BEEP_VARIANTS.filter((v) => v.polarity === row.polarity).map((v) => {
+              const active = row.selectedId === v.id;
+              return (
+                <button
+                  key={v.id}
+                  data-testid={`beep-chip-${v.id}`}
+                  aria-pressed={active}
+                  aria-label={`${row.label} ${v.label}${active ? ' (선택됨)' : ''}`}
+                  onClick={() => {
+                    previewBeep(v); // 탭 = 즉시 미리듣기(사용자 제스처 안 — AudioContext resume 안전)
+                    if (!active) {
+                      s.set({ [row.storeKey]: v.id } as Partial<{ beepPositiveId: string; beepNegativeId: string }>);
+                      logger.log({ type: 'app', extra: `beep_changed:${row.polarity}=${v.id}` });
+                    }
+                  }}
+                  style={{
+                    minHeight: 44, padding: '0 14px', borderRadius: 12,
+                    border: `1px solid ${active ? T.blue : T.lineStrong}`,
+                    background: active ? 'rgba(41,121,255,0.14)' : T.inputBg,
+                    color: active ? T.blue : T.textDim,
+                    fontSize: 14, fontWeight: active ? 800 : 600,
+                    cursor: 'pointer', letterSpacing: -0.1,
+                  }}
+                >
+                  {v.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
+        칩을 누르면 소리를 미리 들려주고 그 소리로 선택됩니다. 확인음은 값이 저장될 때,
+        경고음은 이상치 알람이 뜰 때 울립니다.
+      </div>
+    </div>
+  );
+}
+
 /** S-2: result popup for "타입 검토" — lists columns whose saved type ≠ sheet's data type. */
 function TypeReviewModal({
   checked, mismatches, onApplyAll, onClose,
@@ -870,11 +927,11 @@ function TypeReviewModal({
         position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         // v0.21.0 설정탭#2 — standalone PWA safe-area(노치/상태바/홈인디케이터 침범 방지). backdrop
-        //   패딩에 env(safe-area-inset-*) 흡수. Safari 탭에선 env(...)=0이라 기존 24px 유지.
-        paddingTop: 'max(24px, env(safe-area-inset-top))',
-        paddingBottom: 'max(24px, env(safe-area-inset-bottom))',
-        paddingLeft: 'max(24px, env(safe-area-inset-left))',
-        paddingRight: 'max(24px, env(safe-area-inset-right))',
+        //   패딩에 safe-area 변수(global.css SSOT) 흡수. Safari 탭에선 0이라 기존 24px 유지.
+        paddingTop: 'max(24px, var(--sat))',
+        paddingBottom: 'max(24px, var(--sab))',
+        paddingLeft: 'max(24px, var(--sal))',
+        paddingRight: 'max(24px, var(--sar))',
       }}
     >
       <div
@@ -1218,6 +1275,8 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
 
   // 게이트 열기 — 생성/재생성 모두 동일 경로. 부수효과는 onGenerateConfirm까지 미룬다.
   const onGenerate = () => {
+    // v0.33.0 B-10 — 생성 게이트 열림 계측(생성 퍼널 가시화 — 이전엔 무로깅).
+    logger.log({ type: 'command', parsed: 'ui_open', extra: 'generate_gate' });
     setGenerateGateOpen(true);
   };
 
@@ -1226,6 +1285,13 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
     const total = computeTotalRows(s.columns);
     const sessionAutoLabel = prospectiveSessionLabel();
     s.set({ tableGenerated: true, totalRows: total, sessionAutoLabel });
+    // v0.33.0 항목5 — 테이블 생성 시점 프리페치(세션 시작 start()와 동일 조건). 생성 직후엔 대개
+    // 토큰이 살아 있으므로 여기서 미리 당겨 두면, 세션 시작이 늦어져 토큰이 만료돼도 IDB
+    // write-through 스냅샷이 폴백으로 남는다(07-13 §4 침묵 창 축소).
+    const anyAnomalyRule = s.columns.some(
+      (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
+    );
+    if (anyAnomalyRule && getAccessToken()) { resetPastIndexRetries(); prefetchPastIndex(); }
     setGenerateGateOpen(false);
   };
 
@@ -1241,6 +1307,10 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
       ttsRate: d.ttsRate,
       recognitionTolerance: d.recognitionTolerance,
       fastRecognition: d.fastRecognition,
+      // v0.33.0 항목10 — 자동 캡처·비프음 선택도 기본값으로(초기화 SSOT = makeSettingsDefaults).
+      autoScreenCapture: d.autoScreenCapture,
+      beepPositiveId: d.beepPositiveId,
+      beepNegativeId: d.beepNegativeId,
       manualMode: d.manualMode,
       preferredVoiceName: d.preferredVoiceName,
       sessionLabelColId: d.sessionLabelColId,
@@ -1264,6 +1334,9 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
       s.set({ sheetUrl: '', sheet: null, sheetTab: '', availableSheets: [], savedSheets: [] });
       // 전용 IDB 레코드(onRehydrateStorage 복원 경로)도 함께 비운다 — 안 비우면 다음 부팅에서 되살아남.
       void saveSheetsRecord({ savedSheets: [], sheetUrl: '', updatedAt: Date.now() });
+      // v0.33.0 항목5 — 과거값 인덱스 영속 스냅샷도 함께 삭제(시트를 지웠으면 그 시트의 비교선도
+      // 무의미 — fp 불일치로 어차피 안 쓰이지만 데이터 위생).
+      void deletePastIndexBackup();
       setConfirmedUrl('');
     }
     // 첫 진입 안내 배너 재노출(초기화 = 처음부터 다시 시작하는 사용자).
@@ -1345,7 +1418,11 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
           <button
             type="button"
             data-testid="settings-summary-open"
-            onClick={() => setSummaryOpen(true)}
+            onClick={() => {
+              // v0.33.0 B-10 — 설정 요약 팝업 열림 계측.
+              logger.log({ type: 'command', parsed: 'ui_open', extra: 'settings_summary' });
+              setSummaryOpen(true);
+            }}
             style={{
               flex: 1, minHeight: 40, borderRadius: 12,
               border: `1px solid ${T.lineStrong}`, background: T.card,
@@ -1684,6 +1761,12 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
           </div>
         </div>
 
+        {/* v0.33.0 항목5 — 연결 3상태 분리 표시(07-10 QA P1 #1): Google 연결(토큰 실시간 판정,
+            [AUTH-7] stale 표시 해소) / 시트 연결 / 과거값 준비(+재시도). 입력탭 시작 카드와 공용. */}
+        <div style={{ marginTop: 10, paddingLeft: 16, paddingRight: 16 }}>
+          <ConnectionStatusCard />
+        </div>
+
         {/* Section 2 - Column list */}
         <div
           style={{
@@ -1912,6 +1995,53 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
               확정하므로 소수점을 늦게 말하면 잘릴 수 있습니다. 실험 기능이라 기본은 꺼져 있습니다.
             </div>
 
+            {/* v0.33.0 항목10-B — 입력화면 자동 캡처 토글(기본 on, 민구 확정). 트리거/가드/저장은
+                src/lib/screenshot.ts가 SSOT — 여기는 스위치만. 빠른 인식 토글 패턴 재사용. */}
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 10, marginTop: 10,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+                입력화면 자동 캡처
+              </div>
+              <button
+                data-testid="auto-capture-toggle"
+                aria-pressed={s.autoScreenCapture}
+                onClick={() => {
+                  const next = !s.autoScreenCapture;
+                  s.set({ autoScreenCapture: next });
+                  logger.log({ type: 'app', extra: `setting_changed:autoScreenCapture=${next}` });
+                }}
+                style={{
+                  width: 60, height: 32, borderRadius: 16,
+                  background: s.autoScreenCapture ? T.blue : '#2A2D32',
+                  border: 'none', cursor: 'pointer',
+                  position: 'relative',
+                }}
+                title="음성 입력에 앱이 반응하는 순간의 화면을 저화질로 저장해 로그와 함께 남깁니다"
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 4, left: s.autoScreenCapture ? 32 : 4,
+                    width: 24, height: 24, borderRadius: 12,
+                    background: '#fff',
+                    transition: 'left 150ms ease',
+                  }}
+                />
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
+              값 저장·알람·재질문 같은 순간의 화면을 저화질 사진으로 남겨 음성 로그와 함께 백업합니다.
+              세션당 최대 100장, 2초에 1장 이하로만 저장돼 측정을 느리게 하지 않습니다.
+            </div>
+
+            {/* v0.33.0 항목10-C — 비프음 선택(긍정/부정 각 5종 중 1, 민구 확정). 탭 = 미리듣기 + 선택.
+                세그먼트 스펙은 beepVariants.ts, 재생 해석(kind→극성→변형)은 beep.ts가 SSOT. */}
+            <BeepPicker />
+
             {/* v0.8.0 — 추세 검증 전역 마스터 토글 제거(이상치 알람은 컬럼별 규칙 유무로 활성).
                 조사시기(회차) 컬럼 선택은 조회탭으로 이전(WS4) — roundDateColId 필드는 유지. */}
 
@@ -1959,7 +2089,11 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
           {s.tableGenerated ? (
             <>
               <button
-                onClick={() => setTablePreviewOpen(true)}
+                onClick={() => {
+                  // v0.33.0 B-10 — 미리보기 팝업 열림 계측(생성 후 '미리보기' 버튼 경로).
+                  logger.log({ type: 'command', parsed: 'ui_open', extra: 'table_preview' });
+                  setTablePreviewOpen(true);
+                }}
                 style={{
                   flex: 1, height: 56, borderRadius: 28,
                   background: 'rgba(0,200,83,0.12)',
@@ -2035,7 +2169,11 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
           sessionLabel={prospectiveSessionLabel()}
           regenerating={s.tableGenerated}
           onConfirm={onGenerateConfirm}
-          onOpenPreview={() => setTablePreviewOpen(true)}
+          onOpenPreview={() => {
+            // v0.33.0 B-10 — 게이트 안 "생성될 테이블 미리보기" 경로도 동일 계측.
+            logger.log({ type: 'command', parsed: 'ui_open', extra: 'table_preview' });
+            setTablePreviewOpen(true);
+          }}
           onClose={() => setGenerateGateOpen(false)}
         />
       )}
@@ -2089,10 +2227,11 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
 
       {/* v0.23.0 설정탭#4(Vance) — 설명 팝업. 카드별 `?` 또는 첫 진입 안내의 "자세히 보기"에서 연다.
           모든 데이터형/필드 설명을 한 곳에 모은다(COLUMN_HELP). 사용자 명시 오픈 → 자동 노출 아님. */}
+      {/* v0.33.0 항목10-A — 데이터형 6종 설명(DATA_TYPE_HELP)을 같은 팝업에 이어 통합. */}
       {helpOpen && (
         <SettingsHelpModal
           title="설정 도움말"
-          items={COLUMN_HELP}
+          items={[...COLUMN_HELP, ...DATA_TYPE_HELP]}
           onClose={() => setHelpOpen(false)}
         />
       )}
@@ -2134,12 +2273,12 @@ function TablePreviewModal({
         WebkitBackdropFilter: 'blur(4px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         // v0.21.0 설정탭#2 — standalone PWA safe-area. position:fixed라 phoneStyle 셸 패딩을 벗어나므로
-        //   노치/상태바/홈인디케이터를 침범했다. backdrop 패딩에 env(safe-area-inset-*)를 흡수(중앙
-        //   정렬 카드가 inset만큼 안쪽으로 들어옴). 일반 Safari 탭에선 env(...)=0이라 기존 16px 유지.
-        paddingTop: 'max(16px, env(safe-area-inset-top))',
-        paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
-        paddingLeft: 'max(16px, env(safe-area-inset-left))',
-        paddingRight: 'max(16px, env(safe-area-inset-right))',
+        //   노치/상태바/홈인디케이터를 침범했다. backdrop 패딩에 safe-area 변수(global.css SSOT)를
+        //   흡수(중앙 정렬 카드가 inset만큼 안쪽으로 들어옴). 일반 Safari 탭에선 0이라 기존 16px 유지.
+        paddingTop: 'max(16px, var(--sat))',
+        paddingBottom: 'max(16px, var(--sab))',
+        paddingLeft: 'max(16px, var(--sal))',
+        paddingRight: 'max(16px, var(--sar))',
         animation: 'fade-up 200ms ease-out',
       }}
     >
@@ -2629,10 +2768,10 @@ function SettingsSummaryModal({
         background: 'rgba(0,0,0,0.6)',
         backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        paddingTop: 'max(16px, env(safe-area-inset-top))',
-        paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
-        paddingLeft: 'max(16px, env(safe-area-inset-left))',
-        paddingRight: 'max(16px, env(safe-area-inset-right))',
+        paddingTop: 'max(16px, var(--sat))',
+        paddingBottom: 'max(16px, var(--sab))',
+        paddingLeft: 'max(16px, var(--sal))',
+        paddingRight: 'max(16px, var(--sar))',
         animation: 'fade-up 200ms ease-out',
       }}
     >
@@ -2763,10 +2902,10 @@ function SettingsResetModal({ onCancel, onConfirm }: {
         background: 'rgba(0,0,0,0.6)',
         backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        paddingTop: 'max(16px, env(safe-area-inset-top))',
-        paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
-        paddingLeft: 'max(16px, env(safe-area-inset-left))',
-        paddingRight: 'max(16px, env(safe-area-inset-right))',
+        paddingTop: 'max(16px, var(--sat))',
+        paddingBottom: 'max(16px, var(--sab))',
+        paddingLeft: 'max(16px, var(--sal))',
+        paddingRight: 'max(16px, var(--sar))',
         animation: 'fade-up 200ms ease-out',
       }}
     >

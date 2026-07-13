@@ -117,7 +117,7 @@ async function bootApp(page: Page, { localSession }: { localSession?: unknown } 
     }));
     if (sess) {
       await new Promise<void>((resolve) => {
-        const open = indexedDB.open('survey-011', 4);
+        const open = indexedDB.open('survey-011', 6);
         open.onupgradeneeded = () => {
           const db = open.result;
           if (!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions', { keyPath: 'id' });
@@ -127,6 +127,8 @@ async function bootApp(page: Page, { localSession }: { localSession?: unknown } 
             os.createIndex('bySessionId', 'sessionId');
           }
           if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv'); // v0.14.0 C
+          if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots'); // v0.33.0 10-B
+          if (!db.objectStoreNames.contains('feedbackQueue')) db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true }); // v0.33.0 항목11
         };
         open.onsuccess = () => {
           const db = open.result;
@@ -147,7 +149,7 @@ async function bootApp(page: Page, { localSession }: { localSession?: unknown } 
 async function sessionIds(page: Page): Promise<string[]> {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 4);
+      const r = indexedDB.open('survey-011', 6);
       r.onsuccess = () => res(r.result); r.onerror = () => res(null);
     });
     if (!db) return [];

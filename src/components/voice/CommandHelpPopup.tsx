@@ -16,7 +16,12 @@ export function CommandHelpPopup({ onClose }: { onClose: () => void }) {
         position: 'fixed', inset: 0, zIndex: 50,
         background: 'rgba(0,0,0,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 12,
+        // v0.33.0 safe-area — fixed 오버레이라 App 셸 패딩 밖. 노치/홈인디케이터 침범 방지
+        //   (하단 닫기 버튼이 홈바에 잘리지 않게). Safari 탭에선 var(--sa*)=0 → 기존 12px 유지.
+        paddingTop: 'max(12px, var(--sat))',
+        paddingBottom: 'max(12px, var(--sab))',
+        paddingLeft: 'max(12px, var(--sal))',
+        paddingRight: 'max(12px, var(--sar))',
       }}
     >
       <div

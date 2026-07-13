@@ -33,6 +33,13 @@ export const I: Record<string, IconFn> = {
       <line x1="21" y1="21" x2="16" y2="16" />
     </svg>
   ),
+  // v0.33.0 항목11 — 개선요청 탭(말풍선 + 연필).
+  feedback: (s = 24, c = 'currentColor') => (
+    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5a8.4 8.4 0 01-9 8.4 8.9 8.9 0 01-3.9-.9L3 21l2-4.6a8.4 8.4 0 1116-4.9z" />
+      <path d="M9.5 14.5l5-5" />
+    </svg>
+  ),
   chevron: (s = 16, c = 'currentColor') => (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="9 18 15 12 9 6" />

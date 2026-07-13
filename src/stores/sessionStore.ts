@@ -49,7 +49,15 @@ interface SessionState {
     kind?: 'trend' | 'range';
     /** v0.20.0 — range 알람일 때 임계 변동률(%). kind==='range'에서 팝업이 "±NN%"로 표시한다. */
     threshold?: number;
+    /** v0.33.0 항목7 — 이 알람이 응답 대기(trendConfirm) 중인지. true=음성('확인'/'수정')·터치 버튼
+     *  둘 다 유효(팝업이 [확인][수정] 버튼을 그린다). false/미지정=정보성 팝업(수동 입력 커밋의
+     *  이상치 — 민구 확정: 시각+비프만, 확인 루프 없음 → 버튼 미표시). */
+    awaitingResponse?: boolean;
   } | null;
+  /** v0.33.0 항목8 — 입력/수정 시각 영수증(07-10 QA P1 #3). 마지막 커밋(음성/수동/터치)의
+   *  행·필드·최종값을 다음 커밋까지 잔류 표시한다. prevValue가 있으면 수정 커밋(이전값→새값).
+   *  TTS/버스트를 놓친 사용자가 Data 탭에 가지 않고도 직전 결과를 확인하는 경로. */
+  lastReceipt: { row: number; colName: string; value: string; prevValue?: string } | null;
   /** v0.12.0 AREA2 V4 — '수정 값' 인디케이터. 수정 재안내(announceField isModify) 중 어떤 항목을
    *  다시 말해야 하는지 화면에 파란 pill로 띄운다. 일반 안내로 진입하면 null로 해제. anomalyAlert가
    *  떠 있을 땐 렌더하지 않는다(중앙 팝업과 겹침 방지 — VoiceScreen에서 상호배타 처리). */
@@ -77,6 +85,7 @@ interface SessionState {
   setLastTts: (v: string) => void;
   pushValueBurst: (name: string, value: string) => void;
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
+  setLastReceipt: (r: SessionState['lastReceipt']) => void;
   setModifyIndicator: (m: SessionState['modifyIndicator']) => void;
   setReaskReason: (r: SessionState['reaskReason']) => void;
   setActiveCol: (i: number) => void;
@@ -102,6 +111,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   lastTts: '',
   valueBurst: null,
   anomalyAlert: null,
+  lastReceipt: null,
   modifyIndicator: null,
   reaskReason: null,
   allRowValues: {},
@@ -118,6 +128,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   pushValueBurst: (name, value) =>
     set((s) => ({ valueBurst: { name, value, seq: (s.valueBurst?.seq ?? 0) + 1 } })),
   setAnomalyAlert: (anomalyAlert) => set({ anomalyAlert }),
+  setLastReceipt: (lastReceipt) => set({ lastReceipt }),
   setModifyIndicator: (modifyIndicator) => set({ modifyIndicator }),
   setReaskReason: (reaskReason) => set({ reaskReason }),
   setActiveCol: (activeColIdx) => set({ activeColIdx }),
@@ -171,6 +182,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       lastTts: '',
       valueBurst: null,
       anomalyAlert: null,
+      lastReceipt: null,
       modifyIndicator: null,
       reaskReason: null,
       allRowValues: {},

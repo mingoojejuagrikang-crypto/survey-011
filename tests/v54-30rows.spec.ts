@@ -239,7 +239,7 @@ async function waitForRow(page: Page, targetRow: number, timeout = 6000) {
 async function loadSessionsFromIDB(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 4);
+      const r = indexedDB.open('survey-011', 6);
       r.onsuccess = () => res(r.result);
       r.onerror = () => res(null);
     });
@@ -562,7 +562,7 @@ async function injectSession(page: Page) {
   await page.evaluate(async () => {
     // 앱이 이미 IDB를 열고 있는 경우 같은 버전으로 연결 → 즉시 성공
     const db = await new Promise<IDBDatabase>((res, rej) => {
-      const r = indexedDB.open('survey-011', 4);
+      const r = indexedDB.open('survey-011', 6);
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
       r.onblocked = () => rej(new Error('IDB open blocked'));

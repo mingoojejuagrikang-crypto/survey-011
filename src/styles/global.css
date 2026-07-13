@@ -1,3 +1,15 @@
+/* v0.33.0 safe-area SSOT — env(safe-area-inset-*)의 단일 판독점. 모든 컴포넌트는
+   env()를 직접 쓰지 않고 var(--sat|--sab|--sal|--sar)만 소비한다. 이렇게 하면
+   ① 테스트(Playwright)가 이 변수만 override해 노치 기기를 시뮬레이션할 수 있고
+   ② 부팅 텔레메트리(main.tsx)가 getComputedStyle로 실측값을 한 곳에서 읽는다.
+   일반 Safari 탭에선 env(...)=0 → 기존 동작 무변화. */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
 html, body {
   margin: 0;
   padding: 0;

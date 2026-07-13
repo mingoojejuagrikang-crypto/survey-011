@@ -1,0 +1,274 @@
+/**
+ * v0.33.0 항목7 — 이상치 대기 중 버튼-음성 일치 (07-10 QA P1 #2)
+ *
+ * 음성 이상치 알람(trendConfirm)의 팝업에 [확인][수정] 터치 버튼:
+ *  - [확인] = 음성 '확인'과 동일: 커밋값 확정 + advance 1회 + trend_alert_confirmed(동일 이벤트),
+ *    attribution은 command 이벤트의 extra('touch')로 구분.
+ *  - [수정] = 음성 '수정'과 동일: 같은 필드 재청취(기존값은 덮어쓰기 전까지 보존) +
+ *    trend_alert_dismissed:modify.
+ *  + 항목6 교차: 수동 입력(commitManualValue) 커밋의 이상치는 **정보성 팝업+비프만** —
+ *    버튼/확인 루프/알람 TTS 없음(민구 확정), 흐름은 그대로 진행.
+ *
+ * fixture/mock은 trend-alert.spec.ts와 동일(직전 회차 시트 stub + 토큰).
+ */
+
+import { test, expect, type Page } from '@playwright/test';
+
+test.setTimeout(120_000);
+
+const BASE = 'http://localhost:5175';
+const STORE_KEY = 'survey-011-settings-v3';
+
+function localISO(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const PREV_ROUND = localISO(new Date(Date.now() - 86_400_000));
+
+const COLUMNS = [
+  { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
+  { id: 'c3', name: '농가명', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' }, sampleKey: true },
+  { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 2 }, sampleKey: true },
+  { id: 'c7', name: '조사과실', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 5 }, sampleKey: true },
+  { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false, trendRule: 'increase' },
+  { id: 'c9', name: '종경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false, pctThreshold: 15 },
+];
+
+const SETTINGS = {
+  state: {
+    googleConnected: true,
+    userEmail: 'tester@example.com',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TREND_1/edit',
+    sheetTab: 'Sheet1',
+    columns: COLUMNS,
+    tableGenerated: true,
+    totalRows: 10,
+    ttsRate: 1.05,
+    sessionLabelColId: null,
+    sessionAutoLabel: 'anomaly-touch-test',
+    noisyMode: false,
+    speakerphoneMode: false,
+    preferredVoiceName: '',
+    roundDateColId: null,
+  },
+  version: 6,
+};
+
+const HEADERS = ['조사일자', '농가명', '조사나무', '조사과실', '횡경', '종경'];
+const SHEET_ROWS = [
+  [PREV_ROUND, '이원창', '1', '1', '100.0', '50.0'],
+  [PREV_ROUND, '이원창', '1', '2', '110.0', '55.0'],
+];
+
+const MOCK_INIT_SCRIPT = `
+(function() {
+  window.__ttsLog = [];
+  var mockSynth = {
+    speak: function(utterance) {
+      window.__ttsLog.push(utterance.text);
+      try { if (utterance.onstart) utterance.onstart(new Event('start')); } catch(e) {}
+      try { if (utterance.onend)   utterance.onend(new Event('end'));     } catch(e) {}
+    },
+    cancel: function() {}, pause: function() {}, resume: function() {},
+    getVoices: function() { return [{ name: 'Mock Korean', lang: 'ko-KR', default: true, localService: true, voiceURI: 'mock' }]; },
+    speaking: false, pending: false, paused: false, onvoiceschanged: null,
+    addEventListener: function() {}, removeEventListener: function() {}, dispatchEvent: function() { return true; },
+  };
+  try {
+    Object.defineProperty(window, 'speechSynthesis', { get: function() { return mockSynth; }, configurable: true, enumerable: true });
+  } catch(e1) {
+    try { Object.defineProperty(Window.prototype, 'speechSynthesis', { get: function() { return mockSynth; }, configurable: true }); }
+    catch(e2) { try { window.speechSynthesis = mockSynth; } catch(e3) {} }
+  }
+  var _addStyle = function() {
+    var s = document.createElement('style');
+    s.textContent = '* { animation-duration: 0ms !important; transition-duration: 0ms !important; }';
+    (document.head || document.documentElement).appendChild(s);
+  };
+  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', _addStyle); } else { _addStyle(); }
+
+  function MockSTT() {
+    this._ls = {};
+    this.continuous = true; this.interimResults = true; this.lang = 'ko-KR'; this.maxAlternatives = 3;
+    window.__mockSTT = this;
+  }
+  MockSTT.prototype.addEventListener = function(t, cb) { if (!this._ls[t]) this._ls[t] = []; this._ls[t].push(cb); };
+  MockSTT.prototype.removeEventListener = function(t, cb) { if (this._ls[t]) this._ls[t] = this._ls[t].filter(function(f) { return f !== cb; }); };
+  MockSTT.prototype.start = function() { var self = this; setTimeout(function() { (self._ls['start'] || []).forEach(function(cb) { cb(new Event('start')); }); }, 5); };
+  MockSTT.prototype.stop = function() {};
+  MockSTT.prototype.abort = function() { var self = this; setTimeout(function() { (self._ls['end'] || []).forEach(function(cb) { cb(new Event('end')); }); }, 5); };
+  MockSTT.prototype.fireResult = function(transcript, confidence) {
+    if (confidence === undefined) confidence = 0.95;
+    var event = { resultIndex: 0, results: { length: 1, 0: { isFinal: true, length: 1, 0: { transcript: transcript, confidence: confidence } } } };
+    (this._ls['result'] || []).forEach(function(cb) { cb(event); });
+  };
+  try { Object.defineProperty(window, 'SpeechRecognition', { value: MockSTT, writable: true, configurable: true, enumerable: true }); }
+  catch(e1) { try { window.SpeechRecognition = MockSTT; } catch(e2) {} }
+  try { Object.defineProperty(window, 'webkitSpeechRecognition', { value: MockSTT, writable: true, configurable: true, enumerable: true }); }
+  catch(e) { try { window.webkitSpeechRecognition = MockSTT; } catch(e2) {} }
+})();
+`;
+
+async function stubSheets(page: Page) {
+  await page.route('**://sheets.googleapis.com/**', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ json: { values: [HEADERS, ...SHEET_ROWS] } });
+      return;
+    }
+    await route.fulfill({ status: 404, body: 'unexpected: ' + route.request().url() });
+  });
+}
+
+async function setupAndStart(page: Page) {
+  await stubSheets(page);
+  await page.addInitScript(MOCK_INIT_SCRIPT);
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(
+    ({ settings, storeKey }) => {
+      localStorage.clear();
+      localStorage.setItem('gs10_google_token', JSON.stringify({
+        access_token: 'test-token', expires_at: Date.now() + 3600_000, email: 'tester@example.com',
+      }));
+      localStorage.setItem(storeKey, JSON.stringify(settings));
+      indexedDB.deleteDatabase('survey-011');
+    },
+    { settings: SETTINGS, storeKey: STORE_KEY },
+  );
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(500);
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(200);
+  const startBtn = page.locator('text=음성 입력 시작').first();
+  await expect(startBtn).toBeVisible();
+  await startBtn.click();
+  await page.waitForTimeout(800); // start() 프리페치(stub GET) 정착 여유
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
+}
+
+async function fireStt(page: Page, transcript: string, waitMs = 300) {
+  await page.evaluate((t) => {
+    (window as unknown as { __mockSTT?: { fireResult: (t: string, c: number) => void } }).__mockSTT?.fireResult(t, 0.95);
+  }, transcript);
+  await page.waitForTimeout(waitMs);
+}
+
+async function waitForActiveChip(page: Page, colName: string, timeout = 5000) {
+  await page.waitForFunction(
+    (name) => {
+      const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+      return (chip?.dataset.colName ?? '').includes(String(name));
+    },
+    colName,
+    { timeout },
+  );
+}
+
+async function getTtsLog(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as unknown as { __ttsLog: string[] }).__ttsLog ?? []);
+}
+
+async function loadLogEventsFromIDB(page: Page) {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase | null>((res) => {
+      const r = indexedDB.open('survey-011');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => res(null);
+    });
+    if (!db || !db.objectStoreNames.contains('logEvents')) return [];
+    return new Promise<Array<{ type: string; extra?: string; parsed?: string }>>((res) => {
+      const tx = db.transaction('logEvents', 'readonly');
+      const req = tx.objectStore('logEvents').getAll();
+      req.onsuccess = () => res(req.result as Array<{ type: string; extra?: string; parsed?: string }>);
+      req.onerror = () => res([]);
+    });
+  });
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+test('[확인] 버튼 — 음성 "확인"과 동일: 값 확정 + 1회 advance + trend_alert_confirmed(touch attribution)', async ({ page }) => {
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+
+  // 직전 100.0 → 120.5 = increase 알람 → 응답 대기 팝업 + 버튼.
+  await fireStt(page, '120.5', 700);
+  const popup = page.locator('[data-testid="anomaly-alert"]');
+  await expect(popup).toBeVisible();
+  await expect(popup).toHaveAttribute('data-status', 'pending');
+  const confirmBtn = popup.locator('[data-testid="anomaly-confirm-btn"]');
+  await expect(confirmBtn).toBeVisible();
+
+  await confirmBtn.click();
+  await page.waitForTimeout(500);
+
+  // 값 확정 + 다음 항목으로 정확히 1회 이동(종경).
+  await waitForActiveChip(page, '종경');
+  await expect(popup).toHaveCount(0);
+
+  const events = await loadLogEventsFromIDB(page);
+  // 음성과 동일 이벤트(trend_alert_confirmed) + attribution은 command extra('touch')로.
+  expect(events.some((e) => e.type === 'trend' && e.extra === 'trend_alert_confirmed')).toBe(true);
+  expect(events.some((e) => e.type === 'command' && e.parsed === 'confirm' && e.extra === 'touch')).toBe(true);
+});
+
+test('[수정] 버튼 — 음성 "수정"과 동일: 같은 필드 재청취 + 기존값 보존(덮어쓰기 전까지) + dismissed 로그', async ({ page }) => {
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+
+  await fireStt(page, '120.5', 700);
+  const popup = page.locator('[data-testid="anomaly-alert"]');
+  await expect(popup).toBeVisible();
+
+  await popup.locator('[data-testid="anomaly-modify-btn"]').click();
+  await page.waitForTimeout(500);
+
+  // 팝업 해제 + 같은 필드(횡경)에서 재청취("다시 말씀해 주세요") — 진행하지 않음.
+  await expect(popup).toHaveCount(0);
+  await waitForActiveChip(page, '횡경');
+  const tts = await getTtsLog(page);
+  expect(tts.some((t) => t.includes('횡경') && t.includes('다시 말씀해'))).toBe(true);
+
+  const events = await loadLogEventsFromIDB(page);
+  expect(events.some((e) => e.type === 'trend' && e.extra === 'trend_alert_dismissed:modify')).toBe(true);
+  expect(events.some((e) => e.type === 'command' && e.parsed === 'modify' && e.extra === 'touch')).toBe(true);
+
+  // 새 값(감소 → 무알람) 발화 → 수정 의미론(previousValue=120.5)으로 재커밋 + 진행.
+  await fireStt(page, '99.5', 600);
+  await waitForActiveChip(page, '종경');
+});
+
+test('항목6 교차 — 수동 입력 커밋의 이상치: 정보성 팝업만(버튼·알람 TTS 없음), 흐름은 진행', async ({ page }) => {
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+
+  // 칩 탭 → 키패드로 120.5(=increase 알람 값) 수동 입력.
+  await page.locator('[data-testid="column-chip"][data-col-name="횡경"]').click();
+  await expect(page.locator('[data-testid="manual-value-sheet"]')).toBeVisible();
+  for (const k of ['1', '2', '0', '.', '5']) {
+    await page.locator(`[data-testid="manual-key-${k}"]`).click();
+  }
+  await page.locator('[data-testid="manual-commit"]').click();
+  await page.waitForTimeout(700);
+
+  // 흐름은 음성 커밋과 동일하게 진행(종경) — 확인 루프 없음.
+  await waitForActiveChip(page, '종경');
+
+  // 정보성 팝업: 보이되 버튼 없음(awaitingResponse 미지정) + 비프만(알람 TTS 없음).
+  const popup = page.locator('[data-testid="anomaly-alert"]');
+  await expect(popup).toBeVisible();
+  await expect(popup).toHaveAttribute('data-status', 'pending');
+  await expect(popup).toContainText('120.5');
+  await expect(popup.locator('[data-testid="anomaly-confirm-btn"]')).toHaveCount(0);
+  await expect(popup.locator('[data-testid="anomaly-modify-btn"]')).toHaveCount(0);
+  const tts = await getTtsLog(page);
+  expect(tts.some((t) => t.includes('추세 알람'))).toBe(false); // 알람 TTS 미발화
+
+  // 텔레메트리: src=manual 마커가 붙은 fired 이벤트.
+  const events = await loadLogEventsFromIDB(page);
+  const fired = events.find((e) => e.type === 'trend' && (e.extra ?? '').startsWith('trend_alert_fired'));
+  expect(fired, 'trend_alert_fired 미기록').toBeTruthy();
+  expect(fired!.extra).toContain('src=manual');
+
+  // 다음 값 커밋(종경, 무알람) → 다음 필드 진입 시 팝업 자연 해제.
+  await fireStt(page, '50.5', 600);
+  await expect(popup).toHaveCount(0);
+});

@@ -117,7 +117,7 @@ async function seedAndBoot(page: Page, session: unknown) {
     localStorage.setItem('survey-011-settings-v3', JSON.stringify(settings));
     // IDB sessions store에 세션 저장
     await new Promise<void>((resolve) => {
-      const open = indexedDB.open('survey-011', 4);
+      const open = indexedDB.open('survey-011', 6);
       open.onupgradeneeded = () => {
         const db = open.result;
         if (!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions', { keyPath: 'id' });
@@ -127,6 +127,8 @@ async function seedAndBoot(page: Page, session: unknown) {
           os.createIndex('bySessionId', 'sessionId');
         }
         if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv'); // v0.14.0 C
+          if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots'); // v0.33.0 10-B
+          if (!db.objectStoreNames.contains('feedbackQueue')) db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true }); // v0.33.0 항목11
       };
       open.onsuccess = () => {
         const db = open.result;
@@ -155,7 +157,7 @@ async function runSync(page: Page) {
 async function readSession(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 4);
+      const r = indexedDB.open('survey-011', 6);
       r.onsuccess = () => res(r.result); r.onerror = () => res(null);
     });
     if (!db) return null;
@@ -270,7 +272,7 @@ test('update 404 → sheetRow 초기화 후 append 폴백 + sync_row_mismatch', 
   // sync_row_mismatch 텔레메트리 기록 확인
   const events = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 4);
+      const r = indexedDB.open('survey-011', 6);
       r.onsuccess = () => res(r.result); r.onerror = () => res(null);
     });
     if (!db) return [] as string[];
@@ -335,7 +337,7 @@ test('C1 — append updatedRange 파싱 실패: synced-without-sheetRow (재appe
   await expect(page.locator('text=실패').first()).toBeHidden().catch(() => {});
   const events = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 4);
+      const r = indexedDB.open('survey-011', 6);
       r.onsuccess = () => res(r.result); r.onerror = () => res(null);
     });
     if (!db) return [] as string[];

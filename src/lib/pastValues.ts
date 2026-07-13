@@ -26,6 +26,7 @@ import { fetchAllRowsUnbounded, parseSpreadsheetId } from './sheets';
 import { getAccessToken } from './googleAuth';
 import { useSettingsStore } from '../stores/settingsStore';
 import { logger } from './logger';
+import { loadPastIndexBackup, savePastIndexBackup } from './db';
 
 // ─── 순수 로직 (Node 단위 테스트 대상 — 브라우저 의존 없음) ─────────────────
 
@@ -215,9 +216,114 @@ export function pastValue(
   return v === undefined || v === '' ? null : v;
 }
 
+// ─── 영속화 직렬화 (v0.33.0 항목5 — 순수 함수, Node 단위 테스트 대상) ─────────
+
+/** 폴백 유효기간: 14일. 회차 간격(주 단위 조사)을 넉넉히 덮되, 시즌이 지난 죽은 인덱스로
+ *  엉뚱한 직전값 비교를 하지 않게 상한을 둔다(플랜 확정값). */
+export const FALLBACK_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** 14일 경계 판정(경계 포함: 정확히 14일 = 아직 유효). 순수 함수 — 단위 테스트 대상. */
+export function isFallbackFresh(builtAt: number, now: number): boolean {
+  return now - builtAt <= FALLBACK_TTL_MS;
+}
+
+/** IDB 'kv' 스토어(`__past_index__`)에 저장되는 JSON-호환 레코드. Map은 entries 배열로 편다
+ *  (structured clone이 Map을 지원하긴 하나, 검증 가능한 평면 형태가 복원 안전성·테스트에 유리). */
+export interface PersistedPastIndexRecord {
+  fp: string;
+  builtAt: number;
+  headersMapped: [string, number][];
+  unmappedColumns: string[];
+  rounds: string[];
+  samples: [string, [string, Record<string, string>][]][];
+  duplicateCount: number;
+  rowCount: number;
+}
+
+export function serializePastIndexEntry(entry: {
+  fp: string;
+  builtAt: number;
+  index: PastIndex;
+}): PersistedPastIndexRecord {
+  const { fp, builtAt, index } = entry;
+  return {
+    fp,
+    builtAt,
+    headersMapped: [...index.headersMapped.entries()],
+    unmappedColumns: [...index.unmappedColumns],
+    rounds: [...index.rounds],
+    samples: [...index.samples.entries()].map(
+      ([key, byRound]) => [key, [...byRound.entries()]] as [string, [string, Record<string, string>][]],
+    ),
+    duplicateCount: index.duplicateCount,
+    rowCount: index.rowCount,
+  };
+}
+
+/** 레코드 복원 + 형태 검증. 손상/구버전/이형 레코드는 null(조용히 폐기 — 폴백은 best-effort). */
+export function deserializePastIndexEntry(
+  raw: unknown,
+): { fp: string; builtAt: number; index: PastIndex } | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Partial<PersistedPastIndexRecord>;
+  if (typeof r.fp !== 'string' || typeof r.builtAt !== 'number' || !Number.isFinite(r.builtAt)) return null;
+  if (
+    !Array.isArray(r.headersMapped) || !Array.isArray(r.unmappedColumns) ||
+    !Array.isArray(r.rounds) || !Array.isArray(r.samples) ||
+    typeof r.duplicateCount !== 'number' || typeof r.rowCount !== 'number'
+  ) return null;
+  try {
+    const headersMapped = new Map<string, number>();
+    for (const pair of r.headersMapped) {
+      if (!Array.isArray(pair) || typeof pair[0] !== 'string' || typeof pair[1] !== 'number') return null;
+      headersMapped.set(pair[0], pair[1]);
+    }
+    const samples = new Map<string, Map<string, Record<string, string>>>();
+    for (const entry of r.samples) {
+      if (!Array.isArray(entry) || typeof entry[0] !== 'string' || !Array.isArray(entry[1])) return null;
+      const byRound = new Map<string, Record<string, string>>();
+      for (const pair of entry[1]) {
+        if (!Array.isArray(pair) || typeof pair[0] !== 'string' || typeof pair[1] !== 'object' || pair[1] === null) return null;
+        byRound.set(pair[0], pair[1]);
+      }
+      samples.set(entry[0], byRound);
+    }
+    return {
+      fp: r.fp,
+      builtAt: r.builtAt,
+      index: {
+        headersMapped,
+        unmappedColumns: r.unmappedColumns.filter((x): x is string => typeof x === 'string'),
+        rounds: r.rounds.filter((x): x is string => typeof x === 'string'),
+        samples,
+        duplicateCount: r.duplicateCount,
+        rowCount: r.rowCount,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** fetch 무한대기 방지 래퍼(순수 — 단위 테스트 대상). 시간 초과 시 reject —
+ *  loadPastIndex의 catch가 `past_index_skip:timeout…`으로 로깅하고 null 해소하므로,
+ *  in-flight 가드가 풀려 백오프 재시도·수동 재시도 버튼 경로가 살아난다(07-13 §4 hang 가설 방어). */
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
 // ─── 브라우저 사이드: fetch + 모듈 캐시 ─────────────────────────────────────
 
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10분 — 한 조사 세션 동안 재fetch 없이 충분, 당일 타 기기 업로드는 다음 세션에 반영
+
+/** loadPastIndex 전체 fetch 상한 — 2272행 실측이 ~1s인 시트가 20s를 넘기면 hang으로 간주. */
+const FETCH_TIMEOUT_MS = 20_000;
 
 interface CacheEntry {
   fp: string;
@@ -227,6 +333,23 @@ interface CacheEntry {
 
 let cached: CacheEntry | null = null;
 let inflight: { fp: string; promise: Promise<PastIndex | null> } | null = null;
+
+// v0.33.0 항목5 — IDB에서 복원한 영속 폴백(로그인 무관 이상치 알람). 유효성(fp 일치 + 14일 이내)은
+// 읽기 시점(getFallbackEntry)에 매번 재검증한다 — 하이드레이션 후 설정이 바뀌어도 안전.
+let fallback: CacheEntry | null = null;
+let fallbackHydrateStarted = false;
+
+// v0.33.0 항목5 — 상태 구독(설정탭·입력탭 시작 카드의 '과거값 준비' 배지 실시간 갱신용).
+const statusListeners = new Set<() => void>();
+function notifyStatusChanged(): void {
+  for (const cb of [...statusListeners]) {
+    try { cb(); } catch { /* 리스너 오류가 로더를 죽이지 않게 */ }
+  }
+}
+export function subscribePastIndexStatus(cb: () => void): () => void {
+  statusListeners.add(cb);
+  return () => { statusListeners.delete(cb); };
+}
 
 // v0.14.0 A — 전송 실패(iOS Safari transient "Load failed") 자가 복구용 백오프 재시도 상태.
 // 실기기 로그(v0.13.0)에서 세션 start 직후(~27ms) prefetch가 "Load failed"로 한 번 실패하면
@@ -267,6 +390,71 @@ export function getCachedIndex(): PastIndex | null {
   return cached.index;
 }
 
+// ─── v0.33.0 항목5 — 영속 폴백 (로그인 무관 이상치 알람) ───────────────────
+
+/** 유효한(fp 일치 + 14일 이내) 영속 폴백 엔트리. 신선 캐시와 달리 10분 TTL이 없다 —
+ *  토큰 만료·재부팅·미로그인 세션에서도 "직전 회차 대비" 비교선을 유지하는 것이 목적. */
+function getFallbackEntry(): CacheEntry | null {
+  if (!fallback) return null;
+  if (!isFallbackFresh(fallback.builtAt, Date.now())) return null;
+  if (fallback.fp !== loadContext().fp) return null;
+  return fallback;
+}
+
+/** evaluateTrend 폴백 경로: `getCachedIndex() ?? getFallbackIndex()`. 폴백 사용 시 호출자가
+ *  `trend_used_stale_index`를 로깅한다(세션당 1회 — useVoiceSession의 skip dedupe와 동일 컨벤션). */
+export function getFallbackIndex(): PastIndex | null {
+  return getFallbackEntry()?.index ?? null;
+}
+
+/** 폴백의 빌드 시각(epoch ms) — 배지의 "(x시간 전)" 표기·stale 로그의 age 산출용. 없으면 null. */
+export function getFallbackBuiltAt(): number | null {
+  return getFallbackEntry()?.builtAt ?? null;
+}
+
+/**
+ * 부팅/세션 시작 시 1회 — IDB `__past_index__` 레코드를 메모리 폴백으로 복원한다(idempotent).
+ * 손상 레코드·14일 초과는 조용히 폐기. fp 검증은 여기서 하지 않는다(설정 하이드레이션 레이스
+ * 방지 — 읽기 시점의 getFallbackEntry가 매번 검증). 실패해도 throw하지 않는다(best-effort).
+ */
+export async function hydratePastIndexFallback(): Promise<void> {
+  if (fallbackHydrateStarted) return;
+  fallbackHydrateStarted = true;
+  try {
+    const raw = await loadPastIndexBackup();
+    if (raw == null) return;
+    const entry = deserializePastIndexEntry(raw);
+    if (!entry) return;
+    if (!isFallbackFresh(entry.builtAt, Date.now())) return;
+    // 이미 신선 캐시가 있으면(부팅 직후 prefetch가 먼저 성공) 캐시가 더 최신이다.
+    if (!fallback || entry.builtAt > fallback.builtAt) fallback = entry;
+    notifyStatusChanged();
+  } catch { /* IDB 불가 — 폴백 없이 기존 경로로 동작 */ }
+}
+
+// ─── v0.33.0 항목5 — 상태 스냅샷 (3상태 배지의 '과거값 준비' 행) ──────────────
+
+export interface PastIndexStatus {
+  /** ready=신선 캐시 / stale=영속 폴백만 / loading=fetch 진행 중 / none=없음 */
+  state: 'ready' | 'stale' | 'loading' | 'none';
+  rowCount?: number;
+  roundCount?: number;
+  builtAt?: number;
+}
+
+export function getPastIndexStatus(): PastIndexStatus {
+  const hit = getCachedIndex();
+  if (hit && cached) {
+    return { state: 'ready', rowCount: hit.rowCount, roundCount: hit.rounds.length, builtAt: cached.builtAt };
+  }
+  const fb = getFallbackEntry();
+  if (fb) {
+    return { state: 'stale', rowCount: fb.index.rowCount, roundCount: fb.index.rounds.length, builtAt: fb.builtAt };
+  }
+  if (inflight) return { state: 'loading' };
+  return { state: 'none' };
+}
+
 /**
  * 과거값 인덱스 로드. 캐시 히트면 fetch 없이 반환, 동일 지문 in-flight면 그 promise 공유.
  * 미설정/미로그인/네트워크·HTTP 오류는 **null로 resolve**(throw 안 함) — 호출자는 조용히 skip.
@@ -288,10 +476,20 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
   }
   const promise = (async (): Promise<PastIndex | null> => {
     try {
-      const { headers, rows } = await fetchAllRowsUnbounded(ctx.spreadsheetId!, ctx.sheetTab);
+      // v0.33.0 항목5 — fetch 시작 계측(07-13 §4: 시작 이벤트가 없어 "미완 hang"을 로그로 판별
+      // 불가했던 갭). ready/skip과 짝을 이뤄 미완주 fetch가 로그에서 보인다.
+      logger.log({ type: 'app', extra: 'past_index_fetch_start' });
+      const { headers, rows } = await withTimeout(
+        fetchAllRowsUnbounded(ctx.spreadsheetId!, ctx.sheetTab),
+        FETCH_TIMEOUT_MS,
+      );
       const roundCol = resolveRoundCol(ctx.columns, ctx.roundDateColId);
       const index = buildPastIndex(headers, rows, ctx.columns, roundCol);
       cached = { fp: ctx.fp, builtAt: Date.now(), index };
+      // v0.33.0 항목5 — IDB write-through(kv `__past_index__`) + 메모리 폴백 동기화.
+      // 캐시 TTL(10분)·토큰 만료·재부팅 후에도 이 스냅샷이 알람 비교선으로 살아남는다.
+      fallback = cached;
+      void savePastIndexBackup(serializePastIndexEntry(cached));
       logger.log({
         type: 'app',
         extra:
@@ -300,15 +498,17 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
       });
       return index;
     } catch (e) {
-      // 오프라인/HTTP 오류 — REVIEW-1: 삼키지 말고 로깅하되, 호출자에겐 null(조용히 skip).
+      // 오프라인/HTTP 오류/타임아웃 — REVIEW-1: 삼키지 말고 로깅하되, 호출자에겐 null(조용히 skip).
       const msg = e instanceof Error ? e.message : String(e);
       logger.log({ type: 'app', extra: `past_index_skip:${msg.slice(0, 120)}` });
       return null;
     } finally {
       if (inflight && inflight.fp === ctx.fp) inflight = null;
+      notifyStatusChanged();
     }
   })();
   inflight = { fp: ctx.fp, promise };
+  notifyStatusChanged();
   return promise;
 }
 

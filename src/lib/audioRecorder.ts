@@ -255,6 +255,27 @@ export class AudioRecorder {
     return !track || track.readyState === 'ended';
   }
 
+  /** v0.33.0 항목4 — 포그라운드 복귀 시 마이크 트랙 정밀 판정용 스냅샷(관찰 전용, 재획득 없음 —
+   *  [IOS-5]). 'ended'만 진짜 사망(micLost 래치 대상). 'muted'는 UA가 미디어 전달을 일시 정지한
+   *  상태(통화/Siri 인터럽션·라우트 변경)로, unmute 대기가 옳다(래치하면 멀쩡한 마이크에 재연결
+   *  배너가 뜬다 — refreshActiveInputLabel 주석의 동일 원칙). 'none'은 레코더 미초기화/해제
+   *  (일시정지 등 의도된 상태)로 판정 대상이 아니다. */
+  getTrackState(): 'none' | 'ended' | 'muted' | 'live' {
+    const track = this.stream?.getAudioTracks()[0] ?? null;
+    if (!track) return 'none';
+    if (track.readyState === 'ended') return 'ended';
+    if (track.muted) return 'muted';
+    return 'live';
+  }
+
+  /** v0.33.0 항목4 — 활성 트랙의 다음 unmute 1회 관찰(once). 복귀 시 muted였던 트랙이 실제로
+   *  회복되는지 텔레메트리로 잇는 용도. 트랙이 없으면 no-op. 관찰 전용(스트림 불변). */
+  onceTrackUnmuted(cb: () => void): void {
+    const track = this.stream?.getAudioTracks()[0] ?? null;
+    if (!track) return;
+    try { track.addEventListener('unmute', () => cb(), { once: true }); } catch { /* best-effort */ }
+  }
+
   /** v0.14.0 B-1 — 스트림을 재획득해 죽은 레코더/스테일 입력장치를 되살린다(재-getUserMedia).
    *  빈/극소 클립 감지(useVoiceSession) 또는 유휴 중 장치 변경 시 호출. 진행 중 active 슬롯은
    *  이미 실패(빈 클립)했거나 유휴이므로 정리 후 새 스트림으로 교체한다. 쿨다운/동시성 가드로

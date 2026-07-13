@@ -48,10 +48,10 @@ export function SettingsHelpModal({
         position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         // standalone PWA safe-area(노치/상태바/홈인디케이터 침범 방지) — TypeReviewModal 패턴.
-        paddingTop: 'max(24px, env(safe-area-inset-top))',
-        paddingBottom: 'max(24px, env(safe-area-inset-bottom))',
-        paddingLeft: 'max(24px, env(safe-area-inset-left))',
-        paddingRight: 'max(24px, env(safe-area-inset-right))',
+        paddingTop: 'max(24px, var(--sat))',
+        paddingBottom: 'max(24px, var(--sab))',
+        paddingLeft: 'max(24px, var(--sal))',
+        paddingRight: 'max(24px, var(--sar))',
       }}
     >
       <div

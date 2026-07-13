@@ -13,7 +13,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 const BASE = 'http://localhost:5175';
-const PHONE_414 = { width: 414, height: 896 };
+const PHONE_402 = { width: 402, height: 874 };
 const PHONE_375 = { width: 375, height: 812 };
 
 const SR_STUB = `
@@ -102,13 +102,13 @@ async function assertStepperPanel(page: Page, vpWidth: number) {
   expect(minusH).toBeGreaterThanOrEqual(48);
 }
 
-test('입력탭 — 입력 조절 스탭퍼 패널(414×896)', async ({ page }) => {
-  await setup(page, PHONE_414);
+test('입력탭 — 입력 조절 스탭퍼 패널(402×874)', async ({ page }) => {
+  await setup(page, PHONE_402);
   await generateTable(page);
   await startVoice(page);
 
   await expect(page.locator('[data-testid="voice-active-state"]')).toBeVisible({ timeout: 5000 });
-  await assertStepperPanel(page, PHONE_414.width);
+  await assertStepperPanel(page, PHONE_402.width);
 
   // 칩 구역 캡 회귀 없음(v0.19.0 4구역 인변량).
   const chipClientH = await page.evaluate(() => {
@@ -122,7 +122,7 @@ test('입력탭 — 입력 조절 스탭퍼 패널(414×896)', async ({ page }) 
   expect(chipClientH).not.toBeNull();
   expect(chipClientH!).toBeLessThanOrEqual(170);
 
-  await page.screenshot({ path: '/tmp/v020-shots/steppers-414.png' });
+  await page.screenshot({ path: '/tmp/v020-shots/steppers-402.png' });
 });
 
 test('입력탭 — 좁은 기기에서도 스탭퍼 한 줄 유지(375×812)', async ({ page }) => {

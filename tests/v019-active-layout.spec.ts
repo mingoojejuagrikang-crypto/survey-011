@@ -14,7 +14,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 const BASE = 'http://localhost:5175';
-const PHONE = { width: 414, height: 896 };
+const PHONE = { width: 402, height: 874 };
 
 // isSpeechSupported() 통과용 최소 스텁. start() 후 onstart만 부르고 결과는 안 보냄
 // (레이아웃 검증이라 인식 결과 불필요 — ActiveState 진입이 목적).

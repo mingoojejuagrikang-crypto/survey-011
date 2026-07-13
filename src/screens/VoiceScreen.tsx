@@ -9,8 +9,10 @@ import { useVoiceSession } from '../lib/useVoiceSession';
 import { isSpeechSupported, speak } from '../lib/speech';
 import { logger } from '../lib/logger';
 import { buildSessionLabel } from '../lib/sessionLabel';
+import { ConnectionStatusCard } from '../components/ConnectionStatusCard';
 import { AnomalyAlertPopup } from '../components/voice/AnomalyAlertPopup';
 import { CommandHelpPopup } from '../components/voice/CommandHelpPopup';
+import { ManualValueSheet } from '../components/voice/ManualValueSheet';
 import { PausedCard } from '../components/voice/PausedCard';
 import { ModifyIndicatorPill } from '../components/voice/ModifyIndicatorPill';
 import { ReaskCue, type ReaskReason } from '../components/voice/ReaskCue';
@@ -80,6 +82,11 @@ export function VoiceScreen() {
         onPrevRow={() => voiceSession.gotoAdjacentRow(-1)}
         onNextRow={() => voiceSession.goNextRow()}
         onTouchCommit={(r, colId, v) => voiceSession.commitTouchValue(r, colId, v)}
+        onManualCommit={(r, colId, v) => voiceSession.commitManualValue(r, colId, v)}
+        onManualOpen={() => voiceSession.suspendRecognitionForUi('manual_input')}
+        onManualClose={() => voiceSession.resumeRecognitionForUi('manual_input')}
+        onAnomalyConfirm={() => voiceSession.confirmAnomalyTouch()}
+        onAnomalyModify={() => voiceSession.modifyAnomalyTouch()}
         onCommandHelpOpen={() => voiceSession.suspendRecognitionForUi('command_help')}
         onCommandHelpClose={() => voiceSession.resumeRecognitionForUi('command_help')}
         onTogglePause={() => {
@@ -148,9 +155,9 @@ function MicReconnectBanner({
         position: 'fixed', top: 0, left: 0, right: 0, zIndex: 60,
         display: 'flex', justifyContent: 'center',
         // safe-area(노치·상태바) 침범 방지 — standalone 설치형 대응(App.tsx/PausedCard 패턴).
-        paddingTop: 'max(8px, env(safe-area-inset-top, 0px))',
-        paddingLeft: 'max(10px, env(safe-area-inset-left, 0px))',
-        paddingRight: 'max(10px, env(safe-area-inset-right, 0px))',
+        paddingTop: 'max(8px, var(--sat))',
+        paddingLeft: 'max(10px, var(--sal))',
+        paddingRight: 'max(10px, var(--sar))',
         pointerEvents: 'none', // 컨테이너는 통과, 내부 카드만 인터랙티브.
       }}
     >
@@ -296,6 +303,12 @@ function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => 
           <SummaryRow label="자동입력 항목" value={autoCount} unit="개" />
           <SummaryRow label="음성입력 항목" value={voiceCount} unit="개" accent />
         </div>
+
+        {/* v0.33.0 항목5 — 세션 시작 전 연결 3상태(Google/시트/과거값). 07-13 §4처럼 토큰이 만료된
+            채 시작해 알람이 침묵하는 상황을 시작 카드에서 미리 보이게 한다(설정탭과 공용 컴포넌트). */}
+        <div style={{ width: '100%', maxWidth: 320 }}>
+          <ConnectionStatusCard />
+        </div>
       </div>
 
       <div style={{ padding: '0 16px 12px' }}>
@@ -348,6 +361,7 @@ type HeroEvent = 'listening' | 'confirm' | 'complete';
 function ActiveState({
   totalRows, columns, voiceCols, currentColId, completing, paused, reaskReason,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
+  onManualCommit, onManualOpen, onManualClose, onAnomalyConfirm, onAnomalyModify,
   onCommandHelpOpen, onCommandHelpClose,
 }: {
   totalRows: number;
@@ -364,6 +378,13 @@ function ActiveState({
   onNextRow: () => void;
   onTogglePause: () => void;
   onTouchCommit: (row: number, colId: string, value: string) => void;
+  /** v0.33.0 항목6 — 수동 입력 시트 커밋(commitManualValue) + 열림/닫힘 STT suspend 배선. */
+  onManualCommit: (row: number, colId: string, value: string) => void;
+  onManualOpen: () => void;
+  onManualClose: () => void;
+  /** v0.33.0 항목7 — 이상치 응답 대기 팝업의 터치 버튼(음성 '확인'/'수정'과 동일 동작). */
+  onAnomalyConfirm: () => void;
+  onAnomalyModify: () => void;
   onCommandHelpOpen: () => void;
   onCommandHelpClose: () => void;
 }) {
@@ -375,6 +396,25 @@ function ActiveState({
   const [cmdHelpOpen, setCmdHelpOpen] = useState(false);
   const cmdHelpSuspendedRef = useRef(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
+  // v0.33.0 항목6 — 수동 입력 시트(음성 칩 탭). 열림 중 STT hard-suspend(도움말 팝업과 동일
+  // suspend/resume 검증 경로 재사용), 닫힘 시 resume. suspend ref 패턴은 cmdHelp와 동일.
+  const [manualCol, setManualCol] = useState<Column | null>(null);
+  const manualSuspendedRef = useRef(false);
+  const openManualSheet = useCallback((c: Column) => {
+    setEditingColId(null);
+    if (!manualSuspendedRef.current) {
+      manualSuspendedRef.current = true;
+      onManualOpen();
+    }
+    setManualCol(c);
+  }, [onManualOpen]);
+  const closeManualSheet = useCallback(() => {
+    setManualCol(null);
+    if (manualSuspendedRef.current) {
+      manualSuspendedRef.current = false;
+      onManualClose();
+    }
+  }, [onManualClose]);
 
   // ── A-hero 파생 (v0.17.0) — 전부 store 신호에서 읽기만 한다(useVoiceSession 무수정).
   //    hero 이벤트: complete > confirm > listening. 정정(correct)은 hero가 아니라
@@ -549,10 +589,11 @@ function ActiveState({
               isDone={isDone}
               isEditing={isEditingThis}
               onActivate={() => {
-                if (c.type === 'date') return;
+                if (c.type === 'date' && !isVoice) return;
                 if (isVoice) {
-                  setEditingColId(null);
-                  onRestartFromCol(c.id);
+                  // v0.33.0 항목6 — 음성 칩 탭 = 수동 입력 시트(기존 restartFromCol 즉시 재녹음은
+                  // 시트의 "음성으로 다시 입력" 버튼으로 이전 — 경로 보존).
+                  openManualSheet(c);
                 } else {
                   // auto와 touch 모두 인라인 편집기로 진입
                   setEditingColId(c.id);
@@ -590,6 +631,8 @@ function ActiveState({
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
           padding: '12px 20px', gap: 12,
+          // v0.33.0 항목8 — 시각 영수증(absolute 하단 고정)의 포지셔닝 컨텍스트.
+          position: 'relative',
         }}
       >
         {paused ? (
@@ -597,7 +640,12 @@ function ActiveState({
           <PausedCard row={row} colName={currentCol?.name} />
         ) : sess.anomalyAlert ? (
           // 이상치/범위 알람 카드 — 직전값→현재값·변화량(긴 항목명/큰 음수소수 잘림 0).
-          <AnomalyAlertPopup a={sess.anomalyAlert} />
+          // v0.33.0 항목7 — 응답 대기(awaitingResponse) 팝업에 [확인][수정] 터치 버튼 배선.
+          <AnomalyAlertPopup
+            a={sess.anomalyAlert}
+            onConfirm={onAnomalyConfirm}
+            onModify={onAnomalyModify}
+          />
         ) : sess.modifyIndicator ? (
           // 수정 재안내 카드 — 직전값(취소선)→새값.
           <ModifyIndicatorPill
@@ -615,6 +663,38 @@ function ActiveState({
             reaskReason={heroEvent === 'listening' ? reaskReason : null}
           />
         ) : null}
+
+        {/* v0.33.0 항목8 — 시각 영수증(07-10 QA P1 #3): 마지막 커밋의 행·필드·값(수정은 이전→새값)을
+            다음 커밋까지 잔류 표시. absolute 하단 고정이라 카드/컨트롤을 밀지 않고 스크롤도 안 만든다
+            (375×667 계약). 이상치 팝업 중에는 숨긴다 — 같은 값을 팝업이 더 크게 보여주고 있어 중복 +
+            카드가 흡수영역을 꽉 채울 때의 겹침 방지. reduced-motion 계약: 애니메이션 없음(정적 표시). */}
+        {sess.lastReceipt && !sess.anomalyAlert && !paused && (
+          <div
+            data-testid="commit-receipt"
+            aria-live="polite"
+            style={{
+              position: 'absolute', left: 8, right: 8, bottom: 2,
+              textAlign: 'center', pointerEvents: 'none',
+              fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
+              color: T.textDim, lineHeight: 1.25,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+          >
+            {sess.lastReceipt.prevValue != null ? (
+              <>
+                수정됨 · {sess.lastReceipt.row}행 {sess.lastReceipt.colName}{' '}
+                <span style={{ textDecoration: 'line-through' }}>{sess.lastReceipt.prevValue}</span>
+                {' → '}
+                <span style={{ color: T.text, fontWeight: 900 }}>{sess.lastReceipt.value}</span>
+              </>
+            ) : (
+              <>
+                저장됨 · {sess.lastReceipt.row}행 {sess.lastReceipt.colName}{' '}
+                <span style={{ color: T.text, fontWeight: 900 }}>{sess.lastReceipt.value}</span>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 4) 하단 컨트롤바 — 행동만 노출. 입력중에는 종료를 숨기고, 일시정지 후 확인을 거쳐 종료한다. */}
@@ -666,6 +746,27 @@ function ActiveState({
           넣지 않고 화면 전체 모달을 유지한다.
           v0.18.0 1c — CenterValueBurst('항목:값' 팝업) 완전 제거(store의 valueBurst는 write-only). */}
       {cmdHelpOpen && <CommandHelpPopup onClose={closeCommandHelp} />}
+      {/* v0.33.0 항목6 — 수동 입력 하단 시트(음성 칩 탭). 닫기(suspend 해제)를 먼저 하고 커밋/음성
+          재입력을 실행한다 — resume이 컨트롤러를 복구한 뒤 echo/advance(또는 restartFromCol의
+          announceField)가 이어지도록. */}
+      {manualCol && (
+        <ManualValueSheet
+          col={manualCol}
+          row={row}
+          currentValue={rowValues[manualCol.id] ?? ''}
+          onCommit={(v) => {
+            const colId = manualCol.id;
+            closeManualSheet();
+            onManualCommit(row, colId, v);
+          }}
+          onVoiceRetry={() => {
+            const colId = manualCol.id;
+            closeManualSheet();
+            onRestartFromCol(colId);
+          }}
+          onClose={closeManualSheet}
+        />
+      )}
       {confirmExitOpen && (
         <ExitConfirmDialog
           onCancel={() => setConfirmExitOpen(false)}
@@ -740,7 +841,12 @@ function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onCo
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 20,
+        // v0.33.0 safe-area — fixed 오버레이라 App 셸 패딩 밖. 노치/홈인디케이터 침범 방지.
+        //   Safari 탭에선 var(--sa*)=0 → 기존 20px 유지.
+        paddingTop: 'max(20px, var(--sat))',
+        paddingBottom: 'max(20px, var(--sab))',
+        paddingLeft: 'max(20px, var(--sal))',
+        paddingRight: 'max(20px, var(--sar))',
       }}
     >
       <div
@@ -794,13 +900,22 @@ function ActiveControlSteppers() {
     if (ttsDebounceRef.current !== null) window.clearTimeout(ttsDebounceRef.current);
     ttsDebounceRef.current = window.setTimeout(() => {
       void speak('이 속도로 안내합니다.', { interrupt: true, rate });
+      // v0.33.0 B-5 — ttsRate 스탭퍼 변경 로깅(이전엔 무로깅). 샘플 TTS와 같은 디바운스 창에서
+      // 최종값만 1회 기록해 연타가 링버퍼(2000)를 잠식하지 않게 한다.
+      logger.log({ type: 'app', extra: `setting_changed:ttsRate=${rate}` });
     }, 350);
   };
+  // v0.33.0 B-6 — recognitionTolerance 로깅 디바운스(이전엔 탭마다 즉시 로깅 → 연타 시 링버퍼 잠식).
+  // ttsDebounceRef와 동일 패턴·동일 350ms 창, 최종값만 기록.
+  const tolLogDebounceRef = useRef<number | null>(null);
   const [open, setOpen] = useState(false);
   const setTolerance = (next: number) => {
     const value = clampStep(next, 0.4, 0.9);
     s.set({ recognitionTolerance: value });
-    logger.log({ type: 'app', extra: `setting_changed:recognitionTolerance=${value}` });
+    if (tolLogDebounceRef.current !== null) window.clearTimeout(tolLogDebounceRef.current);
+    tolLogDebounceRef.current = window.setTimeout(() => {
+      logger.log({ type: 'app', extra: `setting_changed:recognitionTolerance=${value}` });
+    }, 350);
   };
   const setTtsRate = (next: number) => {
     const value = clampStep(next, 0.5, 2);
@@ -822,7 +937,12 @@ function ActiveControlSteppers() {
         type="button"
         data-testid="input-control-toggle"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          // v0.33.0 B-7 — 입력 조절 패널 열림/닫힘 계측(ui_suspend/ui_resume의 command 컨벤션).
+          // updater 밖에서 로깅(StrictMode의 updater 중복 호출로 이벤트가 2배로 찍히지 않게).
+          logger.log({ type: 'command', parsed: open ? 'ui_close' : 'ui_open', extra: 'input_control_panel' });
+          setOpen((v) => !v);
+        }}
         style={{
           minHeight: 42,
           borderRadius: 14,
@@ -1100,7 +1220,9 @@ function ColumnChip({
   }, [value, isActive]);
 
   const isDate = col.type === 'date';
-  const clickable = !isDate;
+  // v0.33.0 항목6 — 음성 date 컬럼은 수동 입력 시트(date input)로 편집 가능해야 하므로 클릭 허용.
+  // auto date 칩은 기존대로 비클릭(인라인 편집 미지원).
+  const clickable = !isDate || col.input === 'voice';
 
   let bg: string = 'rgba(255,255,255,0.05)';
   let border: string = 'transparent';

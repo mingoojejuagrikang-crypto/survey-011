@@ -343,6 +343,25 @@ export class SpeechController {
     try { this.rec?.abort(); } catch { /* ignore */ }
     this.attemptStart();
   }
+
+  /** v0.33.0 항목4 — 워치독 1회 즉시 실행(외부 트리거). 포그라운드 복귀(visibilitychange/pageshow)
+   *  시 useVoiceSession이 호출해, 다음 watchdog tick(최대 4초)을 기다리지 않고 죽은 인식기를 즉시
+   *  되살린다. 판정 가드는 watchdogTick과 동일(정상 가동/재시작 예약 중이면 no-op — 복귀마다 맹목
+   *  재시작해 churn을 만들지 않는다). 판정 결과를 문자열로 반환해 호출자가 `kick_result:*` 텔레메트리에
+   *  싣는다. 재시작이 실제 발생하면 lifecycle:kick_restart(항상 기록 — watchdog_restart 카운트와 분리,
+   *  SOP-003의 "watchdog 0이 이상적" 판독을 오염시키지 않기 위해). */
+  kick(): string {
+    if (!this.active) return 'inactive';
+    if (this.ttsMuted) return 'tts_muted';
+    if (this.restartingTimer !== null) return 'restart_scheduled';
+    if (this.restartPendingAfterTts) return 'pending_after_tts';
+    if (this.recRunning) return 'running';
+    if (Date.now() - this.lastStartAttemptAt <= this.watchdogIntervalMs) return 'recent_attempt';
+    this.logLifecycle('kick_restart', true);
+    try { this.rec?.abort(); } catch { /* ignore */ }
+    this.attemptStart();
+    return 'restarted';
+  }
 }
 
 // ─── Active controller reference (for TTS mute integration) ───
@@ -477,6 +496,13 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
 
 export function cancelTts() {
   if (synth) synth.cancel();
+}
+
+/** v0.33.0 항목4 — 포그라운드 복귀 시 TTS 엔진 해동. iOS Safari는 백그라운드 전환 시 synthesis를
+ *  paused로 얼려두는 경우가 있어(다음 speak()가 무음으로 씹힘), 복귀 직후 resume()을 불러준다.
+ *  paused가 아니면 no-op(무해). */
+export function resumeTtsEngine() {
+  try { synth?.resume(); } catch { /* ignore — 미지원/모의 환경 */ }
 }
 
 /** Pre-warm the TTS engine to reduce first-utterance delay.

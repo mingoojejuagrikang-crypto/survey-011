@@ -160,12 +160,13 @@ for (const vp of VIEWPORTS) {
     expect(m.scrollH).toBeLessThanOrEqual(m.clientH + 1);
     expect(m.scrollW).toBeLessThanOrEqual(m.clientW + 1);
 
-    // ② 새 3줄 구조의 핵심 정보가 visible + 뷰포트 안(현재값 > 알람 라벨 > 직전값 > 행동 안내).
+    // ② 새 3줄 구조의 핵심 정보가 visible + 뷰포트 안(현재값 > 알람 라벨 > 직전값 > 행동).
+    //   v0.33.0 항목7 — "확인 또는 수정" 텍스트 힌트는 실제 터치 버튼([확인][수정])으로 대체됐다.
     const infoTexts = [
       '-355.5',                 // P1 현재값
       '추세 알람 감소',           // P2 변화(알람 라벨)
       '100',                    // P3 직전값(카드는 원본 표기 "100"으로 표시 — trend-alert.spec 동일)
-      '확인 또는 수정',
+      '말로도 가능',              // P4 음성 병행 보조문(버튼 아래)
     ];
     const cardBox = (await card.boundingBox())!;
     for (const t of infoTexts) {
@@ -179,7 +180,16 @@ for (const vp of VIEWPORTS) {
       expect(box.y + box.height, `"${t}" 뷰포트 세로 안`).toBeLessThanOrEqual(vp.height + 1);
       expect(box.x + box.width, `"${t}" 뷰포트 가로 안`).toBeLessThanOrEqual(vp.width + 1);
     }
-    console.log(`✓ [${vp.name}] 전 정보 요소 visible + 카드/뷰포트 안`);
+    // v0.33.0 항목7 acceptance(07-10 QA P1 #2) — 두 행동 버튼이 보이고 각 44×44px 이상.
+    for (const btnId of ['anomaly-confirm-btn', 'anomaly-modify-btn']) {
+      const btn = card.locator(`[data-testid="${btnId}"]`);
+      await expect(btn, `버튼 ${btnId}`).toBeVisible();
+      const bb = (await btn.boundingBox())!;
+      expect(bb.height, `${btnId} 높이 ≥44`).toBeGreaterThanOrEqual(44);
+      expect(bb.width, `${btnId} 폭 ≥44`).toBeGreaterThanOrEqual(44);
+      expect(bb.y + bb.height, `${btnId} 뷰포트 안`).toBeLessThanOrEqual(vp.height + 1);
+    }
+    console.log(`✓ [${vp.name}] 전 정보 요소 + 확인/수정 버튼(≥44px) visible + 카드/뷰포트 안`);
 
     // ③ GL-005 가독 하한 — fit 스케일이 걸려도 현재값(hero)은 원거리 가독 크기(≥26px)를 유지한다.
     const heroFontPx = await card.evaluate((el) => {
@@ -293,11 +303,13 @@ test('무스크롤 — 375x812: 일시정지 카드 scrollHeight≤clientHeight'
     expect(m.scrollH, '375×667에서 이상치 카드 내부 스크롤 잔여(무스크롤 회귀)').toBeLessThanOrEqual(m.clientH + 1);
     expect(m.scrollW, '375×667에서 이상치 카드 가로 잘림').toBeLessThanOrEqual(m.clientW + 1);
 
-    // 핵심 정보(현재값·알람 라벨·직전값·행동 안내)는 여전히 visible.
+    // 핵심 정보(현재값·알람 라벨·직전값·행동 버튼)는 여전히 visible.
+    // v0.33.0 항목7 — "확인 또는 수정" 텍스트 힌트는 [확인][수정] 터치 버튼으로 대체.
     await expect(card.getByText('120.5', { exact: false }).first()).toBeVisible();
     await expect(card.getByText('추세 알람 증가', { exact: false }).first()).toBeVisible();
     await expect(card.getByText('100', { exact: false }).first()).toBeVisible();
-    await expect(card.getByText('확인 또는 수정', { exact: false }).first()).toBeVisible();
+    await expect(card.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+    await expect(card.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
 
     await page.screenshot({ path: `${SHOT_DIR}/anomaly-375x667-realistic.png` });
   });

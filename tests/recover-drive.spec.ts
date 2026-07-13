@@ -138,7 +138,7 @@ async function bootApp(page: Page, { signedIn }: { signedIn: boolean }) {
 async function readIdb(page: Page, store: 'sessions' | 'audioClips') {
   return page.evaluate(async (st) => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 4);
+      const r = indexedDB.open('survey-011', 6);
       r.onsuccess = () => res(r.result);
       r.onerror = () => res(null);
     });

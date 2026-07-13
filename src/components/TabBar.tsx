@@ -1,7 +1,7 @@
 import { T } from '../tokens';
 import { I } from './icons';
 
-export type TabId = 'settings' | 'voice' | 'data' | 'review';
+export type TabId = 'settings' | 'voice' | 'data' | 'review' | 'feedback';
 
 interface Props {
   tab: TabId;
@@ -14,6 +14,9 @@ const tabs: { id: TabId; label: string; icon: (s?: number, c?: string) => JSX.El
   { id: 'data', label: '데이터', icon: I.data },
   // 비교 탭 v0.12 숨김 — 재구축 시 해제 (TabId 'review' 유니온·ReviewScreen·persist는 유지)
   // { id: 'review', label: '비교', icon: I.search },
+  // v0.33.0 항목11 — 개선요청. 화면 전환 없는 팝업 방식(민구 확정): App.tsx가 setTab 없이
+  // 인터셉트해 현재 화면 위에 캡처+FeedbackModal을 띄운다 → active 하이라이트가 생기지 않는다.
+  { id: 'feedback', label: '개선요청', icon: I.feedback },
 ];
 
 export function TabBar({ tab, setTab }: Props) {
@@ -25,7 +28,7 @@ export function TabBar({ tab, setTab }: Props) {
         // env(...)는 일반 Safari 탭에서 0이라 28px가 그대로 유지된다(무회귀). minHeight로 바꿔 inset이
         // 28을 넘으면 바가 자라 내부 아이콘/라벨이 잘리지 않게 한다.
         minHeight: 88,
-        paddingBottom: 'max(28px, env(safe-area-inset-bottom, 0px))',
+        paddingBottom: 'max(28px, var(--sab))',
         paddingTop: 4,
         background: 'rgba(14,15,17,0.92)',
         backdropFilter: 'blur(20px) saturate(160%)',

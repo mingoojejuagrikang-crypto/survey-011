@@ -1,6 +1,9 @@
 import JSZip from 'jszip';
 import { logger } from './logger';
-import { loadAudioClip, loadAllAudioClipKeys, loadLogEvents, loadAllSessions } from './db';
+import {
+  loadAudioClip, loadAllAudioClipKeys, loadLogEvents, loadAllSessions,
+  loadScreenshot, loadAllScreenshotKeys,
+} from './db';
 import { getCurrentEmail } from './googleAuth';
 import { buildSessionsSnapshot } from './sessionSnapshot';
 import { attachClipsManifest, type ManifestSourceEvent } from './clipsManifest';
@@ -66,6 +69,31 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
       }
     }
   } catch { /* IDB unavailable */ }
+
+  // v0.33.0 항목10-B: screens/ — 자동 화면 캡처(JPEG) + screens-manifest.json. 키
+  // `${sessionId}:${ts}:${trigger}` 규약이라 세션 필터·조인이 클립과 동일하게 동작한다.
+  // additive-only, 실패해도 export는 성공([REVIEW-1] 빈 catch 금지 — screens_export_failed 로깅).
+  try {
+    const screenKeys = await loadAllScreenshotKeys();
+    const screens: { key: string; sessionId: string; ts: number; trigger: string; bytes: number }[] = [];
+    for (const key of screenKeys) {
+      const [sid, ts, ...trig] = key.split(':');
+      if (filterSet && !filterSet.has(sid)) continue;
+      const blob = await loadScreenshot(key);
+      if (blob) {
+        zip.file(`screens/${key}.jpg`, blob);
+        screens.push({ key, sessionId: sid, ts: Number(ts), trigger: trig.join(':'), bytes: blob.size });
+      }
+    }
+    if (screens.length > 0) {
+      zip.file(
+        'screens-manifest.json',
+        JSON.stringify({ schema: 1, appVersion: deviceWithUser.appVersion, screens }, null, 2),
+      );
+    }
+  } catch (e) {
+    logger.log({ type: 'app', extra: `screens_export_failed:${String((e as Error)?.message ?? e)}` });
+  }
 
   // v0.27.0: clips-manifest.json — 클립 감사(SOP-003 §3) 자동화용 매핑(클립 파일 ↔ 커밋값 ↔
   // confidence ↔ 종류). zip에 실제로 담긴 clips/*만 스캔하므로 목록과 파일이 어긋날 수 없다.

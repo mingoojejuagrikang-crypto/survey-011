@@ -38,7 +38,7 @@ const ANOMALY_FIT_STEPS = [
  *   완만하게 줄여 **스크롤 잔여 0**(scrollHeight ≤ clientHeight)을 보장한다. overflowY:auto는 훅
  *   미작동 시 최후 폴백일 뿐 정상 경로에선 스크롤이 생기지 않는다. ellipsis 잘림은 계속 금지. */
 export function AnomalyAlertPopup({
-  a,
+  a, onConfirm, onModify,
 }: {
   a: {
     colName: string;
@@ -55,7 +55,14 @@ export function AnomalyAlertPopup({
     kind?: 'trend' | 'range';
     /** v0.20.0 — range 알람일 때 임계 변동률(%). kind==='range'에서만 사용. */
     threshold?: number;
+    /** v0.33.0 항목7 — true면 응답 대기(trendConfirm) 알람: [확인][수정] 터치 버튼을 그린다.
+     *  false/미지정 = 정보성 팝업(수동 입력 커밋 이상치 — 버튼·확인 루프 없음, 민구 확정). */
+    awaitingResponse?: boolean;
   };
+  /** v0.33.0 항목7(07-10 QA P1 #2) — 음성 '확인'/'수정'과 동일 동작의 터치 콜백(useVoiceSession의
+   *  confirmAnomalyTouch/modifyAnomalyTouch). awaitingResponse && !corrected일 때만 렌더된다. */
+  onConfirm?: () => void;
+  onModify?: () => void;
 }) {
   const up = a.direction === 'up';
   const corrected = a.status === 'corrected';
@@ -151,20 +158,58 @@ export function AnomalyAlertPopup({
           {a.next}
         </span>
       </div>
-      {!corrected && (
-        <div
-          style={{
-            fontSize: 'max(13px, calc(clamp(15px, min(4vw, 2.3vh), 20px) * var(--fit-lo, 1)))',
-            color: T.textDim,
-            fontWeight: 850,
-            lineHeight: 1.2,
-            wordBreak: 'keep-all',
-            overflowWrap: 'anywhere',
-            textAlign: 'center',
-          }}
-        >
-          확인 또는 수정
-        </div>
+      {/* v0.33.0 항목7(07-10 QA P1 #2) — 응답 대기 알람은 "확인 또는 수정" 텍스트 힌트 대신 실제
+          터치 버튼을 그린다: 음성 명령과 동일 콜백·동일 로그, 각 ≥44px(minHeight 고정 — fit 축소
+          비대상: 장갑 터치 하한 보존). 음성도 가능하다는 보조문을 아래 작게 유지한다.
+          awaitingResponse가 없는 정보성 팝업(수동 입력 이상치)은 버튼·힌트 없이 값만 보여준다. */}
+      {!corrected && a.awaitingResponse && onConfirm && onModify && (
+        <>
+          <div
+            style={{
+              width: '100%',
+              display: 'grid', gridTemplateColumns: '1fr 1fr',
+              gap: 'max(6px, calc(clamp(8px, 1.4vh, 12px) * var(--fit-lo, 1)))',
+            }}
+          >
+            <button
+              type="button"
+              data-testid="anomaly-confirm-btn"
+              onClick={onConfirm}
+              style={{
+                minHeight: 48, borderRadius: 14,
+                border: '1px solid rgba(255,255,255,0.25)',
+                background: 'rgba(255,255,255,0.10)',
+                color: T.text, fontSize: 18, fontWeight: 900, letterSpacing: -0.3,
+                cursor: 'pointer', touchAction: 'manipulation',
+              }}
+            >
+              확인
+            </button>
+            <button
+              type="button"
+              data-testid="anomaly-modify-btn"
+              onClick={onModify}
+              style={{
+                minHeight: 48, borderRadius: 14,
+                border: `2px solid ${accent}`,
+                background: 'rgba(255,82,82,0.12)',
+                color: T.text, fontSize: 18, fontWeight: 900, letterSpacing: -0.3,
+                cursor: 'pointer', touchAction: 'manipulation',
+              }}
+            >
+              수정
+            </button>
+          </div>
+          <div
+            style={{
+              fontSize: 'max(11px, calc(clamp(12px, 1.8vh, 14px) * var(--fit-lo, 1)))',
+              color: T.textDim, fontWeight: 800, lineHeight: 1.2,
+              wordBreak: 'keep-all', textAlign: 'center',
+            }}
+          >
+            말로도 가능: "확인" / "수정"
+          </div>
+        </>
       )}
     </div>
   );

@@ -9,6 +9,13 @@ import { useSettingsStore } from '../stores/settingsStore';
 export const LOG_FOLDER_ID =
   import.meta.env.VITE_ADMIN_LOGS_FOLDER_ID || '123Qag3EJK2R4imt0vfeZwvJyvQ3yL-lw';
 
+/**
+ * v0.33.0 항목11 — 개선요청(feedback) zip의 관리자 수신 폴더 ID.
+ * 환경변수 VITE_ADMIN_FEEDBACK_FOLDER_ID(.env.example 참조). 로그 폴더와 달리 **기본값 없음** —
+ * 미설정 시 관리자 레그는 조용히 skip(사용자 Drive 레그만 수행).
+ */
+export const FEEDBACK_FOLDER_ID = import.meta.env.VITE_ADMIN_FEEDBACK_FOLDER_ID || '';
+
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
 const FILES_API = 'https://www.googleapis.com/drive/v3/files';
 
@@ -281,4 +288,101 @@ export async function uploadLogToBothDrives(
 /** @deprecated v0.10부터 uploadLogToBothDrives 사용 권장. 호환성을 위해 유지. */
 export async function uploadLogToDrive(zipBlob: Blob, filename: string): Promise<string> {
   return uploadZip(zipBlob, filename, LOG_FOLDER_ID);
+}
+
+// ─── v0.33.0 항목11 — 개선요청(feedback) 이중 업로드 ─────────────────────────
+
+const USER_FEEDBACK_SUBFOLDER = 'feedback';
+
+/** 사용자 Drive `survey-011/feedback/` 폴더 ID. 로그 폴더(userLogFolderId 캐시)와 달리 별도
+ *  settings 캐시를 두지 않는다 — 개선요청은 빈도가 낮아 검색 2회 비용이 무해하고, persist 필드
+ *  추가(마이그레이션 비용)를 피한다. */
+async function ensureUserFeedbackFolder(): Promise<string> {
+  const appId = await ensureFolder(APP_FOLDER_NAME);
+  return ensureFolder(USER_FEEDBACK_SUBFOLDER, appId);
+}
+
+/** 관리자 feedback 폴더 내 {userEmail}/ 하위 폴더를 찾거나 생성한다.
+ *  ⚠️ ensureTeamSubFolder를 재사용하지 않는 이유: 그쪽은 settingsStore.teamFolderId 캐시가
+ *  **로그 폴더의** 하위 폴더 ID를 담고 있어, 다른 parent(feedback 폴더)에 재사용하면 로그
+ *  하위 폴더로 오업로드된다. 여기는 무캐시 검색+생성(createdTime asc 최고참 선택 규칙 동일). */
+async function ensureFeedbackSubFolder(parentId: string, userEmail: string): Promise<string> {
+  const q =
+    `'${escapeDriveQ(parentId)}' in parents and name='${escapeDriveQ(userEmail)}'` +
+    ` and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const searchUrl = `${FILES_API}?q=${encodeURIComponent(q)}&fields=files(id,createdTime)&orderBy=createdTime&spaces=drive`;
+  const headers = await authHeader();
+  const sr = await fetch(searchUrl, { headers });
+  if (!sr.ok) {
+    const errText = await sr.text().catch(() => `HTTP ${sr.status}`);
+    throw new Error(`피드백 하위 폴더 검색 실패: ${errText}`);
+  }
+  const data = (await sr.json()) as { files?: { id: string }[] };
+  if (data.files && data.files.length > 0) return data.files[0].id;
+  const createRes = await fetch(FILES_API, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: userEmail,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [parentId],
+    }),
+  });
+  if (!createRes.ok) {
+    const err = await createRes.text().catch(() => `HTTP ${createRes.status}`);
+    throw new Error(`피드백 하위 폴더 생성 실패: ${err}`);
+  }
+  return ((await createRes.json()) as { id: string }).id;
+}
+
+/** 사용자 Drive `survey-011/feedback/`에 업로드. */
+export async function uploadFeedbackToUserDrive(zipBlob: Blob, filename: string): Promise<string> {
+  const folderId = await ensureUserFeedbackFolder();
+  return uploadZip(zipBlob, filename, folderId);
+}
+
+/** 관리자 feedback 폴더의 {검증된 이메일}/ 하위 폴더에 업로드. FEEDBACK_FOLDER_ID 미설정이면 throw
+ *  하지 않도록 호출 전에 adminConfigured로 분기할 것(uploadFeedbackToBothDrives가 담당). */
+export async function uploadFeedbackToAdminFolder(zipBlob: Blob, filename: string): Promise<string> {
+  if (!FEEDBACK_FOLDER_ID) throw new Error('관리자 피드백 폴더 ID 미설정');
+  const verifiedEmail = getCurrentEmail();
+  if (!verifiedEmail || !isLikelyEmail(verifiedEmail)) {
+    throw new Error('토큰에서 검증된 이메일을 가져올 수 없음');
+  }
+  const subId = await ensureFeedbackSubFolder(FEEDBACK_FOLDER_ID, verifiedEmail);
+  return uploadZip(zipBlob, filename, subId);
+}
+
+export interface FeedbackUploadResult {
+  userDriveId?: string;
+  adminDriveId?: string;
+  /** 관리자 폴더(FEEDBACK_FOLDER_ID) 설정 여부 — 미설정이면 admin 레그는 '해당 없음'. */
+  adminConfigured: boolean;
+  errors: string[];
+}
+
+/** 사용자 Drive + 관리자 폴더 이중 업로드(uploadLogToBothDrives 패턴). 한 레그 실패해도 다른
+ *  레그는 진행. 관리자 레그 실패는 non-fatal — 호출자(feedback.ts)가 사용자 레그 성공 시 성공
+ *  처리하고 관리자 레그만 재시도 큐에 남긴다. */
+export async function uploadFeedbackToBothDrives(
+  zipBlob: Blob,
+  filename: string,
+): Promise<FeedbackUploadResult> {
+  const result: FeedbackUploadResult = { errors: [], adminConfigured: !!FEEDBACK_FOLDER_ID };
+
+  try {
+    result.userDriveId = await uploadFeedbackToUserDrive(zipBlob, filename);
+  } catch (e) {
+    result.errors.push(`user_drive: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  if (FEEDBACK_FOLDER_ID) {
+    try {
+      result.adminDriveId = await uploadFeedbackToAdminFolder(zipBlob, filename);
+    } catch (e) {
+      result.errors.push(`admin_drive: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return result;
 }

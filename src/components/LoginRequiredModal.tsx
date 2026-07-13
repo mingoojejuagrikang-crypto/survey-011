@@ -51,10 +51,10 @@ export function LoginRequiredModal({
         // v0.21.0 설정탭#2 — standalone PWA safe-area. position:fixed라 앱 셸(phoneStyle) 패딩을 벗어나
         //   노치/상태바/홈인디케이터를 침범했다. backdrop 패딩에 env(safe-area-inset-*) 흡수(중앙
         //   정렬 카드가 inset만큼 안쪽으로). Safari 탭에선 env(...)=0이라 기존 20px 유지.
-        paddingTop: 'max(20px, env(safe-area-inset-top))',
-        paddingBottom: 'max(20px, env(safe-area-inset-bottom))',
-        paddingLeft: 'max(20px, env(safe-area-inset-left))',
-        paddingRight: 'max(20px, env(safe-area-inset-right))',
+        paddingTop: 'max(20px, var(--sat))',
+        paddingBottom: 'max(20px, var(--sab))',
+        paddingLeft: 'max(20px, var(--sal))',
+        paddingRight: 'max(20px, var(--sar))',
         animation: 'fade-up 200ms ease-out',
       }}
     >

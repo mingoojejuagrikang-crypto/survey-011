@@ -5,6 +5,11 @@ import type { ReviewFilter } from '../lib/reviewQuery';
 import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
 import { isCycling } from '../lib/autoValue';
 import {
+  DEFAULT_POSITIVE_BEEP_ID,
+  DEFAULT_NEGATIVE_BEEP_ID,
+  isBeepVariantId,
+} from '../lib/beepVariants';
+import {
   saveSettingsBackup,
   loadSettingsBackup,
   deleteSettingsBackup,
@@ -113,6 +118,13 @@ interface SettingsState {
    *  브라우저 final(무음 종료감지)을 기다리지 않고 조기 커밋한다. 미완성 숫자 절단 리스크가 있어
    *  기본 false(실기기 A/B용). */
   fastRecognition: boolean;
+  /** v0.33.0 10-B — 입력화면 자동 캡처(음성입력 반응 시점 JPEG 저장, 로그 zip 동봉). 기본 on
+   *  (민구 확정). 가드(2초 스로틀·세션당 100장)는 src/lib/screenshot.ts가 SSOT. */
+  autoScreenCapture: boolean;
+  /** v0.33.0 10-C — 비프음 선택(긍정=값 수용, 부정=이상치 알람). 값은 beepVariants.ts의 변형 id.
+   *  기본 = 현행 사운드(상승/하강 스윕). 해석(kind→극성→변형)은 src/lib/beep.ts가 SSOT. */
+  beepPositiveId: string;
+  beepNegativeId: string;
   /** Preferred Web Speech API voice name for ko-KR TTS. Empty string = auto (first available). */
   preferredVoiceName: string;
   /** v0.10.1: 캐시된 관리자 폴더 내 본인 팀 하위 폴더 ID — race 방지용. 첫 결정 후 재사용. */
@@ -242,6 +254,9 @@ export function makeSettingsDefaults(): SettingsDefaults {
     sessionAutoLabel: null,
     sessionCustomLabel: null,
     fastRecognition: false,
+    autoScreenCapture: true,
+    beepPositiveId: DEFAULT_POSITIVE_BEEP_ID,
+    beepNegativeId: DEFAULT_NEGATIVE_BEEP_ID,
     preferredVoiceName: '',
     teamFolderId: null,
     userLogFolderId: null,
@@ -407,6 +422,12 @@ export const useSettingsStore = create<SettingsState>()(
         // v0.22.0 — 자유입력 세션명. 구버전 영속본엔 없으므로 null로 치유(미사용=자동 라벨).
         if (typeof s.sessionCustomLabel !== 'string' && s.sessionCustomLabel !== null) s.sessionCustomLabel = null;
         if (typeof s.fastRecognition !== 'boolean') s.fastRecognition = false;
+        // v0.33.0 10-B/10-C — 자동 캡처·비프음 선택 신설. persist version은 11 유지(bump 금지 —
+        // sessionCustomLabel과 같은 무조건 coercion 패턴: 구버전 누락/손상은 안전 기본값으로 치유,
+        // version을 올리면 settings-migration.spec의 version===11 단정이 깨진다).
+        if (typeof s.autoScreenCapture !== 'boolean') s.autoScreenCapture = true;
+        if (!isBeepVariantId(s.beepPositiveId, 'positive')) s.beepPositiveId = DEFAULT_POSITIVE_BEEP_ID;
+        if (!isBeepVariantId(s.beepNegativeId, 'negative')) s.beepNegativeId = DEFAULT_NEGATIVE_BEEP_ID;
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
         if (typeof s.userLogFolderId !== 'string' && s.userLogFolderId !== null) s.userLogFolderId = null;

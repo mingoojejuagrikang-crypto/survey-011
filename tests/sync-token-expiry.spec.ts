@@ -117,7 +117,7 @@ async function seedNoToken(page: Page, session: unknown) {
     // 토큰 없음 = 만료/미로그인 상태.
     localStorage.setItem('survey-011-settings-v3', JSON.stringify(settings));
     await new Promise<void>((resolve) => {
-      const open = indexedDB.open('survey-011', 4);
+      const open = indexedDB.open('survey-011', 6);
       open.onupgradeneeded = () => {
         const db = open.result;
         if (!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions', { keyPath: 'id' });
@@ -127,6 +127,8 @@ async function seedNoToken(page: Page, session: unknown) {
           os.createIndex('bySessionId', 'sessionId');
         }
         if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+          if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots'); // v0.33.0 10-B
+          if (!db.objectStoreNames.contains('feedbackQueue')) db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true }); // v0.33.0 항목11
       };
       open.onsuccess = () => {
         const db = open.result;

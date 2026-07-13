@@ -2,7 +2,7 @@ import { openDB, type IDBPDatabase } from 'idb';
 import type { Session } from '../types';
 
 const DB_NAME = 'survey-011';
-const DB_VERSION = 4;
+const DB_VERSION = 6;
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -32,6 +32,18 @@ function getDb() {
           // 경과/강제종료 후 localStorage를 evict하면 시트 등록이 통째로 풀리던 문제(민구 보고)의
           // 방어선 — localStorage가 비면 여기서 복원한다. 키=persist name, 값=JSON 문자열.
           db.createObjectStore('kv');
+        }
+        if (oldVersion < 5) {
+          // v0.33.0 항목10-B: 입력화면 자동 캡처(JPEG 저화질) 저장소. 키 `${sessionId}:${ts}:${trigger}`
+          // — audioClips와 같은 `${sessionId}:` 접두 규약이라 세션 삭제 cascade가 prefix 매칭으로 동작.
+          db.createObjectStore('screenshots');
+        }
+        if (oldVersion < 6) {
+          // v0.33.0 항목11: 개선요청(feedback) 오프라인/미로그인 큐. 전송 실패/불가 시 zip을 통째로
+          // 보관했다가 온라인·로그인 복귀 시 자동 재전송한다(feedback.ts flushFeedbackQueue).
+          // ⚠️ [ENV-11] DB_VERSION bump — 테스트의 `indexedDB.open('survey-011', N)` 하드코딩·스키마
+          // 미러 6곳을 함께 갱신할 것(grep 체크리스트).
+          db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true });
         }
       },
       terminated() {
@@ -64,19 +76,35 @@ export async function loadAllSessions(): Promise<Session[]> {
   return all;
 }
 
-/** Delete session row and cascade-delete its audio clips + log events.
- *  Clip keys follow `${sessionId}:${row}:${colId}` so prefix match is safe. */
+/** Delete session row and cascade-delete its audio clips + log events + screenshots.
+ *  Clip/screenshot keys follow `${sessionId}:...` so prefix match is safe. */
 export async function deleteSession(id: string): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction(['sessions', 'audioClips', 'logEvents'], 'readwrite');
+  // v0.33.0 10-B — screenshots cascade. 일부 테스트 컨텍스트는 자체 upgrade 핸들러로 구버전 스키마
+  // (screenshots 없음)를 만들 수 있어 방어적으로 존재 확인 후 트랜잭션에 포함한다.
+  const hasScreens = db.objectStoreNames.contains('screenshots');
+  const storeNames = hasScreens
+    ? ['sessions', 'audioClips', 'logEvents', 'screenshots']
+    : ['sessions', 'audioClips', 'logEvents'];
+  const tx = db.transaction(storeNames, 'readwrite');
   await tx.objectStore('sessions').delete(id);
 
+  const prefix = `${id}:`;
   const clipsStore = tx.objectStore('audioClips');
   const allKeys = (await clipsStore.getAllKeys()) as string[];
-  const prefix = `${id}:`;
   for (const key of allKeys) {
     if (typeof key === 'string' && key.startsWith(prefix)) {
       await clipsStore.delete(key);
+    }
+  }
+
+  if (hasScreens) {
+    const screensStore = tx.objectStore('screenshots');
+    const screenKeys = (await screensStore.getAllKeys()) as string[];
+    for (const key of screenKeys) {
+      if (typeof key === 'string' && key.startsWith(prefix)) {
+        await screensStore.delete(key);
+      }
     }
   }
 
@@ -138,6 +166,30 @@ export async function deleteAudioClip(key: string): Promise<void> {
 export async function loadAllAudioClipKeys(): Promise<string[]> {
   const db = await getDb();
   return (await db.getAllKeys('audioClips')) as string[];
+}
+
+// ─── 자동 화면 캡처 (v0.33.0 항목10-B) ─────────────────────────────────────
+/** 캡처 JPEG를 screenshots 스토어에 저장. audioClips와 같은 {buf,type} 분해 저장(iOS Safari
+ *  Blob-in-IDB 안전 규약). 캡처는 항상 best-effort — 실패는 호출자(screenshot.ts)가 로깅한다. */
+export async function saveScreenshot(key: string, blob: Blob): Promise<void> {
+  const db = await getDb();
+  const buf = await blob.arrayBuffer();
+  const record: StoredClip = { buf, type: blob.type || 'image/jpeg' };
+  await db.put('screenshots', record, key);
+}
+
+export async function loadScreenshot(key: string): Promise<Blob | null> {
+  const db = await getDb();
+  const v = await db.get('screenshots', key);
+  if (v == null) return null;
+  if (isStoredClip(v)) return new Blob([v.buf], { type: v.type });
+  if (v instanceof Blob) return v;
+  return null;
+}
+
+export async function loadAllScreenshotKeys(): Promise<string[]> {
+  const db = await getDb();
+  return (await db.getAllKeys('screenshots')) as string[];
 }
 
 // ─── 설정 내구 미러 (v0.14.0 C — localStorage eviction 방어) ────────────────
@@ -205,6 +257,90 @@ export async function loadSheetsRecord(): Promise<SheetsRecord | null> {
   } catch {
     return null;
   }
+}
+
+// ─── 과거값 인덱스 내구 레코드 (v0.33.0 항목5 — 로그인 무관 이상치 알람) ─────────
+/** v0.33.0 항목5 — 과거값 인덱스(pastValues)의 IDB write-through 레코드. 07-13 실기기에서 토큰
+ *  만료(~1h, [AUTH-4]) 후 `past_index_skip:not_signed_in`으로 이상치 알람이 침묵해 -99.5% 오데이터가
+ *  무알람 통과했다([TREND-AUTH-1] 잔여). 이 레코드는 loadPastIndex 성공 시마다 갱신되고, 부팅/세션
+ *  시작 시 fp 일치 + 14일 이내면 폴백 인덱스로 복원되어 **미로그인이어도 알람이 작동**한다.
+ *  기존 'kv' 스토어 재사용(신규 스토어·DB 버전 bump 불요). 직렬화/검증은 pastValues.ts 소유 —
+ *  여기서는 JSON-호환 레코드의 round-trip만 담당한다(SheetsRecord 패턴). */
+const PAST_INDEX_RECORD_KEY = '__past_index__';
+
+export async function savePastIndexBackup(rec: unknown): Promise<void> {
+  try {
+    const db = await getDb();
+    await db.put('kv', rec, PAST_INDEX_RECORD_KEY);
+  } catch { /* IDB 불가/쿼터 — 인메모리 캐시(모듈 캐시)가 1차 경로이므로 무해 */ }
+}
+
+export async function loadPastIndexBackup(): Promise<unknown | null> {
+  try {
+    const db = await getDb();
+    const v = await db.get('kv', PAST_INDEX_RECORD_KEY);
+    return v ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 설정 초기화(시트 삭제 opt-in) 시 함께 비운다 — fp 불일치로 어차피 안 쓰이지만 데이터 위생. */
+export async function deletePastIndexBackup(): Promise<void> {
+  try {
+    const db = await getDb();
+    await db.delete('kv', PAST_INDEX_RECORD_KEY);
+  } catch { /* ignore */ }
+}
+
+// ─── 개선요청 큐 (v0.33.0 항목11 — 오프라인/미로그인/부분실패 재전송) ────────────
+/** 큐 항목: 만들어 둔 feedback zip 원본 + 남은 업로드 레그. zip은 ArrayBuffer로 분해 저장
+ *  (iOS Safari Blob-in-IDB 규약 — StoredClip과 동일 이유). 두 레그가 모두 끝나야 삭제된다. */
+export interface FeedbackQueueItem {
+  id?: number;
+  createdAt: number;
+  filename: string;
+  zipBuf: ArrayBuffer;
+  /** 사용자 Drive(survey-011/feedback/) 레그 미완 여부. */
+  pendingUser: boolean;
+  /** 관리자 폴더(<email>/ 하위) 레그 미완 여부 — non-fatal: 사용자 레그만 성공해도 UX상 성공. */
+  pendingAdmin: boolean;
+  attempts: number;
+  lastError?: string;
+}
+
+/** 큐 스토어 부재(구스키마 미러로 만든 테스트 DB 등) 방어 — 전 함수 공통. */
+async function feedbackStoreReady(): Promise<IDBPDatabase | null> {
+  try {
+    const db = await getDb();
+    return db.objectStoreNames.contains('feedbackQueue') ? db : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function enqueueFeedback(item: Omit<FeedbackQueueItem, 'id'>): Promise<void> {
+  const db = await feedbackStoreReady();
+  if (!db) return;
+  await db.add('feedbackQueue', item);
+}
+
+export async function loadFeedbackQueue(): Promise<FeedbackQueueItem[]> {
+  const db = await feedbackStoreReady();
+  if (!db) return [];
+  return (await db.getAll('feedbackQueue')) as FeedbackQueueItem[];
+}
+
+export async function updateFeedbackQueueItem(item: FeedbackQueueItem): Promise<void> {
+  const db = await feedbackStoreReady();
+  if (!db || item.id == null) return;
+  await db.put('feedbackQueue', item);
+}
+
+export async function deleteFeedbackQueueItem(id: number): Promise<void> {
+  const db = await feedbackStoreReady();
+  if (!db) return;
+  await db.delete('feedbackQueue', id);
 }
 
 // ─── Log events (v5.2 Codex 4차 MEDIUM) ────────────────────────────────────

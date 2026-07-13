@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { T } from '../tokens';
 import { I } from '../components/icons';
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -219,6 +219,9 @@ export function DataScreen() {
   }, [runZipExport]);
 
   const handleCellSave = async (sessionId: string, rowIndex: number, colId: string, value: string) => {
+    // v0.33.0 B-8 — 데이터탭 셀 수동 편집 계측(음성탭 touch_commit :2256과 대칭 — 이전엔 무로깅이라
+    // 오터치/수동 정정을 로그로 재구성할 수 없었다). 편집 대상 세션 id를 명시(현재 음성 세션 아님).
+    logger.log({ type: 'command', parsed: 'data_edit', extra: 'touch', text: value, sessionId, row: rowIndex, colId });
     updateRowValue(sessionId, rowIndex, colId, value);
     const updated = useDataStore.getState().sessions.find((x) => x.id === sessionId);
     if (updated) {
@@ -1665,7 +1668,12 @@ function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: (
         backdropFilter: 'blur(4px)',
         WebkitBackdropFilter: 'blur(4px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16,
+        // v0.33.0 safe-area — position:fixed라 App 셸 패딩 밖. 노치/홈인디케이터 침범 방지
+        //   (SettingsScreen backdrop 패턴). 일반 Safari 탭에선 var(--sa*)=0 → 기존 16px 유지.
+        paddingTop: 'max(16px, var(--sat))',
+        paddingBottom: 'max(16px, var(--sab))',
+        paddingLeft: 'max(16px, var(--sal))',
+        paddingRight: 'max(16px, var(--sar))',
         animation: 'fade-up 200ms ease-out',
       }}
     >
@@ -1704,6 +1712,9 @@ function SessionCard({
     ? (dirtyCount > 0 ? `${dirtyCount}행 변경` : `${session.syncedRows}/${session.completedRows}`)
     : '미업로드';
   const syncColor = fullySynced ? T.green : partial ? T.amber : T.textMute;
+  // v0.33.0 #9 — 완료/작성중 구분(07-10 QA P1 #4). 부분입력 세션이 "0행"으로만 보여 데이터가
+  // 없다고 오판·삭제할 위험 → 미완료 행이 있으면 amber '작성중 N' 배지를 완료 배지 옆에 표시.
+  const draftRows = Math.max(0, session.rows.length - session.completedRows);
 
   return (
     <div
@@ -1759,6 +1770,27 @@ function SessionCard({
             </span>
             <span style={{ fontSize: 13, color: T.textMute, fontWeight: 600 }}>행</span>
           </div>
+          {draftRows > 0 && (
+            <div
+              data-testid="draft-badge"
+              title={`미완료(작성중) ${draftRows}행 — 카드를 열어 이어서 채울 수 있습니다`}
+              style={{
+                display: 'flex', alignItems: 'baseline', gap: 4,
+                padding: '6px 10px', borderRadius: 10,
+                background: 'rgba(255,179,0,0.10)',
+              }}
+            >
+              <span style={{ fontSize: 13, color: T.amber, fontWeight: 600 }}>작성중</span>
+              <span
+                style={{
+                  fontSize: 18, fontWeight: 800, color: T.amber,
+                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                }}
+              >
+                {draftRows}
+              </span>
+            </div>
+          )}
           <div
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
@@ -1812,7 +1844,10 @@ function SessionDetailModal({
         onClick={(e) => e.stopPropagation()}
         style={{
           background: T.card, borderRadius: 18, border: `1px solid ${T.line}`,
-          width: '100%', maxWidth: 'min(720px, 96vw)', maxHeight: '90vh',
+          // v0.33.0 safe-area — maxHeight를 90vh → 100%로. vh는 safe-area를 모르는 물리 뷰포트
+          //   기준이라 아이폰 노치/홈바를 침범했다(유력 원인). 부모 Backdrop이 safe-area 패딩을
+          //   가지므로 그 콘텐츠 박스의 100%가 곧 "안전한 최대 높이"다.
+          width: '100%', maxWidth: 'min(720px, 96vw)', maxHeight: '100%',
           display: 'flex', flexDirection: 'column',
           boxShadow: '0 20px 60px rgba(0,0,0,0.5)', overflow: 'hidden',
         }}
@@ -1883,6 +1918,12 @@ function FullRowTable({
   const rows = session.rows;
   const colWidthFor = (c: Column) =>
     c.type === 'date' ? 110 : c.type === 'text' || c.type === 'name' ? 140 : c.type === 'options' ? 100 : 80;
+  // v0.33.0 #9 — 값/클립 컬럼 분리(07-10 QA P1). 재생 버튼이 값 셀 안에 붙어 있어 값을 탭하려다
+  // 클립을 오터치하던 구조를 해체: 클립이 하나라도 있는 voice 컬럼 오른쪽에 44px 클립 전용 컬럼을
+  // 렌더하고, 값 셀(EditableCell)은 값 전용으로 만든다. 클립 없는 세션은 컬럼 자체가 안 생긴다.
+  const clipColIds = cols
+    .filter((c) => c.input === 'voice' && rows.some((r) => !!r.audioClips?.[c.id]))
+    .map((c) => c.id);
 
   return (
     <div
@@ -1920,17 +1961,32 @@ function FullRowTable({
               #
             </div>
             {cols.map((c) => (
-              <div
-                key={c.id}
-                style={{
-                  width: colWidthFor(c), padding: '8px 8px',
-                  fontSize: 12, fontWeight: 700, color: T.textDim,
-                  borderRight: `1px solid ${T.line}`,
-                  whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere',
-                }}
-              >
-                {c.name}
-              </div>
+              <Fragment key={c.id}>
+                <div
+                  style={{
+                    width: colWidthFor(c), padding: '8px 8px',
+                    fontSize: 12, fontWeight: 700, color: T.textDim,
+                    borderRight: `1px solid ${T.line}`,
+                    whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere',
+                  }}
+                >
+                  {c.name}
+                </div>
+                {clipColIds.includes(c.id) && (
+                  <div
+                    data-testid={`clip-col-header-${c.id}`}
+                    title={`${c.name} 음성 클립`}
+                    style={{
+                      width: 44, flexShrink: 0, padding: '8px 4px',
+                      fontSize: 11, fontWeight: 700, color: T.textMute,
+                      textAlign: 'center', whiteSpace: 'nowrap',
+                      borderRight: `1px solid ${T.line}`,
+                    }}
+                  >
+                    클립
+                  </div>
+                )}
+              </Fragment>
             ))}
           </div>
 
@@ -1954,14 +2010,17 @@ function FullRowTable({
                 {r.index}
               </div>
               {cols.map((c) => (
-                <EditableCell
-                  key={c.id}
-                  col={c}
-                  value={r.values[c.id] ?? ''}
-                  width={colWidthFor(c)}
-                  audioClipKey={r.audioClips?.[c.id]}
-                  onSave={(v) => onCellSave(r.index, c.id, v)}
-                />
+                <Fragment key={c.id}>
+                  <EditableCell
+                    col={c}
+                    value={r.values[c.id] ?? ''}
+                    width={colWidthFor(c)}
+                    onSave={(v) => onCellSave(r.index, c.id, v)}
+                  />
+                  {clipColIds.includes(c.id) && (
+                    <ClipCell clipKey={r.audioClips?.[c.id]} value={r.values[c.id] ?? ''} />
+                  )}
+                </Fragment>
               ))}
             </div>
           ))}
@@ -1978,7 +2037,9 @@ function FullRowTable({
           paddingTop: 8, fontSize: 12, color: T.textMute, textAlign: 'center',
         }}
       >
-        총 {rows.length}행 · 셀을 탭하면 수정할 수 있습니다
+        {clipColIds.length > 0
+          ? `총 ${rows.length}행 · 값 셀 탭=수정 · 클립 열 탭=음성 재생`
+          : `총 ${rows.length}행 · 셀을 탭하면 수정할 수 있습니다`}
       </div>
     </div>
   );
@@ -2060,6 +2121,10 @@ const clipPlayer = (() => {
         queue = queue.filter((k) => k !== key); notify();
         return;
       }
+      // v0.33.0 B-9 — 클립 재생 계측(이전엔 무로깅 → 클립버튼 오터치 제보를 검증할 수 없었다).
+      // 실제 재생 의도(enqueue)만 기록 — 정지/취소 탭은 로깅하지 않아 링버퍼를 아낀다. 키에서
+      // 세션 id를 파생해 clipsManifest 조인이 가능하게 한다(clipKey 동봉).
+      logger.log({ type: 'clip', extra: 'clip_play', clipKey: key, sessionId: key.split(':')[0] });
       queue.push(key); notify();
       void playNext();
     },
@@ -2068,23 +2133,20 @@ const clipPlayer = (() => {
   };
 })();
 
+/** v0.33.0 #9 — 값 전용 셀. 클립 재생 버튼은 ClipCell(전용 44px 컬럼)로 분리되어
+ *  값 탭=편집만 남았다(재생 버튼 오터치 구조적 소멸, 07-10 QA P1). */
 function EditableCell({
-  col, value, width, audioClipKey, onSave,
+  col, value, width, onSave,
 }: {
   col: Column;
   value: string;
   width: number;
-  audioClipKey?: string;
   onSave: (v: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [local, setLocal] = useState(value);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
   const skipBlurRef = useRef(false);
-  const clipState = useSyncExternalStore(
-    clipPlayer.subscribe,
-    () => (audioClipKey ? clipPlayer.stateOf(audioClipKey) : 'idle'),
-  );
 
   useEffect(() => { if (!editing) setLocal(value); }, [value, editing]);
   useEffect(() => {
@@ -2114,7 +2176,6 @@ function EditableCell({
   const keyCancel = () => { skipBlurRef.current = true; cancel(); };
 
   const isVoice = col.input === 'voice';
-  const hasClip = isVoice && !!audioClipKey;
   const isDate = col.type === 'date';
   const isText = col.type === 'text' || col.type === 'name';
   const inputType = isDate ? 'date' : 'text';
@@ -2180,46 +2241,66 @@ function EditableCell({
           />
         )
       ) : (
-        <>
-          <button
-            onClick={() => setEditing(true)}
-            style={{
-              flex: 1, minHeight: 36, minWidth: 0,
-              padding: '8px 8px',
-              background: 'transparent', border: 'none',
-              color: isVoice ? T.text : T.textDim,
-              fontSize: 14, fontWeight: 700,
-              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-              textAlign: 'left', cursor: 'pointer',
-              whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere',
-            }}
-          >
-            {value || <span style={{ color: T.textMute, opacity: 0.5 }}>—</span>}
-          </button>
-          {hasClip && (
-            <button
-              onClick={(e) => { e.stopPropagation(); if (audioClipKey) clipPlayer.toggle(audioClipKey); }}
-              // v0.13.0 R4 — 클립이 부자연/판독불가여도 어떤 값을 말한 클립인지 화면으로 확정할 수 있게
-              // 재생 버튼 title에 인식값을 함께 노출(셀 텍스트는 옆에 이미 보이나, 재생 어포던스에도 명시).
-              title={
-                clipState === 'playing' ? '정지'
-                : clipState === 'queued' ? '대기 중 (탭하면 취소)'
-                : value ? `음성 재생: ${value}` : '음성 재생'
-              }
-              aria-label={value ? `음성 재생: ${value}` : '음성 재생'}
-              style={{
-                flexShrink: 0,
-                width: 28, padding: '0 4px',
-                background: 'transparent', border: 'none',
-                color: clipState === 'playing' ? T.amber : clipState === 'queued' ? T.textMute : T.blue,
-                cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-            >
-              {clipState === 'playing' ? I.stop(12, T.amber) : I.play(12, clipState === 'queued' ? T.textMute : T.blue)}
-            </button>
-          )}
-        </>
+        <button
+          onClick={() => setEditing(true)}
+          style={{
+            flex: 1, minHeight: 36, minWidth: 0,
+            padding: '8px 8px',
+            background: 'transparent', border: 'none',
+            color: isVoice ? T.text : T.textDim,
+            fontSize: 14, fontWeight: 700,
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            textAlign: 'left', cursor: 'pointer',
+            whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere',
+          }}
+        >
+          {value || <span style={{ color: T.textMute, opacity: 0.5 }}>—</span>}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** v0.33.0 #9 — 클립 재생 전용 셀(44px 컬럼). 값 셀(EditableCell)에서 재생 버튼을 분리해
+ *  오터치를 구조적으로 없앤다. 터치 타깃은 44×44 이상(장갑·한 손 계약). 재생 상태 색·title·
+ *  aria-label 규약은 기존(v0.13.0 R4) 그대로 승계 — clipPlayer.toggle 내부의 clip_play 계측도
+ *  경로 불변. 클립 없는 행은 빈 자리만 유지해 컬럼 정렬을 지킨다. */
+function ClipCell({ clipKey, value }: { clipKey?: string; value: string }) {
+  const clipState = useSyncExternalStore(
+    clipPlayer.subscribe,
+    () => (clipKey ? clipPlayer.stateOf(clipKey) : 'idle'),
+  );
+  return (
+    <div
+      data-testid="clip-cell"
+      style={{
+        width: 44, flexShrink: 0, minHeight: 44,
+        borderRight: `1px solid ${T.line}`,
+        display: 'flex', alignItems: 'stretch',
+      }}
+    >
+      {clipKey && (
+        <button
+          onClick={() => clipPlayer.toggle(clipKey)}
+          data-testid="clip-cell-button"
+          // v0.13.0 R4 — 클립이 부자연/판독불가여도 어떤 값을 말한 클립인지 화면으로 확정할 수 있게
+          // 재생 버튼 title에 인식값을 함께 노출.
+          title={
+            clipState === 'playing' ? '정지'
+            : clipState === 'queued' ? '대기 중 (탭하면 취소)'
+            : value ? `음성 재생: ${value}` : '음성 재생'
+          }
+          aria-label={value ? `음성 재생: ${value}` : '음성 재생'}
+          style={{
+            flex: 1, minWidth: 44, minHeight: 44, padding: 0,
+            background: 'transparent', border: 'none',
+            color: clipState === 'playing' ? T.amber : clipState === 'queued' ? T.textMute : T.blue,
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          {clipState === 'playing' ? I.stop(14, T.amber) : I.play(14, clipState === 'queued' ? T.textMute : T.blue)}
+        </button>
       )}
     </div>
   );

@@ -303,7 +303,9 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   await expect(popup).toBeVisible();
   await expect(popup).toContainText('100');
   await expect(popup).toContainText('120.5');
-  await expect(popup).toContainText('확인 또는 수정');
+  // v0.33.0 항목7 — "확인 또는 수정" 텍스트 힌트는 [확인][수정] 터치 버튼으로 대체(음성과 동일 동작).
+  await expect(popup.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+  await expect(popup.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
 
   // "확인" → 커밋된 값 유지, 종경으로 진행.
   await fireStt(page, '확인', 500);

@@ -398,6 +398,14 @@
 - **출처:** `2026-07-06 v0.27.0 데스크탑 재현 QA(Sonar 2차 라운드)`, `~/projects/survey-011-test-harness/qa-antigravity/results/c1-w8-flaky-results.md` → **survey-011 v0.28.0** 수정.
 - **현재 상태:** ✅수정됨(`tests/recover-drive.spec.ts` `bootApp()`). 방치 시 `zip-new`(ISO(2))도 며칠 내로 같은 방식으로 30일 창 밖으로 밀려나 더 이른 단계에서 실패했을 것 — 이번 수정으로 실행 시점과 무관하게 항상 통과.
 
+### [ENV-11] 테스트들이 IDB open 버전을 하드코딩 — 앱 DB_VERSION bump 시 일괄 VersionError
+- **증상(선제 발견, 실패 전 차단):** `src/lib/db.ts`의 `DB_VERSION`을 4→5로 올리자(v0.33.0 10-B `screenshots` 스토어 신설) 테스트 ~15개 파일이 `indexedDB.open('survey-011', 4)`를 하드코딩하고 있어, 앱이 먼저 부팅해 DB를 v5로 올린 뒤 테스트 시딩이 낮은 버전으로 열며 **VersionError**로 전부 깨질 상황이었다([ENV-3] "버전 하드코딩" 계열의 IDB 판).
+- **원인:** 시딩 헬퍼들이 앱 스키마 버전을 복제(하드코딩). 일부(pre-boot 시딩 5곳)는 자체 `onupgradeneeded`로 앱 스키마 미러까지 들고 있어, 스토어 추가 시 미러도 함께 갱신해야 한다.
+- **해결·회피:** ① 전 테스트 `open('survey-011', 4)` → `5` 일괄 치환 + 스키마 미러 6곳(`v54-voice-data`·`settings-migration`·`recover-list-stage`·`sync-header-mapping`·`sync-skip-rows`·`sync-token-expiry`)에 `screenshots` 스토어 추가. ② 앱 `deleteSession`은 `objectStoreNames.contains('screenshots')` 방어 — 구스키마 DB(미갱신 미러)에서도 cascade가 throw하지 않는다. **다음 DB_VERSION bump 때도 같은 일괄 갱신 필요**(grep `indexedDB.open('survey-011'`). 사후 시딩(post-boot)은 버전 인자 없이 여는 게 근본 회피지만, pre-boot 시딩은 스키마 미러가 필요해 버전 명시가 불가피 — 미러와 앱 upgrade 블록을 함께 고칠 것.
+- **출처:** `2026-07-13 세션` (survey-011 v0.33.0 항목10-B 작업 중)
+- **재발 1회(2026-07-13, v0.33.0 항목11 DB v5→6):** 리터럴 grep(`indexedDB.open('survey-011'`)로 27곳을 치환했는데 `v54-voice-data.spec.ts`만 **상수 변수 형태**(`const DB_VERSION = 5` → `open(dbName, dbVersion)`)라 grep을 빠져나가 11케이스 VersionError. **체크리스트 보강: 리터럴 grep + `grep -rn "DB_VERSION" tests/`(변수 형태) 둘 다 돌릴 것.** 스키마 미러 6곳에는 `feedbackQueue`(keyPath:'id', autoIncrement)도 추가됨.
+- **현재 상태:** ✅수정됨(전 스위트 588 passed로 검증) | ⚠️주시(다음 bump 시 재발 소지 — 위 grep 체크리스트 2종)
+
 ---
 
 ## ⑥ 인증 · Drive

@@ -115,6 +115,11 @@ const entries: LogEntry[] = [];
  *  exportLogZip(sessionIds)의 세션 필터 ZIP에서 누락되지 않도록 한다. */
 let currentSessionId: string | undefined;
 
+/** v0.33.0 10-B — 로그 tap 리스너. 자동 화면 캡처(screenshot.ts)가 "앱 반응으로 화면이 바뀌는
+ *  순간"(커밋 echo·이상치 알람·재질문·행 이동·micLost·pause/resume·세션 시작/종료)을 이미 로깅되는
+ *  이벤트에서 파생하기 위한 단일 배선 지점. 리스너 예외는 절대 로깅 흐름을 깨지 않는다. */
+const listeners = new Set<(entry: LogEntry) => void>();
+
 export const logger = {
   setSessionId(id: string | undefined): void {
     currentSessionId = id;
@@ -158,6 +163,14 @@ export const logger = {
     if (entries.length > 2000) entries.splice(0, entries.length - 2000);
     // Fire-and-forget IDB persistence (failures fall back to memory-only behavior)
     void appendLogEvent(full as unknown as Parameters<typeof appendLogEvent>[0]);
+    // v0.33.0 10-B — tap 리스너 통지(자동 캡처 트리거 파생). 리스너 오류는 non-fatal.
+    listeners.forEach((fn) => { try { fn(full); } catch { /* non-fatal */ } });
+  },
+
+  /** v0.33.0 10-B — 로그 tap 구독. 반환 함수로 해지. */
+  subscribe(fn: (entry: LogEntry) => void): () => void {
+    listeners.add(fn);
+    return () => { listeners.delete(fn); };
   },
 
   getAll(): LogEntry[] {

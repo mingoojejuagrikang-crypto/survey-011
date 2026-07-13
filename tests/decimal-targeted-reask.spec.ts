@@ -85,6 +85,17 @@ const MOCK_INIT_SCRIPT = `
     var event = { resultIndex: 0, results: { length: 1, 0: { isFinal: true, length: 1, 0: { transcript: transcript, confidence: confidence } } } };
     (this._ls['result'] || []).forEach(function(cb) { cb(event); });
   };
+  // v0.33.0 [STT-15] 재현용 — 대안(alternatives) 포함 final 결과 주입(log-replay.spec.ts와 동일 패턴).
+  MockSTT.prototype.fireResultWithAlts = function(transcript, confidence, alts) {
+    var alternatives = [{ transcript: transcript, confidence: confidence }];
+    for (var i = 0; i < (alts || []).length; i++) {
+      alternatives.push({ transcript: alts[i], confidence: confidence * 0.9 });
+    }
+    var result = { isFinal: true, length: alternatives.length };
+    for (var j = 0; j < alternatives.length; j++) result[j] = alternatives[j];
+    var event = { resultIndex: 0, results: { length: 1, 0: result } };
+    (this._ls['result'] || []).forEach(function(cb) { cb(event); });
+  };
   try { Object.defineProperty(window, 'SpeechRecognition', { value: MockSTT, writable: true, configurable: true, enumerable: true }); }
   catch(e1) { try { window.SpeechRecognition = MockSTT; } catch(e2) {} }
   try { Object.defineProperty(window, 'webkitSpeechRecognition', { value: MockSTT, writable: true, configurable: true, enumerable: true }); }
@@ -94,6 +105,14 @@ const MOCK_INIT_SCRIPT = `
 
 async function fireStt(page: Page, transcript: string, waitMs = 300) {
   await page.evaluate((t) => { (window as any).__mockSTT?.fireResult(t, 0.95); }, transcript);
+  await page.waitForTimeout(waitMs);
+}
+
+async function fireSttAlts(page: Page, transcript: string, alts: string[], waitMs = 400) {
+  await page.evaluate(
+    ({ t, a }) => { (window as any).__mockSTT?.fireResultWithAlts(t, 0.95, a); },
+    { t: transcript, a: alts },
+  );
   await page.waitForTimeout(waitMs);
 }
 
@@ -190,4 +209,67 @@ test('A1 타깃 재질문 후 전체값 재발화: "111 점 에" → "111.5" →
   const session = sessions[sessions.length - 1];
   const row1 = session.rows.find((r: any) => r.index === 1);
   expect(row1?.values?.c8).toBe('111.5');
+});
+
+// ─── v0.33.0 [STT-15] — 소수 재질문 중 alt 폴백이 조각을 전체값으로 오커밋 (07-13 실기기 A/B) ───
+//
+// S2 재현: "211 점 의"(decimal_fraction_lost) → 재질문 → primary "하악" 파싱 실패 →
+// alts 루프가 "하나"를 fractionWhole=211 문맥을 모른 채 **전체값 "1"로 커밋**(무알람 시트 동기화).
+// 수정 후: 소수부 재질문 문맥에서는 alt도 소수부 파서(정수부 합성)로만 해석 —
+//   A) alt가 단자리 조각이면 211.1로 **복구**(decimal_fraction_recovered)
+//   B) 어느 것으로도 해석 불가면 **재질문 유지**(문맥 보존, 전체값 폴백 금지)
+// 어느 경우든 절대 "1"이 커밋되지 않는다.
+
+test('[STT-15] A: 소수 재질문 → primary "하악" 실패 + alt "하나" → 211.1 복구 (절대 "1" 아님)', async ({ page }) => {
+  await setupAndStart(page);
+
+  // 소수부 유실 → 타깃 재질문(fractionWhole=211 무장)
+  await fireStt(page, '211 점 의', 400);
+  const log1 = await ttsLog(page);
+  expect(log1.find((t) => t.includes('소수점 아래') && t.includes('211'))).toBeTruthy();
+  await waitForActiveChip(page, '횡경'); // 미커밋 — 재질문 대기
+
+  // 07-13 S2 시퀀스 주입: primary "하악"(파싱 불가) + alt "하나"
+  await fireSttAlts(page, '하악', ['하나'], 500);
+
+  // 조각 "하나"(=1)는 정수부와 합성되어 211.1로 커밋 → 다음 셀 진행.
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '22.2', 400);
+  await page.waitForTimeout(1500);
+
+  const sessions = await getIdbSessions(page);
+  const session = sessions[sessions.length - 1];
+  const r1 = session.rows.find((r: any) => r.index === 1);
+  expect(r1?.values?.c8).toBe('211.1'); // 복구 — "1"이 아님
+  expect(r1?.values?.c9).toBe('22.2');
+});
+
+test('[STT-15] B: 소수 재질문 → primary·alt 모두 해석 불가 → 재질문 유지(문맥 보존), 이후 "하나"로 211.1', async ({ page }) => {
+  await setupAndStart(page);
+
+  await fireStt(page, '211 점 의', 400);
+  await waitForActiveChip(page, '횡경');
+
+  // primary도 alt도 숫자로 해석 불가 → 전체값 폴백 없이 같은 타깃 재질문을 반복해야 한다.
+  await fireSttAlts(page, '하악', ['콜록'], 500);
+  await waitForActiveChip(page, '횡경'); // 여전히 횡경 — 어떤 값도 커밋되지 않음
+  const log2 = await ttsLog(page);
+  const reasks = log2.filter((t) => t.includes('소수점 아래') && t.includes('211'));
+  expect(reasks.length, `재질문 유지 실패. ttsLog=${JSON.stringify(log2)}`).toBeGreaterThanOrEqual(2);
+
+  // 문맥이 보존됐으므로 다음 조각 발화가 정수부와 합성된다.
+  await fireStt(page, '하나', 500);
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '22.2', 400);
+  await page.waitForTimeout(1500);
+
+  const sessions = await getIdbSessions(page);
+  const session = sessions[sessions.length - 1];
+  const r1 = session.rows.find((r: any) => r.index === 1);
+  expect(r1?.values?.c8).toBe('211.1');
+  // 회귀 방어: 조각이 전체값으로 선 흔적("1" 단독 커밋)이 세션 어디에도 없다.
+  const anyFragmentCommit = session.rows.some(
+    (r: any) => r?.values?.c8 === '1' || r?.values?.c9 === '1',
+  );
+  expect(anyFragmentCommit).toBe(false);
 });

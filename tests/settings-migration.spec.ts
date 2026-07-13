@@ -284,10 +284,12 @@ test('W2 ② 전용 IDB 레코드에서 savedSheets 복원 (settings persist는 
       };
       if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(persisted));
       // 전용 IDB 레코드 __saved_sheets__를 'kv' 스토어에 직접 심는다(앱 db.ts와 동일 스키마).
-      const open = indexedDB.open('survey-011', 4);
+      const open = indexedDB.open('survey-011', 6);
       open.onupgradeneeded = () => {
         const db = open.result;
         if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+          if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots'); // v0.33.0 10-B
+          if (!db.objectStoreNames.contains('feedbackQueue')) db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true }); // v0.33.0 항목11
       };
       open.onsuccess = () => {
         try {
