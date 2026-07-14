@@ -153,11 +153,47 @@
 - **해결·회피(v0.32.0):** ① `muteForTts()`가 예약을 취소하면 `restartPendingAfterTts`로 기억 → `unmuteForTts()`에서 재예약. ② start() 예외 시 backoff(×2, 상한 5s, 무제한 — 재시도 상한을 두면 사망 경로가 재생김) 실재시도. ③ **워치독**(4s 간격): active인데 인식기가 안 돌고 예약도 없으면 강제 재시작 — `stop()`에서 함께 해제되므로 v0.31.0 `suspendRecognitionForUi`와 충돌 불가. ④ stale-instance 가드(버려진 인식기의 늦은 이벤트가 이중 재시작 못 하게). ⑤ **lifecycle 텔레메트리 신설**(`stt`/`extra:lifecycle:*`): `restart_cancelled_by_mute`(사망 시그니처)·`restart_resched_after_tts`·`restart_retry`·`watchdog_restart`·`error:<code>`는 항상, start/end는 10s 스로틀. 회귀 `tests/speech-lifecycle.spec.ts`(유닛 6케이스).
 - **교훈(계측):** 이 사망은 기존 텔레메트리로 직접 관측 불가였다(인식기 lifecycle 이벤트 전무) — "STT 이벤트가 오래 없음"이라는 부재 증거로만 추론 가능했다. 다음 실기기 로그에서 `lifecycle:restart_cancelled_by_mute` → `restart_resched_after_tts`(정상 회복) 연쇄와 `watchdog_restart`(좀비 경로 발동) 빈도를 확인할 것.
 - **출처:** `2026-07-09 v0.31.0 실기기 로그`(sess_1783570914828) → **survey-011 v0.32.0** 수정
-- **현재 상태:** ✅수정됨(코드) — **실기기 검증 대기**(iOS 전용 레이스라 데스크탑/Playwright로 원버그 재현 불가, 가드·워치독 동작만 유닛으로 고정).
+- **현재 상태:** ✅수정됨 — **실기기 검증 완료(2026-07-14, v0.33.0)**: "이전" 음성 명령 7회 사용 후 STT 즉시 생존, `watchdog_restart` 0건, `restart_cancelled_by_mute`→`restart_resched_after_tts` 정상 회복 연쇄 확인. 종결.
+
+### [STT-15] 소수 재질문 중 STT alternative 전체값이 오커밋 ("하나"→"1")
+- **증상(v0.32.0 실기기, 2026-07-13):** 소수부 재질문(`decimal_fraction_lost`) 대기 중 조각 발화가 저신뢰로 거부되면서 `stt_alt_used` 폴백이 **재질문 문맥을 무시하고 alt 전체값을 커밋**("하나"의 alt "1"이 소수부가 아닌 정수 1로 커밋).
+- **해결·회피(v0.33.0):** 재질문 대기 중엔 소수부 문맥 강제 — alt 수용도 fractionWhole 합성 경로로만. 결정론 테스트 고정.
+- **출처:** `2026-07-13 실기기 로그` → v0.33.0 수정 → **실기기 검증 완료(2026-07-14)**: "311 점에"→311.1, "111 점 에"→111.1 회복 2/2, 07-13 회귀 입력 "211 점 의"가 211.1 정상 커밋(완전 A/B).
+- **현재 상태:** ✅수정됨·검증 완료. **단 alt 폴백의 구조적 함정은 [STT-ALT-1]로 일반화** — 이 항목은 lost 계열 봉합만.
+
+### [STT-16] 탭 전환 시 VoiceScreen unmount로 STT 영구 사망
+- **증상(v0.32.0 실기기, 2026-07-13):** 입력 세션 중 데이터탭 등으로 이동하면 VoiceScreen이 unmount되며 인식기·클립 레코더가 파괴 — 복귀해도 재시작 안 됨.
+- **해결·회피(v0.33.0):** **keep-alive 렌더**(세션 활성 중 VoiceScreen unmount 금지, 비활성 탭은 display:none) + `visibilitychange`/`pageshow`에서 `kick()` + 트랙 판정 정밀화(ended만 래치). `App.tsx` 주석 + `tests/stt16-tab-keepalive.spec.ts`.
+- **출처:** `2026-07-13 실기기 로그` → v0.33.0 수정 → **실기기 검증 완료(2026-07-14)**: 탭 왕복(09:21:35→39) 후 무조작 재개, `kick_result:vis:running`, `mic_track:muted→unmuted` 회복.
+- **현재 상태:** ✅수정됨·검증 완료. 파생 효과: 세션 중 어느 탭에서든 useVoiceSession 신호 배선 가능(v0.34.0 피드백 모달 suspend가 이 성질에 의존).
+
+### [STT-17] 긍정 응답어("예/네")가 수사로 오커밋 — "예"→4
+- **증상(v0.33.0 실기기, 2026-07-14):** 값 대기 중 "예"(conf 0.729) 발화가 `stt_alt_used` alt "네"를 거쳐 **수사 4로 커밋**(09:34:59). 알람 있는 컬럼이라 잡혔지만, 알람 없는 컬럼이면 침묵 오염 경로.
+- **원인:** "네"는 한국어 수사 4의 정당 표기(네 개)라 파서는 4로 파싱 — 문제는 값-대기 문맥에서 **단독 응답어**를 값으로 수용한 것.
+- **해결·회피(v0.34.0):** `koreanNum.ts` `isBareResponseWord`(예/네/응/어/넵 등) 신설 — **파서 불변**(네/사 수사 계약 보존), 차단은 handleFinal 값-대기 가드에서 primary·alt 모두 재질문(`stt_rejected_ambiguous_syllable`+`response_word`). trendConfirm 확인 응답('확인'/'유지')과 무충돌.
+- **출처:** `2026-07-14 실기기 로그`(S2 r1c8) → v0.34.0 수정. 회귀 `tests/koreanNum.spec.ts`·`correction-flow.spec.ts`.
+- **현재 상태:** ✅수정됨(v0.34.0) — 실기기 검증 대기.
+
+### [STT-ALT-1] `stt_alt_used` 폴백이 primary 재질문 가드의 **우회로** (구조적 함정)
+- **증상:** primary가 재질문 가드(`decimal_fraction_lost` 등)에 걸려도, alts 루프가 문맥 없이 alt를 수용하면 재질문이 무산되고 잘못된 값이 침묵 커밋된다. 실사례 2건: [STT-15]("하나"→alt "1"), 07-14 "266 점요"(primary lost 재질문 → alt "266" 정수 커밋).
+- **해결·회피(v0.34.0):** alts 루프에 소수-의도 게이트(`parseFailReason==='decimal_fraction_lost'`면 소수점 없는 alt skip) + 응답어 alt skip([STT-17]). **일반 교훈: 재질문 계열 가드를 추가할 때는 반드시 alts 루프 게이트를 함께 검토할 것** — primary만 막으면 alt가 우회한다.
+- **출처:** `2026-07-14 v0.34.0 세션`(O3 진단 정정 — "점요" 사전 누락이 아니라 alt 우회가 실제 메커니즘이었음).
+- **현재 상태:** ✅수정됨(lost·응답어 계열) — 다른 parseFailReason 계열은 전체 재발화 유도라 alt 폴백이 정당(변경 불요).
+
+### [STT-PARSE-1] `extractModifyValue`는 "수정" 뒤 임의 텍스트를 값 후보로 반환 — 컬럼명 지정 신기능의 함정
+- **증상:** "수정 <컬럼명>" 류 기능을 값-우선으로 배선하면 컬럼명("종경")이 값 파싱 실패→cascade 오타깃으로 흡수된다.
+- **해결·회피(v0.34.0):** reviewWait 스코프에서 **컬럼명 매치를 값 적용보다 먼저** 검사(`extractModifyColumn`, 공백 제거 정규화 — STT가 '초장'을 '초 장'으로 쪼개는 변형 대응). 숫자 발화는 컬럼명과 매치 불가라 "수정 30.7" 경로 무손상. 코드 주석 박제.
+- **출처:** `2026-07-14 v0.34.0 세션`(A3 구현 중 발견).
+- **현재 상태:** ✅수정됨(reviewWait 스코프) — 향후 다른 스코프로 확장 시 동일 순서 준수.
 
 ---
 
 ## ② 클립 · IndexedDB 영속화 (최대 광맥)
+
+### [CLIP-BT-1] 블루투스→내장 마이크 전환 시 audio-capture 에러 버스트 + 클립 유실 (세션은 자가 회복)
+- **증상(v0.33.0 실기기, 2026-07-14):** Shokz OpenDots 연결 해제로 트랙 ended → `stt lifecycle:error:audio-capture` ×3 + `clip_empty` 2건(r1 c8/c9 클립 유실, **값은 무손실**). `restart_scheduled`로 자가 회복(07-13식 수동 소생 불필요) — 별도 세션 09:35:15 단발도 0초 자동 회복.
+- **관련:** [STT-12](OpenDots 소음 성능), [AUDIO-INPUT-2](장치 변경 배지 미반영), [CLIP-3](clip_empty broken pointer).
+- **현재 상태:** ⚠️주시 — 값 무손실·자가 회복이라 v0.34.0 수정 없음(등재만). 전환 구간 클립 유실이 반복 관측되면 장치 전환 시 레코더 선제 재획득 검토.
 
 ### [CLIP-5] dispose() 시 in-flight 클립 save가 좀비화(hang)
 - **증상:** `dispose()` 후에도 onstop 이벤트가 큐에 남아 클립 저장 awaiter가 무기한 대기.
@@ -472,6 +508,20 @@
   - **출처:** `2026-07-07 v0.28.0 A5 업로드 테스트(Sonar, 실 Google 계정)` → **survey-011 v0.29.0** 수정.
 - **현재 상태:** ✅수정됨(`src/lib/googleAuth.ts` SIGNIN_TIMEOUT_MS/notifyTokenSettled 분리, `src/screens/SettingsScreen.tsx` onTokenSettled 구독) — 실기기에서 ① 실제 60초+ 2FA가 120s 창 안에서 타임아웃 없이 완료되는지 ② 만에 하나 120s를 넘겨도 지각 성공이 리마운트 없이 반영되는지 device 확인 권장.
 
+### [AUTH-10] ⚠️ 운영 전제 — 과거값 무인증 read(API key)는 "시트 링크 공개"와 "로그아웃은 읽기 경계가 아님"을 전제한다 (v0.34.0 C9)
+
+- **무엇:** v0.34.0부터 과거값 인덱스(이상치 알람 비교선) 조회가 OAuth 토큰이 없을 때 **Google API key + 공개 시트 read**로 폴백한다(`sheets.ts` `planValuesReadonly`/`readonlySheetsAuth`, `pastValues.ts`). 미로그인·토큰 만료 상태에서도 알람이 살아 있게 하려는 조치(민구: "시트가 연결되면 자동으로 작동해야 함").
+- **⚠️ 이건 결함이 아니라 명시해야 할 운영 전제다(v0.34.0 코드리뷰 Codex Medium + agy-Flash Critical/Medium 지적, 민구 확정 2026-07-14 = **시트 공개 상태이며 허용됨 → 경로 유지 + 문서화**):**
+  1. **시트가 "링크 있는 누구나(뷰어)" 공개여야 이 경로가 성립한다.** 비공개면 403이며 폴백 알람은 동작하지 않는다(이 경우 조용히 skip — v0.34.0 리뷰 반영으로 재시도도 즉시 차단, `past_index_retry_blocked:permission`).
+  2. **로그아웃은 읽기 권한 경계가 아니다.** 로그아웃해도 저장된 시트 URL + 번들 API key로 해당 탭을 계속 읽는다. "로그아웃했으니 이 기기에서 시트 내용을 못 본다"는 기대는 **틀리다**.
+  3. **spreadsheetId가 노출되면 제3자도 무인증으로 그 시트를 읽을 수 있다**(공개 시트의 본질적 성질 — 앱 결함이 아니라 공개 설정의 귀결). 농가명 등 식별정보가 들어가는 시트라면 이 점을 인지하고 운용해야 한다.
+  4. **API key는 클라이언트 번들에 포함된다**(Vite `VITE_*`). 네트워크 탭·번들 검사로 취득 가능하므로 **GCP 콘솔에서 반드시 제한을 걸 것**: ① API 제한 = Sheets API(read) + Drive Picker 용도만 ② HTTP 리퍼러 제한 = 배포 도메인(`mingoojejuagrikang-crypto.github.io`). 제한이 없으면 키 도용·쿼터 소모가 가능하다.
+  5. **쓰기는 여전히 OAuth 전용**(`sync.ts` `authFetch`) — 무인증 경로로는 시트를 수정할 수 없다(agy-Pro 확인).
+- **키 스코프 주의(Codex Medium):** 무인증 read는 기존 **Drive Picker용 키를 재사용**한다(`drivePicker.ts`). 그 키가 Drive API로만 제한돼 있으면 **Sheets GET이 실패**한다 — 위 4번의 API 제한에 Sheets read를 반드시 포함시켜야 한다.
+- **계측:** `past_index_fetch_start:auth=token|apikey`로 어느 수단으로 준비됐는지 로그만으로 판정 가능. 권한 실패는 `past_index_skip:<HTTP 403…>` + `past_index_retry_blocked:permission`.
+- **회귀:** `tests/v034-past-index-apikey.spec.ts` — key 경로의 `?key=` 쿼리·Authorization 부재, 토큰 경로의 key 미노출, 403 재시도 차단.
+- **현재 상태:** ✅전제 확정·문서화됨(민구 2026-07-14: 시트 공개 상태·허용). **잔여 운영 액션:** GCP 콘솔에서 위 4번 키 제한(Sheets read 포함 + 리퍼러) 실제 적용 여부 확인 — 미적용 시 키 도용 위험이 남는다.
+
 ### [CLIP-LOSS-1] 입력장치 변경(BT↔스피커폰)이 MediaRecorder를 죽여 이후 클립 연속 소실
 - **증상:** 한 세션 중반부터 음성 클립이 연속으로 통째 소실(값 인식·시트 기록은 정상, 클립만 없음). v0.13.0 로그 세션 `8409` row 11~18(18개 연속) 트림·raw 모두 부재.
 - **원인(로그+민구 현장 관찰):** error 이벤트 `clip_empty`→`clip_too_small:5`/`clip_cmd_empty:null` 반복 = MediaRecorder가 5바이트 빈 청크만 생성(레코더 dead). 초기 행은 `clip_stop_resolved:30000~50000`바이트로 건강 → 중간에 오디오그래프가 죽음. 민구: 입력장치(스피커폰/블루투스) 변경 의심. 앱은 자기 speakerphone 토글만 로깅하고 **OS 라우팅 변경(BT 분리/재연결)은 미로깅** → iOS에서 라우팅 변경이 활성 트랙을 끊으면 MediaRecorder가 빈 데이터만 뱉는데, 앱은 **재-getUserMedia를 안 해([IOS-5])** 복구 못 함 → 이후 전 클립 사망.
@@ -622,6 +672,13 @@
 - **출처:** `2026-07-08 survey-011 v0.31.0 입력탭 UI 재정리`, `tests/v026-tolerance-strict.spec.ts` T5 갱신.
 - **현재 상태:** ✅수정됨. 도움말 중 STT 명령 무시와 닫은 뒤 복원은 로그 기반으로 검증.
 
+### [TEST-SANDBOX-1] 제한 샌드박스에서 Vite 포트 bind·Chromium Mach rendezvous가 EPERM으로 전면 차단
+- **증상:** `npm run dev -- --port 5175 --strictPort`가 `listen EPERM 0.0.0.0:5175`, Playwright의 모든 케이스가 실행 0ms에 Chromium `bootstrap_check_in ... MachPortRendezvousServer: Permission denied (1100)`로 실패한다.
+- **원인:** 코드/테스트 assertion 실패가 아니라 현재 실행 컨테이너의 네트워크 listen 및 macOS Mach service 권한 제한. 서버 미기동 상태에서도 브라우저 launch 자체가 먼저 SIGTRAP으로 종료된다.
+- **해결·회피:** 포트 bind와 Chromium launch가 허용된 호스트 세션에서 5175 strictPort 서버를 띄워 전체 스위트를 재실행한다. 이 패턴은 passed/failed 제품 회귀 수치에 포함하지 말고 인프라 차단으로 별도 보고한다.
+- **출처:** `2026-07-15 survey-011 v0.34.0 High 3건 수정 세션`(Vite·Playwright 명령 stdout 직접 확인).
+- **현재 상태:** ⚠️환경 차단 — `npx tsc --noEmit`은 clean, Playwright 제품 검증은 권한 있는 실행 환경으로 이관 필요.
+
 ---
 
 ## 확인 필요 (미검증)
@@ -633,3 +690,5 @@
 3. **GitHub issues/PR 기반 추가 함정** — 010 issues 0건, 011 issues/PR 0건, 010 PR 1건(`v0.9-improvements` = `@2ed62a5`, 이미 반영). gh 출처에서 **신규 distinct 이슈 없음**. 향후 issue 생기면 여기서 수확.
 4. **survey-011 자체 v0.1~v0.2 라인의 함정** — 본 문서는 조상(010)과 이번(06-04~05) 세션 중심. survey-011의 v0.3.0 이전 자체 커밋 이력은 별도 수확 대상(미수행).
 5. **행 미완료(complete:false) 상태에서 clips-manifest committedValue가 정정 전 값으로 남음** — 2026-07-07 [CLIP-CORRECTION-1] 수정 재검증(Sonar A4 라운드3) 중 관측: 종경(다음 컬럼)에 값을 아직 안 주고 행을 넘긴 export에서 `committedValue`가 33.3(정정 전 값)으로 남아 있었음. [CLIP-CORRECTION-1] 수정(cmd 클립 컬럼 태깅)과는 무관 — colId 태깅 자체는 이 케이스에서도 정확했음. "필드 이탈 시 커밋" 기존 설계와 다른 조건인지, 별도 버그인지 미확정(n=1). 다음 실기기 로그 또는 추가 데스크탑 재현으로 확인 필요.
+6. **"~점이요" 공손 종결 발화가 소수로 합성될 수 있음** — 2026-07-14 v0.34.0 O3 작업 중 관측: "266 점이요"가 266.2로 파싱('이요'의 '이'가 소수 2로 합성). "점 이 요"(=.2 의도) 정당 발화와 문자열상 구분 불가라 **블라인드 수정 금지** — 실기기 로그에서 "점이요" 발화 빈도·오커밋 여부 관측 후 판단.
+7. **Playwright 병렬 부하 플레이크** — `correction-flow.spec.ts`(:276, :411)·`trend-alert.spec.ts`(:458)가 2-worker 병렬 부하에서 간헐 실패(고정 `waitForTimeout` 기반 오라클). 단독·재실행 모두 PASS(2026-07-14 확인, 코드 변경과 무관). 전체 스윕에서 재발 시 flaky로 취급하고 이벤트 기반 대기로 교체 후보.

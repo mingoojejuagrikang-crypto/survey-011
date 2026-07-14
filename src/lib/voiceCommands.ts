@@ -71,3 +71,52 @@ export const VOICE_COMMANDS: CommandSpec[] = [
 
 /** Commands shown in the compact on-screen hint row. */
 export const PRIMARY_COMMANDS = VOICE_COMMANDS.filter((c) => c.primary);
+
+/** "수정 <컬럼명>" 발화에서 허용하는 조사 꼬리(닫힌 목록).
+ *  ⚠️ '도'(역시)는 **의도적으로 제외** — '횡경도' 같은 실제 컬럼명과 구분이 불가능해, 허용하면
+ *  '횡경'만 있는 설정에서 "수정 횡경도"가 '횡경'으로 오매치된다(v0.34.0 리뷰 Codex High).
+ *  같은 이유로 임의 접미사(startsWith)는 허용하지 않는다 — 모르는 꼬리는 매치 실패로 떨어뜨린다. */
+const MODIFY_COL_PARTICLES = ['으로', '로', '을', '를', '은', '는', '이', '가', '에', '의', '만'];
+
+/** v0.34.0 A3 — "수정 <컬럼명>" 파서. 완료 행 검토 대기(reviewWait) 스코프에서 특정 컬럼을 지목해
+ *  수정 진입할 때 쓴다("수정 초장" → '초장'). 규칙:
+ *   - 정규화: 공백 전부 제거(STT가 '초장'을 '초 장'으로 쪼개는 변형 대응) 후 '수정' 전치/후치 제거.
+ *   - 매칭(v0.34.0 리뷰 Codex High·agy 공통 — 오지목=시트 오염이므로 보수적으로):
+ *     ① **완전 일치** 우선. ② 없으면 **컬럼명 + 허용 조사**(MODIFY_COL_PARTICLES)만 인정.
+ *     임의 접미사는 불허 — '횡경'만 있을 때 "수정 횡경도"는 매치 실패(null)로 떨어진다.
+ *   - **모호하면 거부(null)**: 같은 이름의 컬럼이 둘 이상이면(시트 중복 헤더 — sheets.ts는
+ *     occurrence별 다른 id를 부여) 어느 쪽인지 결정할 수 없으므로 지목하지 않는다. 호출자가
+ *     첫 동명 컬럼을 잡아 엉뚱한 셀을 지우던 경로를 차단.
+ *   - **숫자값 추출(extractModifyValue)과 상호배타** — 호출자는 값 추출이 null일 때만 이 함수를
+ *     시도한다(컬럼명이 숫자로 파싱될 일은 없지만, 우선순위를 값>컬럼명으로 고정하는 계약).
+ *  reviewWait 밖에서는 호출하지 않는다(일반 수정 의미론 불변). */
+export function extractModifyColumn(text: string, colNames: string[]): string | null {
+  const norm = text.replace(/[\s.,]+/g, '');
+  let rest: string | null = null;
+  if (norm.startsWith('수정')) rest = norm.slice(2);
+  else if (norm.endsWith('수정')) rest = norm.slice(0, -2);
+  if (!rest) return null;
+  const target = rest;
+  const norms = colNames.map((name) => ({ name, n: name.replace(/\s+/g, '') })).filter((c) => c.n);
+  // 동명 컬럼이 둘 이상이면 어느 것도 지목하지 않는다(모호 → 거부).
+  const isDuplicated = (n: string) => norms.filter((c) => c.n === n).length > 1;
+
+  // ① 완전 일치.
+  const exact = norms.filter((c) => c.n === target);
+  if (exact.length === 1) return exact[0].name;
+  if (exact.length > 1) return null; // 중복 헤더 — 모호
+
+  // ② 컬럼명 + 허용 조사. 후보가 여럿이면 가장 긴 컬럼명(접두 섀도잉 방지), 그래도 동명 중복이면 거부.
+  let best: string | null = null;
+  let bestLen = 0;
+  for (const { name, n } of norms) {
+    if (!target.startsWith(n)) continue;
+    const tail = target.slice(n.length);
+    if (!MODIFY_COL_PARTICLES.includes(tail)) continue; // 임의 접미사 불허
+    if (n.length > bestLen) {
+      best = isDuplicated(n) ? null : name;
+      bestLen = n.length;
+    }
+  }
+  return best;
+}

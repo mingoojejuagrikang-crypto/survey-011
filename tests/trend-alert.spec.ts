@@ -430,10 +430,67 @@ test('이상치 → 새 값 발화 → 재입력+재검증(재알림) → 통과
   expect(events.filter((e) => (e.extra ?? '').startsWith('trend_alert_fired'))).toHaveLength(2);
   expect(events.filter((e) => e.extra === 'trend_alert_corrected')).toHaveLength(2);
   expect(events.filter((e) => e.extra === 'trend_alert_confirmed')).toHaveLength(0);
+  // v0.34.0 O1 — persist 검사 시점 이동 회귀: 교정 커밋(130.5 재위반 + 80.5 통과) 각각 검사 1회,
+  // 전부 :ok — 커밋 경로 종단 이후로 미뤄 07-14 mismatch 오탐(정정 직후 조기 검사)이 재현되지 않는다.
+  const persistChecks = events.filter((e) => (e.extra ?? '').startsWith('trend_corrected_persist_check'));
+  expect(persistChecks).toHaveLength(2);
+  expect(persistChecks.every((e) => e.extra === 'trend_corrected_persist_check:ok')).toBe(true);
   for (const e of events) {
     expect(e.row).toBe(1);
     expect(e.colId).toBe('c8');
   }
+});
+
+test('[리뷰 High] 교정 saveSession IDB 실패 → persist_check가 ok를 기록하지 않고 write_failed', async ({ page }) => {
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '120.5', 500);
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible();
+
+  // quota/transaction 실패를 sessions store put에만 주입한다. logEvents는 정상 저장돼 실패 텔레메트리를
+  // 검증할 수 있고, dataStore 메모리값만 보고 :ok를 찍던 과거 결함을 정확히 재현한다.
+  await page.evaluate(() => {
+    const original = IDBObjectStore.prototype.put;
+    Object.defineProperty(IDBObjectStore.prototype, 'put', {
+      configurable: true,
+      value: function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore['put']>) {
+        if (this.name === 'sessions') throw new DOMException('quota-test', 'QuotaExceededError');
+        return original.apply(this, args);
+      },
+    });
+  });
+  await fireStt(page, '80.5', 700);
+
+  await expect.poll(async () => {
+    const events = await getTrendEvents(page);
+    return events.filter((e) => (e.extra ?? '').startsWith('trend_corrected_persist_check')).map((e) => e.extra);
+  }).toContain('trend_corrected_persist_check:write_failed');
+  const checks = (await getTrendEvents(page))
+    .filter((e) => (e.extra ?? '').startsWith('trend_corrected_persist_check'));
+  expect(checks.some((e) => e.extra === 'trend_corrected_persist_check:ok')).toBe(false);
+});
+
+test('[리뷰 High] 교정 IDB 재조회 실패 → mismatch가 아닌 persist_check:read_failed', async ({ page }) => {
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '120.5', 500);
+  await page.evaluate(() => {
+    const original = IDBObjectStore.prototype.get;
+    Object.defineProperty(IDBObjectStore.prototype, 'get', {
+      configurable: true,
+      value: function(this: IDBObjectStore, ...args: Parameters<IDBObjectStore['get']>) {
+        if (this.name === 'sessions') throw new DOMException('read-test', 'UnknownError');
+        return original.apply(this, args);
+      },
+    });
+  });
+  await fireStt(page, '80.5', 700);
+  await expect.poll(async () => {
+    const events = await getTrendEvents(page);
+    return events.filter((e) => (e.extra ?? '').startsWith('trend_corrected_persist_check')).map((e) => e.extra);
+  }).toContain('trend_corrected_persist_check:read_failed');
+  const checks = (await getTrendEvents(page)).filter((e) => (e.extra ?? '').startsWith('trend_corrected_persist_check'));
+  expect(checks.some((e) => e.extra === 'trend_corrected_persist_check:mismatch')).toBe(false);
 });
 
 test('알림 상태 밖 "확인" → 상태 변경 없이 재안내(진행 안 함)', async ({ page }) => {

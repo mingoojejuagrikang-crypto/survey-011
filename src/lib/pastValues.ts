@@ -22,8 +22,7 @@
  */
 import type { Column } from '../types';
 import { effectiveSampleKey } from './columnFlags';
-import { fetchAllRowsUnbounded, parseSpreadsheetId } from './sheets';
-import { getAccessToken } from './googleAuth';
+import { fetchAllRowsUnbounded, parseSpreadsheetId, readonlySheetsAuth } from './sheets';
 import { useSettingsStore } from '../stores/settingsStore';
 import { logger } from './logger';
 import { loadPastIndexBackup, savePastIndexBackup } from './db';
@@ -361,6 +360,15 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let retryAttempts = 0;
 const MAX_RETRIES = 5;
 
+/** v0.34.0 리뷰(Codex+agy-Flash 공통) — 권한 오류(401 미인증 / 403 권한없음) 판별.
+ *  sheets.ts의 fetch 실패는 `시트 조회 실패 (HTTP 403): …` 형태로 상태코드를 메시지에 담는다
+ *  (별도 status 필드가 없어 메시지 파싱 — 오탐해도 "재시도를 덜 한다"는 안전한 방향이고,
+ *  실패 자체는 past_index_skip으로 항상 로깅되므로 침묵하지 않는다).
+ *  비공개 시트를 API key로 읽는 조합이 대표 사례: 몇 번을 더 쏴도 결과는 같다. */
+function isPermissionError(msg: string): boolean {
+  return /\bHTTP (401|403)\b/.test(msg) || /\b(401|403)\b/.test(msg);
+}
+
 interface LoadContext {
   fp: string;
   spreadsheetId: string | null;
@@ -470,7 +478,12 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
     logger.log({ type: 'app', extra: 'past_index_skip:not_configured' });
     return null;
   }
-  if (!getAccessToken()) {
+  // v0.34.0 C9 — 토큰 **또는** API key(공개 시트 읽기 폴백, readonlySheetsAuth SSOT)가 있으면
+  // 진행. 둘 다 없을 때만 기존 not_signed_in skip(이벤트명 유지 — 로그 분석 호환).
+  // 시트가 비공개라 key 경로가 403이면 fetch 오류가 아래 catch의 `past_index_skip:<msg>`로
+  // 남는다(HTTP 상태 포함) — 침묵 실패 없음.
+  const auth = readonlySheetsAuth();
+  if (!auth) {
     logger.log({ type: 'app', extra: 'past_index_skip:not_signed_in' });
     return null;
   }
@@ -478,7 +491,8 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
     try {
       // v0.33.0 항목5 — fetch 시작 계측(07-13 §4: 시작 이벤트가 없어 "미완 hang"을 로그로 판별
       // 불가했던 갭). ready/skip과 짝을 이뤄 미완주 fetch가 로그에서 보인다.
-      logger.log({ type: 'app', extra: 'past_index_fetch_start' });
+      // v0.34.0 C9 — auth=token|apikey 첨부: 어떤 인증 수단으로 준비됐는지 로그만으로 판정.
+      logger.log({ type: 'app', extra: `past_index_fetch_start:auth=${auth}` });
       const { headers, rows } = await withTimeout(
         fetchAllRowsUnbounded(ctx.spreadsheetId!, ctx.sheetTab),
         FETCH_TIMEOUT_MS,
@@ -500,6 +514,14 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
     } catch (e) {
       // 오프라인/HTTP 오류/타임아웃 — REVIEW-1: 삼키지 말고 로깅하되, 호출자에겐 null(조용히 skip).
       const msg = e instanceof Error ? e.message : String(e);
+      // v0.34.0 리뷰(Codex+agy-Flash 공통) — 권한 오류(401/403)는 재시도해도 낫지 않는다. 비공개
+      // 시트를 API key로 읽으려는 조합에서 지수 백오프 5회가 무의미한 403을 반복해 쿼터·대역폭을
+      // 태우던 표면. 권한 오류로 판정되면 재시도 예산을 소진시켜 즉시 멈춘다(다른 실패는 종전대로
+      // 재시도 — 오프라인·5xx·타임아웃은 회복 가능).
+      if (isPermissionError(msg)) {
+        retryAttempts = MAX_RETRIES;
+        logger.log({ type: 'app', extra: `past_index_retry_blocked:permission:auth=${auth}` });
+      }
       logger.log({ type: 'app', extra: `past_index_skip:${msg.slice(0, 120)}` });
       return null;
     } finally {
@@ -512,11 +534,12 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
   return promise;
 }
 
-/** 재시도 가치 판단: 시트·탭·토큰이 모두 있는데 인덱스가 없으면 네트워크/HTTP 실패였다는 뜻 →
- *  재시도 가치 있음. 미설정/미로그인이면 재시도 무의미(조용히 멈춤). */
+/** 재시도 가치 판단: 시트·탭·인증수단(토큰 또는 API key — v0.34.0 C9, readonlySheetsAuth SSOT)이
+ *  모두 있는데 인덱스가 없으면 네트워크/HTTP 실패였다는 뜻 → 재시도 가치 있음.
+ *  미설정/둘 다 없음이면 재시도 무의미(조용히 멈춤). */
 function shouldRetryLoad(): boolean {
   const ctx = loadContext();
-  return !!ctx.spreadsheetId && !!ctx.sheetTab && !!getAccessToken();
+  return !!ctx.spreadsheetId && !!ctx.sheetTab && readonlySheetsAuth() !== null;
 }
 
 /**

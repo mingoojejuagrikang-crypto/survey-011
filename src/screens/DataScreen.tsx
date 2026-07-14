@@ -2124,7 +2124,19 @@ const clipPlayer = (() => {
       // v0.33.0 B-9 — 클립 재생 계측(이전엔 무로깅 → 클립버튼 오터치 제보를 검증할 수 없었다).
       // 실제 재생 의도(enqueue)만 기록 — 정지/취소 탭은 로깅하지 않아 링버퍼를 아낀다. 키에서
       // 세션 id를 파생해 clipsManifest 조인이 가능하게 한다(clipKey 동봉).
-      logger.log({ type: 'clip', extra: 'clip_play', clipKey: key, sessionId: key.split(':')[0] });
+      // v0.34.0 계측 갭②(B-9 원안 완성, Trace) — row/colId 동봉: 클립 키는
+      // `sess_<ts>:<row>:<colId>[:cmd<n>]` 규약이므로 여기서 파생한다. "클립 재생 중 발화
+      // 오인식" 체크리스트가 재생된 셀과 직후 STT 이벤트를 로그만으로 조인하는 판정 근거.
+      const parts = key.split(':');
+      const rowNum = Number(parts[1]);
+      logger.log({
+        type: 'clip',
+        extra: 'clip_play',
+        clipKey: key,
+        sessionId: parts[0],
+        row: Number.isFinite(rowNum) ? rowNum : undefined,
+        colId: parts[2],
+      });
       queue.push(key); notify();
       void playNext();
     },

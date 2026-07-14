@@ -315,7 +315,13 @@ export function signIn(): Promise<{ email: string; token: string }> {
   });
 }
 
-export async function signOut() {
+/** v0.34.0 계측 갭① — 로그아웃 시점이 로그에 없어 "언제부터 토큰이 없었나"를 재구성할 수 없던
+ *  갭(Trace). reason: 'manual'(설정탭 연결 해제 버튼) | 'settings_reset'(전체 초기화의 로그인
+ *  삭제 옵트인). 토큰 만료(수동 아님)는 여기로 오지 않는다 — SettingsScreen 마운트 강등 분기가
+ *  `auth_signout:token_expired`를 별도 로깅해 수동/만료가 로그에서 구분된다. 토큰 값은 절대
+ *  로깅하지 않는다. */
+export async function signOut(reason: 'manual' | 'settings_reset' = 'manual') {
+  logger.log({ type: 'app', extra: `auth_signout:${reason}` });
   const t = getStoredToken();
   if (t && window.google?.accounts?.oauth2) {
     await new Promise<void>((resolve) => {

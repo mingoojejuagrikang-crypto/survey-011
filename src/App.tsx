@@ -7,7 +7,8 @@ import { DataScreen } from './screens/DataScreen';
 import { ReviewScreen } from './screens/ReviewScreen';
 import { T, DEVICE } from './tokens';
 import { hydrateSessions } from './lib/hydrate';
-import { hydratePastIndexFallback } from './lib/pastValues';
+import { hydratePastIndexFallback, getCachedIndex, getFallbackIndex, ensurePastIndex } from './lib/pastValues';
+import { useSettingsStore } from './stores/settingsStore';
 import { initAutoCapture } from './lib/screenshot';
 import { captureForFeedback, initFeedbackQueueFlush, submitFeedback } from './lib/feedback';
 import { FeedbackModal } from './components/FeedbackModal';
@@ -42,7 +43,22 @@ export default function App() {
     void hydrateSessions();
     // v0.33.0 항목5 — 과거값 인덱스 영속 폴백 복원(idempotent, 토큰 무관). 부팅 시점에 미리
     // 하이드레이션해 두면 미로그인 세션의 첫 값 커밋부터 폴백 알람이 작동한다.
-    void hydratePastIndexFallback();
+    // v0.34.0 C9(c) — 폴백 복원 직후 1회: 시트가 설정돼 있는데 인덱스(신선 캐시·영속 폴백)가
+    // 전무하면 ensurePastIndex()로 미리 준비한다(민구: "시트가 연결되면 자동으로 작동해야 함").
+    // 인증수단(토큰/API key)이 없으면 loadPastIndex가 not_signed_in으로 1회 skip하고 백오프도
+    // 걸지 않으므로(shouldRetryLoad) 미로그인 부팅에 무해. 세션 시작·설정 저장 트리거와 중복돼도
+    // 캐시/in-flight 가드가 흡수한다.
+    void hydratePastIndexFallback().then(() => {
+      const st = useSettingsStore.getState();
+      // v0.34.0 리뷰(Codex+agy 공통 지적) — 부팅 프리페치도 다른 3개 호출부(세션시작 useVoiceSession
+      // :2185·설정저장 SettingsScreen:1309·테이블생성 :1304)와 동일하게 anyAnomalyRule로 게이트한다.
+      // 이상치 규칙이 없으면 과거값 인덱스는 애초에 쓰이지 않으므로 전체 시트 다운로드가 낭비이고
+      // (Codex), 비공개 시트+API key 조합에서 무의미한 403 재시도가 도는 표면도 함께 줄어든다(agy).
+      const anyAnomalyRule = st.columns.some(
+        (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
+      );
+      if (anyAnomalyRule && st.sheetUrl && st.sheetTab && !getCachedIndex() && !getFallbackIndex()) ensurePastIndex();
+    });
     // v0.33.0 항목10-B — 입력화면 자동 캡처 배선(logger tap 단일 지점, idempotent).
     // 토글 off면 tap은 남되 캡처가 스킵된다(스위치는 settingsStore.autoScreenCapture).
     initAutoCapture();
@@ -74,6 +90,10 @@ export default function App() {
     if (next === 'feedback') {
       if (feedback !== 'closed') return; // 이미 캡처 중/모달 표시 중 — 중복 인터셉트 무시
       logger.log({ type: 'app', extra: `feedback_open:tab=${tab}` });
+      // v0.34.0 A2 — 팝업 열림 신호(캡처 시작 시점부터). useVoiceSession 구독이 STT를 일시정지한다
+      // (실기기 피드백: "피드백 팝업 작동 시 음성입력은 잠시 일시 정지"). keep-alive([STT-16]) 덕에
+      // 어느 탭에서 열어도 세션 중이면 신호가 도달하고, 세션이 없으면 자연 no-op.
+      useSessionStore.getState().setUiModalOpen('feedback');
       setFeedback('capturing');
       void captureForFeedback().then((shot) => setFeedback({ shot }));
       return;
@@ -155,7 +175,11 @@ export default function App() {
               context: { tab, sessionPhase: useSessionStore.getState().phase },
             }).then(() => undefined)
           }
-          onClose={() => setFeedback('closed')}
+          onClose={() => {
+            setFeedback('closed');
+            // v0.34.0 A2 — 닫힘 신호 → useVoiceSession 구독이 STT 재개(세션 없으면 no-op).
+            useSessionStore.getState().setUiModalOpen(null);
+          }}
         />
       )}
     </div>

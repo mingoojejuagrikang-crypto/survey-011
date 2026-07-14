@@ -441,3 +441,14 @@ export function isAmbiguousSingleSyllable(raw: string): boolean {
   if (s.length !== 1) return false;
   return SINO[s] !== undefined;
 }
+
+/** v0.34.0 O2 [STT-17] — 단독 응답어("예/네/응/어/넵") 판별. 07-14 실기기: 값 대기 중 "예"
+ *  (conf 0.729)가 alt "네"로 폴백돼 native 수사 4로 커밋됨(알람이 잡았지만 알람 없는 컬럼이면
+ *  침묵 오염). "네"=native 4라 **파서 전역 차단은 불가**("사"/"넷"은 유효 수사) — 호출자
+ *  (useVoiceSession handleFinal)가 숫자 컬럼 값-대기 문맥에서만 이 판별로 재질문한다.
+ *  '확인'/'유지' 명령 경로와 무관(응답어는 어느 명령에도 매핑돼 있지 않다 — voiceCommands SSOT). */
+const RESPONSE_WORDS = new Set(['예', '네', '응', '어', '넵', '넹', '예예', '네네']);
+export function isBareResponseWord(raw: string): boolean {
+  const s = raw.replace(/[\s.,!?]+/g, '');
+  return RESPONSE_WORDS.has(s);
+}

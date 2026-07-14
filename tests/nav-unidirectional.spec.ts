@@ -14,7 +14,10 @@
  * v0.33.0 백로그 A(민구 결정 1·3) — "이전" 재입력(reentry) 모드 폐지:
  *   - 음성 "이전" = ◀ 버튼과 동일한 단순 행 이동(gotoAdjacentRow → jumpToRow).
  *   - 완료 행 착지 시 "N행 완료됨. <항목> <값>…" 낭독 후 명령 대기(reviewWait).
- *   - bare 값 발화는 완료 행을 덮어쓰지 않음 — 수정은 '수정' 명령으로만(잠정 타깃: 마지막 음성 필드).
+ *   - bare 값 발화는 완료 행을 덮어쓰지 않음 — 수정은 '수정' 명령으로만.
+ *   - v0.34.0 A3(확정 규칙, 실기기 피드백): 착지 포인터 = **첫 음성 필드**(이전 규칙 '마지막
+ *     필드'는 첫 항목을 음성으로 수정 불가하게 했다). bare "수정 <값>"은 포인터(첫) 컬럼,
+ *     "수정 <컬럼명>"으로 다른 컬럼 지목.
  *
  * Mock 패턴은 log-replay.spec.ts / v54-30rows.spec.ts와 동일 (instant TTS + MockSTT).
  */
@@ -433,7 +436,7 @@ async function loadLogEventsFromIDB(page: Page) {
   });
 }
 
-test('REVIEW — "이전"으로 완료 행 착지: 값 낭독 + bare 값 무시 + "수정 <값>"만 반영(마지막 필드) + "다음" 복귀', async ({ page }) => {
+test('REVIEW — "이전"으로 완료 행 착지: 값 낭독 + bare 값 무시 + "수정 <값>"만 반영(포인터=첫 필드) + "다음" 복귀', async ({ page }) => {
   await startSession(page);
 
   // Row 1 완료(35.1 / 28.3) → Row 2 진입
@@ -464,7 +467,14 @@ test('REVIEW — "이전"으로 완료 행 착지: 값 낭독 + bare 값 무시 
   await fireStt(page, '99.9', 600);
   expect(await getActiveRow(page)).toBe(1); // 이동/advance 없음
 
-  // "수정 <값>"은 그 행 마지막 음성 필드(종경)를 고친다(v0.33.0 잠정 규칙) 후 검토 대기 재낭독.
+  // v0.34.0 A3 — 검토 대기 계측: 착지 컬럼(첫 필드)이 로그로 재구성 가능해야 한다(D11c).
+  const reviewArm = events1.find(
+    (e) => e.type === 'command' && e.parsed === 'review_wait' && (e.extra ?? '').includes('row=1,col=first'),
+  );
+  expect(reviewArm, 'review_wait 계측(row=1,col=first) 미기록').toBeTruthy();
+
+  // "수정 <값>"은 그 행 **포인터(첫) 음성 필드**(횡경)를 고친다(v0.34.0 A3 확정 규칙 — 이전의
+  // '마지막 필드' 타깃 단언에서 의도적으로 반전) 후 검토 대기 재낭독.
   await fireStt(page, '수정 30.7', 800);
   expect(await getActiveRow(page)).toBe(1);
 
@@ -479,8 +489,8 @@ test('REVIEW — "이전"으로 완료 행 착지: 값 낭독 + bare 값 무시 
     rows: Array<{ index: number; complete: boolean; values: Record<string, string> }>;
   }>;
   const row1 = sessions[0]?.rows.find((r) => r.index === 1);
-  expect(row1?.values['c8']).toBe('35.1'); // bare 99.9로 덮이지 않음
-  expect(row1?.values['c9']).toBe('30.7'); // '수정 30.7' → 마지막 음성 필드 반영
+  expect(row1?.values['c8']).toBe('30.7'); // '수정 30.7' → 포인터(첫) 음성 필드 반영(v0.34.0 A3 반전)
+  expect(row1?.values['c9']).toBe('28.3'); // 마지막 필드는 불변 + bare 99.9로 덮이지 않음
   expect(row1?.complete).toBe(true);
   const anyBareCommit = sessions[0]?.rows.some(
     (r) => r.values['c8'] === '99.9' || r.values['c9'] === '99.9',

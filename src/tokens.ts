@@ -13,6 +13,11 @@ export const T = {
   green: '#00C853',
   amber: '#FFB300',
   red: '#FF5252',
+  // v0.34.0 B8 — 상태색 글로우 변형(blueGlow와 동일 계열·동일 alpha). EdgeGlow(화면 외곽
+  // 은은한 페이드)가 세션 상태 톤(green/amber/red)을 표현할 때 쓴다. 인라인 rgba 일회값 금지.
+  greenGlow: 'rgba(0,200,83,0.32)',
+  amberGlow: 'rgba(255,179,0,0.32)',
+  redGlow: 'rgba(255,82,82,0.32)',
   google: '#4285F4',
 } as const;
 

@@ -3,18 +3,20 @@ import { useSettingsStore, minConfidenceForTolerance } from '../stores/settingsS
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { recountSynced } from './sessionSync';
-import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, getLastParseFailReason, getLastParseFailWhole } from './koreanNum';
-import { VOICE_COMMANDS } from './voiceCommands';
+import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, isBareResponseWord, getLastParseFailReason, getLastParseFailWhole } from './koreanNum';
+import { VOICE_COMMANDS, extractModifyColumn } from './voiceCommands';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
-import { saveSession, saveAudioClip, loadAudioClip } from './db';
+import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import { getCachedIndex, getFallbackIndex, getFallbackBuiltAt, hydratePastIndexFallback, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
-import { getAccessToken, onTokenSettled } from './googleAuth';
+import { onTokenSettled } from './googleAuth';
+import { readonlySheetsAuth } from './sheets';
+import { withoutPendingCandidate } from './pendingValidation';
 import { ensureUniqueSessionLabel } from './sessionLabel';
 
 
@@ -59,7 +61,8 @@ interface AwaitingField {
   /** v0.33.0 백로그 A(민구 결정 3) — 완료 행 착지 "검토 대기" 센티넬. '이전'/행 점프로 완료 행에
    *  착지하면 기록값을 TTS로 읽어준 뒤 이 상태로 대기한다. 명령('수정'/'유지'/'다음' 등)은 계속
    *  dispatch되되, bare 값 발화는 handleFinal의 reviewWait 가드가 흡수한다(덮어쓰기 금지 —
-   *  수정은 '수정' 명령으로만). awaiting은 그 행 마지막 음성 필드를 가리킨다. */
+   *  수정은 '수정' 명령으로만). awaiting은 그 행 **포인터(첫) 음성 필드**를 가리킨다(v0.34.0 A3 —
+   *  이전의 '마지막 필드' 착지는 첫 항목을 음성으로 수정할 수 없게 했던 실기기 피드백으로 전환). */
   reviewWait?: boolean;
 }
 
@@ -167,6 +170,23 @@ export function useVoiceSession() {
 
   const voiceColsList = (): Column[] =>
     useSettingsStore.getState().columns.filter((c) => c.input === 'voice');
+
+  /** v0.34.0 리뷰(민구 결정 2026-07-14 = 수동입력 이상치 보류는 **터치 [확인]/[수정] 전용**) —
+   *  manualHold 팝업이 떠 있는 동안 **보류를 해소하지 않는 모든 동작을 중앙에서 거부**하는 단일
+   *  게이트(SSOT). 라운드1에선 STT만 막았는데 터치 [이전]/[다음]/[일시정지]가 그대로 열려 있어
+   *  미확인 이상치를 우회할 수 있었다(Codex 라운드2 High: announceField/PausedCard가 알람을 지워
+   *  검증 절차 자체가 소멸). 해소 경로는 confirmManualAnomaly/modifyManualAnomaly 둘뿐이다.
+   *  `reason`은 무엇이 막혔는지 다음 로그 분석에서 보이게 한다(막힌 시도가 잦으면 UX 재고 신호). */
+  const isManualHoldBlocked = (reason: string): boolean => {
+    if (!useSessionStore.getState().anomalyAlert?.manualHold) return false;
+    logger.log({
+      type: 'command',
+      extra: `blocked:manual_hold:${reason}`,
+      sessionId: sessionIdRef.current,
+      row: useSessionStore.getState().activeRow,
+    });
+    return true;
+  };
 
   // ── clip preservation ──────────────────────────────────────
   /** Archive the clip currently stored at the bare cell key (`sessionId:row:colId`) under a fresh
@@ -300,7 +320,10 @@ export function useVoiceSession() {
   };
 
   // ── persistence ────────────────────────────────────────────
-  const persistSession = useCallback(async () => {
+  const persistSession = useCallback(async (
+    pendingOverride?: Session['pendingValidation'] | null,
+    publishPendingStage = false,
+  ): Promise<boolean> => {
     // v0.24.0 데이터-3 — 이 호출의 단조 순번(호출 순서=스냅샷 신선도 순서, setRowValue가 호출 전 실행됨).
     const mySeq = ++persistSeqRef.current;
     const settings = useSettingsStore.getState();
@@ -320,7 +343,7 @@ export function useVoiceSession() {
     // 채워지고 음성 칸만 빈 채 데이터탭에 보여, 사용자가 터치로 채울 수 있다. (v0.6.0부터
     // sync가 placeholder도 공백 행으로 시트에 업로드해 sheetRow를 예약한다 — 행 단위 재동기화.)
     const skipped = sess.skippedRows.filter((r) => !completed.includes(r)).sort((a, b) => a - b);
-    if (completed.length === 0 && !backup && !activeHasData && skipped.length === 0) return;
+    if (completed.length === 0 && !backup && !activeHasData && skipped.length === 0) return true;
     // F1: read the existing persisted session once so each row can preserve its sheetRow/syncState
     // (the same source we merge audioClips from). Without this, every persist after a sync wiped
     // row-level tracking → the next sync re-appended already-uploaded rows (duplicates).
@@ -393,8 +416,29 @@ export function useVoiceSession() {
       syncedRows: recountSynced(rows),
       startedAt: resolvedStartedAt,
       finishedAt: Date.now(),
+      // manualHold 중 lifecycle persist가 다시 돌더라도 보류 태그를 버리지 않는다. 태그 유실은
+      // 후보 dirty 값이 확정값처럼 sync/export되는 것과 같으므로 기존 Session에서 그대로 승계한다.
+      ...((pendingOverride === undefined ? existingSession?.pendingValidation : pendingOverride)
+        ? { pendingValidation: (pendingOverride === undefined ? existingSession?.pendingValidation : pendingOverride)! }
+        : {}),
     };
-    try { await saveSession(session); } catch { /* ignore */ }
+    if (publishPendingStage && session.pendingValidation) {
+      // ManualValueSheet는 async onCommit을 await하지 않는다. 첫 await(IDB put) 전에 후보와 pending
+      // 태그를 같은 메모리 스냅샷으로 공개해야 그 짧은 동안 Data sync/export가 후보를 확정값으로
+      // 보지 않는다. persisting 플래그는 [확인]도 durable 완료 전 진행하지 못하게 한다.
+      useDataStore.getState().upsertSession({ ...session, pendingValidationPersisting: true });
+    }
+    try {
+      await saveSession(session);
+    } catch (err) {
+      // IDB 실패 뒤 dataStore만 갱신하면 UI/로그는 성공인데 재시작 후 값이 사라진다. 호출자에게
+      // durable=false를 돌려주고 메모리 upsert도 하지 않아 두 저장소가 거짓으로 갈라지지 않게 한다.
+      logger.log({
+        type: 'error', extra: `session_persist_failed:${String((err as Error)?.message ?? err)}`,
+        sessionId: session.id, row: activeRow,
+      });
+      return false;
+    }
     // [CLIP-VAL-1]③ re-check AFTER the await, synchronously with the upsert: a clip_empty
     // unlink may have tombstoned a key while saveSession was in flight (this session's rows
     // were built synchronously before it). Without this re-strip the upsert below would
@@ -429,12 +473,26 @@ export function useVoiceSession() {
     }
     // v0.24.0 데이터-3 단조 가드 — await(saveSession) 뒤 시점. 이 사이 더 나중에 시작된(=새 값) persist가
     // 이미 dataStore에 반영됐다면(persistAppliedSeqRef가 더 큼), 옛 스냅샷으로 덮어쓰지 않는다.
-    if (mySeq < persistAppliedSeqRef.current) return;
-    persistAppliedSeqRef.current = mySeq;
-    useDataStore.getState().upsertSession(finalSession);
-    if (finalSession !== session) {
-      await saveSession(finalSession).catch(() => {});
+    if (mySeq < persistAppliedSeqRef.current) {
+      if (publishPendingStage) useDataStore.getState().upsertSession(session);
+      return true;
     }
+    persistAppliedSeqRef.current = mySeq;
+    if (finalSession !== session) {
+      try {
+        await saveSession(finalSession);
+      } catch (err) {
+        logger.log({
+          type: 'error', extra: `session_persist_compensation_failed:${String((err as Error)?.message ?? err)}`,
+          sessionId: finalSession.id, row: activeRow,
+        });
+        return false;
+      }
+    }
+    // 마지막으로 내구 저장된 형상만 메모리 store에 공개한다. 보상 save 실패 시 깨진 포인터 형상을
+    // UI에 성공처럼 올렸다가 reload에서 되돌아가는 split-brain을 막는다.
+    useDataStore.getState().upsertSession(finalSession);
+    return true;
   }, []);
 
   // ── announcements ──────────────────────────────────────────
@@ -555,9 +613,10 @@ export function useVoiceSession() {
       : null;
     sess.setReaskReason(null);
     sess.setRecognized('');
-    // phase='complete'로 둬 hero가 "✓ 행 입력 완료"를 보이게 한다(마지막 컬럼을 '듣는 중'처럼 보이는
-    // 오해 방지). STT는 계속 돌아 '종료'/'수정' 음성 명령이 처리되되(handleFinal는 paused만 게이트),
-    // early-commit(active 전용)은 멈춘다. 종료는 '종료' 음성·종료 버튼만.
+    // phase='complete'로 둬 hero가 정적 대기 라벨("N행 완료 — 명령 대기", v0.34.0 A4)을 보이게
+    // 한다(마지막 컬럼을 '듣는 중'처럼 보이는 오해 방지). STT는 계속 돌아 '종료'/'수정' 음성 명령이
+    // 처리되되(handleFinal는 paused만 게이트), early-commit(active 전용)은 멈춘다.
+    // 종료는 '종료' 음성·종료 버튼만.
     sess.setPhase('complete');
     const tail = "종료하려면 '종료'라고 말씀하거나 종료 버튼을 누르세요.";
     const msg = empties.length > 0
@@ -574,10 +633,13 @@ export function useVoiceSession() {
 
   // ── v0.33.0 백로그 A(민구 결정 3): 완료 행 착지 → "값 읽어주기 + 명령 대기" ─────
   /** 완료 행에 착지('이전' 음성/◀ 버튼/행 점프)하면 그 행의 음성입력 기록값을 TTS로 읽어주고
-   *  명령 대기 상태로 둔다. awaiting은 reviewWait 센티넬(그 행 마지막 음성 필드)로 무장 —
+   *  명령 대기 상태로 둔다. awaiting은 reviewWait 센티넬(v0.34.0 A3: 그 행 **포인터=첫 음성 필드**.
+   *  이전엔 마지막 필드였는데, 실기기 피드백 "포인터가 자동으로 마지막 값으로 이동 — 첫 항목값은
+   *  수동 입력 외 수정 불가"로 첫 컬럼 착지로 전환. bare '수정'은 포인터 컬럼, "수정 <컬럼명>"으로
+   *  다른 컬럼 지목 가능 — handleFinal modify 분기 참조)로 무장 —
    *  명령('수정'/'유지'/'다음'/'이전'/'종료' 등)은 계속 dispatch되되, bare 값 발화는 handleFinal의
    *  reviewWait 가드가 흡수한다(덮어쓰기 금지 — 수정은 '수정' 명령으로만). phase='complete'로 둬
-   *  마지막 필드가 '듣는 중'처럼 보이지 않게 하고 early-commit(active 전용)도 함께 멈춘다(atEnd 패턴). */
+   *  착지 필드가 '듣는 중'처럼 보이지 않게 하고 early-commit(active 전용)도 함께 멈춘다(atEnd 패턴). */
   const enterReviewWait = useCallback(async (row: number) => {
     const sess = useSessionStore.getState();
     const vc = voiceColsList();
@@ -585,14 +647,20 @@ export function useVoiceSession() {
     const parts = vc
       .filter((c) => (values[c.id] ?? '') !== '')
       .map((c) => `${c.name} ${formatForTts(values[c.id])}`);
-    const lastCol = vc[vc.length - 1] ?? null;
-    sess.setActiveCol(Math.max(0, vc.length - 1));
+    const firstCol = vc[0] ?? null;
+    sess.setActiveCol(0);
     sess.setRecognized('');
     sess.setReaskReason(null);
     sess.setPhase('complete');
-    awaitingFieldRef.current = lastCol
-      ? { row, colId: lastCol.id, name: lastCol.name, reviewWait: true }
+    awaitingFieldRef.current = firstCol
+      ? { row, colId: firstCol.id, name: firstCol.name, reviewWait: true }
       : null;
+    // v0.34.0 A3 계측(D11c) — 검토 대기 진입은 이전까지 무로깅이라 실기기 분석에서 착지 컬럼을
+    // 재구성할 수 없었다. 기존 command 타입 재사용(신규 LogEntry type 없음 — log-replay 호환).
+    logger.log({
+      type: 'command', parsed: 'review_wait', extra: `review_wait:row=${row},col=first`,
+      sessionId: sessionIdRef.current, row, ...(firstCol ? { colId: firstCol.id } : {}),
+    });
     const msg = `${row}행 완료됨. ${parts.join(', ')}.`;
     sess.setLastTts(msg);
     await say(msg);
@@ -682,9 +750,9 @@ export function useVoiceSession() {
   const enterModifyMode = useCallback(async (
     preExtractedValue?: string,
     pendingCmd?: PendingCommandClip | null,
-    // v0.33.0 잠정 규칙(백로그 A ⚠️ 타깃 규칙 미확정 — 민구 확인 대기): 완료 행 "검토 대기"
-    // (reviewWait) 중의 '수정'은 그 행 **마지막 음성 필드**를 타깃한다(행 끝에 서 있는 것과 동일한
-    // 직전-필드 관례). 직접값("수정 88.9") 적용 후에는 검토 대기(값 재낭독+대기)로 복귀한다.
+    // v0.34.0 A3(확정 규칙 — 실기기 피드백): 완료 행 "검토 대기"(reviewWait) 중의 '수정'은
+    // **포인터(첫) 음성 필드**를 타깃하고, "수정 <컬럼명>"이면 그 컬럼을 타깃한다(handleFinal이
+    // idx를 해석해 넘긴다). 직접값("수정 88.9") 적용 후에는 검토 대기(값 재낭독+대기)로 복귀한다.
     reviewTarget?: { row: number; idx: number },
   ) => {
     const sess = useSessionStore.getState();
@@ -783,13 +851,6 @@ export function useVoiceSession() {
         });
         sess.setRecognized(parsed);
         sess.pushValueBurst(target.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
-        // v0.33.0 항목8 — 직접 수정("수정 <값>")도 시각 영수증(이전값→새값)을 남긴다.
-        sess.setLastReceipt({
-          row: targetRow, colName: target.name, value: parsed,
-          ...(prevDirectValue != null && prevDirectValue !== '' && prevDirectValue !== parsed
-            ? { prevValue: prevDirectValue }
-            : {}),
-        });
         await say(`수정 ${target.name} ${formatForTts(parsed)}`);
         // v0.33.0 — 검토 대기 출신 직접 수정: 값 수신 재안내 대신 검토 대기로 복귀
         // (수정 반영값 재낭독 + 대기 — bare 값 덮어쓰기 금지 계약 유지).
@@ -864,8 +925,8 @@ export function useVoiceSession() {
     sess.setActiveRow(targetRow);
     sess.setActiveCol(targetIdx);
     sess.setRecognized('');
-    // v0.33.0 — 검토 대기(phase 'complete')에서 진입한 재녹음이 '행 입력 완료' 히어로를 단 채
-    // 값을 기다리지 않도록 active로 전환(일반 경로는 이미 active — 무해).
+    // v0.33.0 — 검토 대기(phase 'complete')에서 진입한 재녹음이 대기 라벨 히어로("명령 대기")를
+    // 단 채 값을 기다리지 않도록 active로 전환(일반 경로는 이미 active — 무해).
     sess.setPhase('active');
     await announceField(target, { isModify: true, previousValue: prevTargetValue });
   }, [announceField, enterReviewWait, persistSession, say]);
@@ -948,6 +1009,10 @@ export function useVoiceSession() {
   const gotoAdjacentRow = useCallback(
     async (delta: -1, source: 'voice' | 'touch' = 'touch') => {
       const sess = useSessionStore.getState();
+      // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중엔 **모든 비해소 이동을 거부**한다.
+      // STT만 막고 터치 이동을 열어두면 [확인]/[수정] 대기 중 [이전]을 눌러 미확인 이상치를
+      // 우회할 수 있었다(announceField가 알람을 null로 지워 검증 절차 자체가 소멸).
+      if (isManualHoldBlocked('prev')) return;
       const target = sess.activeRow + delta;
       cancelTts();
       if (target < 1) {
@@ -977,6 +1042,9 @@ export function useVoiceSession() {
   // 해제) 완료 행으로 반복 복귀하는 NAV-1 루프가 구조적으로 불가능해진다. 더 갈 행이 없으면
   // v0.23.0 입력탭#4 — 자동 종료하지 않고 빈 행 안내 후 종료 대기(announceEndReached).
   const goNextRow = useCallback(async (source: 'voice' | 'touch' = 'touch') => {
+    // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중 행 이동 거부(위 gotoAdjacentRow와 동일 근거:
+    // [다음]으로 미확인 이상치를 남긴 채 다음 행으로 새어나가던 경로).
+    if (isManualHoldBlocked('next')) return;
     const sess = useSessionStore.getState();
     const settings = useSettingsStore.getState();
     const vc = voiceColsList();
@@ -1167,6 +1235,18 @@ export function useVoiceSession() {
     if (!awaiting) return;
     const cmd = detectCommand(text);
 
+    // v0.34.0 리뷰(Codex High·agy Pro Critical 공통 지적 → 민구 결정 2026-07-14: **터치 전용**):
+    // 수동입력 이상치 보류(manualHold) 팝업이 떠 있는 동안 STT 결과를 **전부 버린다**.
+    //   근거: 팝업은 사용자가 손으로 넣은 값에 대해 [확인]/[수정] 터치를 기다리는 상태다. 이때
+    //   현장 소음·혼잣말이 숫자로 파싱되면 같은 셀을 음성값으로 재커밋해(팝업이 가리키는 값과
+    //   실제 행 값 불일치) 위반이 아니면 advance까지 돌아 **팝업이 사라지고 원본 수동값이 영구
+    //   소실**된다(3모델 전원 지적). 수동입력은 이미 손 입력이라 음성 재커밋 편의의 가치보다
+    //   데이터 무결성이 우선(민구 결정). 팝업의 '말로도 가능' 힌트도 함께 제거됐다
+    //   (AnomalyAlertPopup — manualHold면 터치 버튼만 노출).
+    //   해제는 confirmManualAnomaly/modifyManualAnomaly(터치)만 담당한다.
+    //   (게이트 SSOT = isManualHoldBlocked — 터치 이동/일시정지도 같은 함수로 거부한다.)
+    if (isManualHoldBlocked('stt')) return;
+
     // While paused, accept only 'resume' and 'end' (v0.15.0 A5); ignore everything else.
     // resume = 멈춘 입력 재개. end = 멈춘 채로 입력 종료·저장(일시정지 카드가 '재시작'/'종료' 둘 다
     // 안내하므로 음성 '종료'도 paused에서 작동해야 한다 — 민구 요청).
@@ -1348,12 +1428,25 @@ export function useVoiceSession() {
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
-      const modifyVal = extractModifyValue(text);
-      // v0.33.0 잠정 규칙(백로그 A ⚠️ — 민구 확정 대기): 완료 행 검토 대기 중의 '수정'은 그 행
-      // 마지막 음성 필드를 타깃한다(awaiting이 곧 그 필드). 직접값 적용 후엔 검토 대기로 복귀.
-      const reviewTarget = awaiting.reviewWait
-        ? { row: awaiting.row, idx: Math.max(0, voiceColsList().findIndex((c) => c.id === awaiting.colId)) }
-        : undefined;
+      // v0.34.0 A3(확정 규칙): 완료 행 검토 대기 중의 bare '수정'은 **포인터 컬럼**(awaiting.colId —
+      // enterReviewWait가 첫 음성 필드에 무장)을 타깃하고, "수정 <컬럼명>"이면 그 컬럼을 타깃한다.
+      // 상호배타 순서 주의 — extractModifyValue는 '수정' 뒤 **임의 텍스트**를 값 후보로 돌려주므로
+      // ("수정 종경" → '종경'), reviewWait에선 컬럼명 매치를 먼저 확인해야 한다(숫자 발화는 컬럼명과
+      // 매치될 수 없어 "수정 30.7" 직접값 경로는 그대로 성립). reviewWait 스코프 한정 — 일반 수정
+      // 의미론(직전 필드·값 추출)은 불변. 직접값 적용 후엔 검토 대기 복귀(enterModifyMode).
+      let modifyVal = extractModifyValue(text);
+      let reviewTarget: { row: number; idx: number } | undefined;
+      if (awaiting.reviewWait) {
+        const vcRw = voiceColsList();
+        let idx = Math.max(0, vcRw.findIndex((c) => c.id === awaiting.colId));
+        const named = extractModifyColumn(text, vcRw.map((c) => c.name));
+        const namedIdx = named ? vcRw.findIndex((c) => c.name === named) : -1;
+        if (namedIdx >= 0) {
+          idx = namedIdx;
+          modifyVal = null; // 컬럼명 지목 — 값 후보('종경' 등 비숫자 잔여)로 오적용 금지
+        }
+        reviewTarget = { row: awaiting.row, idx };
+      }
       await enterModifyMode(modifyVal || undefined, pendingCmd, reviewTarget);
       return;
     }
@@ -1453,6 +1546,24 @@ export function useVoiceSession() {
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
         return;
       }
+      // v0.34.0 O2 [STT-17] — 값 대기 중 단독 응답어("예/네/응/어" 등)는 수사로 커밋하지 않는다.
+      //   07-14 실기기: "예"(conf 0.729)가 alt "네"→native 4로 커밋(알람 없는 컬럼이면 침묵 오염).
+      //   파서 전역 차단은 불가("사"/"넷"은 유효) — 숫자 컬럼 값-대기 문맥에서만 재질문. trendConfirm
+      //   중에도 동일 적용(응답어는 '확인' 명령이 아니다 — 팝업 유지, 정정값 4 오염 방지). 소수 재질문
+      //   문맥(fractionWhole)에선 "네"가 .4로 합성되는 것을 막되, awaiting을 건드리지 않고 return해
+      //   문맥·연속 클립을 보존한다([CLIP-DECIMAL-FRAG-1] — startClip 금지, 타깃 재질문 반복).
+      if (isBareResponseWord(text)) {
+        logger.log({ type: 'stt_rejected_ambiguous_syllable', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, extra: 'response_word' });
+        useSessionStore.getState().setRecognized('');
+        useSessionStore.getState().setReaskReason('parse_failed');
+        if (awaiting.fractionWhole != null) {
+          await say(`${awaiting.fractionWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
+        } else {
+          recorderRef.current?.startClip();
+          await say(`${awaiting.name} 다시 말씀해 주세요.`);
+        }
+        return;
+      }
     }
 
     // v0.19.0 W4 — "소음 환경 모드"(noisyMode) 완전 제거(민구 결정). TTS가 인식값을 되읽어주므로
@@ -1543,6 +1654,15 @@ export function useVoiceSession() {
       for (let ai = 1; ai < Math.min(alts.length, 3); ai++) {
         const alt = alts[ai];
         if (!alt || alt === text) continue;
+        // primary가 독립 숫자 복수/무관 토큰을 잡았다면 alternative의 숫자만 골라 커밋하지 않는다.
+        // `현백 33.3`→alt `33.3`, `이 166.7`→alt `166.7`은 STT가 잃은 자리값/숫자 의미를
+        // 복구한 것이 아니라 위험 신호를 삭제한 후보이므로 전체 발화를 다시 받는 것이 유일하게 안전하다.
+        if (parseFailReason === 'multi_numeric' || parseFailReason === 'extraneous_token') continue;
+        // v0.34.0 O2 [STT-17] — 응답어 alt 차단: primary가 응답어면 위 가드가 이미 재질문했지만,
+        // primary가 다른 잡음("예에" 등)이고 **alt가 "네"**면 native 4로 커밋되는 07-14 실사례
+        // 경로가 남는다. 숫자 컬럼에선 응답어 alt를 건너뛴다(text/options는 "네"가 정당한 값일
+        // 수 있어 제외 — primary 가드와 동일 스코프).
+        if (col && (col.type === 'int' || col.type === 'float') && isBareResponseWord(alt)) continue;
         // v0.33.0 [STT-15] — 소수부 재질문 문맥에서는 alt도 **소수부 파서(정수부 합성)로만** 해석한다.
         // 07-13 실기기: "211 점 의" 재질문 → primary "하악" 파싱 실패 → alts 루프가 "하나"를
         // fractionWhole=211 문맥을 모른 채 **전체값 "1"로 커밋**(무알람 시트 동기화). 조각(단자리)은
@@ -1561,8 +1681,15 @@ export function useVoiceSession() {
           }
           continue;
         }
+        // v0.34.0 O3 — 소수 의도 보존: primary가 decimal_fraction_lost("266 점요" — 소수 의도인데
+        // 소수부 유실 → 타깃 재질문 예정)인데 alt가 **정수**("266")면, alt 폴백이 소수 의도를 버린
+        // 침묵 커밋이 된다(07-14 09:25:49 실사례 — 사전은 이미 점요를 잡지만 alt가 우회). 정수 alt는
+        // 건너뛰어 아래 타깃 재질문으로 넘기고, 소수를 온전히 담은 alt("266.2")만 수용한다.
+        if (parseFailReason === 'decimal_fraction_lost' && !alt.includes('.') && !/[점쩜]/.test(alt)) continue;
         const altParsed = col ? parseValueForCol(col, alt) : null;
         if (altParsed !== null) {
+          // (O3 방어 2선) 정수로 파싱된 alt도 동일 사유로 거부 — "266 점" 류 alt가 정수로 환원되는 경우.
+          if (parseFailReason === 'decimal_fraction_lost' && !altParsed.includes('.')) continue;
           parsed = altParsed;
           logger.log({ type: 'stt_alt_used', altIdx: ai, text: alt, originalText: text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
           break;
@@ -1633,16 +1760,6 @@ export function useVoiceSession() {
     if (!awaiting.trendConfirm) {
       sess.pushValueBurst(awaiting.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
     }
-    // v0.33.0 항목8 — 시각 영수증(07-10 QA P1 #3): 마지막 커밋의 행·필드·값을 다음 커밋까지 잔류
-    // 표시(VoiceScreen 하단 라인). 수정 커밋(isModify — trendConfirm 정정 포함)은 이전값→새값을
-    // 함께 싣는다. TTS/버스트를 놓쳐도 Data 탭 없이 직전 결과를 확인하는 경로.
-    sess.setLastReceipt({
-      row: awaiting.row, colName: awaiting.name, value: parsed,
-      ...(awaiting.isModify && awaiting.previousValue != null && awaiting.previousValue !== ''
-        && awaiting.previousValue !== parsed
-        ? { prevValue: awaiting.previousValue }
-        : {}),
-    });
     awaitingFieldRef.current = null;
 
     // v0.7.0 B4: 추세 알림에 새 값으로 응답한 재커밋 — 정정 기록(오알림률 분모) + 이전 값 발화
@@ -1675,20 +1792,49 @@ export function useVoiceSession() {
     // v0.4.4 증분 영속화: 값 커밋 직후(행이 완료되기 전이라도) 진행 행을 IDB에 저장한다. advance()가
     // 행 완료 시 다시 저장하므로 중복이지만, 마지막 필드 입력 전 새로고침/앱 업데이트로 부분 입력이
     // 유실되는 것을 막는 핵심 보호다. (fire-and-forget — echo TTS/진행을 막지 않음.)
-    // v0.24.0 데이터-3 진단 — 이상치 교정 커밋이면, persist 직후 dataStore 값이 교정값과 일치하는지
+    // v0.24.0 데이터-3 진단 — 이상치 교정 커밋이면 persist 후 dataStore 값이 교정값과 일치하는지
     // 가시화(불일치=옛값 잔존, 단조 가드가 막아야 함). 다음 실기기 세션에서 재현 시 근인 즉시 포착.
+    // v0.34.0 O1 — 검사 **시점 이동**: 이전엔 persist resolve 직후 즉시 검사해, 커밋 경로가 아직
+    // 진행 중(echo/알람 TTS·후속 persist 정착 전)에 dataStore를 읽어 mismatch 오탐 ×2를 기록했다
+    // (07-14 실기기 r8c8 — 정정 09:23:38 검사 vs value 09:23:40, 실피해 0). persist는 그대로
+    // fire-and-forget으로 발사하되, 검사는 커밋 경로 종단(value 이벤트 이후 — 알람 분기는 알람 TTS
+    // 이후)에 스케줄해 durable 반영이 정착한 뒤 1회만 판정한다(로직 최소 변경 — 비교식 동일).
     const wasTrendCorrected = awaiting.trendConfirm;
-    void persistSession().then(() => {
+    const persistPromise = persistSession();
+    void persistPromise.catch(() => {});
+    const runCorrectedPersistCheck = () => {
       if (!wasTrendCorrected) return;
-      const ds = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
-      const persisted = ds?.rows.find((r) => r.index === clipAwaitingRow)?.values[clipAwaitingColId];
-      logger.log({
-        type: 'trend',
-        extra: persisted === parsed ? 'trend_corrected_persist_check:ok' : 'trend_corrected_persist_check:mismatch',
-        sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId, parsed,
-        ...(persisted !== parsed ? { previousValue: String(persisted ?? '') } : {}),
+      void persistPromise.then(async (durable) => {
+        // dataStore는 IDB 실패 뒤에도 과거 코드에서 갱신될 수 있어 검증 근거가 아니다. save 성공
+        // 결과를 먼저 요구하고 같은 레코드를 IDB에서 재조회해 재시작 후에도 남을 값을 판정한다.
+        let persisted: string | undefined;
+        let readFailed = false;
+        if (durable) {
+          try {
+            const saved = await loadSession(sessionIdRef.current);
+            persisted = saved?.rows.find((r) => r.index === clipAwaitingRow)?.values[clipAwaitingColId];
+          } catch (err) {
+            readFailed = true;
+            logger.log({
+              type: 'error', extra: `trend_corrected_persist_read_failed:${String((err as Error)?.message ?? err)}`,
+              sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId,
+            });
+          }
+        }
+        logger.log({
+          type: 'trend',
+          extra: !durable
+            ? 'trend_corrected_persist_check:write_failed'
+            : readFailed
+              ? 'trend_corrected_persist_check:read_failed'
+            : persisted === parsed
+              ? 'trend_corrected_persist_check:ok'
+              : 'trend_corrected_persist_check:mismatch',
+          sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId, parsed,
+          ...(persisted !== parsed ? { previousValue: String(persisted ?? '') } : {}),
+        });
       });
-    });
+    };
     // Codex MEDIUM-4: clip for this field is being committed (stopped) — no longer active.
     // The next announceField will re-set it after its own startClip().
     activeClipRef.current = null;
@@ -1906,6 +2052,9 @@ export function useVoiceSession() {
       playBeep('alert');
       useSessionStore.getState().setLastTts(alertText);
       await say(alertText);
+      // v0.34.0 O1 — 재위반(정정값이 또 위반) 커밋도 검사 대상(이전 .then 무조건 실행과 동등) —
+      // 단 알람 TTS까지 끝난 지금 시점에 스케줄한다.
+      runCorrectedPersistCheck();
       return; // advance 중단 — 해소는 handleFinal 상단의 trendConfirm 분기
     }
 
@@ -1965,6 +2114,9 @@ export function useVoiceSession() {
         ? { previousValue: awaiting.previousValue }
         : {}),
     });
+
+    // v0.34.0 O1 — 교정 persist 검사는 커밋 경로 종단(echo TTS·value 이벤트 이후)에 스케줄.
+    runCorrectedPersistCheck();
 
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
@@ -2053,6 +2205,19 @@ export function useVoiceSession() {
     ctrlRef.current.start();
   }, [handleFinal, handleInterim]);
 
+  // ── v0.34.0 A2 — 개선요청(피드백) 팝업 열림 중 STT 일시정지 ──
+  // App.tsx가 sessionStore.uiModalOpen('feedback')을 올리고/내리는 단일 신호를 구독한다.
+  // 열림 → suspendRecognitionForUi('feedback_modal')(기존 ui_suspend 로그가 판정 근거),
+  // 닫힘 → resumeRecognitionForUi. 세션 비활성이면 hadController=false라 자연 no-op(기능 격리).
+  // keep-alive([STT-16], App.tsx) 덕에 세션 중엔 어느 탭에서 열어도 이 effect가 살아 신호가 닿는다.
+  useEffect(() => {
+    return useSessionStore.subscribe((s, prev) => {
+      if (s.uiModalOpen === prev.uiModalOpen) return;
+      if (s.uiModalOpen === 'feedback') suspendRecognitionForUi('feedback_modal');
+      else if (prev.uiModalOpen === 'feedback') resumeRecognitionForUi('feedback_modal');
+    });
+  }, [suspendRecognitionForUi, resumeRecognitionForUi]);
+
   // ── start / stop ───────────────────────────────────────────
   const start = useCallback(async (label?: string) => {
     const s = useSettingsStore.getState();
@@ -2106,13 +2271,17 @@ export function useVoiceSession() {
     // (방향 trendRule 또는 변동률 pctThreshold)이 한 컬럼이라도 있고 Google 연결 시에만.
     // loadPastIndex는 모든 실패를 null로 해소하고 past_index_skip 텔레메트리만 남기므로
     // 세션 시작 흐름을 절대 막지 않는다. 셀 단위 검사(evaluateTrend)는 이 캐시만 읽는다.
-    const anyAnomalyRule = s.columns.some(
+    // v0.34.0 D11a — 규칙 '개수'를 세션 스냅샷 meta에도 박제(개수만 — 컬럼명 등 내용 제외).
+    const anomalyRuleCount = s.columns.filter(
       (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
-    );
+    ).length;
+    const anyAnomalyRule = anomalyRuleCount > 0;
     // v0.33.0 항목5 — 영속 폴백 하이드레이션(idempotent, 토큰 무관). 미로그인/토큰 만료 세션에서도
     // IDB 스냅샷이 있으면 evaluateTrend가 폴백으로 알람을 발화한다(App 부트 경로와 이중 안전망).
     void hydratePastIndexFallback();
-    if (anyAnomalyRule && getAccessToken()) { resetPastIndexRetries(); prefetchPastIndex(); }
+    // v0.34.0 C9(d) — 토큰 조건을 (토큰 || API key)로 완화(readonlySheetsAuth SSOT). 공개 시트면
+    // 토큰 만료 세션에서도 신선 인덱스를 당길 수 있다 — [TREND-AUTH-1]의 침묵 창이 좁아진다.
+    if (anyAnomalyRule && readonlySheetsAuth()) { resetPastIndexRetries(); prefetchPastIndex(); }
     logger.setSessionId(sessionIdRef.current);
     // #1 reach telemetry: attach session-meta alongside the existing `extra:'start'` tag.
     // `extra` is preserved so any analysis keying on it keeps working; new fields are additive.
@@ -2127,6 +2296,13 @@ export function useVoiceSession() {
         completedRows: 0,
         // v0.23.0 입력탭#2 — 세션 시작 시 활성 인식 허용범위를 박제(설정값 미로깅 갭 해소).
         recognitionTolerance: s.recognitionTolerance,
+        // v0.34.0 D11a — 세션 시작 설정 스냅샷(자가검증 계측): 비프 최종 선택·TTS 속도·자동 캡처·
+        // 이상치 규칙 규모를 로그만으로 판정. anomalyRuleCount는 개수만(컬럼명 등 내용 제외).
+        ttsRate: s.ttsRate,
+        beepPositiveId: s.beepPositiveId,
+        beepNegativeId: s.beepNegativeId,
+        autoScreenCapture: s.autoScreenCapture,
+        anomalyRuleCount,
         // NOTE: session label intentionally NOT logged — buildAutoLabel derives it from the first
         // fixed auto column (농가명 = grower name), a PII vector. Reach is fully computable from
         // sessionId + appVersion + totalRows + completedRows. The label still lives on the Session
@@ -2138,10 +2314,20 @@ export function useVoiceSession() {
     // Init audio recorder fire-and-forget — mic permission is independent of STT startup.
     // Awaiting getUserMedia can block indefinitely in headless/denied-permission environments.
     if (!recorderRef.current) recorderRef.current = new AudioRecorder();
+    // v0.34.0 D11b — 파동 통계 리셋: prewarm(입력탭 마운트)이 세션 전부터 캡처를 돌리므로
+    // 세션 밖 구간이 wave_stats에 섞이지 않게 시작 시점에 0으로 되돌린다.
+    recorderRef.current.resetWaveStats();
     // #4 active mic: once init() resolves, emit a follow-up session event carrying the granted
     // input device. Done async (not awaited) so STT startup is never blocked; emitted as its own
     // event so analysis can attribute STT accuracy to the real device per session.
     void recorderRef.current.init().then((ok) => {
+      // v0.34.0 D11b — UI 이펙트 자가검증 1건: 파동/글로우 활성 + 프리롤 캡처 경로. init 실패
+      // (ok=false)여도 남긴다 — preroll=unavailable이 곧 "파동 무동작(레벨 0 폴백)" 판정 근거.
+      logger.log({
+        type: 'session',
+        sessionId: sessionIdRef.current,
+        extra: `ui_fx:wave=on,glow=on,preroll=${recorderRef.current?.getPrerollKind() ?? 'unavailable'}`,
+      });
       if (!ok) return;
       const input = recorderRef.current?.getActiveInput();
       if (!input) return;
@@ -2201,6 +2387,19 @@ export function useVoiceSession() {
         },
       });
     }
+    // v0.34.0 D11b — 세션 파동 통계 1건(stop 직전, dispose 전에 읽는다). audioRecorder가 세션
+    // 동안 누적한 요약치만 — 고빈도 로깅 절대 금지(ring buffer 2000 보호). 프리롤 미가용이면
+    // 통계가 없어(null) 생략 — ui_fx의 preroll=unavailable이 부재 사유를 설명한다.
+    {
+      const ws = recorderRef.current?.getWaveStats();
+      if (ws) {
+        logger.log({
+          type: 'session',
+          sessionId: sessionIdRef.current,
+          extra: `wave_stats:peak=${ws.peak.toFixed(2)},avg=${ws.avg.toFixed(2)},activePct=${ws.activePct}`,
+        });
+      }
+    }
     if (announce) await say('입력을 종료합니다.');
     useSessionStore.getState().setPhase('ready');
     // Codex 3차 HIGH: 클립 저장을 dispose보다 먼저 flush.
@@ -2228,6 +2427,9 @@ export function useVoiceSession() {
   // 그 경로가 곧 touch다. extra를 `phase:<source>`로 확장(신규 이벤트 타입 무첨가, log-replay 호환).
   // 다음 분석이 "일시정지 횟수 + 어떤 방식으로 해제했는지"(민구 요청·Trace #4)를 정량화한다.
   const pause = useCallback(async (source: 'voice' | 'touch' = 'touch') => {
+    // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중 일시정지 거부. paused 진입은 팝업 렌더를
+    // PausedCard로 교체해(VoiceScreen 분기: paused가 알람보다 우선) 보류를 화면에서 지워버린다.
+    if (isManualHoldBlocked('pause')) return;
     logger.log({ type: 'command', parsed: 'pause', extra: `phase:${source}`, sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow });
     cancelTts();
     // dispose가 in-flight stopClip을 null로 해소해 정상 클립이 clip_empty로 떨어지는 것을 방지:
@@ -2306,6 +2508,37 @@ export function useVoiceSession() {
     return unsubscribe;
   }, []);
 
+  // hydrateSessions가 IDB의 pendingValidation을 sessionStore에 복구한 뒤 VoiceScreen이 마운트된다.
+  // 팝업만 복원하고 이 내부 포인터를 비워 두면 [확인]이 advance 문맥을 잃으므로 같은 셀/검토대기를
+  // 재구성한다. manualHold 게이트가 살아 있어 복구 중 STT가 후보를 우회 커밋할 수는 없다.
+  useEffect(() => {
+    const live = useSessionStore.getState();
+    const pending = useDataStore.getState().sessions
+      .find((s) => s.id === live.sessionId)?.pendingValidation;
+    if (!pending || !live.anomalyAlert?.manualHold) return;
+    sessionIdRef.current = live.sessionId;
+    sessionLabelRef.current = live.sessionLabel;
+    logger.setSessionId(live.sessionId);
+    const col = getColById(pending.colId);
+    if (!col) return;
+    awaitingFieldRef.current = pending.reviewWait
+      ? { row: pending.row, colId: pending.colId, name: col.name, reviewWait: true }
+      : { row: pending.row, colId: pending.colId, name: col.name, isModify: true, previousValue: pending.candidateValue };
+    // reload 전 컨트롤러 인스턴스는 사라진다. 팝업만 복원하면 테스트의 fireResult가 optional no-op이고,
+    // [확인] 뒤 다음 셀도 영구 무음이 된다. 실제 SpeechController를 다시 만들되 manualHold 중앙 게이트가
+    // 복구 직후 STT 결과를 모두 거부하므로 후보는 터치 전용 계약을 유지한다.
+    if (isSpeechSupported() && !ctrlRef.current) {
+      ctrlRef.current = new SpeechController({
+        onFinal: handleFinal,
+        onInterim: handleInterim,
+        onError: () => {},
+      });
+      setActiveController(ctrlRef.current);
+      ctrlRef.current.start();
+      logger.log({ type: 'stt', extra: 'manual_hold_restore_controller:started', sessionId: live.sessionId, row: pending.row, colId: pending.colId });
+    }
+  }, [handleFinal, handleInterim]);
+
   // ── v0.33.0 항목4 — 포그라운드 복귀 즉시 복구(visibilitychange + pageshow) ─────────
   // 세션 활성 중(active/complete/paused — paused도 음성 '재시작'을 들어야 하므로 포함) 화면이
   // 다시 보이면: ① TTS 엔진 해동(resume — iOS가 백그라운드에서 paused로 얼려둠) ② 인식기
@@ -2358,6 +2591,13 @@ export function useVoiceSession() {
     [],
   );
 
+  // v0.34.0 B7 — 파동 레벨 getter(안정 참조, React state 금지 — 리렌더 0). rAF 소비자
+  // (useAudioLevelVar)가 매 프레임 읽는다. recorder가 없거나(세션 전/일시정지) 프리롤 미가용이면 0.
+  const getAudioLevel = useCallback(
+    () => recorderRef.current?.getInputLevel() ?? 0,
+    [],
+  );
+
   // D-2 (RACE-7): restore session id/label from the store on (re)mount. If the hook unmounted
   // mid-session (e.g. tab switch while paused) the local refs were lost, but the store kept the
   // id — recover it so resumed events and the final persist carry the correct sessionId.
@@ -2375,8 +2615,13 @@ export function useVoiceSession() {
   useEffect(() => () => {
     setActiveController(null);
     ctrlRef.current?.stop();
+    // StrictMode simulated teardown 뒤 effect setup이 다시 돌 때 stopped 인스턴스를 재사용하지 않는다.
+    // ref가 남으면 pending restore effect의 `!ctrlRef.current` 가드가 새 컨트롤러 생성을 건너뛴다.
+    ctrlRef.current = null;
     cancelTts();
     recorderRef.current?.dispose();
+    // dispose된 recorder도 StrictMode 2차 setup/prewarm에서 새 인스턴스로 재생성되게 수명을 끝낸다.
+    recorderRef.current = null;
   }, []);
 
   /** v0.33.0 항목6 — 셀 값 영속 공유 코어. 터치 인라인 편집(commitTouchValue)과 수동 입력 시트
@@ -2398,32 +2643,33 @@ export function useVoiceSession() {
    *  v0.33.0 항목6 — 영속 코어는 persistCellValue로 추출(수동 입력 시트와 공유). */
   const commitTouchValue = useCallback(async (row: number, colId: string, value: string) => {
     logger.log({ type: 'command', parsed: 'touch_commit', extra: 'touch', text: value, sessionId: sessionIdRef.current, row, colId });
-    const prevValue = useSessionStore.getState().getRowValues(row)[colId] ?? '';
     await persistCellValue(row, colId, value);
-    // v0.33.0 항목8 — 터치 커밋도 시각 영수증에 반영(입력 결과 확인 경로 일원화).
-    const colName = getColById(colId)?.name ?? colId;
-    useSessionStore.getState().setLastReceipt({
-      row, colName, value,
-      ...(prevValue && prevValue !== value ? { prevValue } : {}),
-    });
   }, [persistCellValue]);
 
   /** v0.33.0 항목6 — 칩 터치 수동 입력(ManualValueSheet) 커밋. 음성 없이 값이 서므로:
    *   ① `manual_commit` 텔레메트리(항목3에서 예약한 기존 command 타입 + extra:'touch')
    *   ② 기존 클립 archive 후 셀 포인터 해제 — 수동 값에는 대응 음성이 없어, 이전 발화 클립이
    *      그대로 걸려 있으면 "값과 다른 오디오 재생"(155.5/177.7 계열 stale-클립 결함)이 된다.
-   *   ③ persistCellValue(공유 영속 코어) + 시각 영수증(항목8)
-   *   ④ 이상치 검사 — **시각 팝업+비프만, 음성 확인 루프 없음(민구 확정)**: trendConfirm을 무장하지
-   *      않고 알람 TTS도 내지 않는다(awaitingResponse 미지정 → 팝업에 [확인][수정] 버튼도 없음).
-   *      팝업 세팅은 안내/advance가 끝난 **뒤**에 한다 — announceField가 진입 시 팝업을 해제(null)
-   *      하므로 먼저 세팅하면 즉시 지워진다. 뒤에 세팅해 다음 필드 전환/커밋까지 잔류시킨다.
-   *   ⑤ awaiting 필드에 대한 커밋이면 echo TTS 후 advance() — 음성 커밋과 같은 진행.
+   *   ③ persistCellValue(공유 영속 코어)
+   *   ④ 이상치 검사 — 음성 확인 루프(trendConfirm) 무장·알람 TTS 없음(민구 확정)은 유지하되,
+   *      v0.34.0 A1: 이 커밋이 진행을 소유하면(awaiting 셀/검토 대기) violation 시 echo/advance를
+   *      **보류**하고 [확인][수정] 터치 응답을 기다린다(manualHold 팝업 — 포인터는 커밋한 칩 유지).
+   *      이전엔 advance()가 먼저 실행되고 팝업 세팅이 나중이라, 팝업이 뜬 채 대상 칩이 다음 칩으로
+   *      전진·활성화되던 버그(실기기 재현). awaiting이 다른 셀인 커밋의 violation은 종전대로 정보성
+   *      팝업(버튼 없음, 흐름 불변) — announceField가 진입 시 팝업을 해제하므로 진행 뒤에 세팅한다.
+   *   ⑤ awaiting 필드에 대한 커밋이면(무위반) echo TTS 후 advance() — 음성 커밋과 같은 진행.
    *      검토 대기(reviewWait, 항목2) 중이면 advance 대신 검토 대기를 재무장(갱신값 재낭독). */
   const commitManualValue = useCallback(async (row: number, colId: string, value: string) => {
     const col = getColById(colId);
     if (!col) return;
     const sess = useSessionStore.getState();
     const prevValue = sess.getRowValues(row)[colId] ?? '';
+    // 클립 포인터를 해제하기 전 확정 상태를 캡처한다. pending 안전 뷰가 값만 원복하고 오디오를
+    // 잃으면 확인 전 export가 직전 확정값과 맞지 않는 불완전한 감사 레코드가 된다.
+    const existingBeforeCommit = useDataStore.getState().sessions
+      .find((s) => s.id === sessionIdRef.current);
+    const oldPending = existingBeforeCommit?.pendingValidation;
+    const originalRow = existingBeforeCommit?.rows.find((r) => r.index === row);
     logger.log({
       type: 'command', parsed: 'manual_commit', extra: 'touch', text: value,
       sessionId: sessionIdRef.current, row, colId,
@@ -2456,20 +2702,103 @@ export function useVoiceSession() {
       }
     }
 
-    // ③ 영속 + 화면 상태 + 영수증
+    // 재커밋 중이면 최초 확정값/syncState를 계속 보존한다. 두 번째 후보를 기준값으로 덮으면
+    // [수정] 반복 뒤 sync/export가 첫 미확정 후보를 내보내는 구멍이 생긴다.
+
+    // ④ 이상치 검사 — hold 여부를 **값 저장 전에** 결정한다. 후보값을 먼저 일반 Session으로
+    // 저장한 뒤 pending 태그를 두 번째 write로 붙이면 그 사이 reload에서 후보가 확정값으로 보이는
+    // 원래 결함이 그대로 남는다. hold면 아래에서 후보+태그를 단일 IDB put으로 저장한다.
+    const violation = evaluateTrend(col, row, colId, value);
+    const fireManualAlert = (v: TrendViolation, hold: boolean) => {
+      const { alertKind, changeText, alertText, threshold } = buildAnomalyDisplay(col, v);
+      logger.log({
+        type: 'trend',
+        extra: `trend_alert_fired:trigger=${v.trigger},kind=${alertKind},dir=${v.direction},change=${changeText || '?'},text=${alertText},src=manual${hold ? ',hold=1' : ''}`,
+        sessionId: sessionIdRef.current, row, colId,
+        colName: col.name, text: value, parsed: value, previousValue: String(v.prev),
+      });
+      const alertExtra = getAnomalyAlertData(row);
+      useSessionStore.getState().setAnomalyAlert({
+        colName: col.name,
+        prev: String(v.prev),
+        next: formatForTts(value),
+        direction: v.direction,
+        changeText,
+        row,
+        colId, // v0.34.0 A1 — [수정]의 시트 재오픈 키(VoiceScreen)
+        sampleKey: alertExtra.sampleKey,
+        prevDate: alertExtra.prevDate,
+        status: 'pending',
+        kind: alertKind,
+        ...(threshold != null ? { threshold } : {}),
+        // v0.34.0 A1 — hold면 [확인][수정] 버튼 표시(awaitingResponse 재사용) + manualHold 라우팅.
+        //   음성 확인 루프(trendConfirm)는 여전히 무장하지 않는다(민구 기존 결정).
+        //   비-hold(awaiting이 다른 셀)는 종전 그대로 정보성 팝업(버튼 없음).
+        ...(hold ? { awaitingResponse: true, manualHold: true } : {}),
+      });
+      playBeep('alert');
+    };
+
+    const awaiting = awaitingFieldRef.current;
+    const ownsFlow = !!awaiting
+      && (awaiting.reviewWait || (!awaiting.atEnd && awaiting.row === row && awaiting.colId === colId));
+    if (violation && ownsFlow) {
+      epochRef.current++;
+      cancelTts();
+      if (!awaiting!.reviewWait) {
+        awaitingFieldRef.current = { row, colId, name: col.name, isModify: true, previousValue: value };
+      }
+      sess.setRowValue(row, colId, value);
+      sess.setRecognized(value);
+      sess.setReaskReason(null);
+      // dataStore는 UI 후보를 보여 주되 여기서는 saveSession을 호출하지 않는다. persistSession에
+      // pendingOverride를 넘긴 단 한 번의 put만 후보를 내구화해 crash window를 제거한다.
+      useDataStore.getState().patchRowValues(sessionIdRef.current, row, { [colId]: value });
+      fireManualAlert(violation, true);
+      const alert = useSessionStore.getState().anomalyAlert;
+      if (!alert?.manualHold) return;
+      const pendingValidation: NonNullable<Session['pendingValidation']> = {
+        row,
+        colId,
+        candidateValue: value,
+        previousValue: oldPending?.previousValue ?? originalRow?.values[colId] ?? prevValue,
+        previousSyncState: oldPending?.previousSyncState ?? originalRow?.syncState,
+        previousAudioClip: oldPending?.previousAudioClip ?? originalRow?.audioClips?.[colId],
+        reviewWait: !!awaiting.reviewWait,
+        activeColIdx: useSessionStore.getState().activeColIdx,
+        alert: { ...alert, colId, awaitingResponse: true, manualHold: true },
+      };
+      const durable = await persistSession(pendingValidation, true);
+      if (!durable) {
+        // 태그와 후보가 함께 저장되지 못했으므로 후보를 확정 상태처럼 메모리에 남기지 않는다.
+        // 직전 값으로 롤백하고 보류 UI를 닫아 reload 전후가 동일한 확정값을 가리키게 한다.
+        sess.setRowValue(row, colId, pendingValidation.previousValue);
+        sess.setRecognized(pendingValidation.previousValue);
+        useSessionStore.getState().setAnomalyAlert(null);
+        const current = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+        if (current) useDataStore.getState().upsertSession(withoutPendingCandidate({ ...current, pendingValidation }));
+      }
+      return;
+    }
+
+    // 일반값/정보성 이상치는 기존 즉시 영속 계약을 유지한다.
     await persistCellValue(row, colId, value);
     sess.setRecognized(value);
     sess.setReaskReason(null);
-    sess.setLastReceipt({
-      row, colName: col.name, value,
-      ...(prevValue && prevValue !== value ? { prevValue } : {}),
-    });
-
-    // ④ 이상치 검사(팝업 세팅은 ⑤ 뒤 — 위 doc 주석 참조)
-    const violation = evaluateTrend(col, row, colId, value);
 
     // ⑤ 진행: awaiting 셀이면 음성 커밋과 동일하게 echo 후 advance. 검토 대기면 재무장.
-    const awaiting = awaitingFieldRef.current;
+    //    v0.34.0 A1 — 단, violation이면 진행을 보류하고 팝업 응답을 기다린다(칩 전진 버그 수정).
+    if (oldPending && oldPending.row === row && oldPending.colId === colId) {
+      const staged = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+      if (staged) {
+        const confirmed = { ...staged };
+        delete confirmed.pendingValidation;
+        await saveSession(confirmed);
+        useDataStore.getState().upsertSession(confirmed);
+      }
+      // 성공적인 정상 재커밋만 보류를 해소한다. 시트 취소는 이 함수에 들어오지 않으므로 유지된다.
+      useSessionStore.getState().setAnomalyAlert(null);
+    }
     if (awaiting?.reviewWait) {
       // v0.33.0 항목2 상호작용 — 검토 대기 중 칩 수동 수정: 검토 대기를 재무장해 갱신값을 재낭독
       // 하고 다시 명령 대기한다(advance로 검토를 강제 종료하지 않는다).
@@ -2485,32 +2814,8 @@ export function useVoiceSession() {
     }
     // (awaiting이 다른 셀이면 흐름 불변 — 값만 반영되고 현재 안내 상태 유지.)
 
-    if (violation) {
-      const { alertKind, changeText, alertText, threshold } = buildAnomalyDisplay(col, violation);
-      logger.log({
-        type: 'trend',
-        extra: `trend_alert_fired:trigger=${violation.trigger},kind=${alertKind},dir=${violation.direction},change=${changeText || '?'},text=${alertText},src=manual`,
-        sessionId: sessionIdRef.current, row, colId,
-        colName: col.name, text: value, parsed: value, previousValue: String(violation.prev),
-      });
-      const alertExtra = getAnomalyAlertData(row);
-      useSessionStore.getState().setAnomalyAlert({
-        colName: col.name,
-        prev: String(violation.prev),
-        next: formatForTts(value),
-        direction: violation.direction,
-        changeText,
-        row,
-        sampleKey: alertExtra.sampleKey,
-        prevDate: alertExtra.prevDate,
-        status: 'pending',
-        kind: alertKind,
-        ...(threshold != null ? { threshold } : {}),
-        // awaitingResponse 미지정 — 정보성 팝업(버튼·음성 확인 루프 없음, 민구 확정).
-      });
-      playBeep('alert');
-    }
-  }, [advance, archiveCellClip, enterReviewWait, evaluateTrend, getAnomalyAlertData, persistCellValue, say]);
+    if (violation) fireManualAlert(violation, false);
+  }, [advance, archiveCellClip, enterReviewWait, evaluateTrend, getAnomalyAlertData, persistCellValue, persistSession, say]);
 
   // ── v0.33.0 항목7 — 이상치 응답 대기(trendConfirm) 중 터치 버튼: 음성 명령과 동일 동작·동일 로그 ──
   /** [확인] 버튼 — 음성 '확인'과 동일: 커밋된 값 확정 + 팝업 해제 + advance 1회. attribution은
@@ -2557,6 +2862,88 @@ export function useVoiceSession() {
     await say(`${awaiting.name} 다시 말씀해 주세요.`);
   }, [armClipForCell, say]);
 
+  // ── v0.34.0 A1 — 수동 입력 이상치 **보류**(manualHold) 팝업의 터치 버튼 ──
+  //   위 confirmAnomalyTouch/modifyAnomalyTouch는 trendConfirm 가드라 음성 경로 전용 — 수동 보류는
+  //   별도 함수로 무충돌 분리한다(트리거 가드도 anomalyAlert.manualHold). 해제 콜백은 RACE-1 패턴
+  //   (epoch bump + cancelTts 후 진행 — confirmAnomalyTouch와 동일 복제).
+  /** [확인] — 커밋된 수동 값 확정 + 팝업 해제 + 보류했던 진행 재개(advance 1회.
+   *  검토 대기 출신이면 enterReviewWait 재진입 — 갱신값 재낭독 + 명령 대기). */
+  const confirmManualAnomaly = useCallback(async () => {
+    const alert = useSessionStore.getState().anomalyAlert;
+    if (!alert?.manualHold) return; // 보류 팝업이 아니면 no-op
+    const staged = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+    // 팝업이 보이더라도 후보+pending 단일 put이 아직 끝나지 않았거나 태그 자체가 없으면 절대
+    // alert를 해제/advance하지 않는다. 느린 IDB와 ManualValueSheet fire-and-forget 사이 우회 차단.
+    if (!staged?.pendingValidation || staged.pendingValidationPersisting) {
+      logger.log({
+        type: 'command', parsed: 'confirm', extra: 'blocked:manual_hold:not_durable',
+        sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+      });
+      return;
+    }
+    epochRef.current++;
+    cancelTts();
+    logger.log({
+      type: 'command', parsed: 'confirm', extra: 'touch:manual_hold',
+      sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+    });
+    if (staged.pendingValidation) {
+      const confirmed = { ...staged };
+      delete confirmed.pendingValidation;
+      // [확인]은 후보를 확정값으로 승격하는 유일한 경로다. IDB 저장이 끝난 뒤에만 메모리 hold를
+      // 지워, 쿼터/트랜잭션 실패 시 화면만 확정된 것처럼 진행하는 불일치를 막는다.
+      try {
+        await saveSession(confirmed);
+        useDataStore.getState().upsertSession(confirmed);
+      } catch (err) {
+        logger.log({
+          type: 'error', extra: `manual_hold_confirm_persist_failed:${String((err as Error)?.message ?? err)}`,
+          sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+        });
+        return;
+      }
+    }
+    useSessionStore.getState().setAnomalyAlert(null);
+    logger.log({
+      type: 'trend', extra: 'trend_alert_confirmed', parsed: 'confirm',
+      sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+    });
+    const awaiting = awaitingFieldRef.current;
+    if (awaiting?.reviewWait) {
+      // 보류 시 재무장을 미뤘던 검토 대기 재진입(commitManualValue의 reviewWait 경로와 동일 착지).
+      await enterReviewWait(awaiting.row);
+      return;
+    }
+    awaitingFieldRef.current = null;
+    await advance();
+  }, [advance, enterReviewWait]);
+
+  /** [수정] — 팝업 해제만 수행. 해당 셀 ManualValueSheet 재오픈은 시트 open 상태를 소유한
+   *  VoiceScreen이 조립한다(이 콜백 직후 alert.colId로 openManualSheet). awaiting은
+   *  commitManualValue가 무장해 둔 isModify(같은 셀) 또는 reviewWait 센티넬을 그대로 둔다 —
+   *  시트 재커밋(commitManualValue)이 같은 경로로 재평가한다. */
+  const modifyManualAnomaly = useCallback(() => {
+    const alert = useSessionStore.getState().anomalyAlert;
+    if (!alert?.manualHold) return;
+    epochRef.current++;
+    cancelTts();
+    logger.log({
+      type: 'command', parsed: 'modify', extra: 'touch:manual_hold',
+      sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+    });
+    // v0.34.0 리뷰 라운드2(Codex Medium) — **보류를 여기서 풀지 않는다.** 이전엔 setAnomalyAlert(null)로
+    // 팝업·hold를 먼저 지웠는데, 그 뒤 사용자가 수동입력 시트를 취소하면 **이미 영속된 이상값이
+    // 확인된 것처럼 남고 STT까지 재개**됐다(미확인 값이 검증 없이 확정 — 민구 결정 "터치로 해소될
+    // 때까지 보류"에 어긋남). 보류는 **성공적인 재커밋으로만** 풀린다:
+    //   · 새 값이 정상 → commitManualValue → advance → announceField가 알람을 지운다.
+    //   · 새 값이 또 위반 → fireManualAlert(hold=1)이 팝업을 갱신해 다시 보류.
+    //   · 시트 취소 → 알람·hold가 그대로 남아 팝업이 다시 보이고 게이트도 유지된다(누수 없음).
+    logger.log({
+      type: 'trend', extra: 'trend_alert_modify_reopen:hold_kept',
+      sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+    });
+  }, []);
+
   // v0.25.0 기능2(WS-2, 민구 요청) — 입력탭 진입(마운트) 시 마이크 prewarm(첫 클립 유실 완화책 1).
   // 기존 start()의 init() 폴백은 **그대로 두고** 위에 얹는 best-effort 배선이다(제거 아님 → 회귀 0).
   // recorderRef.current를 여기서 채우면 이후 start()/reconnectMic이 같은 인스턴스를 재사용하고,
@@ -2593,8 +2980,11 @@ export function useVoiceSession() {
     commitManualValue,
     confirmAnomalyTouch,
     modifyAnomalyTouch,
+    confirmManualAnomaly,
+    modifyManualAnomaly,
     lastConfidenceRef,
     getActiveInputLabel,
+    getAudioLevel,
     micLost,
     reconnectMic,
     prewarmMic,

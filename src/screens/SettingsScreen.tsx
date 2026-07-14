@@ -24,6 +24,7 @@ import {
   inferColumns,
   preserveInferredColumnIds,
   parseSpreadsheetId,
+  readonlySheetsAuth,
 } from '../lib/sheets';
 import { computeTotalRows, nestedAutoValue, buildCyclingValues, autoValue } from '../lib/autoValue';
 import { buildSessionLabel, sessionConstantValue } from '../lib/sessionLabel';
@@ -1050,6 +1051,10 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
       // 됐다. 그래서 UI는 '연결됨'이라 거짓 표시하지만 모든 시트 읽기/쓰기는 토큰 없음으로 실패 →
       // 사용자가 '연결이 풀렸다'고 느끼고 매번 URL을 다시 붙여넣던 혼란의 근본. 정직하게 강등해
       // '재로그인 필요'를 노출하고, 재로그인 후엔 저장 URL을 자동 재연결(아래 onGoogleClick)한다.
+      // v0.34.0 계측 갭① — 토큰 소실이 '발견'되는 유일한 지점(만료는 이벤트가 아니라 상태)이라
+      // 여기서 token_expired를 남긴다. googleConnected=true→false 전이에서만 오므로 로그아웃
+      // 상태의 매 마운트마다 반복되지 않는다. 수동 로그아웃은 signOut('manual'|...)이 별도 로깅.
+      logger.log({ type: 'app', extra: 'auth_signout:token_expired' });
       s.set({ googleConnected: false });
     }
     // S-1: preload GIS + token client so the first 로그인 click opens the popup in one shot
@@ -1243,6 +1248,14 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
       // v0.13.0 R1 — 연결에 성공한 시트를 '파일명'(meta.title)으로 저장 목록에 자동 등록한다(민구
       // 요청). sheetId 기준 dedupe(saveSheet) — 같은 시트 재연결 시 최근 사용으로 갱신만 된다.
       s.saveSheet({ name: meta.title || url, url, sheetId: id, addedAt: Date.now() });
+      // v0.34.0 C9(b) — 시트 연결 확정 직후 프리페치. 이 함수는 Drive Picker 선택·저장목록 선택·
+      // URL 확인·재로그인 자동 재연결의 공통 종점이라 여기 1곳 배선으로 전부 커버된다(단일 배선).
+      // 컬럼은 위 loadHeaders가 방금 교체했을 수 있으므로 getState()로 최신을 읽는다.
+      const st = useSettingsStore.getState();
+      const anyRule = st.columns.some(
+        (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
+      );
+      if (anyRule && readonlySheetsAuth()) { resetPastIndexRetries(); prefetchPastIndex(); }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1291,7 +1304,9 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
     const anyAnomalyRule = s.columns.some(
       (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
     );
-    if (anyAnomalyRule && getAccessToken()) { resetPastIndexRetries(); prefetchPastIndex(); }
+    // v0.34.0 C9(a) — 토큰 조건을 (토큰 || API key)로 완화(readonlySheetsAuth SSOT). 공개 시트면
+    // 미로그인 생성 직후에도 과거값이 준비된다(민구: "시트가 연결되면 자동으로 작동해야 함").
+    if (anyAnomalyRule && readonlySheetsAuth()) { resetPastIndexRetries(); prefetchPastIndex(); }
     setGenerateGateOpen(false);
   };
 
@@ -1327,7 +1342,7 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
     setPreferredVoiceName(''); // 라이브 speech 모듈도 스토어 기본값과 동기화
     setTypeReview(null);
     if (clearLogin) {
-      await googleSignOut(); // 토큰 없으면 no-op(clearToken만) — 로그아웃 상태에서도 안전
+      await googleSignOut('settings_reset'); // 토큰 없으면 no-op(clearToken만) — 로그아웃 상태에서도 안전
       s.set({ googleConnected: false, userEmail: null });
     }
     if (clearSheets) {
@@ -2049,6 +2064,38 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
 
           </div>
         </div>
+
+        {/* v0.34.0 C10(Vance) — 설정 요약 인라인(스크롤 영역 말미, 민구 요청: "설정 재확인에 페이지
+            최상단까지 가는 번거로움"). 상단 '설정 요약' 팝업 버튼은 유지하고, 같은 SettingsSummary
+            SSOT를 하단 액션바("총 N행 생성됨 (미리보기)") 바로 위에서 한 번 더 보여준다. 수치는
+            팝업(SettingsSummaryModal)과 동일 소스: computeTotalRows(s.columns) +
+            prospectiveSessionLabel(). footer(액션바, flexShrink:0 무스크롤 존)에 넣지 않는다 —
+            반드시 스크롤 영역 안. 캡션에 '생성됨'/'생성 예정' 부분문자열 금지(기존 text= 로케이터
+            보호) — 스펙 단언은 data-testid 기반. */}
+        {s.columns.length > 0 && (
+          <div
+            data-testid="settings-summary-inline"
+            style={{
+              margin: '18px 16px 0',
+              padding: 14,
+              background: T.card,
+              borderRadius: 16,
+              border: `1px solid ${T.line}`,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+            }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 800, color: T.textDim, letterSpacing: -0.2 }}>
+              설정 요약
+            </div>
+            <SettingsSummary
+              columns={s.columns}
+              totalRows={computeTotalRows(s.columns)}
+              sessionLabel={prospectiveSessionLabel()}
+            />
+          </div>
+        )}
 
         {/* Footer: version + build date */}
         <div

@@ -256,6 +256,61 @@ test('B3 — 초기화(체크박스 2개): 로그인 해제 + 시트 URL·저장
   console.log('✓ 초기화 + opt-in 삭제: 로그인 해제 · 시트 URL/저장 시트 삭제');
 });
 
+// ─── C10(v0.34.0). 설정 요약 인라인(하단 배치) ───────────────────────────────
+
+/** SettingsSummary pill(라벨 span + 값 span 2-child div)에서 라벨→값 맵 추출.
+ *  '생성됨'/'생성 예정' 텍스트 로케이터에 민감한 기존 스펙 보호 — 단언은 testid + 구조 기반. */
+async function summaryPills(page: Page, scopeSelector: string): Promise<Record<string, string>> {
+  return page.locator(scopeSelector).evaluate((root) => {
+    const wanted = ['음성입력', '자동입력', '수동입력', '전체 항목', '총 행수'];
+    const out: Record<string, string> = {};
+    root.querySelectorAll('div').forEach((d) => {
+      if (
+        d.children.length === 2 &&
+        d.children[0].tagName === 'SPAN' &&
+        d.children[1].tagName === 'SPAN'
+      ) {
+        const label = d.children[0].textContent?.trim() ?? '';
+        if (wanted.includes(label)) out[label] = d.children[1].textContent?.trim() ?? '';
+      }
+    });
+    return out;
+  });
+}
+
+test('C10 — 설정 요약 인라인이 스크롤 말미(액션바 위)에 존재 + 팝업 요약과 동일 수치', async ({ page }) => {
+  await freshSettings(page);
+
+  // ① 인라인 요약 존재(스크롤 영역 안 — 스크롤해야 보인다) + 상단 팝업 버튼은 그대로 유지.
+  await expect(page.locator('[data-testid="settings-summary-open"]')).toBeVisible();
+  const inline = page.locator('[data-testid="settings-summary-inline"]');
+  await inline.scrollIntoViewIfNeeded();
+  await expect(inline).toBeVisible();
+
+  // ② 인라인이 footer(무스크롤 액션바)가 아니라 스크롤 영역 안에 있다:
+  //    scrollIntoView 없이도 위치가 스크롤에 따라 움직이는 요소인지 = offsetParent 체인이
+  //    overflowY:auto 조상 안에 있는지로 판정.
+  const inScrollArea = await inline.evaluate((el) => {
+    for (let n = el.parentElement; n; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.overflowY === 'auto' || cs.overflowY === 'scroll') return true;
+    }
+    return false;
+  });
+  expect(inScrollArea, '인라인 요약이 스크롤 영역 안(footer 금지)').toBe(true);
+
+  const inlinePills = await summaryPills(page, '[data-testid="settings-summary-inline"]');
+  expect(Object.keys(inlinePills).sort()).toEqual(['수동입력', '음성입력', '자동입력', '전체 항목', '총 행수'].sort());
+
+  // ③ 팝업 요약과 수치 대조(같은 SettingsSummary SSOT — 동일 소스이므로 글자까지 동일).
+  await page.locator('[data-testid="settings-summary-open"]').click();
+  await page.waitForTimeout(300);
+  await expect(page.locator('[data-testid="settings-summary-modal"]')).toBeVisible({ timeout: 2000 });
+  const modalPills = await summaryPills(page, '[data-testid="settings-summary-card"]');
+  expect(modalPills).toEqual(inlinePills);
+  console.log(`✓ 인라인 요약 = 팝업 요약: ${JSON.stringify(inlinePills)}`);
+});
+
 // ─── B4. 생성 완료 → 입력탭 이동 ─────────────────────────────────────────────
 
 test('B4 — 생성 완료 시 "입력탭으로 이동 →" 버튼 → 입력탭 전환', async ({ page }) => {

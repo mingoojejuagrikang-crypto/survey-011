@@ -1,8 +1,14 @@
 /**
  * Google Sheets API v4 helpers.
  * All requests use the user's access token from googleAuth.ts.
+ *
+ * v0.34.0 C9 예외 — 과거값 인덱스 읽기(fetchAllRowsUnbounded)만 토큰 부재 시 API key 폴백
+ * (`fetchValuesReadonly`)을 쓴다. 쓰기·메타 경로(authFetch)는 무수정: API key는 공개 시트
+ * '읽기'만 가능하고, 쓰기 경로에 key가 새면 401이 403으로 바뀌어 [AUTH-7] 계열 재로그인
+ * 유도(LoginRequiredModal, sync-token-expiry.spec)가 무너진다.
  */
 import { getAccessToken } from './googleAuth';
+import { getPickerApiKey } from './drivePicker';
 import type { Column, DataType } from '../types';
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
@@ -30,6 +36,46 @@ async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   headers.set('Authorization', `Bearer ${token}`);
   return fetch(url, { ...init, headers });
+}
+
+// ── v0.34.0 C9 — 읽기 전용 폴백 (과거값 인덱스 경로 격리) ────────────────────
+
+export type ReadonlyAuth = 'token' | 'apikey';
+
+/**
+ * 읽기 전용 values GET 요청 계획(순수 함수 — tests/v034-past-index-apikey.spec.ts 단위 테스트 대상).
+ *  - 토큰 있으면 Bearer 헤더(auth='token') — key는 URL에 싣지 않는다(불필요 노출 방지).
+ *  - 토큰 없고 key 있으면 `?key=` 쿼리(auth='apikey') — "링크가 있는 모든 사용자" 공개 시트는
+ *    API key만으로 읽기가 가능하다. 비공개 시트면 403 → 호출자의 기존 오류 경로가 흡수.
+ *  - 둘 다 없으면 null — 호출자가 미로그인 skip을 결정한다.
+ */
+export function planValuesReadonly(
+  spreadsheetId: string,
+  range: string,
+  token: string | null,
+  apiKey: string | null,
+): { url: string; headers?: Record<string, string>; auth: ReadonlyAuth } | null {
+  const base = `${API}/${spreadsheetId}/values/${range}`;
+  if (token) return { url: base, headers: { Authorization: `Bearer ${token}` }, auth: 'token' };
+  if (apiKey) return { url: `${base}?key=${encodeURIComponent(apiKey)}`, auth: 'apikey' };
+  return null;
+}
+
+/** 현재 사용 가능한 읽기 전용 인증 수단. key 접근자는 drivePicker의 env 판독(getPickerApiKey)
+ *  재사용 — VITE_GOOGLE_API_KEY의 판독 지점은 한 곳뿐이다(중복 금지). pastValues의 skip 가드·
+ *  재시도 판단·`past_index_fetch_start:auth=` 계측이 전부 이 함수를 SSOT로 쓴다. */
+export function readonlySheetsAuth(): ReadonlyAuth | null {
+  if (getAccessToken()) return 'token';
+  if (getPickerApiKey()) return 'apikey';
+  return null;
+}
+
+/** 읽기 전용 values GET — 토큰 우선, 없으면 API key 폴백. 둘 다 없으면 authFetch와 동일 메시지로
+ *  throw(도달 전에 호출자 가드가 막는 것이 정상 경로). 쓰기·메타 경로에서는 절대 사용 금지. */
+async function fetchValuesReadonly(spreadsheetId: string, range: string): Promise<Response> {
+  const plan = planValuesReadonly(spreadsheetId, range, getAccessToken(), getPickerApiKey());
+  if (!plan) throw new Error('Google 인증 토큰이 없습니다. 먼저 로그인하세요.');
+  return fetch(plan.url, plan.headers ? { headers: plan.headers } : undefined);
 }
 
 export async function fetchSpreadsheetMeta(spreadsheetId: string): Promise<SpreadsheetMeta> {
@@ -288,13 +334,16 @@ export async function fetchAllRows(
  * v0.7.0 — 탭 전체를 한 번의 GET으로 읽는다. range를 **따옴표 처리한 탭명만**으로 보내면
  * Sheets API가 데이터가 있는 전 범위를 돌려주므로, fetchAllRows의 A1:Z 바운드가 만들던
  * 26컬럼/2000행 클램프가 없다. 과거값 인덱스(pastValues) 전용 — 행 단위 재fetch 금지.
+ *
+ * v0.34.0 C9 — authFetch 대신 fetchValuesReadonly: 토큰 없으면 API key 폴백(공개 시트 읽기).
+ * 이 함수만 폴백 대상 — 쓰기·메타·헤더 경로는 여전히 authFetch(토큰 필수).
  */
 export async function fetchAllRowsUnbounded(
   spreadsheetId: string,
   sheetTitle: string,
 ): Promise<{ headers: string[]; rows: string[][] }> {
   const range = encodeURIComponent(quoteSheetTitle(sheetTitle));
-  const r = await authFetch(`${API}/${spreadsheetId}/values/${range}`);
+  const r = await fetchValuesReadonly(spreadsheetId, range);
   if (!r.ok) {
     let body = '';
     try { body = await r.text(); } catch { /* ignore */ }

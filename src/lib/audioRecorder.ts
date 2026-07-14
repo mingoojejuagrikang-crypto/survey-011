@@ -70,6 +70,18 @@ const PREROLL_MS = 500;
  *  하지 않도록 쿨다운을 둔다(장치 토글은 초당 수회씩 일어나지 않음). */
 const RECOVER_COOLDOWN_MS = 3000;
 
+// ── v0.34.0 B7 — 입력 레벨(음성 반응 파동) 상수. 기존 preroll 캡처 그래프의 push(pcm) 공통
+//    경로에서 chunk RMS를 지수평활한 0~1 레벨을 만든다. **새 AudioContext/AnalyserNode를 만들지
+//    않는다**(iOS Safari 제스처/suspended 함정 — 기존 그래프 tap만). preroll 미가용 기기는 push가
+//    아예 안 불려 레벨 0 고정 = 파동 무동작이 자연 폴백(no-op 원칙). ──
+/** RMS→레벨 정규화 기준(대화 발화 RMS ~0.02-0.15, echoCancellation·AGC-off 기준). 이 값에서 1.0. */
+const LEVEL_REF_RMS = 0.1;
+/** 지수평활 계수 — 상승(attack)은 빠르게(발화 반응성), 하강(release)은 느리게(파동 잔향). */
+const LEVEL_ATTACK = 0.55;
+const LEVEL_RELEASE = 0.15;
+/** wave_stats activePct 판정 하한 — 이 레벨 이상인 chunk를 '발화 활성'으로 센다. */
+const LEVEL_ACTIVE_MIN = 0.15;
+
 export interface ActiveInputInfo {
   deviceId: string;
   label: string;
@@ -147,6 +159,13 @@ export class AudioRecorder {
   /** v0.14.0 B-1/D — 스트림 재획득(recoverStream) 동시성/쿨다운 가드. */
   private recovering = false;
   private lastRecoverAt = 0;
+  /** v0.34.0 B7 — 지수평활된 마이크 입력 레벨(0~1). preroll push(pcm)에서만 갱신되고 UI(rAF)가
+   *  getInputLevel()로 읽는다. React state 아님 — 리렌더 0. preroll 미가용이면 0에 머문다. */
+  private inputLevel = 0;
+  /** v0.34.0 D11b — 세션 파동 통계 누적(min/max/avg/활성비율용 카운터만 — **고빈도 로깅 절대
+   *  금지**, ring buffer 2000 보호). 로깅은 useVoiceSession이 세션 stop 직전 1건으로 요약한다.
+   *  솔직한 한계: 일시정지→재개는 새 AudioRecorder 인스턴스라 재개 이후 구간만 담긴다. */
+  private waveStats = { peak: 0, sum: 0, count: 0, active: 0 };
 
   /** The microphone actually in use for this recorder (null until init() succeeds). */
   getActiveInput(): ActiveInputInfo | null {
@@ -477,6 +496,18 @@ export class AudioRecorder {
           capture.totalSamples -= capture.chunks[0].length;
           capture.chunks.shift();
         }
+        // v0.34.0 B7 — 파동 레벨 tap: chunk(2048샘플 ≈43ms@48k) RMS → 지수평활 레벨(0~1).
+        // worklet/script 공통 경로라 어느 폴백이든 동일 동작. 여기서는 절대 로깅하지 않는다.
+        let sq = 0;
+        for (let i = 0; i < pcm.length; i++) { const v = pcm[i]; sq += v * v; }
+        const target = Math.min(1, Math.sqrt(sq / pcm.length) / LEVEL_REF_RMS);
+        this.inputLevel += (target - this.inputLevel) *
+          (target > this.inputLevel ? LEVEL_ATTACK : LEVEL_RELEASE);
+        const st = this.waveStats;
+        st.count++;
+        st.sum += this.inputLevel;
+        if (this.inputLevel > st.peak) st.peak = this.inputLevel;
+        if (this.inputLevel >= LEVEL_ACTIVE_MIN) st.active++;
       };
 
       try {
@@ -518,6 +549,34 @@ export class AudioRecorder {
       try { ctx?.close().catch(() => {}); } catch { /* ignore */ }
       this.preroll = null;
     }
+  }
+
+  /** v0.34.0 B7 — 현재 마이크 입력 레벨(0~1, 지수평활). rAF 소비자(useAudioLevelVar)가 매 프레임
+   *  읽는다 — 읽기 전용 스칼라라 비용 0. preroll 미가용(`clip_preroll_unavailable`)이면 항상 0. */
+  getInputLevel(): number {
+    return this.inputLevel;
+  }
+
+  /** v0.34.0 D11b — 프리롤 캡처 종류(계측용). null = 미가용(ui_fx에서 'unavailable'로 표기). */
+  getPrerollKind(): 'worklet' | 'script' | null {
+    return this.preroll?.kind ?? null;
+  }
+
+  /** v0.34.0 D11b — 세션 파동 통계 요약. push가 한 번도 안 불렸으면(프리롤 미가용) null. */
+  getWaveStats(): { peak: number; avg: number; activePct: number } | null {
+    const st = this.waveStats;
+    if (st.count === 0) return null;
+    return {
+      peak: st.peak,
+      avg: st.sum / st.count,
+      activePct: Math.round((st.active / st.count) * 100),
+    };
+  }
+
+  /** v0.34.0 D11b — 통계 리셋(세션 시작 시). prewarm(입력탭 마운트)이 세션 전부터 캡처를 돌리므로
+   *  세션 밖 구간이 통계에 섞이지 않게 start()가 호출한다. */
+  resetWaveStats(): void {
+    this.waveStats = { peak: 0, sum: 0, count: 0, active: 0 };
   }
 
   /** 링버퍼의 마지막 `ms` 구간을 mono PCM으로 스냅샷 (startClip 시점 = 마크). */
@@ -720,6 +779,8 @@ export class AudioRecorder {
   private teardownPreroll(): void {
     const cap = this.preroll;
     this.preroll = null;
+    // v0.34.0 B7 — 캡처 그래프가 내려가면 push가 멈추므로 레벨을 0으로 되돌린다(파동 정지).
+    this.inputLevel = 0;
     if (!cap) return;
     try {
       if (cap.kind === 'worklet') (cap.node as AudioWorkletNode).port.onmessage = null;

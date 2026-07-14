@@ -100,6 +100,38 @@ export interface Session {
   /** time stamps */
   startedAt: number;
   finishedAt?: number;
+  /** v0.34.0 — 수동 이상치 후보의 내구 보류 상태. 후보는 UI에는 보이지만 확인 전에는 Sheets/내보내기
+   *  확정값이 아니다. previousValue/previousSyncState로 외부 출력용 안전 뷰를 만들고, 새로고침 뒤에도
+   *  같은 [확인]/[수정] 팝업을 복구한다. */
+  pendingValidation?: {
+    row: number;
+    colId: string;
+    candidateValue: string;
+    previousValue: string;
+    previousSyncState?: 'synced' | 'dirty';
+    /** 후보 커밋이 수동입력이라 기존 음성 포인터를 제거했을 때, 확인 전 외부 안전 뷰에 복원할 키. */
+    previousAudioClip?: string;
+    reviewWait: boolean;
+    activeColIdx: number;
+    alert: {
+      colName: string;
+      prev: string;
+      next: string;
+      direction: 'up' | 'down';
+      changeText: string;
+      row: number;
+      colId: string;
+      sampleKey?: string;
+      prevDate?: string;
+      status?: 'pending' | 'corrected';
+      kind?: 'trend' | 'range';
+      threshold?: number;
+      awaitingResponse: true;
+      manualHold: true;
+    };
+  };
+  /** 런타임 전용: 후보+pending 단일 IDB put이 아직 끝나지 않음. 저장되는 Session 본문에는 넣지 않는다. */
+  pendingValidationPersisting?: boolean;
 }
 
 export type VoiceState = 'IDLE' | 'READY' | 'ANNOUNCE' | 'LISTEN' | 'ECHO' | 'ROW_DONE' | 'DONE';

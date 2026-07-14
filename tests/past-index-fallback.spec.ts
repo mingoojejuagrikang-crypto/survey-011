@@ -392,8 +392,9 @@ test('로그인 세션 → past_index_fetch_start 계측 + IDB write-through 레
   expect(rec.fp).toBe(computeFp());
 
   // 계측: fetch 시작 이벤트가 ready와 짝으로 남는다(07-13 §4 hang 판별 갭 해소).
+  // v0.34.0 C9 — auth=token|apikey 첨부: 토큰 세션이므로 auth=token이어야 한다.
   const extras = await getEventExtras(page);
-  expect(extras.filter((x) => x === 'past_index_fetch_start').length).toBeGreaterThanOrEqual(1);
+  expect(extras.filter((x) => x === 'past_index_fetch_start:auth=token').length).toBeGreaterThanOrEqual(1);
   expect(extras.some((x) => x.startsWith('past_index_ready:rows=2'))).toBe(true);
 
   // 신선 캐시 경로: 알람은 뜨되 stale 계측은 없어야 한다.

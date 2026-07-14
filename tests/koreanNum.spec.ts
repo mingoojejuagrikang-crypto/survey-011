@@ -18,6 +18,7 @@ import {
   extractModifyValue,
   detectCommand,
   isAmbiguousSingleSyllable,
+  isBareResponseWord,
   getLastParseFailReason,
   getLastParseFailWhole,
 } from '../src/lib/koreanNum';
@@ -459,5 +460,44 @@ test.describe('T-3 — ambiguous single-syllable homophone re-confirm', () => {
   // CALLER-side (handleFinal) decision, the parser stays pure/unchanged.
   test('"이" → "2" (parser unchanged; re-confirm is caller-side)', () => {
     expect(parseKoreanNumber('이')).toBe('2');
+  });
+});
+
+// ─── v0.34.0 O2 [STT-17] — 단독 응답어 판별(값 오커밋 금지의 판별 유닛) ──────────
+test.describe('isBareResponseWord (v0.34.0 O2 [STT-17])', () => {
+  const yes = ['예', '네', '응', '어', '넵', '네네', '예예', ' 네 ', '네.'];
+  for (const input of yes) {
+    test(`"${input}" → 응답어(true)`, () => {
+      expect(isBareResponseWord(input)).toBe(true);
+    });
+  }
+  // 유효 수사·유사 발화는 응답어가 아니다 — 파서 전역 차단 금지 계약("사"/"넷"은 커밋 유지).
+  const no = ['사', '넷', '네시', '35.1', '네 점 오', '어제', ''];
+  for (const input of no) {
+    test(`"${input}" → 응답어 아님(false)`, () => {
+      expect(isBareResponseWord(input)).toBe(false);
+    });
+  }
+  // 파서 자체는 불변 — "네"는 여전히 native 4로 파싱된다(차단은 handleFinal 문맥 판단).
+  test('"네" → "4" (parser unchanged; 값-대기 차단은 caller-side)', () => {
+    expect(parseKoreanNumber('네')).toBe('4');
+  });
+});
+
+// ─── v0.34.0 O3 — "점요/점 요" 소수 의도 변형: 침묵 커밋 금지(재질문) 사전 회귀 고정 ──────
+// (07-14 실사례 "266 점요"→266 침묵 커밋의 실제 누출로는 alts 폴백 — e2e는
+//  decimal-targeted-reask.spec.ts. 여기는 primary 파서가 전 변형에서 재질문함을 고정한다.)
+test.describe('decimal_fraction_lost — 점요 변형 (v0.34.0 O3)', () => {
+  const reask = ['266 점요', '266점요', '266 점 요', '266점 요', '266 쩜요', '이백육십육 점요'];
+  for (const input of reask) {
+    test(`"${input}" → null + decimal_fraction_lost(whole=266)`, () => {
+      expect(parseKoreanNumber(input, 1)).toBeNull();
+      expect(getLastParseFailReason()).toBe('decimal_fraction_lost');
+      expect(getLastParseFailWhole()).toBe('266');
+    });
+  }
+  // 소수부가 실제로 들린 경우는 종전대로 합성 커밋(재질문 아님).
+  test('"266 점 오" → "266.5" (정상 합성 무회귀)', () => {
+    expect(parseKoreanNumber('266 점 오', 1)).toBe('266.5');
   });
 });

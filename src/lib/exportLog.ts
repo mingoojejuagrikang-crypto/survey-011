@@ -8,6 +8,7 @@ import { getCurrentEmail } from './googleAuth';
 import { buildSessionsSnapshot } from './sessionSnapshot';
 import { attachClipsManifest, type ManifestSourceEvent } from './clipsManifest';
 import type { Session } from '../types';
+import { withoutPendingCandidate } from './pendingValidation';
 
 /** Export logs + audio clips as a ZIP.
  *  - `sessionIds` undefined → include ALL events and clips (used by manual LOG button)
@@ -48,7 +49,8 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
   let scopedSessions: Session[] = [];
   try {
     const allSessions = await loadAllSessions();
-    scopedSessions = filterSet ? allSessions.filter((s) => filterSet.has(s.id)) : allSessions;
+    scopedSessions = (filterSet ? allSessions.filter((s) => filterSet.has(s.id)) : allSessions)
+      .map(withoutPendingCandidate);
     zip.file('sessions.json', buildSessionsSnapshot(scopedSessions, deviceWithUser.appVersion));
   } catch (e) {
     logger.log({ type: 'app', extra: `export_sessions_json_failed:${String((e as Error)?.message ?? e)}` });

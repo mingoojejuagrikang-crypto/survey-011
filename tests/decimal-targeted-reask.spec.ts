@@ -273,3 +273,71 @@ test('[STT-15] B: 소수 재질문 → primary·alt 모두 해석 불가 → 재
   );
   expect(anyFragmentCommit).toBe(false);
 });
+
+// ─── v0.34.0 O3 — "점요" 소수 의도 + 정수 alt 폴백의 침묵 커밋 차단 (07-14 09:25:49 실사례) ───
+//
+// primary "266 점요"는 파서가 decimal_fraction_lost로 잡아 타깃 재질문 대상이지만, alts 루프가
+// 정수 alt "266"을 커밋해(stt_alt_used) 소수 의도를 버린 266이 침묵으로 섰다(재질문 미발동).
+// 수정 후: primary가 decimal_fraction_lost면 정수 alt는 건너뛰고 타깃 재질문으로 — 소수를 온전히
+// 담은 alt("266.2")만 수용한다.
+
+test('[O3] "266 점요" + alt "266" → 정수 alt 거부·타깃 재질문 → "이"로 266.2 합성 (절대 266 아님)', async ({ page }) => {
+  await setupAndStart(page);
+
+  await fireSttAlts(page, '266 점요', ['266'], 500);
+  // 침묵 커밋 없음 — 여전히 횡경 + "266 점, 소수점 아래" 타깃 재질문.
+  await waitForActiveChip(page, '횡경');
+  const log1 = await ttsLog(page);
+  const reask = log1.find((t) => t.includes('소수점 아래') && t.includes('266'));
+  expect(reask, `타깃 재질문 TTS가 없음. ttsLog=${JSON.stringify(log1)}`).toBeTruthy();
+
+  // 조각 발화 → 266.2 합성 커밋 후 진행.
+  await fireStt(page, '이', 500);
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '22.2', 400);
+  await page.waitForTimeout(1500);
+
+  const sessions = await getIdbSessions(page);
+  const session = sessions[sessions.length - 1];
+  const r1 = session.rows.find((r: any) => r.index === 1);
+  expect(r1?.values?.c8).toBe('266.2');
+  // 회귀 방어: 정수 alt "266"이 값으로 선 흔적이 없다.
+  expect(session.rows.some((r: any) => r?.values?.c8 === '266' || r?.values?.c9 === '266')).toBe(false);
+});
+
+test('[O3] 무회귀: 소수를 온전히 담은 alt("266.2")는 정상 수용(재질문 없이 커밋)', async ({ page }) => {
+  await setupAndStart(page);
+
+  await fireSttAlts(page, '266 점요', ['266.2'], 500);
+  await waitForActiveChip(page, '종경'); // alt가 소수를 담았으므로 그대로 커밋·진행
+  await fireStt(page, '22.2', 400);
+  await page.waitForTimeout(1500);
+
+  const sessions = await getIdbSessions(page);
+  const r1 = sessions[sessions.length - 1].rows.find((r: any) => r.index === 1);
+  expect(r1?.values?.c8).toBe('266.2');
+});
+
+// v0.34.0 리뷰 High — primary가 위험 신호를 포함했는데 alt가 숫자만 남긴 경우, alt는 의미 보존
+// 후보가 아니다. 자리값/독립 숫자를 삭제한 후보를 채택하지 않고 전체 발화를 재질문한다.
+for (const tc of [
+  { primary: '현백 33.3', alt: '33.3', reason: 'extraneous_token' },
+  { primary: '이 166.7', alt: '166.7', reason: 'multi_numeric' },
+]) {
+  test(`[alt 의미보존] "${tc.primary}" + alt "${tc.alt}" → ${tc.reason} 재질문, alt 오커밋 없음`, async ({ page }) => {
+    await setupAndStart(page);
+    await fireSttAlts(page, tc.primary, [tc.alt], 500);
+    await waitForActiveChip(page, '횡경');
+    expect((await ttsLog(page)).some((t) => t.includes('횡경 다시 말씀해 주세요'))).toBe(true);
+
+    // 정상 재발화만 커밋된다. 위험 primary의 숫자-only alt가 중간값으로 선 흔적은 없어야 한다.
+    await fireStt(page, '44.4', 500);
+    await waitForActiveChip(page, '종경');
+    await fireStt(page, '22.2', 400);
+    await page.waitForTimeout(1000);
+    const sessions = await getIdbSessions(page);
+    const r1 = sessions[sessions.length - 1].rows.find((r: any) => r.index === 1);
+    expect(r1?.values?.c8).toBe('44.4');
+    expect(sessions.some((s: any) => s.rows.some((r: any) => r?.values?.c8 === tc.alt))).toBe(false);
+  });
+}

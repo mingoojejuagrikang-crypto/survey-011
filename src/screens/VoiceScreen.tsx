@@ -10,13 +10,14 @@ import { isSpeechSupported, speak } from '../lib/speech';
 import { logger } from '../lib/logger';
 import { buildSessionLabel } from '../lib/sessionLabel';
 import { ConnectionStatusCard } from '../components/ConnectionStatusCard';
+import { EdgeGlow, type GlowTone } from '../components/voice/EdgeGlow';
+import { useAudioLevelVar } from '../components/voice/useAudioLevelVar';
 import { AnomalyAlertPopup } from '../components/voice/AnomalyAlertPopup';
 import { CommandHelpPopup } from '../components/voice/CommandHelpPopup';
 import { ManualValueSheet } from '../components/voice/ManualValueSheet';
 import { PausedCard } from '../components/voice/PausedCard';
 import { ModifyIndicatorPill } from '../components/voice/ModifyIndicatorPill';
 import { ReaskCue, type ReaskReason } from '../components/voice/ReaskCue';
-import { heroFontSize } from '../components/voice/heroLayout';
 import { useFitScale } from '../components/voice/useFitScale';
 import type { Column } from '../types';
 
@@ -58,6 +59,15 @@ export function VoiceScreen() {
     );
   }
 
+  // v0.34.0 B8 — 글로우 톤 파생 SSOT(여기 1곳). ActiveState의 칩/진행색 파생(chipAccent/
+  //   progressAccent)과 같은 신호를 쓰되, anomalyPending은 여기서 한 번만 계산해 prop으로 내린다
+  //   (파생 중복 방지). 우선순위: 이상치/마이크 소실(red) > 일시정지(amber) > 입력 중(green).
+  const anomalyPending = !!sess.anomalyAlert && sess.anomalyAlert.status !== 'corrected';
+  const glowTone: GlowTone =
+    anomalyPending || voiceSession.micLost ? 'red' : sess.phase === 'paused' ? 'amber' : 'green';
+  const sessionLive =
+    sess.phase === 'active' || sess.phase === 'paused' || sess.phase === 'complete';
+
   return (
     <div
       style={{
@@ -68,6 +78,9 @@ export function VoiceScreen() {
         animation: sess.phase === 'complete' ? 'flash-green 600ms ease-out' : 'none',
       }}
     >
+      {/* v0.34.0 B8 — 화면 외곽 상태 글로우. 루트(position:relative) 직하 absolute inset:0,
+          pointer-events:none·zIndex 54(팝업/시트 55-60 아래). 세션 비활성 시 미렌더(no-op). */}
+      {sessionLive && <EdgeGlow tone={glowTone} getLevel={voiceSession.getAudioLevel} />}
       <ActiveState
         totalRows={totalRows}
         columns={s.columns}
@@ -75,6 +88,8 @@ export function VoiceScreen() {
         currentColId={currentCol?.id}
         completing={sess.phase === 'complete'}
         paused={sess.phase === 'paused'}
+        anomalyPending={anomalyPending}
+        getAudioLevel={voiceSession.getAudioLevel}
         reaskReason={(sess.reaskReason ?? null) as ReaskReason}
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
@@ -87,6 +102,8 @@ export function VoiceScreen() {
         onManualClose={() => voiceSession.resumeRecognitionForUi('manual_input')}
         onAnomalyConfirm={() => voiceSession.confirmAnomalyTouch()}
         onAnomalyModify={() => voiceSession.modifyAnomalyTouch()}
+        onManualAnomalyConfirm={() => voiceSession.confirmManualAnomaly()}
+        onManualAnomalyModify={() => voiceSession.modifyManualAnomaly()}
         onCommandHelpOpen={() => voiceSession.suspendRecognitionForUi('command_help')}
         onCommandHelpClose={() => voiceSession.resumeRecognitionForUi('command_help')}
         onTogglePause={() => {
@@ -352,16 +369,17 @@ function SummaryRow({ label, value, unit, accent }: { label: string; value: numb
 }
 
 // ─── A-hero helpers (v0.17.0) ─────────────────────────────────
-// v0.23.0 입력탭#1 — heroFontSize는 components/voice/heroLayout 로 분리(ModifyIndicatorPill과 공유,
-//   순환 import 방지). 위 import에서 가져온다.
-
-type HeroEvent = 'listening' | 'confirm' | 'complete';
+// v0.23.0 입력탭#1 — heroFontSize는 components/voice/heroLayout 로 분리(ModifyIndicatorPill과 공유
+//   SSOT — 그쪽이 직접 import). v0.34.0 A4 — hero가 '듣는 중' 전용이 되며 mono 값 표시가 사라져
+//   이 파일에서는 더 이상 참조하지 않는다(heroLayout.ts 자체는 보존).
 
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
-  totalRows, columns, voiceCols, currentColId, completing, paused, reaskReason,
+  totalRows, columns, voiceCols, currentColId, completing, paused, anomalyPending, getAudioLevel,
+  reaskReason,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
   onManualCommit, onManualOpen, onManualClose, onAnomalyConfirm, onAnomalyModify,
+  onManualAnomalyConfirm, onManualAnomalyModify,
   onCommandHelpOpen, onCommandHelpClose,
 }: {
   totalRows: number;
@@ -370,6 +388,10 @@ function ActiveState({
   currentColId?: string;
   completing: boolean;
   paused: boolean;
+  /** v0.34.0 B8 — 이상치 대기(파생 SSOT는 VoiceScreen — EdgeGlow 톤과 동일 신호). */
+  anomalyPending: boolean;
+  /** v0.34.0 B7 — 파동 레벨 getter(useVoiceSession, 안정 참조). VoiceHero로 내려간다. */
+  getAudioLevel: () => number;
   reaskReason: ReaskReason;
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
@@ -385,6 +407,10 @@ function ActiveState({
   /** v0.33.0 항목7 — 이상치 응답 대기 팝업의 터치 버튼(음성 '확인'/'수정'과 동일 동작). */
   onAnomalyConfirm: () => void;
   onAnomalyModify: () => void;
+  /** v0.34.0 A1 — 수동 입력 이상치 **보류**(manualHold) 팝업 전용 해제 콜백. [수정]의 시트 재오픈은
+   *  시트 open 상태(manualCol)를 소유한 이 컴포넌트가 조립한다(팝업 렌더 분기에서 라우팅). */
+  onManualAnomalyConfirm: () => void;
+  onManualAnomalyModify: () => void;
   onCommandHelpOpen: () => void;
   onCommandHelpClose: () => void;
 }) {
@@ -416,16 +442,12 @@ function ActiveState({
     }
   }, [onManualClose]);
 
-  // ── A-hero 파생 (v0.17.0) — 전부 store 신호에서 읽기만 한다(useVoiceSession 무수정).
-  //    hero 이벤트: complete > confirm > listening. 정정(correct)은 hero가 아니라
-  //    ModifyIndicatorPill(정정 구간 내내 화면을 점유, z-fight 없음)에서 직전값→새값으로 표시한다.
+  // ── A-hero 파생 (v0.17.0 → v0.34.0 A4 단순화) — 전부 store 신호에서 읽기만 한다.
+  //    실기기 피드백: '입력 완료'/'입력됨' 상태 표시는 혼란만 줬다(advance가 TTS 전에 store 포인터를
+  //    옮기므로 커밋 즉시 다음 항목 '듣는 중'이 자동 성립). hero는 '듣는 중' 전용으로 두고, 유일한
+  //    예외는 completing(phase 'complete' — 완료행 검토 대기/종료 대기/행 완료 안내)의 정적 라벨
+  //    "N행 완료 — 명령 대기"다. 정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(불변).
   const currentCol = voiceCols.find((c) => c.id === currentColId) || voiceCols[0];
-  const currentValue = currentCol ? (rowValues[currentCol.id] ?? '') : '';
-  const heroEvent: HeroEvent = completing
-    ? 'complete'
-    : currentValue
-    ? 'confirm'
-    : 'listening';
 
   // 직전값 캡처 — store에 prevValue가 없으므로 view 레이어 ref로 정정 직전의 값을 기억한다.
   //   매 렌더에서 필드별 "마지막 비어있지 않은 값"을 추적해 둔다(재프롬프트가 셀을 ''로 비우기
@@ -445,7 +467,7 @@ function ActiveState({
     if (v && c.id !== modCol) lastNonEmptyRef.current[c.id] = v;
   }
 
-  const anomalyPending = !!sess.anomalyAlert && sess.anomalyAlert.status !== 'corrected';
+  // v0.34.0 B8 — anomalyPending은 VoiceScreen에서 파생돼 prop으로 들어온다(EdgeGlow 톤과 SSOT).
   const chipAccent = anomalyPending ? T.red : T.green;
   const progressAccent = anomalyPending ? T.red : completing ? T.green : paused ? T.amber : T.blue;
 
@@ -631,20 +653,37 @@ function ActiveState({
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
           padding: '12px 20px', gap: 12,
-          // v0.33.0 항목8 — 시각 영수증(absolute 하단 고정)의 포지셔닝 컨텍스트.
+          // v0.34.0 A5 — 시각 영수증(v0.33.0 항목8)은 실기기 피드백으로 제거. 이 wrapper는
+          // 흡수영역 자식들의 포지셔닝 컨텍스트로 계속 쓰이므로 position:relative는 보존한다.
           position: 'relative',
         }}
       >
         {paused ? (
           // 일시정지 카드(최우선) — '재시작'/'종료' 음성명령 안내.
           <PausedCard row={row} colName={currentCol?.name} />
-        ) : sess.anomalyAlert ? (
+        ) : sess.anomalyAlert && !manualCol ? (
           // 이상치/범위 알람 카드 — 직전값→현재값·변화량(긴 항목명/큰 음수소수 잘림 0).
           // v0.33.0 항목7 — 응답 대기(awaitingResponse) 팝업에 [확인][수정] 터치 버튼 배선.
+          // v0.34.0 A1 — 수동 입력 보류(manualHold) 팝업은 전용 콜백으로 라우팅. [수정]은 해당 셀
+          //   (colId)의 ManualValueSheet를 재오픈한다(시트 open 상태는 이 컴포넌트 소유).
+          // v0.34.0 리뷰 라운드2(Codex Medium) — `!manualCol`: 수동입력 시트가 열려 있는 동안엔
+          //   팝업을 렌더하지 않는다(시트가 화면을 덮으므로 중복 표시 방지). **보류 상태 자체는
+          //   유지**되므로(useVoiceSession.modifyManualAnomaly가 더 이상 알람을 지우지 않음) 시트를
+          //   취소하면 팝업이 그대로 다시 나타나고 STT 게이트도 살아 있다 — [수정] 후 취소로 미확인
+          //   이상값이 확정된 것처럼 남던 누수의 차단축. 해소는 성공적인 재커밋(advance→announceField)
+          //   또는 [확인]뿐.
           <AnomalyAlertPopup
             a={sess.anomalyAlert}
-            onConfirm={onAnomalyConfirm}
-            onModify={onAnomalyModify}
+            onConfirm={sess.anomalyAlert.manualHold ? onManualAnomalyConfirm : onAnomalyConfirm}
+            onModify={
+              sess.anomalyAlert.manualHold
+                ? () => {
+                    const holdCol = columns.find((c) => c.id === sess.anomalyAlert?.colId);
+                    onManualAnomalyModify(); // 팝업 해제(+로그) — colId 캡처 후 호출
+                    if (holdCol) openManualSheet(holdCol);
+                  }
+                : onAnomalyModify
+            }
           />
         ) : sess.modifyIndicator ? (
           // 수정 재안내 카드 — 직전값(취소선)→새값.
@@ -654,47 +693,18 @@ function ActiveState({
             newValue={modCurrent}
           />
         ) : currentCol ? (
-          // v0.17.0 A-hero — 한 번에 한 값을 거대 mono로 중앙 표시. listening/confirm/complete.
-          //   listening일 때 재질문 사유 큐(reaskReason, Mack 필드)를 hero 아래 보조선으로 함께 노출.
+          // v0.34.0 A4 — hero는 '듣는 중'(항목명) 전용. completing(phase 'complete')일 때만
+          //   "N행 완료 — 명령 대기" 정적 라벨. 재질문 사유 큐(reaskReason)는 듣는 중에만 노출.
           <VoiceHero
-            event={heroEvent}
             col={currentCol}
-            value={currentValue}
-            reaskReason={heroEvent === 'listening' ? reaskReason : null}
+            review={completing}
+            row={row}
+            reaskReason={completing ? null : reaskReason}
+            getAudioLevel={getAudioLevel}
           />
         ) : null}
-
-        {/* v0.33.0 항목8 — 시각 영수증(07-10 QA P1 #3): 마지막 커밋의 행·필드·값(수정은 이전→새값)을
-            다음 커밋까지 잔류 표시. absolute 하단 고정이라 카드/컨트롤을 밀지 않고 스크롤도 안 만든다
-            (375×667 계약). 이상치 팝업 중에는 숨긴다 — 같은 값을 팝업이 더 크게 보여주고 있어 중복 +
-            카드가 흡수영역을 꽉 채울 때의 겹침 방지. reduced-motion 계약: 애니메이션 없음(정적 표시). */}
-        {sess.lastReceipt && !sess.anomalyAlert && !paused && (
-          <div
-            data-testid="commit-receipt"
-            aria-live="polite"
-            style={{
-              position: 'absolute', left: 8, right: 8, bottom: 2,
-              textAlign: 'center', pointerEvents: 'none',
-              fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
-              color: T.textDim, lineHeight: 1.25,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}
-          >
-            {sess.lastReceipt.prevValue != null ? (
-              <>
-                수정됨 · {sess.lastReceipt.row}행 {sess.lastReceipt.colName}{' '}
-                <span style={{ textDecoration: 'line-through' }}>{sess.lastReceipt.prevValue}</span>
-                {' → '}
-                <span style={{ color: T.text, fontWeight: 900 }}>{sess.lastReceipt.value}</span>
-              </>
-            ) : (
-              <>
-                저장됨 · {sess.lastReceipt.row}행 {sess.lastReceipt.colName}{' '}
-                <span style={{ color: T.text, fontWeight: 900 }}>{sess.lastReceipt.value}</span>
-              </>
-            )}
-          </div>
-        )}
+        {/* v0.34.0 A5 — 시각 영수증(commit-receipt, v0.33.0 항목8) 삭제(실기기 피드백: 불필요 중복).
+            커밋 확인 경로는 칩 값 갱신 + echo TTS로 일원화. */}
       </div>
 
       {/* 4) 하단 컨트롤바 — 행동만 노출. 입력중에는 종료를 숨기고, 일시정지 후 확인을 거쳐 종료한다. */}
@@ -1083,35 +1093,46 @@ function StepperButton({
  *  listening/confirm/complete = 초록 계열(확정 톤). 패널/반투명 배경만 강화해 원거리에서
  *  "글자만 덩그러니" 뜨던 hero를 영역으로 분리한다. */
 const HERO_PANEL = {
-  // listening도 confirm/complete와 같은 초록 계열 패널(현행 의미색 — 입력탭 hero는 확정 흐름).
+  // listening/review 공통 초록 계열 패널(현행 의미색 — 입력탭 hero는 확정 흐름).
   bg: 'rgba(10,28,18,0.94)',
   border: T.green,
 } as const;
 
-/** 입력 탭의 시각 중심(방향 A). 현재 필드의 이벤트 상태를 거대 숫자/안내로 표시한다.
- *  값/이벤트는 전부 store에서 파생된 props로만 들어온다(플로우 로직 무수정).
- *  - 패널 상단: 범용 샘플 식별 라벨(sampleParts, 순차변화 파트는 굵게/액센트).
- *  - listening: 필드명을 거대하게 단독 표시(v0.21.0 입력탭#3 — 정적 안내문구·타입배지 삭제,
+/** 입력 탭의 시각 중심(방향 A → v0.34.0 A4 '듣는 중' 전용). 상태는 store에서 파생된 props로만
+ *  들어온다(플로우 로직 무수정).
+ *  - listening(기본): 필드명을 거대하게 단독 표시(v0.21.0 입력탭#3 — 정적 안내문구·타입배지 삭제,
  *               항목명을 가용공간 기준 최대 크기로). 패널 자체 점멸(panel-pulse)로 '듣는 중' 신호.
- *  - confirm:   필드명 → 거대 값(mono, 길이별 150/104/50) → "✓ 정상"(배지 없음).
- *  - complete:  ✓ + "행 입력 완료".
+ *  - review(예외 1분기 — phase 'complete': 완료행 검토 대기/종료 대기/행 완료 안내):
+ *               "N행 완료 — 명령 대기" 정적 라벨(점멸 없음 — 듣는 중이 아니라 명령 대기).
+ *  '입력 완료'/'입력됨'(confirm/complete 이벤트)은 제거 — advance가 TTS 전에 포인터를 옮기므로
+ *  커밋 즉시 다음 항목 '듣는 중'이 자동 성립(실기기 피드백 반영).
  *  정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(직전값 취소선→새값). */
 function VoiceHero({
-  event, col, value, reaskReason,
+  col, review, row, reaskReason, getAudioLevel,
 }: {
-  event: HeroEvent;
   col: Column;
-  value: string;
+  /** v0.34.0 A4 — true면 phase 'complete'의 정적 라벨("N행 완료 — 명령 대기"). */
+  review: boolean;
+  row: number;
   /** v0.23.0 입력탭#2 — listening일 때만 비-null. 재질문 사유(소리 불확실 / 파싱 실패)를 항목명 아래
    *  보조선으로 노출(상단 인식률 %와 구분). null이면 미표시. Mack이 sessionStore.reaskReason을 null로
    *  리셋하면 자동으로 사라진다. */
   reaskReason: ReaskReason;
+  /** v0.34.0 B7 — 파동 레벨 getter(recorder 지수평활 레벨, 0~1). listening일 때만 rAF 소비. */
+  getAudioLevel: () => number;
 }) {
   // v0.20.0 입력탭#5 — listening일 때 패널 자체가 은은히 점멸(점3개 제거). transform 미사용 호흡.
-  const isListening = event === 'listening';
+  const isListening = !review;
   // v0.27.0 무스크롤(민구 07-03) — 양손 측정 중 스크롤 불가. 넘칠 때만 useFitScale이 폰트를 줄여
   //   스크롤 잔여 0 보장(항목명·값=--fit-hi 완만, 샘플 라벨·상태문=--fit-lo 먼저).
-  const fitRef = useFitScale<HTMLDivElement>([event, col.name, value, reaskReason]);
+  const fitRef = useFitScale<HTMLDivElement>([review, col.name, row, reaskReason]);
+  // v0.34.0 B7 — '듣는 중' 항목명 글자에 음성 반응 파동(민구 요청: "입력해야 하는 항목의 문자를
+  //   파동으로"). rAF가 --voice-level만 갱신하고 시각 효과는 HeroPrimaryLine의 calc() 기반
+  //   text-shadow 확산 + 미세 opacity 변조(레이아웃 불변 — useFitScale 무간섭). scale은 쓰지 않는다:
+  //   transform도 scrollable overflow에 계상돼 패널(overflowY:auto 폴백)의 무스크롤 계약을 깰 수
+  //   있다(v0.20.0 "scale 금지" 제약과 동일 계열 — 확인 후 배제 결정). listening 아닐 때·탭
+  //   숨김·keep-alive display:none 시 루프 정지는 훅이 담당.
+  const waveRef = useAudioLevelVar<HTMLSpanElement>(getAudioLevel, isListening);
 
   return (
     <div
@@ -1135,12 +1156,13 @@ function VoiceHero({
         willChange: isListening ? 'opacity, box-shadow' : undefined,
       }}
     >
-      <HeroStatusLine>{event === 'complete' ? '입력 완료' : event === 'confirm' ? '입력됨' : '듣는 중'}</HeroStatusLine>
+      <HeroStatusLine>{review ? '명령 대기' : '듣는 중'}</HeroStatusLine>
       <HeroPrimaryLine
-        mono={event !== 'listening'}
-        value={event === 'listening' ? col.name : event === 'complete' ? col.name : value || '—'}
+        value={review ? `${row}행 완료` : col.name}
+        wave={isListening}
+        waveRef={isListening ? waveRef : undefined}
       />
-      {event === 'listening' && <ReaskCue reason={reaskReason} />}
+      {isListening && <ReaskCue reason={reaskReason} />}
     </div>
   );
 }
@@ -1162,24 +1184,40 @@ function HeroStatusLine({ children }: { children: ReactNode }) {
   );
 }
 
-function HeroPrimaryLine({ value, mono }: { value: string; mono: boolean }) {
+// v0.34.0 A4 — mono 값 표시 분기 제거(hero가 값을 보여주지 않으므로 heroFontSize 불필요).
+// v0.34.0 B7 — wave=true(듣는 중)면 --voice-level(useAudioLevelVar가 rAF로 갱신) 기반 파동:
+//   text-shadow 확산(4→22px + 12→46px 2겹) + 미세 opacity(0.88→1.0) 변조. 전부 레이아웃 불변
+//   속성이라 fit 계약(scrollHeight)·chip-pop 애니메이션과 무간섭. 레벨 0(무발화·프리롤 미가용)
+//   이면 잔잔한 기본 글로우로 수렴한다.
+function HeroPrimaryLine({ value, wave, waveRef }: {
+  value: string;
+  wave?: boolean;
+  waveRef?: Ref<HTMLSpanElement>;
+}) {
   return (
     <span
       key={value}
+      ref={waveRef}
+      data-testid="hero-primary"
       style={{
-        fontFamily: mono ? 'JetBrains Mono, ui-monospace, monospace' : undefined,
-        fontSize: mono
-          ? `calc(${heroFontSize(value)} * var(--fit-hi, 1))`
-          : 'calc(clamp(30px, min(13vw, 9.4vh), 76px) * var(--fit-hi, 1))',
+        fontSize: 'calc(clamp(30px, min(13vw, 9.4vh), 76px) * var(--fit-hi, 1))',
         fontWeight: 900,
         lineHeight: 1.05,
         color: T.text,
-        letterSpacing: mono ? -2 : -1,
-        wordBreak: mono ? 'break-word' : 'keep-all',
+        letterSpacing: -1,
+        wordBreak: 'keep-all',
         overflowWrap: 'anywhere',
         maxWidth: '100%',
         textAlign: 'center',
         animation: 'chip-pop 320ms ease-out',
+        ...(wave
+          ? {
+              textShadow:
+                '0 0 calc(4px + var(--voice-level, 0) * 18px) rgba(0,200,83,0.55), '
+                + '0 0 calc(12px + var(--voice-level, 0) * 34px) rgba(0,200,83,0.35)',
+              opacity: 'calc(0.88 + var(--voice-level, 0) * 0.12)' as unknown as number,
+            }
+          : {}),
       }}
     >
       {value}

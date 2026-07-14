@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import type { Session } from '../types';
+import { withoutPendingCandidate } from './pendingValidation';
 
 /** Escape a single CSV field per RFC 4180. */
 function escapeField(v: string): string {
@@ -10,6 +11,8 @@ function escapeField(v: string): string {
 /** Convert sessions to a single CSV string with BOM (for Excel Korean). */
 export function sessionsToCsv(sessions: Session[]): string {
   if (sessions.length === 0) return '﻿';
+  // 수동 이상치 후보는 [확인] 전까지 확정 데이터가 아니므로 CSV에서도 직전 확정값만 사용한다.
+  sessions = sessions.map(withoutPendingCandidate);
   // Collect all column names (use the first session's columns, since each session has its own schema)
   // For mixed sessions, we union all column names.
   const colMap = new Map<string, string>(); // id → name

@@ -91,6 +91,20 @@ export interface SessionMeta {
   /** v0.23.0 입력탭#2 — 세션 시작 시 활성 인식 허용범위(recognitionTolerance, 0.40~0.90). 세션 단위로
    *  설정값을 박제해 로그만으로 "허용범위 vs 인식률" 대조가 가능하게 한다(설정값 미로깅 갭 해소). */
   recognitionTolerance?: number;
+  // ── v0.34.0 D11a — 세션 시작 설정 스냅샷(자가검증 계측). recognitionTolerance와 동일 패턴으로
+  //    `extra:'start'` meta에만 박제 — 로그만으로 "그 세션에 어떤 설정이 활성이었나"(비프 최종
+  //    선택·TTS 속도·자동 캡처·이상치 규칙 규모)를 판정한다. 신규 LogEntry type 없음(meta 확장만).
+  //    내용성 데이터(컬럼명 등 PII 가능 값)는 싣지 않는다 — anomalyRuleCount는 '개수'만. ──
+  /** TTS 배속(설정탭 다이얼, 기본 1.05). */
+  ttsRate?: number;
+  /** 긍정(커밋 echo) 비프 변형 id — beepVariants.ts SSOT. */
+  beepPositiveId?: string;
+  /** 부정(알람/재질문) 비프 변형 id. */
+  beepNegativeId?: string;
+  /** 입력화면 자동 캡처 토글(v0.33.0 항목10). */
+  autoScreenCapture?: boolean;
+  /** 이상치 알람 규칙(trendRule 또는 pctThreshold)이 걸린 컬럼 수 — 개수만, 컬럼명 제외. */
+  anomalyRuleCount?: number;
   /** Reserved slot for self-test vs real-field split. Defaults to 'field'; an explicit UI
    *  toggle is a Vance follow-up. userEmail (device.json) + value-pattern already allow
    *  crude post-hoc splitting today. */

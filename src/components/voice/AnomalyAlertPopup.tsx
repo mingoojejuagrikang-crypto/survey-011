@@ -36,7 +36,10 @@ const ANOMALY_FIT_STEPS = [
  *   크기·iOS 텍스트 확대에 자동 대응), ② useFitScale이 흡수영역 높이를 실측해 넘칠 때만 --fit-lo
  *   (하위 우선순위: 직전값·식별정보·안내문)를 먼저·더 크게, --fit-hi(상위: 현재값·알람 라벨)를
  *   완만하게 줄여 **스크롤 잔여 0**(scrollHeight ≤ clientHeight)을 보장한다. overflowY:auto는 훅
- *   미작동 시 최후 폴백일 뿐 정상 경로에선 스크롤이 생기지 않는다. ellipsis 잘림은 계속 금지. */
+ *   미작동 시 최후 폴백일 뿐 정상 경로에선 스크롤이 생기지 않는다. ellipsis 잘림은 계속 금지.
+ *  v0.34.0 A6(실기기 피드백): 직전값을 현재값과 같은 급 폰트로 승격해 [직전값]→[현재값]을 같은
+ *   행(grid, baseline)으로, 값 위에 소형 라벨('직전'/'현재'), 직전 조사일은 직전값 아래 소형 줄.
+ *   직전값은 --fit-hi를 따르되 절대 하한을 22px(현재값 26px보다 한 단계 낮게)로 둬 fit 예산 확보. */
 export function AnomalyAlertPopup({
   a, onConfirm, onModify,
 }: {
@@ -58,6 +61,10 @@ export function AnomalyAlertPopup({
     /** v0.33.0 항목7 — true면 응답 대기(trendConfirm) 알람: [확인][수정] 터치 버튼을 그린다.
      *  false/미지정 = 정보성 팝업(수동 입력 커밋 이상치 — 버튼·확인 루프 없음, 민구 확정). */
     awaitingResponse?: boolean;
+    /** v0.34.0 A1 — 수동입력 이상치 **보류** 팝업(터치 [확인]/[수정] 대기). v0.34.0 리뷰·민구 결정
+     *  2026-07-14: 이 상태는 **터치 전용**이라 handleFinal이 STT를 전부 무시하므로, '말로도 가능'
+     *  힌트를 띄우지 않는다(거짓 어포던스 제거). */
+    manualHold?: boolean;
   };
   /** v0.33.0 항목7(07-10 QA P1 #2) — 음성 '확인'/'수정'과 동일 동작의 터치 콜백(useVoiceSession의
    *  confirmAnomalyTouch/modifyAnomalyTouch). awaitingResponse && !corrected일 때만 렌더된다. */
@@ -93,7 +100,6 @@ export function AnomalyAlertPopup({
   const fitRef = useFitScale<HTMLDivElement>([
     a.colName, a.prev, a.next, a.changeText, a.sampleKey, a.prevDate, a.status, a.kind,
   ], ANOMALY_FIT_STEPS);
-  const prevLabel = `직전${a.prevDate ? `(${a.prevDate})` : ''} ${a.prev}`;
   return (
     <div
       ref={fitRef}
@@ -118,8 +124,8 @@ export function AnomalyAlertPopup({
         animation: corrected ? 'card-breathe-green 2.4s ease-in-out infinite' : 'card-breathe-red 2.2s ease-in-out infinite',
       }}
     >
-      {/* 두 줄 구조: ① 알람라벨 ② 직전값→현재값. 확인류 안내문구는
-          비프음+배경 호흡으로 대체해 카드 전체를 현장 거리에서 읽히는 정보만 남긴다. */}
+      {/* 구조(v0.34.0 A6): ① 알람라벨 ② [직전값] → [현재값] 값 그리드(+직전 조사일). 확인류
+          안내문구는 비프음+배경 호흡으로 대체해 카드 전체를 현장 거리에서 읽히는 정보만 남긴다. */}
       <div
         style={{
           maxWidth: '100%',
@@ -130,33 +136,68 @@ export function AnomalyAlertPopup({
       >
         <span style={{ color: accent }}>{alarmLabel}</span>
       </div>
+      {/* v0.34.0 A6(실기기 피드백) — "직전값 글자가 너무 작다 · 직전/현재가 다른 행 · 직전 조사일
+          위치". 직전값을 현재값과 같은 급 폰트로 승격해 [직전값] → [현재값]을 **같은 행**(grid
+          row 2, baseline 정렬)에 두고, 각 값 위에 소형 라벨('직전'/'현재'), 직전 조사일은 직전값
+          **아래** 별도 소형 줄(row 3, col 1). fit 계약 유지 — 현재값 26px 하한(기존 단언) 불변,
+          직전값 승격의 fit 예산은 직전값 하한을 한 단계 낮게(22px) 둬서 확보한다. */}
       <div
         style={{
-          display: 'flex', alignItems: 'baseline', justifyContent: 'center', flexWrap: 'wrap',
-          gap: 'max(4px, calc(clamp(7px, 1.2vh, 10px) * var(--fit-lo, 1)))',
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, auto) auto minmax(0, auto)',
+          columnGap: 'max(6px, calc(clamp(8px, 2vw, 14px) * var(--fit-lo, 1)))',
+          rowGap: 'max(1px, calc(clamp(2px, 0.4vh, 4px) * var(--fit-lo, 1)))',
+          justifyContent: 'center', justifyItems: 'center', alignItems: 'baseline',
           maxWidth: '100%', lineHeight: 1.05,
-          fontSize: 'max(15px, calc(clamp(18px, min(4.8vw, 3.4vh), 24px) * var(--fit-hi, 1)))',
-          fontWeight: 900,
-          letterSpacing: -0.3,
-          wordBreak: 'keep-all',
-          overflowWrap: 'anywhere',
+          fontWeight: 900, letterSpacing: -0.3,
+          wordBreak: 'keep-all', overflowWrap: 'anywhere',
         }}
       >
+        {/* row 1 — 소형 라벨(값 위) */}
+        <span style={{
+          fontSize: 'max(10px, calc(clamp(11px, 1.7vh, 13px) * var(--fit-lo, 1)))',
+          color: T.textDim, fontWeight: 800, lineHeight: 1.2,
+        }}>
+          직전
+        </span>
+        <span aria-hidden />
+        <span style={{
+          fontSize: 'max(10px, calc(clamp(11px, 1.7vh, 13px) * var(--fit-lo, 1)))',
+          color: T.textDim, fontWeight: 800, lineHeight: 1.2,
+        }}>
+          현재
+        </span>
+        {/* row 2 — 직전값(현재값과 같은 급) → 현재값, baseline 정렬로 같은 행 */}
+        <span style={{
+          color: T.textDim, maxWidth: '100%',
+          fontSize: 'max(22px, calc(clamp(32px, min(9vw, 6vh), 52px) * var(--fit-hi, 1)))',
+          letterSpacing: -0.8,
+        }}>
+          {a.prev}
+        </span>
         <span style={{
           color: T.textDim,
-          maxWidth: '100%',
-          overflowWrap: 'anywhere',
+          fontSize: 'max(15px, calc(clamp(18px, min(4.8vw, 3.4vh), 24px) * var(--fit-hi, 1)))',
         }}>
-          {prevLabel}
+          →
         </span>
-        <span style={{ color: T.textDim }}>→</span>
         <span style={{
-          color: T.text,
+          color: T.text, maxWidth: '100%',
           fontSize: 'max(26px, calc(clamp(32px, min(9vw, 6vh), 52px) * var(--fit-hi, 1)))',
           letterSpacing: -0.8,
         }}>
           {a.next}
         </span>
+        {/* row 3 — 직전 조사일(직전값 아래, prevDate 있을 때만) */}
+        {a.prevDate && (
+          <span style={{
+            gridColumn: 1,
+            fontSize: 'max(10px, calc(clamp(11px, 1.7vh, 13px) * var(--fit-lo, 1)))',
+            color: T.textDim, fontWeight: 700, lineHeight: 1.2, whiteSpace: 'nowrap',
+          }}>
+            조사일 {a.prevDate}
+          </span>
+        )}
       </div>
       {/* v0.33.0 항목7(07-10 QA P1 #2) — 응답 대기 알람은 "확인 또는 수정" 텍스트 힌트 대신 실제
           터치 버튼을 그린다: 음성 명령과 동일 콜백·동일 로그, 각 ≥44px(minHeight 고정 — fit 축소
@@ -200,15 +241,21 @@ export function AnomalyAlertPopup({
               수정
             </button>
           </div>
-          <div
-            style={{
-              fontSize: 'max(11px, calc(clamp(12px, 1.8vh, 14px) * var(--fit-lo, 1)))',
-              color: T.textDim, fontWeight: 800, lineHeight: 1.2,
-              wordBreak: 'keep-all', textAlign: 'center',
-            }}
-          >
-            말로도 가능: "확인" / "수정"
-          </div>
+          {/* v0.34.0 리뷰(민구 결정 2026-07-14) — 수동입력 보류(manualHold)는 **터치 전용**이라
+              이 힌트를 띄우지 않는다. 그 상태에선 handleFinal이 STT를 전부 무시하므로(소음이
+              수동값을 덮어쓰는 경로 차단) 음성 안내는 거짓 어포던스가 된다. 음성 확인 루프
+              (trendConfirm)로 무장된 음성 경로 알람에서만 노출. */}
+          {!a.manualHold && (
+            <div
+              style={{
+                fontSize: 'max(11px, calc(clamp(12px, 1.8vh, 14px) * var(--fit-lo, 1)))',
+                color: T.textDim, fontWeight: 800, lineHeight: 1.2,
+                wordBreak: 'keep-all', textAlign: 'center',
+              }}
+            >
+              말로도 가능: "확인" / "수정"
+            </div>
+          )}
         </>
       )}
     </div>

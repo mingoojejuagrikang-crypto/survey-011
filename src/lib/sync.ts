@@ -8,6 +8,7 @@ import { logger } from './logger';
 import { hasSyncState, recountSynced, legacySyncedIndexSet } from './sessionSync';
 import { mapColumnsToHeader, buildRowForMapping, buildSparseCellsForMapping, type ColumnMapping } from './columnMapping';
 import type { Session, SessionRow } from '../types';
+import { withoutPendingCandidate } from './pendingValidation';
 
 // Re-export so existing importers of recountSynced from sync.ts keep working (SSOT now in sessionSync).
 export { recountSynced } from './sessionSync';
@@ -120,8 +121,8 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
   for (const id of sessionIds) {
     // Read fresh each iteration so concurrent edits (voice/touch) to this or other sessions are
     // seen (F7). getState() returns the current snapshot, not the one captured at call time.
-    const session = useDataStore.getState().sessions.find((x) => x.id === id);
-    if (!session) {
+    const storedSession = useDataStore.getState().sessions.find((x) => x.id === id);
+    if (!storedSession) {
       report.failed++;
       report.failures.push({
         sessionId: id, sessionDate: '?',
@@ -129,6 +130,10 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
       });
       continue;
     }
+    // 확인 전 수동 이상치 후보는 dirty여도 Sheets에 쓸 수 없다. 원 확정값/원 syncState로 투영한
+    // 작업 복사본을 사용하고, 해당 행 자체도 append/update 대상에서 제외해 PUT/POST를 0으로 만든다.
+    const pendingRow = storedSession.pendingValidation?.row;
+    const session = withoutPendingCandidate(storedSession);
 
     // C3 — skip a session that a concurrent sync is already pushing (double-append safety net).
     if (inFlightSessionIds.has(id)) {
@@ -195,6 +200,7 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     // actively-recording session may still fill or remove them, so uploading a half-empty in-flight
     // row is premature (C2). For finished sessions, blank-on-purpose rows upload as designed.
     const appendTargets = rows
+      .filter((r) => r.index !== pendingRow)
       .filter((r) => r.syncState !== 'synced' && r.sheetRow === undefined)
       .filter((r) => r.complete || !isActivelyRecording)
       .sort((a, b) => a.index - b.index);
@@ -252,6 +258,7 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     // (network is likely down — don't compound errors; this session is reported failed).
     if (!sessionFailed) {
       const updateTargets = rows
+        .filter((r) => r.index !== pendingRow)
         .filter((r) => r.syncState === 'dirty' && r.sheetRow !== undefined)
         .sort((a, b) => a.index - b.index);
       for (const row of updateTargets) {
@@ -358,7 +365,14 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
       // recorded, even if some of its complete rows uploaded — the user may add more rows. (With
       // the current UI sync only runs on finished sessions; this guard makes the invariant explicit
       // and survives any future entry point that syncs a live session.)
-      if (!isActivelyRecording) report.successIds.push(session.id);
+      //
+      // v0.34.0 리뷰(Codex 전용 리뷰 하네스, P1) — **보류(pendingValidation) 행이 있는 세션도 제외**.
+      // 위 pass 1·2가 보류 행만 건너뛰고 나머지 행을 올리면 pushedAnything=true가 되는데, 여기서
+      // 세션 전체를 successIds에 넣으면 DataScreen이 "동기화 완료"로 보고 **자동 삭제**한다. 백업에는
+      // withoutPendingCandidate로 위생처리된 **직전 확정값만** 담기므로 확인 대기 중이던 후보값이
+      // 영구 소실된다(자동삭제가 꺼져 있어도 UI가 미완 세션을 성공으로 거짓 보고). 보류가 해소된 뒤
+      // 다음 sync에서 정상적으로 성공 처리된다.
+      if (!isActivelyRecording && pendingRow === undefined) report.successIds.push(session.id);
     }
 
     } finally {

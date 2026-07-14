@@ -65,8 +65,17 @@ export function resetDb(): void {
 }
 
 export async function saveSession(session: Session): Promise<void> {
+  // Playwright 지연 경쟁 회귀 seam. 기본 undefined라 운영 경로 비용은 분기 1회뿐이며, 테스트가
+  // ManualValueSheet의 fire-and-forget onCommit 동안 sync/confirm 우회를 재현할 때만 사용한다.
+  const delayMs = (globalThis as typeof globalThis & { __survey011DelaySessionPutMs?: number })
+    .__survey011DelaySessionPutMs;
+  if (delayMs && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
   const db = await getDb();
-  await db.put('sessions', session);
+  // pendingValidationPersisting은 동시 UI 게이트용 메모리 플래그다. sync가 저장 중 Session을
+  // 재저장해도 이 플래그가 IDB에 박혀 reload 후 [확인]을 영구 차단하지 않도록 DB 경계에서 제거한다.
+  const durable = { ...session };
+  delete durable.pendingValidationPersisting;
+  await db.put('sessions', durable);
 }
 
 export async function loadAllSessions(): Promise<Session[]> {
@@ -74,6 +83,12 @@ export async function loadAllSessions(): Promise<Session[]> {
   const all = (await db.getAll('sessions')) as Session[];
   all.sort((a, b) => b.startedAt - a.startedAt);
   return all;
+}
+
+/** 단일 세션 내구 재조회. 메모리 dataStore가 아니라 실제 IDB write 결과를 검증할 때 사용한다. */
+export async function loadSession(id: string): Promise<Session | null> {
+  const db = await getDb();
+  return (await db.get('sessions', id) as Session | undefined) ?? null;
 }
 
 /** Delete session row and cascade-delete its audio clips + log events + screenshots.
