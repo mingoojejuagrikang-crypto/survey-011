@@ -125,6 +125,10 @@ interface SettingsState {
    *  기본 = 현행 사운드(상승/하강 스윕). 해석(kind→극성→변형)은 src/lib/beep.ts가 SSOT. */
   beepPositiveId: string;
   beepNegativeId: string;
+  /** v0.35.0 FB-D(Vance) — 비프음 마스터 볼륨(0~1). 기존 세그먼트 gain(0.04~0.055 하드코딩)에
+   *  beep.ts가 곱하는 마스터 배수로 매핑(0~1 → 0~BEEP_VOLUME_MAX). 기본 0.5(현행 1×보다 큼 —
+   *  민구 "확인음 더 크게"). 500–1200Hz·클립경계 제약은 beepVariants.ts에서 유지(STT 오트리거 방지). */
+  beepVolume: number;
   /** Preferred Web Speech API voice name for ko-KR TTS. Empty string = auto (first available). */
   preferredVoiceName: string;
   /** v0.10.1: 캐시된 관리자 폴더 내 본인 팀 하위 폴더 ID — race 방지용. 첫 결정 후 재사용. */
@@ -257,6 +261,7 @@ export function makeSettingsDefaults(): SettingsDefaults {
     autoScreenCapture: true,
     beepPositiveId: DEFAULT_POSITIVE_BEEP_ID,
     beepNegativeId: DEFAULT_NEGATIVE_BEEP_ID,
+    beepVolume: 0.5,
     preferredVoiceName: '',
     teamFolderId: null,
     userLogFolderId: null,
@@ -428,6 +433,10 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.autoScreenCapture !== 'boolean') s.autoScreenCapture = true;
         if (!isBeepVariantId(s.beepPositiveId, 'positive')) s.beepPositiveId = DEFAULT_POSITIVE_BEEP_ID;
         if (!isBeepVariantId(s.beepNegativeId, 'negative')) s.beepNegativeId = DEFAULT_NEGATIVE_BEEP_ID;
+        // v0.35.0 FB-D — 비프 마스터 볼륨. version 11 유지(무조건 coercion 한 줄, beepPositiveId 패턴).
+        if (typeof s.beepVolume !== 'number' || !Number.isFinite(s.beepVolume) || s.beepVolume < 0 || s.beepVolume > 1) {
+          s.beepVolume = 0.5;
+        }
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
         if (typeof s.userLogFolderId !== 'string' && s.userLogFolderId !== null) s.userLogFolderId = null;

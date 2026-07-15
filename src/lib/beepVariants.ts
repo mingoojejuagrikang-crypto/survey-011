@@ -116,6 +116,19 @@ export function isBeepVariantId(id: unknown, polarity: BeepPolarity): boolean {
   return typeof id === 'string' && BEEP_VARIANTS.some((v) => v.id === id && v.polarity === polarity);
 }
 
+/** v0.35.0 FB-D — 비프 마스터 볼륨 배수 상한. settingsStore.beepVolume(0~1)을 [0, MAX] 배수로 매핑해
+ *  세그먼트 gain(0.04~0.055)에 곱한다. 기본 0.5 → 3×(현행 1×보다 큼, 피크 ≈0.17). 최대 1.0 → 6×.
+ *  주파수·클립경계 제약은 위 변형 정의에서 불변. */
+export const BEEP_VOLUME_MAX = 6;
+
+/** v0.35.0 FIX-1(리뷰 라운드1) — beepVolume(0~1) → 마스터 게인 배수(순수 함수, 단위 테스트 가능).
+ *  손상값(NaN/±Inf/범위 밖)은 기본 0.5로 치유해 침묵/폭주를 막는다. */
+export function beepVolumeToMultiplier(v: unknown): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : 0.5;
+  const clamped = Math.max(0, Math.min(1, n));
+  return clamped * BEEP_VOLUME_MAX;
+}
+
 /** 극성별 변형 조회 — 미상 id는 그 극성의 기본 변형으로 폴백(재생이 절대 침묵하지 않게). */
 export function getBeepVariant(id: string, polarity: BeepPolarity): BeepVariant {
   const found = BEEP_VARIANTS.find((v) => v.id === id && v.polarity === polarity);

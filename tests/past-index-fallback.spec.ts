@@ -324,6 +324,8 @@ test('미로그인 + 유효 폴백(2h 전) → 이상치 알람 발화 + trend_u
   await expect(page.locator('[data-testid="conn-google"]')).toHaveAttribute('data-tone', 'warn');
   await expect(page.locator('[data-testid="conn-past"]')).toContainText('2행 · 1회차 준비됨');
   await expect(page.locator('[data-testid="conn-past"]')).toHaveAttribute('data-tone', 'warn');
+  // v0.35.0 항목8 — stale(영속 폴백)엔 ready ✓ 표식이 없다(ready일 때만 붙는다).
+  await expect(page.locator('[data-testid="conn-past-check"]')).toHaveCount(0);
 
   const startBtn = page.locator('text=음성 입력 시작').first();
   await startBtn.click();
@@ -403,6 +405,21 @@ test('로그인 세션 → past_index_fetch_start 계측 + IDB write-through 레
   expect((await getTtsLog(page)).some((t) => t.includes('추세 알람 증가 20.5'))).toBe(true);
   const extras2 = await getEventExtras(page);
   expect(extras2.some((x) => x.startsWith('trend_used_stale_index'))).toBe(false);
+});
+
+test('v0.35.0 항목8 — 로그인+시트연결로 과거값 ready → 굵은 녹색 ✓ 표식(중앙카드 커밋 ✓와 동일 시각언어)', async ({ page }) => {
+  // 토큰 있음 + 시트 stub 성공 → 부팅/연결 프리페치가 신선 인덱스를 만들어 ready.
+  await seedAndBoot(page, { withToken: true });
+  await page.locator('[data-testid="tab-voice"]').click();
+
+  const past = page.locator('[data-testid="conn-past"]');
+  // 프리페치 완료(ready) 대기 — 그때만 tone ok + ✓ 표식.
+  await expect(past).toHaveAttribute('data-tone', 'ok', { timeout: 6000 });
+  await expect(past).toContainText('준비됨');
+  const check = page.locator('[data-testid="conn-past-check"]');
+  await expect(check).toBeVisible();
+  // 표식은 과거값 준비 행 안(값 앞)에 있다.
+  await expect(past.locator('[data-testid="conn-past-check"]')).toHaveCount(1);
 });
 
 test('3상태 배지(설정탭) — 토큰 실시간 판정([AUTH-7] stale 표시 해소) / 시트 / 과거값+재시도', async ({ page }) => {

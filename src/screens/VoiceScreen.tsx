@@ -11,14 +11,15 @@ import { logger } from '../lib/logger';
 import { buildSessionLabel } from '../lib/sessionLabel';
 import { ConnectionStatusCard } from '../components/ConnectionStatusCard';
 import { EdgeGlow, type GlowTone } from '../components/voice/EdgeGlow';
-import { useAudioLevelVar } from '../components/voice/useAudioLevelVar';
 import { AnomalyAlertPopup } from '../components/voice/AnomalyAlertPopup';
 import { CommandHelpPopup } from '../components/voice/CommandHelpPopup';
 import { ManualValueSheet } from '../components/voice/ManualValueSheet';
 import { PausedCard } from '../components/voice/PausedCard';
 import { ModifyIndicatorPill } from '../components/voice/ModifyIndicatorPill';
-import { ReaskCue, type ReaskReason } from '../components/voice/ReaskCue';
-import { useFitScale } from '../components/voice/useFitScale';
+import { type ReaskReason } from '../components/voice/ReaskCue';
+import { VoiceHero } from '../components/voice/VoiceHero';
+import { PersistErrorBanner } from '../components/voice/PersistErrorBanner';
+import { StoppingState } from '../components/voice/StoppingState';
 import type { Column } from '../types';
 
 export function VoiceScreen() {
@@ -31,7 +32,10 @@ export function VoiceScreen() {
   //   건드리지 않고 UI 상태만 반영한다(도메인 경계 보존). 창은 3s 후 자동 해제.
   const [reconnecting, setReconnecting] = useState(false);
 
-  useWakeLock(sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused');
+  // 최종 저장이 끝나기 전 화면 잠금으로 브라우저가 얼면 stopping이 길어질 수 있으므로 종료 중도 유지.
+  useWakeLock(
+    sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused' || sess.phase === 'stopping',
+  );
 
   // v0.25.0 기능2(WS-2) — 입력탭 진입(마운트) 시 마이크 prewarm(첫 클립 유실 완화). best-effort:
   //   실패/거부해도 start()의 init()이 재시도(폴백)하므로 회귀 없음. prewarmMic은 useVoiceSession의
@@ -59,6 +63,20 @@ export function VoiceScreen() {
     );
   }
 
+  if (sess.phase === 'stopping') {
+    return (
+      <>
+        <StoppingState />
+        {sess.persistError && (
+          <PersistErrorBanner
+            retrying={sess.persistError.retrying}
+            onRetry={() => { void voiceSession.retryFinalPersist(); }}
+          />
+        )}
+      </>
+    );
+  }
+
   // v0.34.0 B8 — 글로우 톤 파생 SSOT(여기 1곳). ActiveState의 칩/진행색 파생(chipAccent/
   //   progressAccent)과 같은 신호를 쓰되, anomalyPending은 여기서 한 번만 계산해 prop으로 내린다
   //   (파생 중복 방지). 우선순위: 이상치/마이크 소실(red) > 일시정지(amber) > 입력 중(green).
@@ -67,6 +85,10 @@ export function VoiceScreen() {
     anomalyPending || voiceSession.micLost ? 'red' : sess.phase === 'paused' ? 'amber' : 'green';
   const sessionLive =
     sess.phase === 'active' || sess.phase === 'paused' || sess.phase === 'complete';
+  // v0.35.0 R2-FIX-5 — 루트 완료 플래시(flash-green) reduced-motion 판정.
+  const rootReduced =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   return (
     <div
@@ -75,12 +97,23 @@ export function VoiceScreen() {
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        animation: sess.phase === 'complete' ? 'flash-green 600ms ease-out' : 'none',
+        // v0.35.0 R2-FIX-5(리뷰 라운드2) — 루트 완료 플래시도 reduced-motion 존중(FIX-6은 VoiceHero만
+        //   처리해 루트를 놓쳤다). EdgeGlow·VoiceWaveform·VoiceHero와 동일 계약.
+        animation: sess.phase === 'complete' && !rootReduced ? 'flash-green 600ms ease-out' : 'none',
       }}
     >
       {/* v0.34.0 B8 — 화면 외곽 상태 글로우. 루트(position:relative) 직하 absolute inset:0,
           pointer-events:none·zIndex 54(팝업/시트 55-60 아래). 세션 비활성 시 미렌더(no-op). */}
-      {sessionLive && <EdgeGlow tone={glowTone} getLevel={voiceSession.getAudioLevel} />}
+      {/* v0.35.0 FB-B(Vance) — EdgeGlow의 레벨 rAF는 입력 중(phase 'active')일 때만 돈다.
+          일시정지·완료(paused/complete)엔 발화가 없으므로 levelActive=false로 rAF를 멈춰 배터리를
+          아끼고, 글로우는 정적 baseline으로 톤만 표시한다. */}
+      {sessionLive && (
+        <EdgeGlow
+          tone={glowTone}
+          getLevel={voiceSession.getAudioLevel}
+          levelActive={sess.phase === 'active'}
+        />
+      )}
       <ActiveState
         totalRows={totalRows}
         columns={s.columns}
@@ -90,6 +123,7 @@ export function VoiceScreen() {
         paused={sess.phase === 'paused'}
         anomalyPending={anomalyPending}
         getAudioLevel={voiceSession.getAudioLevel}
+        getTimeDomainData={voiceSession.getTimeDomainData}
         reaskReason={(sess.reaskReason ?? null) as ReaskReason}
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
@@ -106,6 +140,12 @@ export function VoiceScreen() {
         onManualAnomalyModify={() => voiceSession.modifyManualAnomaly()}
         onCommandHelpOpen={() => voiceSession.suspendRecognitionForUi('command_help')}
         onCommandHelpClose={() => voiceSession.resumeRecognitionForUi('command_help')}
+        // v0.35.0 R2-FIX-2(리뷰 라운드2, Pro High·데이터무결성) — 종료 확인 다이얼로그 동안 STT 정지.
+        //   완료 상태에선 '종료' 음성명령 대기로 인식기가 살아 있어, 다이얼로그가 떠 있는 동안 배경
+        //   음성이 파싱돼 엉뚱한 커밋/행이동이 될 수 있었다(manual_input·command_help와 동일 배선).
+        //   취소로 닫을 때만 resume — 확인 경로는 stop()이 어차피 인식기를 정지시킨다.
+        onExitConfirmOpen={() => voiceSession.suspendRecognitionForUi('exit_confirm')}
+        onExitConfirmCancel={() => voiceSession.resumeRecognitionForUi('exit_confirm')}
         onTogglePause={() => {
           if (sess.phase === 'paused') voiceSession.resume();
           else voiceSession.pause();
@@ -129,6 +169,15 @@ export function VoiceScreen() {
         }}
         onCooldownEnd={() => setReconnecting(false)}
       />
+      {/* v0.35.0 R3-FIX-2(리뷰 라운드3) — 최종 저장 실패 모달. stop()의 persistSession()이 false를
+          반환하면 phase가 'ready'로 내려가지 않아(=이 화면 유지) 사용자가 "종료가 왜 안 되지"로
+          남는다. 그 사유를 명시하고 [다시 저장]만 제공한다. persistError=null이면 미렌더. */}
+      {sess.persistError && (
+        <PersistErrorBanner
+          retrying={sess.persistError.retrying}
+          onRetry={() => { void voiceSession.retryFinalPersist(); }}
+        />
+      )}
     </div>
   );
 }
@@ -376,11 +425,13 @@ function SummaryRow({ label, value, unit, accent }: { label: string; value: numb
 // ─── ACTIVE ───────────────────────────────────────────────────
 function ActiveState({
   totalRows, columns, voiceCols, currentColId, completing, paused, anomalyPending, getAudioLevel,
+  getTimeDomainData,
   reaskReason,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
   onManualCommit, onManualOpen, onManualClose, onAnomalyConfirm, onAnomalyModify,
   onManualAnomalyConfirm, onManualAnomalyModify,
   onCommandHelpOpen, onCommandHelpClose,
+  onExitConfirmOpen, onExitConfirmCancel,
 }: {
   totalRows: number;
   columns: Column[];
@@ -392,6 +443,8 @@ function ActiveState({
   anomalyPending: boolean;
   /** v0.34.0 B7 — 파동 레벨 getter(useVoiceSession, 안정 참조). VoiceHero로 내려간다. */
   getAudioLevel: () => number;
+  /** v0.35.0 — 시간영역 파형 getter(useVoiceSession). VoiceHero → VoiceWaveform으로 내려간다. */
+  getTimeDomainData: (out: Uint8Array) => boolean;
   reaskReason: ReaskReason;
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
@@ -413,6 +466,10 @@ function ActiveState({
   onManualAnomalyModify: () => void;
   onCommandHelpOpen: () => void;
   onCommandHelpClose: () => void;
+  /** v0.35.0 R2-FIX-2 — 종료 확인 다이얼로그 열림/취소 시 STT suspend·resume. 확인(종료) 경로는
+   *  stop()이 인식기를 정지시키므로 resume하지 않는다. */
+  onExitConfirmOpen: () => void;
+  onExitConfirmCancel: () => void;
 }) {
   const sess = useSessionStore();
   const row = sess.activeRow;
@@ -422,6 +479,18 @@ function ActiveState({
   const [cmdHelpOpen, setCmdHelpOpen] = useState(false);
   const cmdHelpSuspendedRef = useRef(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
+  // v0.35.0 R2-FIX-2(리뷰 라운드2) — 종료 확인 다이얼로그 = UI 모달이므로 열려 있는 동안 STT를
+  //   정지한다(manual_input·command_help와 동일 계약). 완료 상태에선 '종료' 음성명령 대기로 인식기가
+  //   살아 있어, 다이얼로그 중 배경 음성이 커밋/행이동으로 파싱되던 경로를 차단한다.
+  //   취소 → resume. 확인 → resume 없음(stop()이 정지).
+  const openExitConfirm = useCallback(() => {
+    onExitConfirmOpen();
+    setConfirmExitOpen(true);
+  }, [onExitConfirmOpen]);
+  const cancelExitConfirm = useCallback(() => {
+    setConfirmExitOpen(false);
+    onExitConfirmCancel();
+  }, [onExitConfirmCancel]);
   // v0.33.0 항목6 — 수동 입력 시트(음성 칩 탭). 열림 중 STT hard-suspend(도움말 팝업과 동일
   // suspend/resume 검증 경로 재사용), 닫힘 시 resume. suspend ref 패턴은 cmdHelp와 동일.
   const [manualCol, setManualCol] = useState<Column | null>(null);
@@ -701,13 +770,16 @@ function ActiveState({
             row={row}
             reaskReason={completing ? null : reaskReason}
             getAudioLevel={getAudioLevel}
+            getTimeDomainData={getTimeDomainData}
           />
         ) : null}
         {/* v0.34.0 A5 — 시각 영수증(commit-receipt, v0.33.0 항목8) 삭제(실기기 피드백: 불필요 중복).
             커밋 확인 경로는 칩 값 갱신 + echo TTS로 일원화. */}
       </div>
 
-      {/* 4) 하단 컨트롤바 — 행동만 노출. 입력중에는 종료를 숨기고, 일시정지 후 확인을 거쳐 종료한다. */}
+      {/* 4) 하단 컨트롤바 — 행동만 노출. 입력중에는 종료를 숨기고, 일시정지 후 확인을 거쳐 종료한다.
+          v0.35.0 FB-G(Vance) — 완료(completing)면 '일시정지'가 무의미하므로 중앙 버튼을 종료로.
+          기존 ExitConfirmDialog/onEnd를 그대로 재사용(최소 변경). 마지막 행 완료 안내와 짝을 맞춘다. */}
       <div
         style={{
           borderTop: `1px solid ${T.line}`,
@@ -730,8 +802,21 @@ function ActiveState({
               title="입력 종료"
               icon={I.stop(20, T.red)}
               tone="danger"
-              onClick={() => setConfirmExitOpen(true)}
+              onClick={openExitConfirm}
             />
+          </div>
+        ) : completing ? (
+          // 완료 상태: 이전/다음은 유지하되 중앙을 '종료'로(일시정지 대체).
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(78px, 0.62fr) minmax(124px, 1fr) minmax(78px, 0.62fr)', gap: 12 }}>
+            <VoiceActionButton label="이전" title="이전 행으로 이동" tone="secondary" onClick={onPrevRow} />
+            <VoiceActionButton
+              label="종료"
+              title="입력 종료"
+              icon={I.stop(20, T.red)}
+              tone="danger"
+              onClick={openExitConfirm}
+            />
+            <VoiceActionButton label="다음" title="다음 행으로 이동" tone="secondary" onClick={onNextRow} />
           </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(78px, 0.62fr) minmax(124px, 1fr) minmax(78px, 0.62fr)', gap: 12 }}>
@@ -754,7 +839,8 @@ function ActiveState({
           않는다. 위 row3(1fr) 흡수영역으로 이전했다(잘림 방지). 여기 남는 fixed 오버레이는 흡수
           대상이 아닌 ？명령어 도움말(CommandHelpPopup)뿐 — 전체 명령어 모달이라 흡수영역 한 칸에
           넣지 않고 화면 전체 모달을 유지한다.
-          v0.18.0 1c — CenterValueBurst('항목:값' 팝업) 완전 제거(store의 valueBurst는 write-only). */}
+          v0.18.0 1c — CenterValueBurst('항목:값' 화면중앙 팝업)은 제거된 채 유지. v0.35.0(Vance)부터
+          store valueBurst 소비자는 VoiceHero의 확인 플래시(✓+값, ~1.5s)로 부활 — 별도 오버레이는 없다. */}
       {cmdHelpOpen && <CommandHelpPopup onClose={closeCommandHelp} />}
       {/* v0.33.0 항목6 — 수동 입력 하단 시트(음성 칩 탭). 닫기(suspend 해제)를 먼저 하고 커밋/음성
           재입력을 실행한다 — resume이 컨트롤러를 복구한 뒤 echo/advance(또는 restartFromCol의
@@ -779,8 +865,9 @@ function ActiveState({
       )}
       {confirmExitOpen && (
         <ExitConfirmDialog
-          onCancel={() => setConfirmExitOpen(false)}
+          onCancel={cancelExitConfirm}
           onConfirm={() => {
+            // 확인 경로는 resume하지 않는다 — onEnd()=stop()이 인식기를 정지시킨다(R2-FIX-2).
             setConfirmExitOpen(false);
             onEnd();
           }}
@@ -1087,146 +1174,7 @@ function StepperButton({
   );
 }
 
-// ─── A-hero (v0.17.0 → v0.18.0 패널화) — 한 번에 한 값, 거대 mono, 반투명 패널. ──
-/** v0.18.0 1a — 상태색 패널 톤. 다른 중앙 팝업(AnomalyAlertPopup/ModifyIndicatorPill/
- *  PausedCard, `rgba(...,0.94~0.96)` + 2px border)과 시각 일관. 의미색은 현행 유지:
- *  listening/confirm/complete = 초록 계열(확정 톤). 패널/반투명 배경만 강화해 원거리에서
- *  "글자만 덩그러니" 뜨던 hero를 영역으로 분리한다. */
-const HERO_PANEL = {
-  // listening/review 공통 초록 계열 패널(현행 의미색 — 입력탭 hero는 확정 흐름).
-  bg: 'rgba(10,28,18,0.94)',
-  border: T.green,
-} as const;
-
-/** 입력 탭의 시각 중심(방향 A → v0.34.0 A4 '듣는 중' 전용). 상태는 store에서 파생된 props로만
- *  들어온다(플로우 로직 무수정).
- *  - listening(기본): 필드명을 거대하게 단독 표시(v0.21.0 입력탭#3 — 정적 안내문구·타입배지 삭제,
- *               항목명을 가용공간 기준 최대 크기로). 패널 자체 점멸(panel-pulse)로 '듣는 중' 신호.
- *  - review(예외 1분기 — phase 'complete': 완료행 검토 대기/종료 대기/행 완료 안내):
- *               "N행 완료 — 명령 대기" 정적 라벨(점멸 없음 — 듣는 중이 아니라 명령 대기).
- *  '입력 완료'/'입력됨'(confirm/complete 이벤트)은 제거 — advance가 TTS 전에 포인터를 옮기므로
- *  커밋 즉시 다음 항목 '듣는 중'이 자동 성립(실기기 피드백 반영).
- *  정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(직전값 취소선→새값). */
-function VoiceHero({
-  col, review, row, reaskReason, getAudioLevel,
-}: {
-  col: Column;
-  /** v0.34.0 A4 — true면 phase 'complete'의 정적 라벨("N행 완료 — 명령 대기"). */
-  review: boolean;
-  row: number;
-  /** v0.23.0 입력탭#2 — listening일 때만 비-null. 재질문 사유(소리 불확실 / 파싱 실패)를 항목명 아래
-   *  보조선으로 노출(상단 인식률 %와 구분). null이면 미표시. Mack이 sessionStore.reaskReason을 null로
-   *  리셋하면 자동으로 사라진다. */
-  reaskReason: ReaskReason;
-  /** v0.34.0 B7 — 파동 레벨 getter(recorder 지수평활 레벨, 0~1). listening일 때만 rAF 소비. */
-  getAudioLevel: () => number;
-}) {
-  // v0.20.0 입력탭#5 — listening일 때 패널 자체가 은은히 점멸(점3개 제거). transform 미사용 호흡.
-  const isListening = !review;
-  // v0.27.0 무스크롤(민구 07-03) — 양손 측정 중 스크롤 불가. 넘칠 때만 useFitScale이 폰트를 줄여
-  //   스크롤 잔여 0 보장(항목명·값=--fit-hi 완만, 샘플 라벨·상태문=--fit-lo 먼저).
-  const fitRef = useFitScale<HTMLDivElement>([review, col.name, row, reaskReason]);
-  // v0.34.0 B7 — '듣는 중' 항목명 글자에 음성 반응 파동(민구 요청: "입력해야 하는 항목의 문자를
-  //   파동으로"). rAF가 --voice-level만 갱신하고 시각 효과는 HeroPrimaryLine의 calc() 기반
-  //   text-shadow 확산 + 미세 opacity 변조(레이아웃 불변 — useFitScale 무간섭). scale은 쓰지 않는다:
-  //   transform도 scrollable overflow에 계상돼 패널(overflowY:auto 폴백)의 무스크롤 계약을 깰 수
-  //   있다(v0.20.0 "scale 금지" 제약과 동일 계열 — 확인 후 배제 결정). listening 아닐 때·탭
-  //   숨김·keep-alive display:none 시 루프 정지는 훅이 담당.
-  const waveRef = useAudioLevelVar<HTMLSpanElement>(getAudioLevel, isListening);
-
-  return (
-    <div
-      ref={fitRef}
-      aria-live="polite"
-      style={{
-        // v0.18.0 1a — 반투명 패널: 다른 팝업과 동일한 frame + 2px 상태색 border + shadow.
-        maxWidth: 'min(560px, 94vw)', width: '100%',
-        // v0.21.0 입력탭#2 잘림 방지 가드 유지 — 단 v0.27.0부터 overflowY:auto는 폴백일 뿐,
-        //   정상 경로에선 useFitScale이 축소해 내부 스크롤이 생기지 않는다(무스크롤 원칙).
-        maxHeight: '100%', minHeight: 0, overflowY: 'auto',
-        padding: 'clamp(12px, 2.2vh, 20px) clamp(16px, 4.4vw, 24px)', borderRadius: 18,
-        background: HERO_PANEL.bg,
-        border: `2px solid ${HERO_PANEL.border}`,
-        boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'clamp(6px, 1.2vh, 10px)',
-        textAlign: 'center', minWidth: 0,
-        // v0.20.0 입력탭#5 — 패널 자체 점멸(듣는 중 신호). opacity+box-shadow만(scale 금지 — 94vw가
-        //   overflow:hidden 1fr 구역에서 잘림). 다른 상태(confirm/complete)는 점멸하지 않는다.
-        animation: isListening ? 'panel-pulse 1.8s ease-in-out infinite' : undefined,
-        willChange: isListening ? 'opacity, box-shadow' : undefined,
-      }}
-    >
-      <HeroStatusLine>{review ? '명령 대기' : '듣는 중'}</HeroStatusLine>
-      <HeroPrimaryLine
-        value={review ? `${row}행 완료` : col.name}
-        wave={isListening}
-        waveRef={isListening ? waveRef : undefined}
-      />
-      {isListening && <ReaskCue reason={reaskReason} />}
-    </div>
-  );
-}
-
-function HeroStatusLine({ children }: { children: ReactNode }) {
-  return (
-    <span style={{
-      fontSize: 'max(14px, calc(clamp(17px, min(4.6vw, 2.6vh), 24px) * var(--fit-lo, 1)))',
-      fontWeight: 900,
-      color: T.green,
-      letterSpacing: -0.2,
-      lineHeight: 1.12,
-      wordBreak: 'keep-all',
-      overflowWrap: 'anywhere',
-      textAlign: 'center',
-    }}>
-      {children}
-    </span>
-  );
-}
-
-// v0.34.0 A4 — mono 값 표시 분기 제거(hero가 값을 보여주지 않으므로 heroFontSize 불필요).
-// v0.34.0 B7 — wave=true(듣는 중)면 --voice-level(useAudioLevelVar가 rAF로 갱신) 기반 파동:
-//   text-shadow 확산(4→22px + 12→46px 2겹) + 미세 opacity(0.88→1.0) 변조. 전부 레이아웃 불변
-//   속성이라 fit 계약(scrollHeight)·chip-pop 애니메이션과 무간섭. 레벨 0(무발화·프리롤 미가용)
-//   이면 잔잔한 기본 글로우로 수렴한다.
-function HeroPrimaryLine({ value, wave, waveRef }: {
-  value: string;
-  wave?: boolean;
-  waveRef?: Ref<HTMLSpanElement>;
-}) {
-  return (
-    <span
-      key={value}
-      ref={waveRef}
-      data-testid="hero-primary"
-      style={{
-        fontSize: 'calc(clamp(30px, min(13vw, 9.4vh), 76px) * var(--fit-hi, 1))',
-        fontWeight: 900,
-        lineHeight: 1.05,
-        color: T.text,
-        letterSpacing: -1,
-        wordBreak: 'keep-all',
-        overflowWrap: 'anywhere',
-        maxWidth: '100%',
-        textAlign: 'center',
-        animation: 'chip-pop 320ms ease-out',
-        ...(wave
-          ? {
-              textShadow:
-                '0 0 calc(4px + var(--voice-level, 0) * 18px) rgba(0,200,83,0.55), '
-                + '0 0 calc(12px + var(--voice-level, 0) * 34px) rgba(0,200,83,0.35)',
-              opacity: 'calc(0.88 + var(--voice-level, 0) * 0.12)' as unknown as number,
-            }
-          : {}),
-      }}
-    >
-      {value}
-    </span>
-  );
-}
-
-// v0.21.0 입력탭#3 — TypeBadge(항목 옆 데이터형 작은 배지) 컴포넌트 및 사용처 삭제(불필요).
-//   TYPE_LABELS/TYPE_COLORS import도 함께 제거(다른 사용처 없음).
+// ─── A-hero → components/voice/VoiceHero.tsx로 추출(v0.35.0, Vance). 3-상태 카드(대기: 항목+파형 / 확인: ✓+값 / 검토: N행 완료). HeroStatusLine·HeroPrimaryLine·HERO_PANEL도 이전.
 
 // ─── chip with optional inline edit ────────────────────────────
 function ColumnChip({

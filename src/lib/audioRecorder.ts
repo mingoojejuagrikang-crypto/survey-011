@@ -94,6 +94,10 @@ interface PrerollCapture {
   node: AudioWorkletNode | ScriptProcessorNode;
   /** silent sink — keeps the graph pulled without audible output. */
   sink: GainNode;
+  /** v0.35.0 (Vance) — 시간영역 파형 탭. VoiceWaveform이 getByteTimeDomainData로 실시간 사람 음성
+   *  파형을 그린다(레벨 스칼라와 별개 — 실제 파형은 시간영역 샘플이 필요). source→analyser→sink로
+   *  연결해 WebKit이 사이드 브랜치를 확실히 pull하게 한다(sink는 gain 0 → 무음). null이면 미가용. */
+  analyser: AnalyserNode | null;
   kind: 'worklet' | 'script';
   chunks: Float32Array[];
   totalSamples: number;
@@ -477,8 +481,19 @@ export class AudioRecorder {
       sink.gain.value = 0; // 그래프를 destination까지 연결하되 무음 출력(에코 방지)
       sink.connect(ctx.destination);
 
+      // v0.35.0 (Vance) — 시간영역 파형 탭. source→analyser→sink(무음)로 연결해 브랜치가
+      //   pull되게 한다(연결만으론 WebKit이 사이드 브랜치를 안 돌릴 수 있음). fftSize 1024로
+      //   한 프레임 1024 샘플(≈21ms@48k) — 캔버스 폭에 충분. 실패해도 파형만 폴백(레벨 기반).
+      let analyser: AnalyserNode | null = null;
+      try {
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 1024;
+        source.connect(analyser);
+        analyser.connect(sink);
+      } catch { analyser = null; }
+
       const capture: PrerollCapture = {
-        ctx, source, sink,
+        ctx, source, sink, analyser,
         node: null as unknown as AudioWorkletNode, // 아래에서 채움
         kind: 'worklet',
         chunks: [],
@@ -555,6 +570,22 @@ export class AudioRecorder {
    *  읽는다 — 읽기 전용 스칼라라 비용 0. preroll 미가용(`clip_preroll_unavailable`)이면 항상 0. */
   getInputLevel(): number {
     return this.inputLevel;
+  }
+
+  /** v0.35.0 (Vance) — 시간영역 파형 샘플을 `out`(길이=fftSize=1024)에 채운다. 채웠으면 true.
+   *  analyser 미가용(preroll 미지원 기기)이면 false → 소비자(VoiceWaveform)가 레벨 기반 폴백으로
+   *  전환한다. 읽기 전용(getByteTimeDomainData)이라 rAF마다 불러도 비용 낮음. */
+  getTimeDomainData(out: Uint8Array): boolean {
+    const a = this.preroll?.analyser;
+    if (!a) return false;
+    try {
+      // TS 5.7+ DOM 타입은 Uint8Array<ArrayBuffer>로 좁아졌다 — 공개 API는 plain Uint8Array 유지,
+      // 여기서만 캐스트(런타임 동작 동일).
+      a.getByteTimeDomainData(out as Parameters<AnalyserNode['getByteTimeDomainData']>[0]);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** v0.34.0 D11b — 프리롤 캡처 종류(계측용). null = 미가용(ui_fx에서 'unavailable'로 표기). */
@@ -787,6 +818,7 @@ export class AudioRecorder {
       else (cap.node as ScriptProcessorNode).onaudioprocess = null;
       cap.source.disconnect();
       cap.node.disconnect();
+      cap.analyser?.disconnect(); // v0.35.0 (Vance) — 파형 탭 해제.
       cap.sink.disconnect();
     } catch { /* ignore */ }
     void cap.ctx.close().catch(() => {});

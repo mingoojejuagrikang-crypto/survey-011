@@ -36,12 +36,37 @@ export function formatAge(builtAt: number, now: number): string {
   return `${Math.floor(diff / 86_400_000)}일 전`;
 }
 
-function StatusRow({ label, value, tone, testId, action }: {
+/** v0.35.0 항목8(Vance) — 과거값 준비 완료(ready) 표식. 중앙 카드 커밋 ✓(VoiceHero CheckMark)와
+ *  동일한 시각 언어: 굵은 녹색 원 + 흰 체크 + 녹색 글로우. 상태 카드용으로 18px 고정(인라인). 지속
+ *  표식이라 진입 애니메이션은 두지 않는다(커밋 ✓의 check-pop과 달리 상시 상태). */
+function ReadyCheckBadge() {
+  return (
+    <span
+      aria-hidden
+      data-testid="conn-past-check"
+      style={{
+        flexShrink: 0, width: 18, height: 18, borderRadius: '50%',
+        background: T.green,
+        // v0.35.0 FIX-8(리뷰 라운드1) — glow 반경 축소(8→4px): Dynamic Type 확대 시 윗행 겹침 방지.
+        boxShadow: '0 0 4px rgba(0,200,83,0.55)',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <svg viewBox="0 0 24 24" width="62%" height="62%" fill="none" stroke="#fff" strokeWidth={3.6} strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 12.5l5 5L20 6" />
+      </svg>
+    </span>
+  );
+}
+
+function StatusRow({ label, value, tone, testId, action, lead }: {
   label: string;
   value: string;
   tone: 'ok' | 'warn' | 'off';
   testId: string;
   action?: React.ReactNode;
+  /** 값 텍스트 바로 앞(오른쪽 정렬 유지)에 붙는 표식(예: 과거값 ready ✓). */
+  lead?: React.ReactNode;
 }) {
   const color = tone === 'ok' ? T.green : tone === 'warn' ? T.amber : T.textMute;
   return (
@@ -51,13 +76,20 @@ function StatusRow({ label, value, tone, testId, action }: {
       </span>
       <span
         style={{
-          flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700,
-          color, textAlign: 'right',
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          flex: 1, minWidth: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6,
         }}
-        title={value}
       >
-        {value}
+        {lead}
+        <span
+          style={{
+            minWidth: 0, fontSize: 13, fontWeight: 700, color,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}
+          title={value}
+        >
+          {value}
+        </span>
       </span>
       {action}
     </div>
@@ -135,7 +167,16 @@ export function ConnectionStatusCard() {
     >
       <StatusRow label="Google 연결" value={googleValue} tone={googleTone} testId="conn-google" />
       <StatusRow label="시트 연결" value={sheetValue} tone={sheetTone} testId="conn-sheet" />
-      <StatusRow label="과거값 준비" value={idxValue} tone={idxTone} testId="conn-past" action={retry} />
+      <StatusRow
+        label="과거값 준비"
+        value={idxValue}
+        tone={idxTone}
+        testId="conn-past"
+        action={retry}
+        // v0.35.0 항목8 — ready(신선 캐시=로그인+시트연결로 프리페치 완료)일 때만 굵은 녹색 ✓.
+        //   stale(영속 폴백)/loading/none엔 표식 없음(기존 표기 유지). 프리페치 트리거/TTL 무변경.
+        lead={idx.state === 'ready' ? <ReadyCheckBadge /> : undefined}
+      />
     </div>
   );
 }

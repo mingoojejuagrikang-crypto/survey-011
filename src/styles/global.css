@@ -102,6 +102,13 @@ input::placeholder {
   100% { transform: scale(1); }
 }
 
+/* v0.35.0 FB-B (Vance) — EdgeGlow의 느리고 부드러운 점멸. opacity만 변조(합성기 전용, box-shadow
+   재페인트 없음). 정상(초록)·이상치(빨강) 공통. reduced-motion에선 미적용(정적). */
+@keyframes edge-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
 /* Floating value badge: pops out over the active chip on each new recognition,
    springs in with overshoot, holds, then auto-fades. transform/opacity only. */
 @keyframes value-burst {

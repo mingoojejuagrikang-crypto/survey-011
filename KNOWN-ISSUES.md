@@ -664,6 +664,23 @@
 - **해결·회피(v0.31.0):** 활성 화면의 하단 기준점은 `input-control-toggle` 또는 `일시정지` 버튼으로 잡는다. 버튼 종료 경로를 검증할 때는 `일시정지` → `button[title="입력 종료"]` → `button[title="종료 확인"]` 순서로 테스트한다. 음성 종료 경로는 STT `"종료"` 명령으로 별도 검증한다.
 - **출처:** `2026-07-08 survey-011 v0.31.0 입력탭 UI 재정리`, 커밋 `bbf6a1e`; `2026-07-09 v0.32.0 세션` — 누락 2건 추가 수리(`v019-active-layout.spec.ts` W5는 컨트롤바 Y 앵커를 `input-control-toggle`로 교체, `correction-flow.spec.ts` D-2는 일시정지 패널 경로 적용).
 - **현재 상태:** ✅수정됨(`tests/v023-voice.spec.ts`, `tests/correction-flow.spec.ts`, `tests/v54-30rows.spec.ts`, `tests/v019-active-layout.spec.ts`).
+- **⚠️ 부분 변경(v0.35.0 FB-G, Vance):** **완료(completing, phase 'complete') 상태**에선 하단 중앙 버튼이 `일시정지` 대신 `입력 종료`로 바뀐다(마지막 행 대기 시 일시정지가 무의미). 즉 completing에선 일시정지 패널을 거치지 않고 하단 `button[title="입력 종료"]`가 **직접** 보인다(→ `button[title="종료 확인"]`). **활성(active) 상태**의 상시-종료-없음 원칙은 그대로. completing 종료 경로 테스트는 `v023-voice.spec.ts` B4가 갱신됨(일시정지 우회 제거).
+
+### [TEST-UI-3] 진입 애니메이션(scale(0)→1) 중 getBoundingClientRect가 0×0을 반환 — 측정/스크린샷은 애니메이션 종료 후
+- **증상:** v0.35.0 확인 카드 ✓ 배지가 `check-pop`(0%: `scale(0)`) 진입 애니메이션을 쓰는데, 커밋 직후 즉시 스크린샷/측정하면 배지가 `width:0,height:0`으로 잡혀 "렌더 안 됨"으로 오판된다(스타일은 정상 적용됨 — bg/border 존재). 값 텍스트는 `chip-pop`(scale 1→1.16→1, 0 미경유)이라 항상 보여 혼동을 키운다.
+- **원인:** `getBoundingClientRect`/스크린샷은 현재 transform을 반영하므로 `scale(0)` 프레임에선 0 크기. 애니메이션(320ms)이 끝나기 전 캡처하면 그 순간을 찍는다.
+- **해결·회피:** 진입 애니메이션이 있는 요소는 **애니메이션 시간(≥320ms) 경과 후** 측정/캡처한다. 항상-보여야-하는 배지엔 `scale(0)` 진입을 피하거나(페이드/미세 스케일) 측정 타이밍을 늦춘다. 확인 카드 캡처는 `waitFor(confirm)` 후 ~450ms 대기(1500ms 확인 창 안).
+- **파생(민구 판단 필요):** 확인 플래시는 **행 중간 음성 컬럼** 커밋에만 1.5초 지속된다. **행의 마지막 음성 컬럼** 커밋은 `advance()`가 phase를 'complete'로 두고 "N행 완료" 안내를 낸 뒤 다음 행에서 'active'로 복귀하므로(useVoiceSession `advance` 699~742), 그 커밋엔 ✓ 확인 플래시 대신 "N행 완료 — 명령 대기"가 뜬다. 렌더 우선순위(review > confirm)로 이렇게 되며 기존 review 라벨과는 일관되나, **"커밋 직후 ✓+값" 민구 결정과는 행-마지막 컬럼에서 어긋난다** — 행-마지막에도 ✓를 띄우려면 advance/phase 순서 재작업 필요(이번 범위 밖, 민구 확정 대기). 스크린샷/테스트로 확인 플래시를 재현하려면 음성 컬럼 2개 이상 + 첫 컬럼 커밋을 쓴다.
+  - **⚠️ 정밀화(2026-07-15 v0.35.0 R3-FIX-5, 실측 타임라인으로 정정):** 위 "✓ **대신** N행 완료"는 정확하지 않다. 행-마지막 커밋에서도 ✓는 **뜬다** — 커밋 직후엔 phase가 아직 'active'라 confirm이 페인트되고, echo TTS가 끝나 `advance()`가 phase를 'complete'로 올리는 순간 review가 **덮어쓴다**. 즉 정확한 동작은 "✓가 echo TTS 길이만큼 잠깐 떴다가 'N행 완료'로 **승계**된다(1.5초를 못 채운다)"이다. rAF 전이 기록(음성컬럼 2개, mock TTS onend 200ms): `listening(산도) → confirm(4.2) → review(1행 완료) → listening(당도)`. 회귀 `tests/v035-hero-confirm.spec.ts`가 이 **순서**(confirm→review, review 이후 confirm 재생 없음)를 고정한다 — "confirm이 없다"로 단언하면 거짓이 된다.
+
+### [TEST-TTS-MOCK-1] 동기(synchronous) `onend` TTS mock이 상태머신 전이를 왜곡 — 존재하지 않는 화면을 검증하게 된다
+- **증상:** `tests/v035-hero-confirm.spec.ts`가 **음성 컬럼 1개** fixture로 "커밋 → 확인 카드(✓) → ~1.5초 뒤 대기 복귀"를 단언하며 통과했다. 그러나 음성 컬럼이 1개면 그 커밋은 곧 **행-마지막** 커밋이라, 실기기라면 ✓가 1.5초를 못 채우고 "N행 완료"로 승계된다([TEST-UI-3] 파생). 테스트는 그 review를 **한 번도 보지 못한 채** 통과했다.
+- **원인(코드 확정):** mock `speechSynthesis.speak()`가 `onend`를 **함수 본문 안에서 동기 호출**했다. 실제 speechSynthesis는 발화 시간이 있어 절대 그러지 않는다. 동기 onend면 `advance()`의 `setPhase('complete')` → `await announceRowComplete()` → `setPhase('active')`가 **페인트 없이 한 흐름에 끝나** review가 단 한 프레임도 렌더되지 않는다 → 화면이 실기기와 정반대인데 테스트는 초록. mock의 `onend`를 `setTimeout(…, 200)`으로만 바꿔도 전이가 즉시 드러난다(`confirm → review → listening`).
+- **해결·회피:** TTS mock의 `onend`는 **항상 비동기**로 발화시킨다(≥1 태스크, 200ms 권장 — 실기기 수백ms~수초의 축약). 동기 mock은 "TTS를 기다리는 모든 상태 전이"(advance/review/확인 플래시/재질문)를 통째로 접어버려, 그 구간을 겨냥한 테스트를 **공허하게** 만든다. 더불어 **일시적 상태**(review 등)는 `expect(...).toBeVisible()` 폴링으로 겨냥하지 말고 rAF로 전이를 기록해 사후 판정하라(`recordHeroTimeline` 패턴) — 수백 ms 상태는 폴링이 놓쳐 플래키가 된다.
+- **출처:** `2026-07-15 v0.35.0 리뷰 라운드3`(Vance, R3-FIX-5 사실확인 중 실측). Codex 지적의 **결론**(공허·타이밍 의존)은 옳았으나 **사유**("음성컬럼 1개면 review가 burst를 소비해 확인 플래시가 안 뜬다")는 사실과 달랐다 — 플래시는 뜬다. 1차 증거 = rAF 타임라인.
+- **현재 상태:** ✅수정됨(`tests/v035-hero-confirm.spec.ts` — 음성 컬럼 2개 + async onend + 타임라인 오라클). ⚠️주시 — **다른 스펙 다수가 여전히 동기 onend mock을 쓴다**(`manual-input.spec.ts` 등). 그 스펙들이 TTS-대기 전이를 단언하지 않는 한 무해하나, 새로 그런 단언을 추가할 땐 반드시 async로 바꿀 것.
+- **출처:** `2026-07-15 v0.35.0 UI 개선 세션`(Vance, 확인 카드 스크린샷 캡처 중 발견). 회귀 `tests/v035-hero-confirm.spec.ts`.
+- **현재 상태:** ✅패턴 확립(테스트/캡처 타이밍 규칙).
 
 ### [TEST-STT-UI-1] 도움말 hard suspend 검증에서 총 1행 설정이면 `다음` 후 행 번호 변화가 없다
 - **증상:** 도움말 모달을 닫은 뒤 STT 복원 검증 테스트가 `다음` 발화 후 `active-row`가 1→2로 바뀌기를 기대했지만 실패했다.
@@ -678,6 +695,13 @@
 - **해결·회피:** 포트 bind와 Chromium launch가 허용된 호스트 세션에서 5175 strictPort 서버를 띄워 전체 스위트를 재실행한다. 이 패턴은 passed/failed 제품 회귀 수치에 포함하지 말고 인프라 차단으로 별도 보고한다.
 - **출처:** `2026-07-15 survey-011 v0.34.0 High 3건 수정 세션`(Vite·Playwright 명령 stdout 직접 확인).
 - **현재 상태:** ⚠️환경 차단 — `npx tsc --noEmit`은 clean, Playwright 제품 검증은 권한 있는 실행 환경으로 이관 필요.
+
+### [TEST-PERSIST-SEAM-1] 빈 세션에서는 persist 실패·지연 seam이 호출되지 않아 종료 테스트가 공허해진다
+- **증상:** `tests/v035-r3-fixes.spec.ts`의 P1-1/P1-4가 각각 `__survey011DelaySessionPutMs`/`__survey011FailSessionPut`을 주입했지만, stopping 또는 저장 실패 화면을 관측하지 못했다. P1-3도 같은 빈 세션+지연 seam 구조라 종료 재진입 창이 결정론적으로 유지되지 않았다.
+- **원인:** `useVoiceSession.persistSession()`은 완료행·백업·활성행 데이터·skip 행이 모두 없으면 `saveSession()` 호출 전에 `true`를 반환한다. `startSession()` helper는 값을 커밋하지 않으므로, seam을 켜기만 해서는 `db.saveSession()`의 지연/실패 분기에 도달하지 않는다.
+- **해결·회피:** persist seam에 의존하는 테스트는 seam 주입 전에 `fireStt`로 실제 값을 커밋하고, 필요하면 완료행까지 만든다. Observer 등 다른 폴백 seam은 주입 후 런타임 전제(`typeof ... === 'undefined'`)도 직접 단언해 공허 통과를 차단한다.
+- **출처:** `2026-07-16 v0.35.0 P1/P2 회귀 테스트 보정` — 권한 있는 호스트 전체 스위트에서 수정 전 681 passed/2 failed/16 skipped; 실패 스크린샷과 `src/lib/useVoiceSession.ts` 조기 반환 분기 대조.
+- **현재 상태:** ✅테스트 보정됨(`tests/v035-r3-fixes.spec.ts` P1-1/P1-3/P1-4 값 커밋, P2 seam 전제 단언). 제품 코드는 변경하지 않음.
 
 ---
 

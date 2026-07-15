@@ -70,6 +70,13 @@ export async function saveSession(session: Session): Promise<void> {
   const delayMs = (globalThis as typeof globalThis & { __survey011DelaySessionPutMs?: number })
     .__survey011DelaySessionPutMs;
   if (delayMs && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  // v0.35.0 R3-FIX-2(리뷰 라운드3) — IDB **쓰기 실패** 주입 seam. 위 지연 seam과 같은 계약(기본
+  // undefined → 운영 경로는 분기 1회). 종전엔 '지연 성공'만 재현 가능해, 용량부족·DB 연결 종료·
+  // 트랜잭션 실패 같은 durable 실패에서 stop()이 어떻게 행동하는지 검증할 수단이 없었다
+  // (그 공백이 곧 "최종 저장 실패를 삼킨다" 버그가 테스트를 통과한 이유다).
+  if ((globalThis as typeof globalThis & { __survey011FailSessionPut?: boolean }).__survey011FailSessionPut) {
+    throw new Error('injected: session put failed (QuotaExceededError)');
+  }
   const db = await getDb();
   // pendingValidationPersisting은 동시 UI 게이트용 메모리 플래그다. sync가 저장 중 Session을
   // 재저장해도 이 플래그가 IDB에 박혀 reload 후 [확인]을 영구 차단하지 않도록 DB 경계에서 제거한다.

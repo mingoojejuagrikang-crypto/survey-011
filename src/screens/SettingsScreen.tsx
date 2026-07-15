@@ -903,9 +903,54 @@ function BeepPicker() {
           </div>
         </div>
       ))}
+      {/* v0.35.0 FB-D(Vance) — 확인음·경고음 마스터 볼륨 슬라이더. 슬라이더는 store만 갱신(드래그
+          중 비프 폭주 방지), '미리듣기'가 현재 볼륨으로 확인음→경고음을 순서로 들려준다(긍/부정 대비).
+          범위를 넓게 열어(0~100%) 민구가 실기기에서 STT 오트리거 없이 조절하게 한다. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <label htmlFor="beep-volume" style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+            소리 크기
+          </label>
+          <span style={{ fontSize: 13, fontWeight: 800, color: T.blue }}>{Math.round(s.beepVolume * 100)}%</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <input
+            id="beep-volume"
+            data-testid="beep-volume"
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={s.beepVolume}
+            aria-label="확인음·경고음 소리 크기"
+            onChange={(e) => s.set({ beepVolume: Number(e.target.value) })}
+            style={{ flex: 1, minWidth: 0, height: 44, accentColor: T.blue, cursor: 'pointer' }}
+          />
+          <button
+            data-testid="beep-volume-preview"
+            aria-label="현재 소리 크기로 미리듣기"
+            onClick={() => {
+              const vol = s.beepVolume;
+              const pos = BEEP_VARIANTS.find((x) => x.id === s.beepPositiveId && x.polarity === 'positive')
+                ?? BEEP_VARIANTS.find((x) => x.polarity === 'positive')!;
+              const neg = BEEP_VARIANTS.find((x) => x.id === s.beepNegativeId && x.polarity === 'negative')
+                ?? BEEP_VARIANTS.find((x) => x.polarity === 'negative')!;
+              previewBeep(pos, vol);
+              window.setTimeout(() => previewBeep(neg, vol), 480);
+            }}
+            style={{
+              flexShrink: 0, minHeight: 44, padding: '0 14px', borderRadius: 12,
+              border: `1px solid ${T.lineStrong}`, background: T.inputBg,
+              color: T.text, fontSize: 14, fontWeight: 700, cursor: 'pointer', letterSpacing: -0.1,
+            }}
+          >
+            미리듣기
+          </button>
+        </div>
+      </div>
       <div style={{ fontSize: 11, color: T.textMute, lineHeight: 1.4 }}>
         칩을 누르면 소리를 미리 들려주고 그 소리로 선택됩니다. 확인음은 값이 저장될 때,
-        경고음은 이상치 알람이 뜰 때 울립니다.
+        경고음은 이상치 알람이 뜰 때 울립니다. 소리 크기는 확인음·경고음에 함께 적용됩니다.
       </div>
     </div>
   );
@@ -1024,6 +1069,9 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
   const [showUrlInput, setShowUrlInput] = useState(false);
   // v0.14.0 F — 저장된 시트 목록을 기본 접힌 드롭다운으로(세로 풀리스트가 시트 多 시 화면 점유 과다).
   const [savedSheetsOpen, setSavedSheetsOpen] = useState(false);
+  // v0.35.0 FB-E(Vance) — 하단 인라인 설정 요약을 접기식·기본 접힘으로(온디맨드). 인라인 자체는
+  //   유지(제거하면 C10 스크롤 마찰 재발) — 헤더 탭으로만 펼친다. savedSheetsOpen과 동일 패턴.
+  const [summaryInlineOpen, setSummaryInlineOpen] = useState(false);
   // v0.23.0 설정탭#4(Vance) — `?` 도움말 팝업 열림 여부(카드별 `?` 또는 첫 진입 안내의 "자세히").
   const [helpOpen, setHelpOpen] = useState(false);
   // v0.23.0 설정탭#4 — 첫 진입 안내 배너(1회 dismissible). "본 적 있는지"는 localStorage에 영속
@@ -1326,6 +1374,7 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
       autoScreenCapture: d.autoScreenCapture,
       beepPositiveId: d.beepPositiveId,
       beepNegativeId: d.beepNegativeId,
+      beepVolume: d.beepVolume, // v0.35.0 FIX-5(리뷰 라운드1) — 볼륨도 기본값 복원(누락 수리).
       manualMode: d.manualMode,
       preferredVoiceName: d.preferredVoiceName,
       sessionLabelColId: d.sessionLabelColId,
@@ -2083,17 +2132,43 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
               border: `1px solid ${T.line}`,
               display: 'flex',
               flexDirection: 'column',
-              gap: 10,
+              gap: summaryInlineOpen ? 10 : 0,
             }}
           >
-            <div style={{ fontSize: 14, fontWeight: 800, color: T.textDim, letterSpacing: -0.2 }}>
-              설정 요약
-            </div>
-            <SettingsSummary
-              columns={s.columns}
-              totalRows={computeTotalRows(s.columns)}
-              sessionLabel={prospectiveSessionLabel()}
-            />
+            {/* v0.35.0 FB-E — 헤더 탭으로만 펼침(기본 접힘). testid는 컨테이너에 상주(항상 마운트),
+                내용만 게이트. savedSheets 헤더와 동일 aria-expanded + 회전 셰브런 패턴. */}
+            <button
+              data-testid="settings-summary-toggle"
+              onClick={() => setSummaryInlineOpen((v) => !v)}
+              aria-expanded={summaryInlineOpen}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: T.textDim, textAlign: 'left', width: '100%',
+                // v0.35.0 R2-FIX-4(리뷰 라운드2, a11y) — 44px 터치 타깃 확보(장갑 낀 현장 조작).
+                //   종전 padding:0 + 18~20px 텍스트라 타깃이 작았다.
+                minHeight: 44, padding: '4px 0',
+              }}
+            >
+              <span style={{ fontSize: 14, fontWeight: 800, color: T.textDim, letterSpacing: -0.2, flex: 1 }}>
+                설정 요약
+              </span>
+              <span
+                style={{
+                  flexShrink: 0, display: 'inline-flex',
+                  transform: summaryInlineOpen ? 'rotate(180deg)' : 'none', transition: 'transform 150ms',
+                }}
+              >
+                {I.chevDown(18, T.textMute)}
+              </span>
+            </button>
+            {summaryInlineOpen && (
+              <SettingsSummary
+                columns={s.columns}
+                totalRows={computeTotalRows(s.columns)}
+                sessionLabel={prospectiveSessionLabel()}
+              />
+            )}
           </div>
         )}
 

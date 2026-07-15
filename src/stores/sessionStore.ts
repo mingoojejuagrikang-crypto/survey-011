@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Session } from '../types';
 
-export type VoicePhase = 'ready' | 'active' | 'paused' | 'complete' | 'done';
+export type VoicePhase = 'ready' | 'active' | 'paused' | 'complete' | 'stopping' | 'done';
 
 interface SessionState {
   phase: VoicePhase;
@@ -72,6 +72,18 @@ interface SessionState {
    *  resumeRecognitionForUi를 배선한다(세션 없으면 자연 no-op — 단일 배선·기능 격리).
    *  단일 작성자 = App.tsx(모달 소유자)뿐이므로 resetAll이 건드리지 않는다(세션 수명과 무관). */
   uiModalOpen: 'feedback' | null;
+  /** v0.35.0 R3-FIX-2(리뷰 라운드3, Codex High·데이터무결성) — **최종 저장(stop) 실패** 상태.
+   *  persistSession()이 false(IDB 쓰기 실패: 용량부족·DB 연결 종료·트랜잭션 실패)를 반환하면
+   *  stop()이 phase를 'ready'로 내리지 **않고** 이 플래그를 세운다. VoiceScreen이 이 값으로 종료
+   *  실패 배너(재시도 버튼)를 띄운다. null=정상.
+   *
+   *  왜 phase를 안 내리나: 'ready'가 되면 '음성 입력 시작' 버튼이 떠 사용자가 새 세션을 시작할 수
+   *  있고, 그 start()의 resetAll이 **미저장 값·클립 포인터를 메모리에서 지워** 복구 기회가 영원히
+   *  사라진다. v0.34.0 "durable 실패를 삼키지 않는다" 원칙(persistSession 성공 반환·persist_check)과
+   *  같은 계약 — 실패는 화면에 남긴다.
+   *
+   *  retrying=재시도 IDB 쓰기 진행 중(버튼 잠금). 성공하면 stop()이 null로 지우고 ready로 전환. */
+  persistError: { retrying: boolean } | null;
   /** v0.23.0 입력탭#2(재질문 사유, Mack) — 직전 음성 입력이 왜 재질문됐는지. 'low_confidence'=신뢰도가
    *  허용범위 미만, 'parse_failed'=인식은 됐으나 숫자/값으로 파싱 불가(항목명·잡음 거부 포함). null=정상.
    *  VoiceScreen(Vance)의 ReaskCue가 이 값으로 "소리가 불확실" vs "숫자로 인식 실패"를 구분 표시한다.
@@ -96,6 +108,7 @@ interface SessionState {
   pushValueBurst: (name: string, value: string) => void;
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
   setUiModalOpen: (m: SessionState['uiModalOpen']) => void;
+  setPersistError: (e: SessionState['persistError']) => void;
   setModifyIndicator: (m: SessionState['modifyIndicator']) => void;
   setReaskReason: (r: SessionState['reaskReason']) => void;
   setActiveCol: (i: number) => void;
@@ -123,6 +136,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   valueBurst: null,
   anomalyAlert: null,
   uiModalOpen: null,
+  persistError: null,
   modifyIndicator: null,
   reaskReason: null,
   allRowValues: {},
@@ -140,6 +154,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((s) => ({ valueBurst: { name, value, seq: (s.valueBurst?.seq ?? 0) + 1 } })),
   setAnomalyAlert: (anomalyAlert) => set({ anomalyAlert }),
   setUiModalOpen: (uiModalOpen) => set({ uiModalOpen }),
+  setPersistError: (persistError) => set({ persistError }),
   setModifyIndicator: (modifyIndicator) => set({ modifyIndicator }),
   setReaskReason: (reaskReason) => set({ reaskReason }),
   setActiveCol: (activeColIdx) => set({ activeColIdx }),
@@ -214,6 +229,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       lastTts: '',
       valueBurst: null,
       anomalyAlert: null,
+      // v0.35.0 R3-FIX-2 — persistError는 세션 수명에 속하므로 여기서 지운다. 단 이 경로에 도달하려면
+      //   phase가 'ready'여야 하고(start 버튼), 저장 실패 중엔 phase가 'ready'가 되지 않으므로
+      //   실패 상태를 모르고 덮어쓰는 일은 없다(uiModalOpen과 달리 단일 작성자 = useVoiceSession).
+      persistError: null,
       modifyIndicator: null,
       reaskReason: null,
       allRowValues: {},

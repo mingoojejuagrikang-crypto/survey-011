@@ -154,6 +154,8 @@ test('[UI] 10-B/10-C — persist migrate coercion: 구버전(v10) 손상/누락 
         trendRuleClearedV6: true,
         // 손상값: 캡처 토글은 문자열, 긍정 자리에 부정 id(극성 불일치), 부정 자리에 미상 id.
         autoScreenCapture: 'yes', beepPositiveId: 'neg-fall', beepNegativeId: 'bogus',
+        // v0.35.0 FIX-1 — beepVolume 손상값(범위 밖)도 기본 0.5로 coercion(version 11 유지).
+        beepVolume: 9,
       },
       version: 10,
     };
@@ -172,11 +174,12 @@ test('[UI] 10-B/10-C — persist migrate coercion: 구버전(v10) 손상/누락 
     .toBe(11);
   const stored = await page.evaluate((key) => {
     const raw = localStorage.getItem(key);
-    return JSON.parse(raw!) as { state: { autoScreenCapture: unknown; beepPositiveId: unknown; beepNegativeId: unknown } };
+    return JSON.parse(raw!) as { state: { autoScreenCapture: unknown; beepPositiveId: unknown; beepNegativeId: unknown; beepVolume: unknown } };
   }, SETTINGS_KEY);
   expect(stored.state.autoScreenCapture).toBe(true);
   expect(stored.state.beepPositiveId).toBe('pos-rise');
   expect(stored.state.beepNegativeId).toBe('neg-fall');
+  expect(stored.state.beepVolume).toBe(0.5); // 범위 밖(9) → 기본 0.5 치유
 
   // UI에도 치유 결과 반영.
   await page.locator('[data-testid="tab-settings"]').click();

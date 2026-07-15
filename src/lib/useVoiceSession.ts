@@ -1009,6 +1009,7 @@ export function useVoiceSession() {
   const gotoAdjacentRow = useCallback(
     async (delta: -1, source: 'voice' | 'touch' = 'touch') => {
       const sess = useSessionStore.getState();
+      if (sess.phase === 'stopping') return;
       // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중엔 **모든 비해소 이동을 거부**한다.
       // STT만 막고 터치 이동을 열어두면 [확인]/[수정] 대기 중 [이전]을 눌러 미확인 이상치를
       // 우회할 수 있었다(announceField가 알람을 null로 지워 검증 절차 자체가 소멸).
@@ -1042,6 +1043,7 @@ export function useVoiceSession() {
   // 해제) 완료 행으로 반복 복귀하는 NAV-1 루프가 구조적으로 불가능해진다. 더 갈 행이 없으면
   // v0.23.0 입력탭#4 — 자동 종료하지 않고 빈 행 안내 후 종료 대기(announceEndReached).
   const goNextRow = useCallback(async (source: 'voice' | 'touch' = 'touch') => {
+    if (useSessionStore.getState().phase === 'stopping') return;
     // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중 행 이동 거부(위 gotoAdjacentRow와 동일 근거:
     // [다음]으로 미확인 이상치를 남긴 채 다음 행으로 새어나가던 경로).
     if (isManualHoldBlocked('next')) return;
@@ -1200,6 +1202,30 @@ export function useVoiceSession() {
       } else {
         logger.log({ type: 'clip', extra: 'mic_reconnect_failed', sessionId: sessionIdRef.current });
       }
+    });
+  }, []);
+
+  /** v0.35.0 R3-FIX-1(리뷰 라운드3, Codex High·데이터무결성) — **복원 없이** suspend 래치만 해제한다.
+   *  세션 경계(stop/start)에서 쓴다. resumeRecognitionForUi와 달리 인식기를 다시 만들지 않는다 —
+   *  세션이 끝나는(또는 새로 시작하는) 시점이라 복원 대상 자체가 없기 때문.
+   *
+   *  왜 필요한가: 래치(uiSuspendRef.active)는 suspend→resume 쌍으로만 풀린다. 그런데 종료 확인
+   *  다이얼로그의 **확인(confirm)** 경로는 resume 없이 곧장 stop()으로 간다(R2-FIX-2 배선: 취소만
+   *  resume). stop()도 start()도 래치를 안 만졌으므로 래치가 **영구히 active로 잔존**했다. 그러면
+   *  같은 입력탭에서 다음 세션을 시작한 뒤 수동입력·명령어 도움말·피드백·종료 모달을 열 때
+   *  suspendRecognitionForUi가 `if (active) return`으로 **조기 반환** → STT가 계속 살아 배경 발화가
+   *  값을 커밋하거나 행을 이동시킬 수 있었다(데이터 무결성). */
+  const clearUiSuspendLatch = useCallback((reason: string) => {
+    if (!uiSuspendRef.current.active) return;
+    const prev = uiSuspendRef.current.reason;
+    uiSuspendRef.current = { active: false, hadController: false, reason: null };
+    // 기존 ui_resume/ui_suspend와 같은 command 레인 — 신규 이벤트 타입 무첨가(log-replay 호환).
+    logger.log({
+      type: 'command',
+      parsed: 'ui_suspend_cleared',
+      extra: `${reason}:was=${prev ?? 'unknown'}`,
+      sessionId: sessionIdRef.current,
+      row: useSessionStore.getState().activeRow,
     });
   }, []);
 
@@ -2223,11 +2249,17 @@ export function useVoiceSession() {
     const s = useSettingsStore.getState();
     setPreferredVoiceName(s.preferredVoiceName);
     const sess = useSessionStore.getState();
+    if (sess.phase === 'stopping') return false;
     if (!s.tableGenerated) return false;
     const vc = s.columns.filter((c) => c.input === 'voice');
     if (vc.length === 0) return false;
     const total = computeTotalRows(s.columns);
     if (total === 0) return false;
+
+    // v0.35.0 R3-FIX-1 — 방어적 초기화. stop()이 이미 풀지만, stop을 거치지 않은 경로(크래시 후
+    //   재개·언마운트/리마운트 등)로 래치가 남아 들어와도 새 세션은 항상 깨끗한 상태에서 시작한다.
+    //   already-false면 no-op(로그도 없음).
+    clearUiSuspendLatch('start');
 
     const startTs = Date.now();
     sessionIdRef.current = `sess_${startTs}`;
@@ -2356,14 +2388,22 @@ export function useVoiceSession() {
 
     await announceField(vc[0]);
     return true;
-  }, [announceField, announceRowDiff, handleFinal, handleInterim, say]);
+  }, [announceField, announceRowDiff, handleFinal, handleInterim, say, clearUiSuspendLatch]);
 
   const stop = useCallback(async (announce = true) => {
+    const phaseAtEntry = useSessionStore.getState().phase;
+    // v0.35.0 P1 — 종료 teardown 전체를 단일 비대화형 phase로 잠근다. 첫 await보다 먼저 전환해야
+    // pause→stop 사이 재시작, 완료행 이동, 중복 stop이 같은 이벤트 루프 틈에서도 끼어들 수 없다.
+    if (phaseAtEntry === 'stopping') return false;
+    useSessionStore.getState().setPhase('stopping');
     setActiveController(null);
     ctrlRef.current?.stop();
     ctrlRef.current = null;
     cancelTts();
     awaitingFieldRef.current = null;
+    // v0.35.0 R3-FIX-1 — 종료 확인 '확인' 경로는 resume 없이 여기로 온다. 래치를 여기서 풀지 않으면
+    //   다음 세션의 모달 suspend가 전부 조기 반환돼 STT가 안 멈춘다. 복원은 불필요(세션 종료 중).
+    clearUiSuspendLatch('stop');
     // #1 reach telemetry: session-meta on stop. `extra:'stop'` preserved; new fields additive.
     // completedRows here is the denominator-complement for reach/completion-rate aggregation.
     {
@@ -2401,7 +2441,6 @@ export function useVoiceSession() {
       }
     }
     if (announce) await say('입력을 종료합니다.');
-    useSessionStore.getState().setPhase('ready');
     // Codex 3차 HIGH: 클립 저장을 dispose보다 먼저 flush.
     // dispose는 in-flight stopClip의 resolveStop을 null로 해소하지만(zombie 방지),
     // 가능하면 자연 onstop으로 실제 blob을 저장하는 것이 우선.
@@ -2415,9 +2454,60 @@ export function useVoiceSession() {
     recorderRef.current?.dispose();
     recorderRef.current = null;
     // v0.10: await로 변경 — audioClips 키가 IDB session에 확실히 저장된 후 종료
-    await persistSession();
+    // v0.35.0 R3-FIX-2(리뷰 라운드3, Codex High·데이터무결성) — 반환값을 **더 이상 무시하지 않는다**.
+    //   persistSession은 IDB 쓰기 실패 시 false를 돌려주는데(그 자체는 이미 session_persist_failed로
+    //   로깅됨 — 여기서 중복 로깅하지 않는다), 종전엔 곧장 setPhase('ready')로 넘어가 **최신 값·클립
+    //   포인터가 미저장인 채** 새 세션을 시작할 수 있었다(start()의 resetAll이 메모리 사본까지 지워
+    //   복구 기회 소멸). v0.34.0 "durable 실패를 삼키지 않는다" 원칙과 정면 충돌 → 실패면 ready 미전환.
+    const durable = await persistSession();
+    if (!durable) {
+      // stopping을 유지해 '음성 입력 시작' 버튼과 모든 세션 컨트롤을 띄우지 않는다
+      //   → 새 세션의 resetAll이 미저장 값을 덮을 수 없다. 화면엔 재시도 배너(VoiceScreen).
+      //   logger.setSessionId도 유지 — 재시도/후속 이벤트가 같은 세션에 귀속돼야 한다.
+      useSessionStore.getState().setPersistError({ retrying: false });
+      logger.log({
+        type: 'session', extra: 'stop_persist_check:write_failed',
+        sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow,
+      });
+      return false;
+    }
+    // v0.35.0 R2-FIX-1(리뷰 라운드2, Flash Critical·데이터무결성) — setPhase('ready')를 **persist
+    //   완료 뒤**로 이동. 종전엔 이 위(say/clip flush/dispose/persist await 전)에서 ready로 렌더돼,
+    //   그 await 구간에 사용자가 '음성 입력 시작'을 누르면 start()의 resetAll+새 sessionId가 최종
+    //   flush·audioClips 키를 덮어써 오염될 수 있었다. persist 완료까지 UI가 전용 'stopping'을
+    //   유지 → race 창 제거. teardown~persist 사이 로직은 phase==='ready'에 의존하지 않음(확인).
+    useSessionStore.getState().setPersistError(null);
+    logger.log({
+      type: 'session', extra: 'stop_persist_check:ok',
+      sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow,
+    });
+    useSessionStore.getState().setPhase('ready');
     logger.setSessionId(undefined);
-  }, [persistSession, say]);
+    return true;
+  }, [persistSession, say, clearUiSuspendLatch]);
+
+  /** v0.35.0 R3-FIX-2 — 최종 저장 실패 후 **저장만** 재시도한다. stop()의 teardown(인식기 정지·
+   *  recorder dispose·종료 안내·session:stop 로그)은 이미 끝났으므로 stop() 전체를 다시 돌리지
+   *  않는다 — 값·클립 포인터는 메모리(sessionStore/pendingClipsRef)에 그대로 살아 있어 persist만
+   *  다시 쏘면 된다. 성공하면 그때 비로소 ready로 전환한다. */
+  const retryFinalPersist = useCallback(async (): Promise<boolean> => {
+    const store = useSessionStore.getState();
+    if (!store.persistError || store.persistError.retrying) return false;
+    store.setPersistError({ retrying: true });
+    const durable = await persistSession();
+    logger.log({
+      type: 'session', extra: `stop_persist_retry:${durable ? 'ok' : 'write_failed'}`,
+      sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow,
+    });
+    if (!durable) {
+      useSessionStore.getState().setPersistError({ retrying: false });
+      return false;
+    }
+    useSessionStore.getState().setPersistError(null);
+    useSessionStore.getState().setPhase('ready');
+    logger.setSessionId(undefined);
+    return true;
+  }, [persistSession]);
 
   /** Pause STT value processing without stopping the controller.
    *  The controller stays active so the user can say '재시작' to resume.
@@ -2427,6 +2517,7 @@ export function useVoiceSession() {
   // 그 경로가 곧 touch다. extra를 `phase:<source>`로 확장(신규 이벤트 타입 무첨가, log-replay 호환).
   // 다음 분석이 "일시정지 횟수 + 어떤 방식으로 해제했는지"(민구 요청·Trace #4)를 정량화한다.
   const pause = useCallback(async (source: 'voice' | 'touch' = 'touch') => {
+    if (useSessionStore.getState().phase === 'stopping') return;
     // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중 일시정지 거부. paused 진입은 팝업 렌더를
     // PausedCard로 교체해(VoiceScreen 분기: paused가 알람보다 우선) 보류를 화면에서 지워버린다.
     if (isManualHoldBlocked('pause')) return;
@@ -2450,6 +2541,7 @@ export function useVoiceSession() {
   /** Resume from paused: re-announce current field. Controller is kept alive during pause. */
   const resume = useCallback(async (source: 'voice' | 'touch' = 'touch') => {
     const sess = useSessionStore.getState();
+    if (sess.phase === 'stopping') return;
     if (sess.phase !== 'paused') return;
     // v0.20.0 Phase 5 #3 — 해제 방식 동봉(voice='재시작' 음성, touch=마이크 버튼). 일시정지가 어떤
     // 경로로 풀렸는지를 정량화해 "분투→해제" 패턴(강남호 13/14 churn)을 다음 세션부터 분해한다.
@@ -2595,6 +2687,13 @@ export function useVoiceSession() {
   // (useAudioLevelVar)가 매 프레임 읽는다. recorder가 없거나(세션 전/일시정지) 프리롤 미가용이면 0.
   const getAudioLevel = useCallback(
     () => recorderRef.current?.getInputLevel() ?? 0,
+    [],
+  );
+
+  // v0.35.0 (Vance) — 시간영역 파형 getter(안정 참조). VoiceWaveform의 rAF가 out 버퍼에 실시간
+  //   샘플을 채운다. recorder 없음/analyser 미가용이면 false → 소비자가 레벨 기반 폴백.
+  const getTimeDomainData = useCallback(
+    (out: Uint8Array) => recorderRef.current?.getTimeDomainData(out) ?? false,
     [],
   );
 
@@ -2968,6 +3067,8 @@ export function useVoiceSession() {
   return {
     start,
     stop,
+    /** v0.35.0 R3-FIX-2 — 종료 저장 실패 배너의 [다시 저장] 핸들러(VoiceScreen). */
+    retryFinalPersist,
     restartFromCol,
     jumpToRow,
     gotoAdjacentRow,
@@ -2985,6 +3086,7 @@ export function useVoiceSession() {
     lastConfidenceRef,
     getActiveInputLabel,
     getAudioLevel,
+    getTimeDomainData,
     micLost,
     reconnectMic,
     prewarmMic,
