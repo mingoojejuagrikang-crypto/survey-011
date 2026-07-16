@@ -2,15 +2,11 @@ import { useState } from 'react';
 import { T } from '../../tokens';
 import { I } from '../icons';
 import { downloadBlob } from '../../lib/csv';
+import type { ExportResult } from '../../lib/useDataActions';
 import { Backdrop } from './Backdrop';
 
 // ─── export done modal (v0.13.0 R6) ──────────────────────────
-/** 내보내기 결과 — 완료 팝업이 보관해 클릭 시 공유/재다운로드에 재사용한다. */
-export interface ExportResult {
-  blob: Blob;
-  filename: string;
-  kind: 'csv' | 'zip';
-}
+// ExportResult 타입은 생산자인 useDataActions(lib)가 소유한다 — lib→component 역참조 방지.
 
 /** 내보내기 완료를 작은 줄 배너 대신 큰 중앙 팝업으로 안내(민구 시인성 요청). 클릭 동작:
  *  - '파일 열기/공유': Web Share API Level 2(navigator.share({files})). iOS 스탠드얼론 PWA에서

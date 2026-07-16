@@ -449,7 +449,7 @@
 - **예외(파일 상단 `eslint-disable max-lines`, 해소 시 주석 제거 + 이 목록에서 삭제):**
   1. `src/lib/useVoiceSession.ts` (~3,248) — Stage 3(음성 코어 재설계)에서 해소
   2. `src/screens/SettingsScreen.tsx` (~3,113) — Stage 2(컴포넌트 추출)에서 해소
-  3. `src/screens/DataScreen.tsx` (~2,420) — Stage 2(components/data 분리)에서 해소
+  3. ~~`src/screens/DataScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/data 15파일 + useDataActions 훅 분리, 2,420→315줄)
   4. `src/screens/VoiceScreen.tsx` (~1,341) — Stage 2(컴포넌트 추출)에서 해소
   5. `src/lib/audioRecorder.ts` (854) — 단일 책임 클래스, 분리 경계 검토 후 해소
   6. `src/lib/pastValues.ts` (573) — 과거값 인덱스 도메인, 분리 경계 검토 후 해소
