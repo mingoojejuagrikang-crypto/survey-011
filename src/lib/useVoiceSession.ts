@@ -2811,16 +2811,18 @@ export function useVoiceSession() {
     // 원래 결함이 그대로 남는다. hold면 아래에서 후보+태그를 단일 IDB put으로 저장한다.
     const violation = evaluateTrend(col, row, colId, value);
     const fireManualAlert = (v: TrendViolation, hold: boolean) => {
-      // 알람 페이로드 조립은 buildAnomalyAlert가 SSOT(v0.35.1 Stage 1-2) — 수동 경로 전용 접미사
-      // ',src=manual[,hold=1]'만 여기서 이어 붙인다(SOP-003 파서 계약 바이트 불변).
+      // 알람 페이로드 조립은 buildAnomalyAlert가 SSOT(v0.35.1) — 수동 경로 전용
+      // ',src=manual[,hold=1]' 접미사 조립까지 buildAnomalyAlert가 담당한다(SOP-003 바이트 계약,
+      // 특성화 테스트가 실제 조립 경로를 그대로 검증).
       const alertExtra = getAnomalyAlertData(row);
       const { logExtra, alert } = buildAnomalyAlert({
         col, v, colName: col.name, next: formatForTts(value), row,
         sampleKey: alertExtra.sampleKey, prevDate: alertExtra.prevDate,
+        manual: { hold },
       });
       logger.log({
         type: 'trend',
-        extra: `${logExtra},src=manual${hold ? ',hold=1' : ''}`,
+        extra: logExtra,
         sessionId: sessionIdRef.current, row, colId,
         colName: col.name, text: value, parsed: value, previousValue: String(v.prev),
       });

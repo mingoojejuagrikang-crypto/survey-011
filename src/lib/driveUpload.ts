@@ -87,8 +87,8 @@ const USER_LOG_SUBFOLDER = 'log';
 
 /** 사용자 Drive에서 `name` 폴더를 parent(미지정=루트) 아래에서 검색만 한다(생성 없음).
  *  중복이 있으면 createdTime asc로 가장 오래된 것을 선택해 일관성 유지. 미존재 시 null. */
-async function findFolder(name: string, parentId?: string): Promise<string | null> {
-  const headers = await authHeader();
+async function findFolder(name: string, parentId?: string, headersIn?: Record<string, string>): Promise<string | null> {
+  const headers = headersIn ?? (await authHeader());
   const safeName = escapeDriveQ(name);
   const parentClause = parentId ? `'${escapeDriveQ(parentId)}' in parents` : `'root' in parents`;
   const q = `${parentClause} and name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
@@ -103,10 +103,10 @@ async function findFolder(name: string, parentId?: string): Promise<string | nul
 }
 
 /** 사용자 Drive에서 `name` 폴더를 parent(미지정=루트) 아래에서 찾거나 생성해 ID 반환. */
-async function ensureFolder(name: string, parentId?: string): Promise<string> {
-  const found = await findFolder(name, parentId);
+async function ensureFolder(name: string, parentId?: string, headersIn?: Record<string, string>): Promise<string> {
+  const found = await findFolder(name, parentId, headersIn);
   if (found) return found;
-  const headers = await authHeader();
+  const headers = headersIn ?? (await authHeader());
   const createRes = await fetch(FILES_API, {
     method: 'POST',
     headers: { ...headers, 'Content-Type': 'application/json' },
@@ -127,20 +127,24 @@ async function ensureFolder(name: string, parentId?: string): Promise<string> {
 /** 사용자 Drive `survey-011/log/` 폴더 ID (settingsStore 캐시 우선).
  *  v0.35.1 — 캐시는 계정 결합: 같은 기기에서 계정을 바꾸면 다른 사용자 Drive의 폴더 ID가
  *  재사용되지 않는다(불일치 = 재검색). 이메일 미확인 상태면 무캐시로 진행. */
-async function ensureUserLogFolder(): Promise<string> {
-  const email = getCurrentEmail();
+async function ensureUserLogFolder(email: string | null, headers: Record<string, string>): Promise<string> {
   const cached = cachedFolderIdFor(useSettingsStore.getState().userLogFolderCache, email);
   if (cached) return cached;
-  const appId = await ensureFolder(APP_FOLDER_NAME);
-  const logId = await ensureFolder(USER_LOG_SUBFOLDER, appId);
+  const appId = await ensureFolder(APP_FOLDER_NAME, undefined, headers);
+  const logId = await ensureFolder(USER_LOG_SUBFOLDER, appId, headers);
   if (email) useSettingsStore.getState().set({ userLogFolderCache: { email, id: logId } });
   return logId;
 }
 
-/** 사용자 본인 드라이브 `survey-011/log/` 폴더에 업로드 (v0.4.5 Q1b: 루트 대신 전용 폴더). */
+/** 사용자 본인 드라이브 `survey-011/log/` 폴더에 업로드 (v0.4.5 Q1b: 루트 대신 전용 폴더).
+ *  v0.35.1(리뷰 라운드3 Codex High): 이메일·토큰을 작업 시작 시 1회 스냅샷해 폴더 탐색·생성·zip
+ *  업로드·캐시 기록 전 과정에 주입 — 응답 대기 중 A→B 재로그인이 끼어도 폴더는 B에, 캐시는
+ *  {A, B폴더}로 갈라지는 혼입이 생기지 않는다(admin 레그와 동일 방어). */
 export async function uploadLogToUserDrive(zipBlob: Blob, filename: string): Promise<string> {
-  const folderId = await ensureUserLogFolder();
-  return uploadZip(zipBlob, filename, folderId);
+  const email = getCurrentEmail();
+  const headers = await authHeader();
+  const folderId = await ensureUserLogFolder(email, headers);
+  return uploadZip(zipBlob, filename, folderId, headers);
 }
 
 // ─── v0.5.0 W8: 로그 zip 기반 세션 복구 — Drive 읽기 경로 ──────────────────────
@@ -289,9 +293,9 @@ const USER_FEEDBACK_SUBFOLDER = 'feedback';
 /** 사용자 Drive `survey-011/feedback/` 폴더 ID. 로그 폴더(userLogFolderCache)와 달리 별도
  *  settings 캐시를 두지 않는다 — 개선요청은 빈도가 낮아 검색 2회 비용이 무해하고, persist 필드
  *  추가(마이그레이션 비용)를 피한다. */
-async function ensureUserFeedbackFolder(): Promise<string> {
-  const appId = await ensureFolder(APP_FOLDER_NAME);
-  return ensureFolder(USER_FEEDBACK_SUBFOLDER, appId);
+async function ensureUserFeedbackFolder(headers: Record<string, string>): Promise<string> {
+  const appId = await ensureFolder(APP_FOLDER_NAME, undefined, headers);
+  return ensureFolder(USER_FEEDBACK_SUBFOLDER, appId, headers);
 }
 
 /** 관리자 feedback 폴더 내 {userEmail}/ 하위 폴더를 찾거나 생성한다.
@@ -309,10 +313,12 @@ async function ensureFeedbackSubFolder(
   });
 }
 
-/** 사용자 Drive `survey-011/feedback/`에 업로드. */
+/** 사용자 Drive `survey-011/feedback/`에 업로드. TOCTOU — 로그 사용자 레그와 동일하게 토큰을
+ *  작업 시작 시 1회 스냅샷해 전 과정에 주입. */
 export async function uploadFeedbackToUserDrive(zipBlob: Blob, filename: string): Promise<string> {
-  const folderId = await ensureUserFeedbackFolder();
-  return uploadZip(zipBlob, filename, folderId);
+  const headers = await authHeader();
+  const folderId = await ensureUserFeedbackFolder(headers);
+  return uploadZip(zipBlob, filename, folderId, headers);
 }
 
 /** 관리자 feedback 폴더의 {검증된 이메일}/ 하위 폴더에 업로드. FEEDBACK_FOLDER_ID 미설정이면 throw

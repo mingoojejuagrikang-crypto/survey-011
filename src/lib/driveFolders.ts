@@ -23,10 +23,17 @@ export const FILES_API = 'https://www.googleapis.com/drive/v3/files';
  *  타임아웃으로 반드시 settle시켜 Map이 정리되게 한다(30s — 현장 LTE 최악 왕복 대비 여유). */
 const ENSURE_FETCH_TIMEOUT_MS = 30_000;
 
-/** AbortSignal.timeout 폴백 — 미지원 브라우저·테스트 환경에선 signal 없이 진행(종전 동작). */
+/** 타임아웃 signal — AbortSignal.timeout 미지원 환경은 AbortController+setTimeout으로 폴백해
+ *  같은 계약(반드시 settle → inFlight 정리)을 유지한다(리뷰 라운드3 Codex Medium). 폴백 타이머는
+ *  30s 일회성 no-op이라 해제 훅 없이 무해. 둘 다 불가한 환경만 signal 없이 진행(종전 동작). */
 function timeoutSignal(): AbortSignal | undefined {
   try {
     return AbortSignal.timeout(ENSURE_FETCH_TIMEOUT_MS);
+  } catch { /* 폴백으로 */ }
+  try {
+    const c = new AbortController();
+    setTimeout(() => c.abort(new Error('drive folder ensure timeout')), ENSURE_FETCH_TIMEOUT_MS);
+    return c.signal;
   } catch {
     return undefined;
   }

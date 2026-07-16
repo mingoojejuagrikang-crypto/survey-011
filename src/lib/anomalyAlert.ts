@@ -61,6 +61,10 @@ export function buildAnomalyAlert(args: {
   row: number;
   sampleKey?: string;
   prevDate?: string;
+  /** 수동 커밋(commitManualValue) 경로 — logExtra에 ',src=manual[,hold=1]' 접미사를 붙인다.
+   *  접미사 조립도 이 함수가 SSOT(리뷰 라운드3 Codex Medium — 호출부 재조립은 테스트가 실제
+   *  계약을 검증하지 못하게 한다). 미지정 = 음성 경로(접미사 없음). */
+  manual?: { hold: boolean };
 }): {
   /** 알람 TTS/팝업 라벨 문구(글자까지 동일 계약) — 음성 경로가 say()에 쓴다. */
   alertText: string;
@@ -81,11 +85,12 @@ export function buildAnomalyAlert(args: {
     threshold?: number;
   };
 } {
-  const { col, v, colName, next, row, sampleKey, prevDate } = args;
+  const { col, v, colName, next, row, sampleKey, prevDate, manual } = args;
   const { alertKind, changeText, alertText, threshold } = buildAnomalyDisplay(col, v);
+  const manualSuffix = manual ? `,src=manual${manual.hold ? ',hold=1' : ''}` : '';
   return {
     alertText,
-    logExtra: `trend_alert_fired:trigger=${v.trigger},kind=${alertKind},dir=${v.direction},change=${changeText || '?'},text=${alertText}`,
+    logExtra: `trend_alert_fired:trigger=${v.trigger},kind=${alertKind},dir=${v.direction},change=${changeText || '?'},text=${alertText}${manualSuffix}`,
     alert: {
       colName,
       prev: String(v.prev),
