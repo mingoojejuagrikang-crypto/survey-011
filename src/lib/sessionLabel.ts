@@ -81,3 +81,24 @@ export function ensureUniqueSessionLabel(base: string, existingLabels: Iterable<
     if (!taken.has(candidate)) return candidate;
   }
 }
+
+/** 단일 컬럼에서 세션명 접미사로 쓸 값을 뽑는다(fixed 값 또는 단일 선택 옵션). 없으면 ''.
+ *  명시 선택(pickedCol) 경로 전용 — 사용자가 세션명 컬럼을 직접 고른 경우 그 컬럼의 값을 그대로 쓴다. */
+function colSessionValue(col: Column): string {
+  if (col.auto.kind === 'fixed') return col.auto.value;
+  if (col.auto.kind === 'options' && col.auto.selected.length === 1) return col.auto.selected[0];
+  return '';
+}
+
+/**
+ * 세션명 접미사로 쓸 값을 고른다.
+ *  - 명시 선택(pickedCol): 그 컬럼 하나의 값(사용자 수동 선택 보존).
+ *  - 자동(pickedCol 없음): **세션 상수**(농가명/라벨/처리 등 행마다 안 바뀌는 유효 자동입력값)를 전부
+ *    공백 join한다. v0.22.0 — 판정을 `sessionLabel.sessionConstantValue`(SSOT)로 통일했다. 이로써
+ *    기존에 누락되던 **단일선택 options 컬럼(라벨=[A] 등)**까지 포함된다(`2026-06-25 강남호 A`).
+ *    이전 구현은 `auto.kind==='fixed'`만 봐 단일선택 options를 놓쳤다(P2 근인).
+ */
+export function pickSessionLabelValue(columns: Column[], pickedCol: Column | null | undefined): string {
+  if (pickedCol) return colSessionValue(pickedCol);
+  return columns.map(sessionConstantValue).filter(Boolean).join(' ');
+}
