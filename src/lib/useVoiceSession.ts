@@ -95,6 +95,16 @@ function fractionWholeOf(a: AwaitingField): string | undefined {
     : undefined;
 }
 
+/** trendConfirm → modify 강등(알림 해제, 수정 의미론 유지 — 종전 `trendConfirm=false` 변이와 동등).
+ *  **fractionWhole을 반드시 보존한다** — 소수부 재질문 중 강등되면 정수부 문맥('111')이 유실돼
+ *  다음 소수부 발화가 전체값으로 오커밋되던 회귀(v0.35.3 리뷰 r1, 3모델 공통 Critical/High). */
+function demoteTrendConfirm(a: AwaitingBase & { kind: 'trendConfirm'; previousValue: string; fractionWhole?: string }): AwaitingField {
+  return {
+    kind: 'modify', row: a.row, colId: a.colId, name: a.name,
+    previousValue: a.previousValue, fractionWhole: a.fractionWhole,
+  };
+}
+
 /** v0.9.0 빠른 인식(조기확정): interim 숫자가 이 시간(ms) 동안 같은 값으로 안정되면 final을
  *  기다리지 않고 커밋한다. 짧을수록 빠르지만 미완성 숫자(소수점 추가 전) 절단 위험이 커진다. */
 const EARLY_COMMIT_STABLE_MS = 400;
@@ -1489,10 +1499,7 @@ export function useVoiceSession() {
         row: awaiting.row, colId: awaiting.colId,
       });
       // 알림만 해제 — 수정 의미론(종전 isModify 겸장)으로 강등 후 아래 정상 명령 dispatch로 폴스루.
-      awaiting = {
-        kind: 'modify', row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
-        previousValue: awaiting.previousValue,
-      };
+      awaiting = demoteTrendConfirm(awaiting);
       awaitingFieldRef.current = awaiting;
     }
     // action 'value'의 trendCorrection(새 값 폴스루)은 값 경로가 처리 — 커밋 지점에서
@@ -2923,11 +2930,8 @@ export function useVoiceSession() {
       type: 'trend', extra: 'trend_alert_dismissed:modify',
       row: awaiting.row, colId: awaiting.colId,
     });
-    // 음성 경로의 trendConfirm 해제('modify' 강등 후 재질문)와 동일 상태.
-    awaitingFieldRef.current = {
-      kind: 'modify', row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
-      previousValue: awaiting.previousValue,
-    };
+    // 음성 경로의 trendConfirm 해제('modify' 강등 후 재질문)와 동일 상태(fractionWhole 보존).
+    awaitingFieldRef.current = demoteTrendConfirm(awaiting);
     armClipForCell(awaiting.row, awaiting.colId);
     await say(`${awaiting.name} 다시 말씀해 주세요.`);
   }, [armClipForCell, say]);
