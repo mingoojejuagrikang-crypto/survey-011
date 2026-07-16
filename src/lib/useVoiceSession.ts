@@ -194,6 +194,12 @@ export function useVoiceSession() {
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
+  /** v0.35.3 Stage 3-4 — 세션 컨텍스트 로거. 이 훅의 모든 계측은 현재 세션 id를 동봉하므로
+   *  sessionId 고정 인자를 여기서 1회 주입한다. 나머지 필드(extra 문자열 포함)는 호출부 그대로
+   *  전개 — SOP-003 파서 계약 불변. */
+  const logCell = (entry: Omit<Parameters<typeof logger.log>[0], 'sessionId'>): void => {
+    logCell({ ...entry } as Parameters<typeof logger.log>[0]);
+  };
   const say = useCallback(async (text: string, interrupt = true) => {
     if (!text) return;
     const ttsStart = Date.now();
@@ -203,12 +209,11 @@ export function useVoiceSession() {
       rate: getTtsRate(),
       onStart: (d) => { startDelayMs = d; },
     });
-    logger.log({
+    logCell({
       type: 'tts',
       ttsText: text,
       durationMs: Date.now() - ttsStart,
       startDelayMs,
-      sessionId: sessionIdRef.current,
       row: useSessionStore.getState().activeRow,
     });
   }, []);
@@ -227,10 +232,9 @@ export function useVoiceSession() {
    *  `reason`은 무엇이 막혔는지 다음 로그 분석에서 보이게 한다(막힌 시도가 잦으면 UX 재고 신호). */
   const isManualHoldBlocked = (reason: string): boolean => {
     if (!useSessionStore.getState().anomalyAlert?.manualHold) return false;
-    logger.log({
+    logCell({
       type: 'command',
       extra: `blocked:manual_hold:${reason}`,
-      sessionId: sessionIdRef.current,
       row: useSessionStore.getState().activeRow,
     });
     return true;
@@ -258,12 +262,12 @@ export function useVoiceSession() {
         const blob = await loadAudioClip(bareKey);
         if (!blob) return; // nothing recorded yet (e.g. direct-modify before any clip) — skip
         await saveAudioClip(archiveKey, blob);
-        logger.log({
+        logCell({
           type: 'clip', extra: 'clip_preserved', kind: 'value', attempt, clipKey: archiveKey,
-          sessionId: sessionIdRef.current, row, colId,
+          row, colId,
         });
       } catch (e) {
-        logger.log({ type: 'error', extra: `clip_preserve_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row, colId });
+        logCell({ type: 'error', extra: `clip_preserve_failed:${String((e as Error)?.message ?? e)}`, row, colId });
       }
     })();
     return archiveKey;
@@ -301,20 +305,20 @@ export function useVoiceSession() {
         try {
           const { blob, raw } = await stopPromise;
           if (!blob || blob.size <= EMPTY_CLIP_BYTES) {
-            logger.log({ type: 'clip', extra: `clip_cmd_empty:${blob ? blob.size : 'null'}`, kind: 'command', sessionId: sessionIdRef.current, row: targetRow, colId: targetColId });
+            logCell({ type: 'clip', extra: `clip_cmd_empty:${blob ? blob.size : 'null'}`, kind: 'command', row: targetRow, colId: targetColId });
             return;
           }
           await saveAudioClip(cmdKey, blob);
-          logger.log({ type: 'clip', extra: 'clip_preserved', kind: 'command', attempt: idx, clipKey: cmdKey, sessionId: sessionIdRef.current, row: targetRow, colId: targetColId });
+          logCell({ type: 'clip', extra: 'clip_preserved', kind: 'command', attempt: idx, clipKey: cmdKey, row: targetRow, colId: targetColId });
           // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
           // deleteSession의 prefix cascade와 exportLog의 `key.split(':')[0]` 세션 필터가 모두
           // `sessionId:` prefix 기준이라 추가 배선 없이 zip clips/ 포함·삭제가 따라온다.
           if (raw) {
             await saveAudioClip(`${cmdKey}:raw`, raw);
-            logger.log({ type: 'clip', extra: `clip_raw_saved:${raw.size}`, kind: 'command', clipKey: `${cmdKey}:raw`, sessionId: sessionIdRef.current, row: targetRow, colId: targetColId });
+            logCell({ type: 'clip', extra: `clip_raw_saved:${raw.size}`, kind: 'command', clipKey: `${cmdKey}:raw`, row: targetRow, colId: targetColId });
           }
         } catch (e) {
-          logger.log({ type: 'error', extra: `clip_cmd_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row: targetRow, colId: targetColId });
+          logCell({ type: 'error', extra: `clip_cmd_save_failed:${String((e as Error)?.message ?? e)}`, row: targetRow, colId: targetColId });
         }
       })();
       pendingClipSavesRef.current.add(savePromise);
@@ -662,10 +666,9 @@ export function useVoiceSession() {
       ? `마지막 행까지 입력했습니다. ${formatRowList(empties)}이 비어 있습니다. ${tail}`
       : `마지막 행까지 입력했습니다. ${tail}`;
     sess.setLastTts(msg);
-    logger.log({
+    logCell({
       type: 'session',
       extra: empties.length > 0 ? `end_reached_waiting:empty=${empties.join(',')}` : 'end_reached_waiting',
-      sessionId: sessionIdRef.current,
     });
     await say(msg);
   }, [say]);
@@ -696,9 +699,9 @@ export function useVoiceSession() {
       : null;
     // v0.34.0 A3 계측(D11c) — 검토 대기 진입은 이전까지 무로깅이라 실기기 분석에서 착지 컬럼을
     // 재구성할 수 없었다. 기존 command 타입 재사용(신규 LogEntry type 없음 — log-replay 호환).
-    logger.log({
+    logCell({
       type: 'command', parsed: 'review_wait', extra: `review_wait:row=${row},col=first`,
-      sessionId: sessionIdRef.current, row, ...(firstCol ? { colId: firstCol.id } : {}),
+      row, ...(firstCol ? { colId: firstCol.id } : {}),
     });
     const msg = `${row}행 완료됨. ${parts.join(', ')}.`;
     sess.setLastTts(msg);
@@ -877,9 +880,8 @@ export function useVoiceSession() {
         // #3 error-vs-intent: log the direct-modify commit with previousValue → parsed.
         // extra:'direct_modify' marks the inline-value path (no re-record), distinct from the
         // cascade path's value event which carries previousValue via awaiting.previousValue.
-        logger.log({
+        logCell({
           type: 'value',
-          sessionId: sessionIdRef.current,
           row: targetRow,
           colId: target.id,
           colName: target.name,
@@ -977,7 +979,7 @@ export function useVoiceSession() {
     const idx = vc.findIndex((c) => c.id === colId);
     if (idx < 0) return;
     const row = sess.activeRow;
-    logger.log({ type: 'command', parsed: 'restart', extra: 'touch', sessionId: sessionIdRef.current, row, colId });
+    logCell({ type: 'command', parsed: 'restart', extra: 'touch', row, colId });
     // Clear this and subsequent voice values in the current row
     for (let i = idx; i < vc.length; i++) {
       sess.setRowValue(row, vc[i].id, '');
@@ -1013,7 +1015,7 @@ export function useVoiceSession() {
       // 하드코딩되던 것을 source 파라미터화(pause/resume의 phase:<source> 패턴). extra 형태는
       // `<source>:<from>-><to>`로 유지해 기존 `touch:` 파서와 모양 호환.
       const source = options?.source ?? 'touch';
-      logger.log({ type: 'command', parsed: 'jump', extra: `${source}:${cur}->${targetRow}`, sessionId: sessionIdRef.current, row: targetRow });
+      logCell({ type: 'command', parsed: 'jump', extra: `${source}:${cur}->${targetRow}`, row: targetRow });
       if (options?.setReturn ?? true) sess.setReturn(cur, sess.activeColIdx);
       sess.setActiveRow(targetRow);
       cancelTts();
@@ -1096,16 +1098,16 @@ export function useVoiceSession() {
     const row = sess.activeRow;
     if (!isRowVoiceComplete(row, vc)) {
       sess.markRowSkipped(row);
-      logger.log({
+      logCell({
         type: 'command', parsed: 'nextRow', extra: rowMarked('row_skipped', row, source),
-        sessionId: sessionIdRef.current, row,
+        row,
       });
       void persistSession(); // skip 즉시 영속화 — 데이터탭에 빈 행 placeholder가 바로 보이도록
     } else {
       // v0.33.0 B-3 — 완료 행에서의 '다음' 이동도 기록(이전엔 skip 시에만 로깅 → 이동 공백).
-      logger.log({
+      logCell({
         type: 'command', parsed: 'nextRow', extra: rowMarked('row_complete', row, source),
-        sessionId: sessionIdRef.current, row,
+        row,
       });
     }
     const next = findNextIncompleteRow(row + 1, total, vc);
@@ -1123,7 +1125,7 @@ export function useVoiceSession() {
   const logTrendSkip = useCallback((cause: string, row: number, colId: string) => {
     if (trendSkipLoggedRef.current.has(cause)) return;
     trendSkipLoggedRef.current.add(cause);
-    logger.log({ type: 'trend', extra: `trend_skip:${cause}`, sessionId: sessionIdRef.current, row, colId });
+    logCell({ type: 'trend', extra: `trend_skip:${cause}`, row, colId });
   }, []);
 
   /** 방금 커밋된 값의 이상치 알람 검사(v0.8.0). 전역 마스터 토글 제거 — 컬럼에 방향 규칙
@@ -1153,9 +1155,9 @@ export function useVoiceSession() {
           trendSkipLoggedRef.current.add('used_stale_index');
           const builtAt = getFallbackBuiltAt();
           const ageH = builtAt != null ? Math.round((Date.now() - builtAt) / 3_600_000) : -1;
-          logger.log({
+          logCell({
             type: 'trend', extra: `trend_used_stale_index:age_h=${ageH}`,
-            sessionId: sessionIdRef.current, row, colId,
+            row, colId,
           });
         }
         ensurePastIndex(); // 폴백으로 평가는 계속하되, 백그라운드에선 신선 인덱스를 계속 시도(자가 제한).
@@ -1215,9 +1217,8 @@ export function useVoiceSession() {
     if (rec.isStreamLost() && !micLostLatchedRef.current) {
       micLostLatchedRef.current = true;
       setMicLost(true);
-      logger.log({
+      logCell({
         type: 'clip', extra: `mic_lost:${reason}`,
-        sessionId: sessionIdRef.current,
       });
     }
     // 스트림이 살아있으면 자동 복구 금지(no-op) — 다음 클립이 자가 치유. recoverStream은 오직
@@ -1228,18 +1229,18 @@ export function useVoiceSession() {
    *  컨텍스트라 여기서만 스트림을 재획득한다. 성공 시 micLost를 false로 클리어하고 래치를 푼다. */
   const reconnectMic = useCallback(() => {
     const rec = recorderRef.current;
-    logger.log({ type: 'clip', extra: 'mic_reconnect_attempt', sessionId: sessionIdRef.current });
+    logCell({ type: 'clip', extra: 'mic_reconnect_attempt' });
     if (!rec) {
-      logger.log({ type: 'clip', extra: 'mic_reconnect_no_recorder', sessionId: sessionIdRef.current });
+      logCell({ type: 'clip', extra: 'mic_reconnect_no_recorder' });
       return;
     }
     void rec.recoverStream('user_gesture').then((ok) => {
       if (ok) {
         micLostLatchedRef.current = false;
         setMicLost(false);
-        logger.log({ type: 'clip', extra: 'mic_reconnect_ok', sessionId: sessionIdRef.current });
+        logCell({ type: 'clip', extra: 'mic_reconnect_ok' });
       } else {
-        logger.log({ type: 'clip', extra: 'mic_reconnect_failed', sessionId: sessionIdRef.current });
+        logCell({ type: 'clip', extra: 'mic_reconnect_failed' });
       }
     });
   }, []);
@@ -1259,11 +1260,10 @@ export function useVoiceSession() {
     const prev = uiSuspendRef.current.reason;
     uiSuspendRef.current = { active: false, hadController: false, reason: null };
     // 기존 ui_resume/ui_suspend와 같은 command 레인 — 신규 이벤트 타입 무첨가(log-replay 호환).
-    logger.log({
+    logCell({
       type: 'command',
       parsed: 'ui_suspend_cleared',
       extra: `${reason}:was=${prev ?? 'unknown'}`,
-      sessionId: sessionIdRef.current,
       row: useSessionStore.getState().activeRow,
     });
   }, []);
@@ -1272,11 +1272,10 @@ export function useVoiceSession() {
     if (uiSuspendRef.current.active) return;
     const hadController = !!ctrlRef.current;
     uiSuspendRef.current = { active: true, hadController, reason };
-    logger.log({
+    logCell({
       type: 'command',
       parsed: 'ui_suspend',
       extra: reason,
-      sessionId: sessionIdRef.current,
       row: useSessionStore.getState().activeRow,
     });
     earlyCommitStableRef.current = null;
@@ -1340,9 +1339,9 @@ export function useVoiceSession() {
         await advance();
         return;
       }
-      logger.log({
+      logCell({
         type: 'command', parsed: 'keep', extra: 'keep_no_value',
-        sessionId: sessionIdRef.current, row: a.row, colId: a.colId,
+        row: a.row, colId: a.colId,
       });
       const msg = `유지할 값이 없습니다. ${a.name} 말씀해 주세요.`;
       useSessionStore.getState().setLastTts(msg);
@@ -1442,12 +1441,11 @@ export function useVoiceSession() {
     // 넘어야 한다. confidence 0은 "미보고" 센티널로 통과(엔진별 미보고 대응). paused-resume은 위에서
     // 이미 처리됐고 의도적으로 비게이트(일시정지 탈출의 유일한 경로).
     if (action.act === 'rejectLowConfidence' && cmd) {
-      logger.log({
+      logCell({
         type: 'command',
         text,
         parsed: cmd,
         confidence,
-        sessionId: sessionIdRef.current,
         row: awaiting.row,
         colId: awaiting.colId,
         extra: 'rejected_low_confidence',
@@ -1462,12 +1460,11 @@ export function useVoiceSession() {
     // Commands interrupt TTS immediately — bump epoch to invalidate in-flight advance/skip
     if (cmd) {
       epochRef.current++;
-      logger.log({
+      logCell({
         type: 'command',
         text,
         parsed: cmd,
         confidence,
-        sessionId: sessionIdRef.current,
         row: awaiting.row,
         colId: awaiting.colId,
         extra: ctrlRef.current?.isTtsMuted() ? 'tts_was_speaking' : 'tts_silent',
@@ -1481,9 +1478,9 @@ export function useVoiceSession() {
     if (action.act === 'trendResolve' && cmd && awaiting.kind === 'trendConfirm') {
       cancelTts();
       useSessionStore.getState().setAnomalyAlert(null); // 팝업 해제
-      logger.log({
+      logCell({
         type: 'trend', extra: 'trend_alert_confirmed', parsed: cmd,
-        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        row: awaiting.row, colId: awaiting.colId,
         ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
       });
       awaitingFieldRef.current = null;
@@ -1492,9 +1489,9 @@ export function useVoiceSession() {
     }
     if (action.act === 'dispatch' && action.trendDemoted && awaiting.kind === 'trendConfirm') {
       useSessionStore.getState().setAnomalyAlert(null); // 타 명령으로 해제 → 팝업 닫음
-      logger.log({
+      logCell({
         type: 'trend', extra: `trend_alert_dismissed:${cmd}`,
-        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        row: awaiting.row, colId: awaiting.colId,
       });
       // 알림만 해제 — 수정 의미론(종전 isModify 겸장)으로 강등 후 아래 정상 명령 dispatch로 폴스루.
       awaiting = {
@@ -1548,7 +1545,7 @@ export function useVoiceSession() {
       const muted = ctrlRef.current?.isTtsMuted() ?? false;
       if (muted) {
         // 이어폰 barge-in: 재생 중 들어온 값을 폐기하지 않고 TTS를 끊고 그대로 처리.
-        logger.log({ type: 'stt_barge_in', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        logCell({ type: 'stt_barge_in', text, confidence, row: awaiting.row, colId: awaiting.colId });
         cancelTts();
         epochRef.current++; // 진행 중인 advance/안내 체인 무효화
       }
@@ -1563,14 +1560,13 @@ export function useVoiceSession() {
     // A8 계측: final이 안정화 후보보다 먼저 도착해 조기확정이 무산된 케이스. 후보가 무장돼 있었을
     // 때만 기록(매 final 폭주 방지). early-commit 자체 경로면 이미 ref가 비어 있어 여기선 안 찍힌다.
     if (earlyCommitStableRef.current) {
-      logger.log({ type: 'stt_early_commit', sessionId: sessionIdRef.current,
+      logCell({ type: 'stt_early_commit',
         row: awaiting.row, colId: awaiting.colId,
         extra: `attempt:reset:final_first:${earlyCommitStableRef.current.value}` });
       earlyCommitStableRef.current = null;
     }
-    logger.log({
+    logCell({
       type: 'stt',
-      sessionId: sessionIdRef.current,
       row: awaiting.row,
       colId: awaiting.colId,
       colName: awaiting.name,
@@ -1603,7 +1599,7 @@ export function useVoiceSession() {
     if (currentCol && currentCol.type !== 'text' && currentCol.type !== 'options') {
       const colNames = allColumns.map((c) => c.name.trim());
       if (colNames.includes(text.trim())) {
-        logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        logCell({ type: 'stt_rejected_col_name', text, row: awaiting.row, colId: awaiting.colId });
         useSessionStore.getState().setRecognized('');
         useSessionStore.getState().setReaskReason('parse_failed');
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
@@ -1611,7 +1607,7 @@ export function useVoiceSession() {
       }
       const KNOWN_NOISE = /^(변경|성경|광경|구정|혜정|당장|경정)$/;
       if (KNOWN_NOISE.test(text.trim())) {
-        logger.log({ type: 'stt_rejected_col_name', text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, extra: 'known_noise' });
+        logCell({ type: 'stt_rejected_col_name', text, row: awaiting.row, colId: awaiting.colId, extra: 'known_noise' });
         recorderRef.current?.startClip();
         useSessionStore.getState().setRecognized('');
         useSessionStore.getState().setReaskReason('parse_failed');
@@ -1625,7 +1621,7 @@ export function useVoiceSession() {
       //   문맥(fractionWhole)에선 "네"가 .4로 합성되는 것을 막되, awaiting을 건드리지 않고 return해
       //   문맥·연속 클립을 보존한다([CLIP-DECIMAL-FRAG-1] — startClip 금지, 타깃 재질문 반복).
       if (isBareResponseWord(text)) {
-        logger.log({ type: 'stt_rejected_ambiguous_syllable', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, extra: 'response_word' });
+        logCell({ type: 'stt_rejected_ambiguous_syllable', text, confidence, row: awaiting.row, colId: awaiting.colId, extra: 'response_word' });
         useSessionStore.getState().setRecognized('');
         useSessionStore.getState().setReaskReason('parse_failed');
         const respFracWhole = fractionWholeOf(awaiting);
@@ -1664,7 +1660,7 @@ export function useVoiceSession() {
     // (정수부 컨텍스트가 이미 있어, 아래 fractionWhole 분기가 `111.5`로 합성한다.)
     if (currentCol && (currentCol.type === 'int' || currentCol.type === 'float') && fractionWholeOf(awaiting) == null) {
       if (alts.length <= 1 && isAmbiguousSingleSyllable(text)) {
-        logger.log({ type: 'stt_rejected_ambiguous_syllable', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        logCell({ type: 'stt_rejected_ambiguous_syllable', text, confidence, row: awaiting.row, colId: awaiting.colId });
         recorderRef.current?.startClip();
         useSessionStore.getState().setRecognized('');
         useSessionStore.getState().setReaskReason('parse_failed');
@@ -1680,9 +1676,9 @@ export function useVoiceSession() {
       // v0.25.0 F1 — 다이얼 값(tolerance)과 반전된 실제 임계(minConf)를 둘 다 싣는다. 반전 이후엔
       // `confidence < minConf` 불변식이 이벤트 자체로 읽혀야 하고(예 conf 0.65 < minConf 0.70), 다이얼
       // 값만 두면 "0.65인데 tolerance 0.60에서 거부"처럼 모순으로 보인다(Trace가 반전식을 몰라도 명료).
-      logger.log({
+      logCell({
         type: 'stt_rejected_low_confidence', text, confidence,
-        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        row: awaiting.row, colId: awaiting.colId,
         colName: awaiting.name, extra: `tolerance:${recognitionTolerance},minConf:${minConfidence}`,
       });
       recorderRef.current?.startClip(); // restart clip
@@ -1709,7 +1705,7 @@ export function useVoiceSession() {
         if (frac !== null && /^[0-9]$/.test(frac)) {
           parsed = parseValueForCol(col, `${fractionWhole}.${frac}`);
           if (parsed !== null) {
-            logger.log({ type: 'stt', extra: 'decimal_fraction_recovered', text: `${fractionWhole}.${frac}`, originalText: text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+            logCell({ type: 'stt', extra: 'decimal_fraction_recovered', text: `${fractionWhole}.${frac}`, originalText: text, row: awaiting.row, colId: awaiting.colId });
           }
         }
       }
@@ -1748,8 +1744,8 @@ export function useVoiceSession() {
             const composed = col ? parseValueForCol(col, `${fractionWhole}.${altFrac}`) : null;
             if (composed !== null) {
               parsed = composed;
-              logger.log({ type: 'stt_alt_used', altIdx: ai, text: alt, originalText: text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, extra: `frac_ctx:${fractionWhole}` });
-              logger.log({ type: 'stt', extra: 'decimal_fraction_recovered', text: `${fractionWhole}.${altFrac}`, originalText: alt, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+              logCell({ type: 'stt_alt_used', altIdx: ai, text: alt, originalText: text, row: awaiting.row, colId: awaiting.colId, extra: `frac_ctx:${fractionWhole}` });
+              logCell({ type: 'stt', extra: 'decimal_fraction_recovered', text: `${fractionWhole}.${altFrac}`, originalText: alt, row: awaiting.row, colId: awaiting.colId });
               break;
             }
           }
@@ -1765,7 +1761,7 @@ export function useVoiceSession() {
           // (O3 방어 2선) 정수로 파싱된 alt도 동일 사유로 거부 — "266 점" 류 alt가 정수로 환원되는 경우.
           if (parseFailReason === 'decimal_fraction_lost' && !altParsed.includes('.')) continue;
           parsed = altParsed;
-          logger.log({ type: 'stt_alt_used', altIdx: ai, text: alt, originalText: text, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+          logCell({ type: 'stt_alt_used', altIdx: ai, text: alt, originalText: text, row: awaiting.row, colId: awaiting.colId });
           break;
         }
       }
@@ -1775,10 +1771,10 @@ export function useVoiceSession() {
       // (colName)과 직전 컨텍스트(소수부 재질문 중이면 정수부 fractionWhole)를 더해 "주로 실패하는
       // 숫자/항목"을 다음 세션부터 정량화한다. (런타임에 '기대값'은 알 수 없어 추가하지 않는다 —
       // 실세션은 정답이 없는 자유 측정이므로 transcript+context로 패턴을 집계하는 것이 정직하다.)
-      logger.log({
+      logCell({
         type: 'stt_parse_failed', text, altsCount: alts.length,
         extra: parseFailReason ?? undefined,
-        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        row: awaiting.row, colId: awaiting.colId,
         colName: awaiting.name,
         ...(fractionWhole != null ? { originalText: `frac_ctx:${fractionWhole}` } : {}),
       });
@@ -1798,7 +1794,7 @@ export function useVoiceSession() {
         // 사이 무음째 그대로 담아 전체값으로 재생/전사된다(사람 청취 보존). 별도 cross-restart webm
         // concat이 없어 iOS decodeAudioData(webm/opus) 위험(CLIP-2 ⚠️주시)을 구조적으로 피한다.
         // `:raw`도 재시작이 없어 1회만 보존됨.
-        logger.log({ type: 'clip', extra: 'clip_decimal_kept', sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        logCell({ type: 'clip', extra: 'clip_decimal_kept', row: awaiting.row, colId: awaiting.colId });
         awaitingFieldRef.current = { ...awaiting, fractionWhole: parseFailWhole };
         await say(`${parseFailWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
       } else if (fractionWhole != null) {
@@ -1806,7 +1802,7 @@ export function useVoiceSession() {
         // 해석되지 않으면 문맥(fractionWhole)을 버리지 않고 같은 타깃 재질문을 반복한다. 이전엔
         // 문맥이 원샷 해제돼 다음 발화가 전체값으로 처리됐다(조각 "1"이 값으로 설 위험).
         // 클립도 decimal_fraction_lost 분기와 동일하게 재시작하지 않는다(원본+조각 연속 보존).
-        logger.log({ type: 'clip', extra: 'clip_decimal_kept', sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
+        logCell({ type: 'clip', extra: 'clip_decimal_kept', row: awaiting.row, colId: awaiting.colId });
         awaitingFieldRef.current = { ...awaiting };
         await say(`${fractionWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
       } else {
@@ -1840,9 +1836,9 @@ export function useVoiceSession() {
     // 클립 보존. 새 저장이 같은 bare key(`sess:row:colId`)를 덮어쓰므로 :a<n>로 먼저 보관한다
     // (RACE-4 보존 원칙 — enterModifyMode의 archive 패턴과 동일, 백그라운드).
     if (awaiting.kind === 'trendConfirm') {
-      logger.log({
+      logCell({
         type: 'trend', extra: 'trend_alert_corrected',
-        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        row: awaiting.row, colId: awaiting.colId,
         text, parsed,
         ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
       });
@@ -1889,13 +1885,13 @@ export function useVoiceSession() {
             persisted = saved?.rows.find((r) => r.index === clipAwaitingRow)?.values[clipAwaitingColId];
           } catch (err) {
             readFailed = true;
-            logger.log({
+            logCell({
               type: 'error', extra: `trend_corrected_persist_read_failed:${String((err as Error)?.message ?? err)}`,
-              sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId,
+              row: clipAwaitingRow, colId: clipAwaitingColId,
             });
           }
         }
-        logger.log({
+        logCell({
           type: 'trend',
           extra: !durable
             ? 'trend_corrected_persist_check:write_failed'
@@ -1904,7 +1900,7 @@ export function useVoiceSession() {
             : persisted === parsed
               ? 'trend_corrected_persist_check:ok'
               : 'trend_corrected_persist_check:mismatch',
-          sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId, parsed,
+          row: clipAwaitingRow, colId: clipAwaitingColId, parsed,
           ...(persisted !== parsed ? { previousValue: String(persisted ?? '') } : {}),
         });
       });
@@ -1984,9 +1980,9 @@ export function useVoiceSession() {
           }
           const cmdBlob = await loadAudioClip(cmdKey).catch(() => null);
           if (cmdBlob && relinkPointer(cmdKey)) {
-            logger.log({
+            logCell({
               type: 'clip', extra: 'clip_relink_cmd', kind: 'command', clipKey: cmdKey,
-              sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId,
+              row: clipAwaitingRow, colId: clipAwaitingColId,
             });
             return;
           }
@@ -1999,16 +1995,16 @@ export function useVoiceSession() {
     let savePromiseSelf: Promise<unknown> | null = null;
     const savePromise = (async () => {
       try {
-        logger.log({ type: 'clip', extra: 'clip_stop_await', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+        logCell({ type: 'clip', extra: 'clip_stop_await', row: clipAwaitingRow, colId: clipAwaitingColId });
         const { blob: clipBlob, raw: rawBlob, trimFailed, trimFailReason } = await clipStopPromise;
-        logger.log({ type: 'clip', extra: `clip_stop_resolved:${clipBlob ? clipBlob.size : 'null'}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+        logCell({ type: 'clip', extra: `clip_stop_resolved:${clipBlob ? clipBlob.size : 'null'}`, row: clipAwaitingRow, colId: clipAwaitingColId });
         // v0.20.0 BL-2 — 트림이 예외(decodeAudioData 등)로 생략됐으면(저장본=미트림 원본 webm) 가시화한다.
         // 이전엔 무이벤트 침묵 폴백이라 "음성클립 편집 실패"(이원창 c7 3·4·5 = 비고 3행)가 로그에 안 보였다.
         // 클립 자체는 저장되어 재생 가능(capture 플로우 불깨짐) — 이건 순수 관측용 신호다(보수적).
         if (trimFailed) {
-          logger.log({
+          logCell({
             type: 'clip', extra: `clip_trim_failed:${trimFailReason ?? 'unknown'}`,
-            sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId, clipKey,
+            row: clipAwaitingRow, colId: clipAwaitingColId, clipKey,
           });
         }
         if (!clipBlob) {
@@ -2016,10 +2012,10 @@ export function useVoiceSession() {
           // BT clip_empty는 내장↔블루투스 thrash 직후 트랙 사망으로 발생 — 전이를 같은 이벤트에 붙여
           // 다음 분석이 BT 라우팅 원인을 즉시 잇게 한다(이전엔 별도 input_device_changed와 ts로만 상관).
           const lic = recorderRef.current?.getLastInputChange();
-          logger.log({
+          logCell({
             type: 'error',
             extra: lic ? `clip_empty:after:${lic.reason}:${lic.transition}` : 'clip_empty',
-            sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId,
+            row: clipAwaitingRow, colId: clipAwaitingColId,
           });
           // v0.22.0 P0 — 빈 클립 자동 재시도 폭주 차단. 자동 recoverStream은 iOS에서 **제스처 밖
           // getUserMedia**라 NotAllowedError로 거부되어 살아있던 스트림까지 잃고 매 빈 클립마다
@@ -2031,7 +2027,7 @@ export function useVoiceSession() {
           return;
         }
         if (clipBlob.size <= EMPTY_CLIP_BYTES) {
-          logger.log({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+          logCell({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, row: clipAwaitingRow, colId: clipAwaitingColId });
           maybeAutoRecoverOrLatch('clip_too_small');
           await resolveFailedCapture(savePromiseSelf);
           return;
@@ -2041,23 +2037,23 @@ export function useVoiceSession() {
         // m[colId] !== clipKey가 되어 폐기됨. epoch 가드보다 정밀해서 정상 클립을 차단하지 않음.
         const guard = pendingClipsRef.current[clipAwaitingRow];
         if (!guard || guard[clipAwaitingColId] !== clipKey) {
-          logger.log({ type: 'error', extra: 'clip_stale_pending', sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+          logCell({ type: 'error', extra: 'clip_stale_pending', row: clipAwaitingRow, colId: clipAwaitingColId });
           return;
         }
         await saveAudioClip(clipKey, clipBlob);
         // [CLIP-VAL-1]③: fresh bytes landed under this key — lift the tombstone so the pointer
         // may persist again (a previous failed attempt on the same cell reuses the same key).
         brokenClipKeysRef.current.delete(clipKey);
-        logger.log({ type: 'clip', extra: `clip_saved:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+        logCell({ type: 'clip', extra: `clip_saved:${clipBlob.size}`, row: clipAwaitingRow, colId: clipAwaitingColId });
         // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
         // pendingClips에는 등록하지 않으므로 데이터탭 재생 UI에는 노출되지 않고, 로그 zip의
         // clips/(prefix 매칭)과 deleteSession cascade에만 따라간다. 분석 전용.
         if (rawBlob) {
           await saveAudioClip(`${clipKey}:raw`, rawBlob);
-          logger.log({ type: 'clip', extra: `clip_raw_saved:${rawBlob.size}`, clipKey: `${clipKey}:raw`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+          logCell({ type: 'clip', extra: `clip_raw_saved:${rawBlob.size}`, clipKey: `${clipKey}:raw`, row: clipAwaitingRow, colId: clipAwaitingColId });
         }
       } catch (e) {
-        logger.log({ type: 'error', extra: `clip_save_failed:${String((e as Error)?.message ?? e)}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
+        logCell({ type: 'error', extra: `clip_save_failed:${String((e as Error)?.message ?? e)}`, row: clipAwaitingRow, colId: clipAwaitingColId });
         await resolveFailedCapture(savePromiseSelf);
       }
     })();
@@ -2085,16 +2081,15 @@ export function useVoiceSession() {
       // v0.26.0(Trace 권장, 2세션 연속 계측 갭) — 어떤 종류/트리거/문구로 알람이 나갔는지 extra에 동봉.
       //   직전까지는 extra='trend_alert_fired'뿐이라 기능3(both→범위 우선) 라우팅을 로그로 검증할 수
       //   없었다. 파서 호환을 위해 'trend_alert_fired' 접두는 유지하고 ':k=v' 목록을 덧붙인다.
-      logger.log({
+      logCell({
         type: 'trend',
         extra: logExtra,
-        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        row: awaiting.row, colId: awaiting.colId,
         colName: awaiting.name, text, parsed, confidence, previousValue: String(v.prev),
       });
       // value 이벤트는 정상 커밋과 동일하게 남긴다 — 분석 파이프라인이 위반 여부와 무관하게 본다.
-      logger.log({
+      logCell({
         type: 'value',
-        sessionId: sessionIdRef.current,
         row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
         text, parsed, confidence,
         durationMs: commitLatencyMs, // v0.20.0 Phase 5 #4 — 발화 확정→커밋 반응속도(ms)
@@ -2155,21 +2150,19 @@ export function useVoiceSession() {
       interrupt: true,
       rate: getTtsRate(),
       onStart: (d) => {
-        logger.log({
+        logCell({
           type: 'tts',
           ttsText: echoText,
           startDelayMs: d,
           durationMs: Date.now() - echoEnqueuedAt,
-          sessionId: sessionIdRef.current,
           row: awaiting.row,
           extra: 'echo',
         });
       },
     });
 
-    logger.log({
+    logCell({
       type: 'value',
-      sessionId: sessionIdRef.current,
       row: awaiting.row,
       colId: awaiting.colId,
       colName: awaiting.name,
@@ -2207,7 +2200,7 @@ export function useVoiceSession() {
     // 로 안정화 시도 진입·리셋 사유를 가시화한다. 동작은 변경하지 않는다(가시성만 추가). OFF면 위
     // early-return으로 무발화(오버헤드 0). 로그 폭주를 막기 위해 전이(transition) 시에만 찍는다.
     const logAttempt = (extra: string) =>
-      logger.log({ type: 'stt_early_commit', sessionId: sessionIdRef.current,
+      logCell({ type: 'stt_early_commit',
         row: awaitingFieldRef.current?.row, colId: awaitingFieldRef.current?.colId,
         extra: `attempt:${extra}` });
     const awaiting = awaitingFieldRef.current;
@@ -2238,9 +2231,9 @@ export function useVoiceSession() {
     if (now - stable.since < EARLY_COMMIT_STABLE_MS) return;
     // 안정 충족 → 조기확정. 이중 커밋 방지: 인식기 abort로 같은 발화의 in-flight final 폐기.
     earlyCommitStableRef.current = null;
-    logger.log({
+    logCell({
       type: 'stt_early_commit', text: t, parsed,
-      sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+      row: awaiting.row, colId: awaiting.colId,
       extra: `stable=${EARLY_COMMIT_STABLE_MS}`,
     });
     ctrlRef.current?.restartRecognition();
@@ -2252,11 +2245,10 @@ export function useVoiceSession() {
     const suspended = uiSuspendRef.current;
     if (!suspended.active) return;
     uiSuspendRef.current = { active: false, hadController: false, reason: null };
-    logger.log({
+    logCell({
       type: 'command',
       parsed: 'ui_resume',
       extra: reason,
-      sessionId: sessionIdRef.current,
       row: useSessionStore.getState().activeRow,
     });
     const phase = useSessionStore.getState().phase;
@@ -2360,9 +2352,8 @@ export function useVoiceSession() {
     logger.setSessionId(sessionIdRef.current);
     // #1 reach telemetry: attach session-meta alongside the existing `extra:'start'` tag.
     // `extra` is preserved so any analysis keying on it keeps working; new fields are additive.
-    logger.log({
+    logCell({
       type: 'session',
-      sessionId: sessionIdRef.current,
       extra: 'start',
       meta: {
         appVersion: logger.device().appVersion,
@@ -2398,17 +2389,15 @@ export function useVoiceSession() {
     void recorderRef.current.init().then((ok) => {
       // v0.34.0 D11b — UI 이펙트 자가검증 1건: 파동/글로우 활성 + 프리롤 캡처 경로. init 실패
       // (ok=false)여도 남긴다 — preroll=unavailable이 곧 "파동 무동작(레벨 0 폴백)" 판정 근거.
-      logger.log({
+      logCell({
         type: 'session',
-        sessionId: sessionIdRef.current,
         extra: `ui_fx:wave=on,glow=on,preroll=${recorderRef.current?.getPrerollKind() ?? 'unavailable'}`,
       });
       if (!ok) return;
       const input = recorderRef.current?.getActiveInput();
       if (!input) return;
-      logger.log({
+      logCell({
         type: 'session',
-        sessionId: sessionIdRef.current,
         extra: 'input_device',
         meta: {
           appVersion: logger.device().appVersion,
@@ -2453,9 +2442,8 @@ export function useVoiceSession() {
       const sessNow = useSessionStore.getState();
       const settingsNow = useSettingsStore.getState();
       const input = recorderRef.current?.getActiveInput();
-      logger.log({
+      logCell({
         type: 'session',
-        sessionId: sessionIdRef.current,
         extra: 'stop',
         meta: {
           appVersion: logger.device().appVersion,
@@ -2476,9 +2464,8 @@ export function useVoiceSession() {
     {
       const ws = recorderRef.current?.getWaveStats();
       if (ws) {
-        logger.log({
+        logCell({
           type: 'session',
-          sessionId: sessionIdRef.current,
           extra: `wave_stats:peak=${ws.peak.toFixed(2)},avg=${ws.avg.toFixed(2)},activePct=${ws.activePct}`,
         });
       }
@@ -2503,9 +2490,9 @@ export function useVoiceSession() {
       //   → 새 세션의 resetAll이 미저장 값을 덮을 수 없다. 화면엔 재시도 배너(VoiceScreen).
       //   logger.setSessionId도 유지 — 재시도/후속 이벤트가 같은 세션에 귀속돼야 한다.
       useSessionStore.getState().setPersistError({ retrying: false });
-      logger.log({
+      logCell({
         type: 'session', extra: 'stop_persist_check:write_failed',
-        sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow,
+        row: useSessionStore.getState().activeRow,
       });
       return false;
     }
@@ -2515,9 +2502,9 @@ export function useVoiceSession() {
     //   flush·audioClips 키를 덮어써 오염될 수 있었다. persist 완료까지 UI가 전용 'stopping'을
     //   유지 → race 창 제거. teardown~persist 사이 로직은 phase==='ready'에 의존하지 않음(확인).
     useSessionStore.getState().setPersistError(null);
-    logger.log({
+    logCell({
       type: 'session', extra: 'stop_persist_check:ok',
-      sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow,
+      row: useSessionStore.getState().activeRow,
     });
     useSessionStore.getState().setPhase('ready');
     logger.setSessionId(undefined);
@@ -2533,9 +2520,9 @@ export function useVoiceSession() {
     if (!store.persistError || store.persistError.retrying) return false;
     store.setPersistError({ retrying: true });
     const durable = await persistSession();
-    logger.log({
+    logCell({
       type: 'session', extra: `stop_persist_retry:${durable ? 'ok' : 'write_failed'}`,
-      sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow,
+      row: useSessionStore.getState().activeRow,
     });
     if (!durable) {
       useSessionStore.getState().setPersistError({ retrying: false });
@@ -2559,7 +2546,7 @@ export function useVoiceSession() {
     // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중 일시정지 거부. paused 진입은 팝업 렌더를
     // PausedCard로 교체해(VoiceScreen 분기: paused가 알람보다 우선) 보류를 화면에서 지워버린다.
     if (isManualHoldBlocked('pause')) return;
-    logger.log({ type: 'command', parsed: 'pause', extra: `phase:${source}`, sessionId: sessionIdRef.current, row: useSessionStore.getState().activeRow });
+    logCell({ type: 'command', parsed: 'pause', extra: `phase:${source}`, row: useSessionStore.getState().activeRow });
     cancelTts();
     // dispose가 in-flight stopClip을 null로 해소해 정상 클립이 clip_empty로 떨어지는 것을 방지:
     // stop()과 동일하게 pending save를 먼저 flush.
@@ -2578,7 +2565,7 @@ export function useVoiceSession() {
     if (sess.phase !== 'paused') return;
     // v0.20.0 Phase 5 #3 — 해제 방식 동봉(voice='재시작' 음성, touch=마이크 버튼). 일시정지가 어떤
     // 경로로 풀렸는지를 정량화해 "분투→해제" 패턴(강남호 13/14 churn)을 다음 세션부터 분해한다.
-    logger.log({ type: 'command', parsed: 'resume', extra: `phase:${source}`, sessionId: sessionIdRef.current, row: sess.activeRow });
+    logCell({ type: 'command', parsed: 'resume', extra: `phase:${source}`, row: sess.activeRow });
     sess.setPhase('active');
     epochRef.current = 0;
     // Controller stays alive during pause (pause() no longer stops it).
@@ -2625,7 +2612,7 @@ export function useVoiceSession() {
       );
       // 인덱스가 이미 캐시돼 있으면 재프리페치 불필요(early 토큰 케이스가 채웠음).
       if (anyAnomalyRule && !getCachedIndex()) {
-        logger.log({ type: 'app', extra: 'past_index_reprefetch:token_settled', sessionId: sessionIdRef.current });
+        logCell({ type: 'app', extra: 'past_index_reprefetch:token_settled' });
         resetPastIndexRetries();
         prefetchPastIndex();
       }
@@ -2678,7 +2665,7 @@ export function useVoiceSession() {
       if (phase !== 'active' && phase !== 'complete' && phase !== 'paused') return;
       resumeTtsEngine();
       const result = ctrlRef.current ? ctrlRef.current.kick() : 'no_controller';
-      logger.log({ type: 'stt', extra: `kick_result:${evt}:${result}`, sessionId: sessionIdRef.current });
+      logCell({ type: 'stt', extra: `kick_result:${evt}:${result}` });
       const rec = recorderRef.current;
       if (!rec) return;
       const trackState = rec.getTrackState();
@@ -2687,13 +2674,13 @@ export function useVoiceSession() {
         if (!micLostLatchedRef.current) {
           micLostLatchedRef.current = true;
           setMicLost(true);
-          logger.log({ type: 'clip', extra: `mic_track:ended:${evt}`, sessionId: sessionIdRef.current });
+          logCell({ type: 'clip', extra: `mic_track:ended:${evt}` });
         }
       } else if (trackState === 'muted') {
         // UA 일시 정지(통화/Siri/라우트 변경) — 분리로 오판해 래치하지 않고 unmute를 기다린다.
-        logger.log({ type: 'clip', extra: `mic_track:muted:${evt}`, sessionId: sessionIdRef.current });
+        logCell({ type: 'clip', extra: `mic_track:muted:${evt}` });
         rec.onceTrackUnmuted(() => {
-          logger.log({ type: 'clip', extra: 'mic_track:unmuted', sessionId: sessionIdRef.current });
+          logCell({ type: 'clip', extra: 'mic_track:unmuted' });
         });
       }
       // 'live'/'none'(레코더 미초기화·일시정지 해제 상태)은 무로깅 — 복귀마다 링버퍼를 잠식하지 않는다.
@@ -2774,7 +2761,7 @@ export function useVoiceSession() {
    *  Codex MEDIUM: setRowValue만으로는 휘발성 상태만 변경 → sync/CSV가 누락하는 위험 해결.
    *  v0.33.0 항목6 — 영속 코어는 persistCellValue로 추출(수동 입력 시트와 공유). */
   const commitTouchValue = useCallback(async (row: number, colId: string, value: string) => {
-    logger.log({ type: 'command', parsed: 'touch_commit', extra: 'touch', text: value, sessionId: sessionIdRef.current, row, colId });
+    logCell({ type: 'command', parsed: 'touch_commit', extra: 'touch', text: value, row, colId });
     await persistCellValue(row, colId, value);
   }, [persistCellValue]);
 
@@ -2802,9 +2789,9 @@ export function useVoiceSession() {
       .find((s) => s.id === sessionIdRef.current);
     const oldPending = existingBeforeCommit?.pendingValidation;
     const originalRow = existingBeforeCommit?.rows.find((r) => r.index === row);
-    logger.log({
+    logCell({
       type: 'command', parsed: 'manual_commit', extra: 'touch', text: value,
-      sessionId: sessionIdRef.current, row, colId,
+      row, colId,
       ...(prevValue ? { previousValue: prevValue } : {}),
     });
 
@@ -2851,10 +2838,10 @@ export function useVoiceSession() {
         sampleKey: alertExtra.sampleKey, prevDate: alertExtra.prevDate,
         manual: { hold },
       });
-      logger.log({
+      logCell({
         type: 'trend',
         extra: logExtra,
-        sessionId: sessionIdRef.current, row, colId,
+        row, colId,
         colName: col.name, text: value, parsed: value, previousValue: String(v.prev),
       });
       useSessionStore.getState().setAnomalyAlert({
@@ -2954,14 +2941,14 @@ export function useVoiceSession() {
     if (awaiting?.kind !== 'trendConfirm') return; // 응답 대기 중이 아니면 no-op(정보성 팝업 등)
     epochRef.current++;
     cancelTts();
-    logger.log({
+    logCell({
       type: 'command', parsed: 'confirm', extra: 'touch',
-      sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+      row: awaiting.row, colId: awaiting.colId,
     });
     useSessionStore.getState().setAnomalyAlert(null);
-    logger.log({
+    logCell({
       type: 'trend', extra: 'trend_alert_confirmed', parsed: 'confirm',
-      sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+      row: awaiting.row, colId: awaiting.colId,
       ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
     });
     awaitingFieldRef.current = null;
@@ -2976,14 +2963,14 @@ export function useVoiceSession() {
     if (awaiting?.kind !== 'trendConfirm') return;
     epochRef.current++;
     cancelTts();
-    logger.log({
+    logCell({
       type: 'command', parsed: 'modify', extra: 'touch',
-      sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+      row: awaiting.row, colId: awaiting.colId,
     });
     useSessionStore.getState().setAnomalyAlert(null);
-    logger.log({
+    logCell({
       type: 'trend', extra: 'trend_alert_dismissed:modify',
-      sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+      row: awaiting.row, colId: awaiting.colId,
     });
     // 음성 경로의 trendConfirm 해제('modify' 강등 후 재질문)와 동일 상태.
     awaitingFieldRef.current = {
@@ -3007,17 +2994,17 @@ export function useVoiceSession() {
     // 팝업이 보이더라도 후보+pending 단일 put이 아직 끝나지 않았거나 태그 자체가 없으면 절대
     // alert를 해제/advance하지 않는다. 느린 IDB와 ManualValueSheet fire-and-forget 사이 우회 차단.
     if (!staged?.pendingValidation || staged.pendingValidationPersisting) {
-      logger.log({
+      logCell({
         type: 'command', parsed: 'confirm', extra: 'blocked:manual_hold:not_durable',
-        sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+        row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
       });
       return;
     }
     epochRef.current++;
     cancelTts();
-    logger.log({
+    logCell({
       type: 'command', parsed: 'confirm', extra: 'touch:manual_hold',
-      sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+      row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
     });
     if (staged.pendingValidation) {
       const confirmed = { ...staged };
@@ -3028,17 +3015,17 @@ export function useVoiceSession() {
         await saveSession(confirmed);
         useDataStore.getState().upsertSession(confirmed);
       } catch (err) {
-        logger.log({
+        logCell({
           type: 'error', extra: `manual_hold_confirm_persist_failed:${String((err as Error)?.message ?? err)}`,
-          sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+          row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
         });
         return;
       }
     }
     useSessionStore.getState().setAnomalyAlert(null);
-    logger.log({
+    logCell({
       type: 'trend', extra: 'trend_alert_confirmed', parsed: 'confirm',
-      sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+      row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
     });
     const awaiting = awaitingFieldRef.current;
     if (awaiting?.kind === 'reviewWait') {
@@ -3059,9 +3046,9 @@ export function useVoiceSession() {
     if (!alert?.manualHold) return;
     epochRef.current++;
     cancelTts();
-    logger.log({
+    logCell({
       type: 'command', parsed: 'modify', extra: 'touch:manual_hold',
-      sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+      row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
     });
     // v0.34.0 리뷰 라운드2(Codex Medium) — **보류를 여기서 풀지 않는다.** 이전엔 setAnomalyAlert(null)로
     // 팝업·hold를 먼저 지웠는데, 그 뒤 사용자가 수동입력 시트를 취소하면 **이미 영속된 이상값이
@@ -3070,9 +3057,9 @@ export function useVoiceSession() {
     //   · 새 값이 정상 → commitManualValue → advance → announceField가 알람을 지운다.
     //   · 새 값이 또 위반 → fireManualAlert(hold=1)이 팝업을 갱신해 다시 보류.
     //   · 시트 취소 → 알람·hold가 그대로 남아 팝업이 다시 보이고 게이트도 유지된다(누수 없음).
-    logger.log({
+    logCell({
       type: 'trend', extra: 'trend_alert_modify_reopen:hold_kept',
-      sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
+      row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
     });
   }, []);
 
