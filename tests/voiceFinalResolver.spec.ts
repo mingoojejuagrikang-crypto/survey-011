@@ -25,6 +25,9 @@ test('명령 신뢰도 게이트(T-2) — 명령별 floor, 0은 미보고 센티
   // T-12: modify는 0.55 완화 — 0.587 실기기 발화가 수용돼야 한다.
   expect(resolveFinal({ ...base, cmd: 'modify', confidence: 0.587 }))
     .toEqual({ act: 'dispatch', cmd: 'modify', trendDemoted: false });
+  // 정확 경계 0.55 = 수용(조건은 `< floor` — `<=`로 바뀌면 여기서 잡힌다, 리뷰 s3r2 Codex Low).
+  expect(resolveFinal({ ...base, cmd: 'modify', confidence: 0.55 }))
+    .toEqual({ act: 'dispatch', cmd: 'modify', trendDemoted: false });
   expect(resolveFinal({ ...base, cmd: 'modify', confidence: 0.54 }))
     .toEqual({ act: 'rejectLowConfidence', minConfidence: 0.55 });
   // confidence 0 = 미보고 → 게이트 통과

@@ -1920,6 +1920,13 @@ export function useVoiceSession() {
       row: clipAwaitingRow, colId: clipAwaitingColId, clipKey,
       pendingClips: pendingClipsRef.current,
     };
+    // 지연 재개 방어(v0.35.3 리뷰 s3r2 Codex Medium) — 이 커밋의 세션·cmd 인덱스도 **캡처 시점에
+    // 고정**한다. 클립 저장이 stop() 유예(5s)를 넘긴 뒤 다음 세션이 시작되면 pendingClipsRef는 새
+    // 객체로 재할당되지만 pointerArgs는 옛 세션의 맵을 계속 보므로 소유권 가드가 통과하는데, 이때
+    // cmdKey를 라이브 sessionIdRef(새 세션)로 조립하면 옛 세션 행이 새 세션 클립 키를 참조하는
+    // provenance 오염이 생긴다. 캡처 고정으로 지연 콜백은 이 커밋의 문맥만 본다.
+    const sessionIdAtCommit = sessionIdRef.current;
+    const cmdIdxAtCommit = cmdClipRef.current[`${clipAwaitingRow}:${clipAwaitingColId}`];
     // [CLIP-VAL-1]②③ — a capture under the canonical key failed. Tombstone the key FIRST (so an
     // in-flight persistSession can never re-persist it), then: if this was a modify re-record and
     // its command clip (`…:cmd<n>` — for "수정 <값>" it carries the NEW value's utterance) actually
@@ -1928,9 +1935,9 @@ export function useVoiceSession() {
     const resolveFailedCapture = async (savePromiseSelf: Promise<unknown> | null) => {
       brokenClipKeysRef.current.add(clipKey);
       if (wasModify) {
-        const n = cmdClipRef.current[`${clipAwaitingRow}:${clipAwaitingColId}`];
+        const n = cmdIdxAtCommit;
         if (n) {
-          const cmdKey = `${sessionIdRef.current}:${clipAwaitingRow}:${clipAwaitingColId}:cmd${n}`;
+          const cmdKey = `${sessionIdAtCommit}:${clipAwaitingRow}:${clipAwaitingColId}:cmd${n}`;
           // The cmd-clip save may still be in flight — flush other pending saves (not ourselves)
           // before the existence check (archiveCellClip's flush pattern, bounded).
           const others = Array.from(pendingClipSavesRef.current).filter((p) => p !== savePromiseSelf);
@@ -1942,9 +1949,10 @@ export function useVoiceSession() {
           }
           const cmdBlob = await loadAudioClip(cmdKey).catch(() => null);
           if (cmdBlob && relinkClipPointer(pointerArgs, cmdKey)) {
-            logCell({
+            // 지연 재개 시 라이브 sessionId(다음 세션)로 오귀속되지 않게 캡처된 세션으로 기록.
+            logger.log({
               type: 'clip', extra: 'clip_relink_cmd', kind: 'command', clipKey: cmdKey,
-              row: clipAwaitingRow, colId: clipAwaitingColId,
+              sessionId: sessionIdAtCommit, row: clipAwaitingRow, colId: clipAwaitingColId,
             });
             return;
           }

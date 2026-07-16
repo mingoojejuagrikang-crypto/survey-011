@@ -345,8 +345,35 @@ test('trendConfirm 중 소수부 재질문 → "수정" 강등 → 소수부 "5"
 
   // 소수부만 응답 → 130.5 합성 커밋(재위반 알람은 떠도 무방 — 값 자체가 계약).
   await fireStt(page, '5', 700);
-  await page.waitForTimeout(800);
-  const committed = await page.evaluate(async () => {
+  // persist는 fire-and-forget — 고정 대기 대신 poll로 최종값 수렴 확인(리뷰 s3r2 Codex Low).
+  await expect.poll(() => readRow1C8(page), { timeout: 5000 }).toBe('130.5');
+});
+
+// 위 시나리오의 터치 변형 — 팝업 [수정] 버튼(modifyAnomalyTouch)도 같은 demoteTrendConfirm을
+// 쓰지만, 추후 두 경로가 갈라져도 각각 잡히도록 별도 고정(리뷰 s3r2 Codex Low).
+test('trendConfirm 중 소수부 재질문 → [수정] 터치 강등 → 소수부 "5" = 130.5 합성', async ({ page }) => {
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+
+  await fireStt(page, '120.5', 700);
+  const popup = page.locator('[data-testid="anomaly-alert"]');
+  await expect(popup).toBeVisible();
+
+  await fireStt(page, '130 점 에', 500);
+  const tts1 = await getTtsLog(page);
+  expect(tts1.some((t) => t.includes('130') && t.includes('소수점 아래'))).toBe(true);
+
+  // 터치 [수정] — modifyAnomalyTouch 강등 경로.
+  await popup.locator('[data-testid="anomaly-modify-btn"]').click();
+  await page.waitForTimeout(400);
+
+  await fireStt(page, '5', 700);
+  await expect.poll(() => readRow1C8(page), { timeout: 5000 }).toBe('130.5');
+});
+
+/** 1행 횡경(c8)의 영속 값 — 최신 세션에서 읽는다(poll 대상). */
+async function readRow1C8(page: Page): Promise<string | null> {
+  return page.evaluate(async () => {
     const db: IDBDatabase = await new Promise((res, rej) => {
       const r = indexedDB.open('survey-011');
       r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
@@ -361,5 +388,4 @@ test('trendConfirm 중 소수부 재질문 → "수정" 강등 → 소수부 "5"
     const s = all[all.length - 1];
     return s?.rows.find((r) => r.index === 1)?.values?.c8 ?? null;
   });
-  expect(committed).toBe('130.5');
-});
+}
