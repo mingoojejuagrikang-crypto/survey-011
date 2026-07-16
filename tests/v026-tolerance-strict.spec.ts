@@ -138,7 +138,7 @@ type LogEv = { type?: string; parsed?: string; extra?: string; text?: string };
 async function loadLogEvents(page: Page): Promise<LogEv[]> {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 6);
+      const r = indexedDB.open('survey-011');
       r.onsuccess = () => res(r.result);
       r.onerror = () => res(null);
     });

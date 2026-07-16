@@ -7,12 +7,11 @@
  *  - [E2E-19]    설정→생성→시작→일시정지→재시작→종료 전체 플로우
  */
 import { test, expect, type Page } from '@playwright/test';
+import { DB_NAME, DB_VERSION, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
 
 test.setTimeout(60_000);
 
 const BASE = 'http://localhost:5175';
-const DB_NAME = 'survey-011';
-const DB_VERSION = 6; // 앱 db.ts DB_VERSION과 일치해야 함(낮으면 VersionError)
 
 // ─── Mock STT / TTS init script ──────────────────────────────────────────────
 
@@ -124,8 +123,9 @@ async function enterActiveState(page: Page): Promise<boolean> {
 
 /** Inject a test session into IndexedDB and reload */
 async function injectSessionAndReload(page: Page, sessionData: object) {
-  await page.evaluate(async ({ dbName, dbVersion, session }) => {
+  await page.evaluate(async ({ dbName, dbVersion, session, schemaSrc }) => {
     await new Promise<void>((resolve, reject) => {
+      const applySchema = (0, eval)(`(${schemaSrc})`) as (db: IDBDatabase) => void;
       const req = indexedDB.open(dbName, dbVersion);
       req.onerror = () => reject(req.error);
       req.onsuccess = () => {
@@ -135,26 +135,9 @@ async function injectSessionAndReload(page: Page, sessionData: object) {
         tx.oncomplete = () => { db.close(); resolve(); };
         tx.onerror = () => reject(tx.error);
       };
-      req.onupgradeneeded = (e) => {
-        const db = (e.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains('sessions')) {
-          const store = db.createObjectStore('sessions', { keyPath: 'id' });
-          store.createIndex('byDate', 'date');
-          store.createIndex('bySync', 'syncedRows');
-        }
-        if (!db.objectStoreNames.contains('audioClips')) {
-          db.createObjectStore('audioClips');
-        }
-        if (!db.objectStoreNames.contains('logEvents')) {
-          const logs = db.createObjectStore('logEvents', { keyPath: 'id', autoIncrement: true });
-          logs.createIndex('bySessionId', 'sessionId');
-        }
-        if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv'); // v0.14.0 C
-        if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots'); // v0.33.0 10-B
-        if (!db.objectStoreNames.contains('feedbackQueue')) db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true }); // v0.33.0 항목11
-      };
+      req.onupgradeneeded = (e) => applySchema((e.target as IDBOpenDBRequest).result);
     });
-  }, { dbName: DB_NAME, dbVersion: DB_VERSION, session: sessionData });
+  }, { dbName: DB_NAME, dbVersion: DB_VERSION, session: sessionData, schemaSrc: APPLY_APP_SCHEMA_SOURCE });
   await page.reload();
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(600);

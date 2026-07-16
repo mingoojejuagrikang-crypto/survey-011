@@ -1,8 +1,11 @@
 import { openDB, type IDBPDatabase } from 'idb';
 import type { Session } from '../types';
 
-const DB_NAME = 'survey-011';
-const DB_VERSION = 6;
+/** [ENV-11] SSOT — 테스트는 tests/fixtures/idb.ts가 이 상수를 재수출해 쓴다(하드코딩 금지,
+ *  tests/idb-fixture.spec.ts 가드가 강제). 버전 bump 시 fixture의 스키마 미러(applyAppSchema)에
+ *  신규 스토어를 함께 반영할 것. */
+export const DB_NAME = 'survey-011';
+export const DB_VERSION = 6;
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -41,8 +44,8 @@ function getDb() {
         if (oldVersion < 6) {
           // v0.33.0 항목11: 개선요청(feedback) 오프라인/미로그인 큐. 전송 실패/불가 시 zip을 통째로
           // 보관했다가 온라인·로그인 복귀 시 자동 재전송한다(feedback.ts flushFeedbackQueue).
-          // ⚠️ [ENV-11] DB_VERSION bump — 테스트의 `indexedDB.open('survey-011', N)` 하드코딩·스키마
-          // 미러 6곳을 함께 갱신할 것(grep 체크리스트).
+          // [ENV-11] DB_VERSION bump 시 tests/fixtures/idb.ts의 스키마 미러(applyAppSchema)에
+          // 신규 스토어를 함께 반영할 것 — spec별 하드코딩은 v0.35.1에 근절(가드 spec이 강제).
           db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true });
         }
       },
@@ -162,85 +165,92 @@ function isStoredClip(v: unknown): v is StoredClip {
   );
 }
 
-export async function saveAudioClip(key: string, blob: Blob): Promise<void> {
-  const db = await getDb();
-  const buf = await blob.arrayBuffer();
-  const record: StoredClip = { buf, type: blob.type || 'audio/webm' };
-  await db.put('audioClips', record, key);
+/** v0.35.1 Stage 1-4 — {buf,type} 분해 저장 스토어 팩토리. audioClips·screenshots에 2벌이던
+ *  save/load/keys를 통합한다. load는 구형 하위호환(Blob 직접 저장 레코드)도 그대로 지원. */
+function blobStore(storeName: 'audioClips' | 'screenshots', defaultType: string) {
+  return {
+    async save(key: string, blob: Blob): Promise<void> {
+      const db = await getDb();
+      const buf = await blob.arrayBuffer();
+      const record: StoredClip = { buf, type: blob.type || defaultType };
+      await db.put(storeName, record, key);
+    },
+    async load(key: string): Promise<Blob | null> {
+      const db = await getDb();
+      const v = await db.get(storeName, key);
+      if (v == null) return null;
+      // 신형: { buf, type } 객체
+      if (isStoredClip(v)) return new Blob([v.buf], { type: v.type });
+      // 구형 하위호환: Blob을 직접 저장했던 레코드
+      if (v instanceof Blob) return v;
+      return null;
+    },
+    async keys(): Promise<string[]> {
+      const db = await getDb();
+      return (await db.getAllKeys(storeName)) as string[];
+    },
+  };
 }
 
-export async function loadAudioClip(key: string): Promise<Blob | null> {
-  const db = await getDb();
-  const v = await db.get('audioClips', key);
-  if (v == null) return null;
-  // 신형: { buf, type } 객체
-  if (isStoredClip(v)) return new Blob([v.buf], { type: v.type });
-  // 구형 하위호환: Blob을 직접 저장했던 레코드
-  if (v instanceof Blob) return v;
-  return null;
-}
+const audioClips = blobStore('audioClips', 'audio/webm');
+// v0.33.0 항목10-B — 자동 화면 캡처. audioClips와 같은 {buf,type} 분해 저장(iOS Safari
+// Blob-in-IDB 안전 규약). 캡처는 항상 best-effort — 실패는 호출자(screenshot.ts)가 로깅한다.
+const screenshots = blobStore('screenshots', 'image/jpeg');
+
+export const saveAudioClip = audioClips.save;
+export const loadAudioClip = audioClips.load;
+export const loadAllAudioClipKeys = audioClips.keys;
 
 export async function deleteAudioClip(key: string): Promise<void> {
   const db = await getDb();
   await db.delete('audioClips', key);
 }
 
-export async function loadAllAudioClipKeys(): Promise<string[]> {
-  const db = await getDb();
-  return (await db.getAllKeys('audioClips')) as string[];
-}
-
-// ─── 자동 화면 캡처 (v0.33.0 항목10-B) ─────────────────────────────────────
-/** 캡처 JPEG를 screenshots 스토어에 저장. audioClips와 같은 {buf,type} 분해 저장(iOS Safari
- *  Blob-in-IDB 안전 규약). 캡처는 항상 best-effort — 실패는 호출자(screenshot.ts)가 로깅한다. */
-export async function saveScreenshot(key: string, blob: Blob): Promise<void> {
-  const db = await getDb();
-  const buf = await blob.arrayBuffer();
-  const record: StoredClip = { buf, type: blob.type || 'image/jpeg' };
-  await db.put('screenshots', record, key);
-}
-
-export async function loadScreenshot(key: string): Promise<Blob | null> {
-  const db = await getDb();
-  const v = await db.get('screenshots', key);
-  if (v == null) return null;
-  if (isStoredClip(v)) return new Blob([v.buf], { type: v.type });
-  if (v instanceof Blob) return v;
-  return null;
-}
-
-export async function loadAllScreenshotKeys(): Promise<string[]> {
-  const db = await getDb();
-  return (await db.getAllKeys('screenshots')) as string[];
-}
+export const saveScreenshot = screenshots.save;
+export const loadScreenshot = screenshots.load;
+export const loadAllScreenshotKeys = screenshots.keys;
 
 // ─── 설정 내구 미러 (v0.14.0 C — localStorage eviction 방어) ────────────────
-/** persist된 설정 JSON 문자열을 IDB 'kv' 스토어에 미러(write-through). best-effort —
- *  IDB 불가/쿼터 초과여도 localStorage 경로는 그대로 동작하므로 조용히 무시한다. */
-export async function saveSettingsBackup(key: string, value: string): Promise<void> {
+// v0.35.1 Stage 1-4 — 'kv' 스토어 접근 공용 헬퍼. 전 kv 레코드(설정 미러·시트 레코드·과거값
+// 인덱스)가 같은 best-effort 계약을 공유한다: IDB 불가/쿼터 초과여도 각 레코드의 1차 경로
+// (localStorage persist·인메모리 캐시)는 그대로 동작하므로 조용히 무시한다.
+async function kvPut(key: string, value: unknown): Promise<void> {
   try {
     const db = await getDb();
     await db.put('kv', value, key);
-  } catch { /* IDB 불가 — localStorage가 1차 저장소이므로 무해 */ }
+  } catch { /* IDB 불가 — 1차 경로가 살아 있으므로 무해 */ }
 }
 
-/** IDB 미러에서 설정 JSON 문자열을 읽는다(localStorage가 evict된 경우 복원용). 없으면 null. */
-export async function loadSettingsBackup(key: string): Promise<string | null> {
+async function kvGet(key: string): Promise<unknown | null> {
   try {
     const db = await getDb();
-    const v = await db.get('kv', key);
-    return typeof v === 'string' ? v : null;
+    return (await db.get('kv', key)) ?? null;
   } catch {
     return null;
   }
 }
 
-/** IDB 미러 삭제(설정 초기화 시). */
-export async function deleteSettingsBackup(key: string): Promise<void> {
+async function kvDelete(key: string): Promise<void> {
   try {
     const db = await getDb();
     await db.delete('kv', key);
   } catch { /* ignore */ }
+}
+
+/** persist된 설정 JSON 문자열을 IDB 'kv' 스토어에 미러(write-through). */
+export async function saveSettingsBackup(key: string, value: string): Promise<void> {
+  await kvPut(key, value);
+}
+
+/** IDB 미러에서 설정 JSON 문자열을 읽는다(localStorage가 evict된 경우 복원용). 없으면 null. */
+export async function loadSettingsBackup(key: string): Promise<string | null> {
+  const v = await kvGet(key);
+  return typeof v === 'string' ? v : null;
+}
+
+/** IDB 미러 삭제(설정 초기화 시). */
+export async function deleteSettingsBackup(key: string): Promise<void> {
+  await kvDelete(key);
 }
 
 // ─── 시트 등록 전용 내구 레코드 (v0.19.0 W2 — 업데이트/evict 무관 복원 경로) ──────
@@ -262,23 +272,15 @@ export interface SheetsRecord {
 }
 
 export async function saveSheetsRecord(rec: SheetsRecord): Promise<void> {
-  try {
-    const db = await getDb();
-    await db.put('kv', rec, SHEETS_RECORD_KEY);
-  } catch { /* IDB 불가 — settings persist가 1차 경로이므로 무해 */ }
+  await kvPut(SHEETS_RECORD_KEY, rec);
 }
 
 export async function loadSheetsRecord(): Promise<SheetsRecord | null> {
-  try {
-    const db = await getDb();
-    const v = await db.get('kv', SHEETS_RECORD_KEY);
-    if (v && typeof v === 'object' && Array.isArray((v as SheetsRecord).savedSheets)) {
-      return v as SheetsRecord;
-    }
-    return null;
-  } catch {
-    return null;
+  const v = await kvGet(SHEETS_RECORD_KEY);
+  if (v && typeof v === 'object' && Array.isArray((v as SheetsRecord).savedSheets)) {
+    return v as SheetsRecord;
   }
+  return null;
 }
 
 // ─── 과거값 인덱스 내구 레코드 (v0.33.0 항목5 — 로그인 무관 이상치 알람) ─────────
@@ -291,28 +293,16 @@ export async function loadSheetsRecord(): Promise<SheetsRecord | null> {
 const PAST_INDEX_RECORD_KEY = '__past_index__';
 
 export async function savePastIndexBackup(rec: unknown): Promise<void> {
-  try {
-    const db = await getDb();
-    await db.put('kv', rec, PAST_INDEX_RECORD_KEY);
-  } catch { /* IDB 불가/쿼터 — 인메모리 캐시(모듈 캐시)가 1차 경로이므로 무해 */ }
+  await kvPut(PAST_INDEX_RECORD_KEY, rec);
 }
 
 export async function loadPastIndexBackup(): Promise<unknown | null> {
-  try {
-    const db = await getDb();
-    const v = await db.get('kv', PAST_INDEX_RECORD_KEY);
-    return v ?? null;
-  } catch {
-    return null;
-  }
+  return kvGet(PAST_INDEX_RECORD_KEY);
 }
 
 /** 설정 초기화(시트 삭제 opt-in) 시 함께 비운다 — fp 불일치로 어차피 안 쓰이지만 데이터 위생. */
 export async function deletePastIndexBackup(): Promise<void> {
-  try {
-    const db = await getDb();
-    await db.delete('kv', PAST_INDEX_RECORD_KEY);
-  } catch { /* ignore */ }
+  await kvDelete(PAST_INDEX_RECORD_KEY);
 }
 
 // ─── 개선요청 큐 (v0.33.0 항목11 — 오프라인/미로그인/부분실패 재전송) ────────────

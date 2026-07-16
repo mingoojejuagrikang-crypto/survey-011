@@ -13,6 +13,7 @@
  * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
  */
 import { test, expect, type Page } from '@playwright/test';
+import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
 
 test.setTimeout(60_000);
 const BASE = 'http://localhost:5175';
@@ -112,24 +113,14 @@ async function installGisMock(page: Page) {
 /** 토큰 없이 부팅(만료 시뮬). settings/세션은 시드하되 gs10_google_token은 일부러 미설정. */
 async function seedNoToken(page: Page, session: unknown) {
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(async ({ sess, settings }) => {
+  await page.evaluate(async ({ sess, settings, idb, schemaSrc }) => {
     localStorage.clear();
     // 토큰 없음 = 만료/미로그인 상태.
     localStorage.setItem('survey-011-settings-v3', JSON.stringify(settings));
     await new Promise<void>((resolve) => {
-      const open = indexedDB.open('survey-011', 6);
-      open.onupgradeneeded = () => {
-        const db = open.result;
-        if (!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions', { keyPath: 'id' });
-        if (!db.objectStoreNames.contains('audioClips')) db.createObjectStore('audioClips');
-        if (!db.objectStoreNames.contains('logEvents')) {
-          const os = db.createObjectStore('logEvents', { keyPath: 'id', autoIncrement: true });
-          os.createIndex('bySessionId', 'sessionId');
-        }
-        if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
-          if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots'); // v0.33.0 10-B
-          if (!db.objectStoreNames.contains('feedbackQueue')) db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true }); // v0.33.0 항목11
-      };
+      const applySchema = (0, eval)(`(${schemaSrc})`) as (db: IDBDatabase) => void;
+      const open = indexedDB.open(idb.name, idb.version);
+      open.onupgradeneeded = () => applySchema(open.result);
       open.onsuccess = () => {
         const db = open.result;
         const tx = db.transaction('sessions', 'readwrite');
@@ -139,7 +130,7 @@ async function seedNoToken(page: Page, session: unknown) {
       };
       open.onerror = () => resolve();
     });
-  }, { sess: session, settings: SETTINGS });
+  }, { sess: session, settings: SETTINGS, idb: IDB, schemaSrc: APPLY_APP_SCHEMA_SOURCE });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(500);
   await page.locator('[data-testid="tab-data"]').click();

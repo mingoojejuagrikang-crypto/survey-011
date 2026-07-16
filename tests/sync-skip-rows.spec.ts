@@ -13,6 +13,7 @@
  * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
  */
 import { test, expect, type Page } from '@playwright/test';
+import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
 
 test.setTimeout(60_000);
 const BASE = 'http://localhost:5175';
@@ -109,7 +110,7 @@ async function seedAndBoot(page: Page, session: unknown) {
   await page.route('**://www.googleapis.com/**', (r) =>
     r.fulfill({ json: { id: 'stub', files: [{ id: 'stub' }] } }));
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(async ({ sess, settings }) => {
+  await page.evaluate(async ({ sess, settings, idb, schemaSrc }) => {
     localStorage.clear();
     localStorage.setItem('gs10_google_token', JSON.stringify({
       access_token: 'test-token', expires_at: Date.now() + 3600_000, email: 'tester@example.com',
@@ -117,19 +118,9 @@ async function seedAndBoot(page: Page, session: unknown) {
     localStorage.setItem('survey-011-settings-v3', JSON.stringify(settings));
     // IDB sessions store에 세션 저장
     await new Promise<void>((resolve) => {
-      const open = indexedDB.open('survey-011', 6);
-      open.onupgradeneeded = () => {
-        const db = open.result;
-        if (!db.objectStoreNames.contains('sessions')) db.createObjectStore('sessions', { keyPath: 'id' });
-        if (!db.objectStoreNames.contains('audioClips')) db.createObjectStore('audioClips');
-        if (!db.objectStoreNames.contains('logEvents')) {
-          const os = db.createObjectStore('logEvents', { keyPath: 'id', autoIncrement: true });
-          os.createIndex('bySessionId', 'sessionId');
-        }
-        if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv'); // v0.14.0 C
-          if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots'); // v0.33.0 10-B
-          if (!db.objectStoreNames.contains('feedbackQueue')) db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true }); // v0.33.0 항목11
-      };
+      const applySchema = (0, eval)(`(${schemaSrc})`) as (db: IDBDatabase) => void;
+      const open = indexedDB.open(idb.name, idb.version);
+      open.onupgradeneeded = () => applySchema(open.result);
       open.onsuccess = () => {
         const db = open.result;
         const tx = db.transaction('sessions', 'readwrite');
@@ -139,7 +130,7 @@ async function seedAndBoot(page: Page, session: unknown) {
       };
       open.onerror = () => resolve();
     });
-  }, { sess: session, settings: SETTINGS });
+  }, { sess: session, settings: SETTINGS, idb: IDB, schemaSrc: APPLY_APP_SCHEMA_SOURCE });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(500);
   await page.locator('[data-testid="tab-data"]').click();
@@ -157,7 +148,7 @@ async function runSync(page: Page) {
 async function readSession(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 6);
+      const r = indexedDB.open('survey-011');
       r.onsuccess = () => res(r.result); r.onerror = () => res(null);
     });
     if (!db) return null;
@@ -272,7 +263,7 @@ test('update 404 → sheetRow 초기화 후 append 폴백 + sync_row_mismatch', 
   // sync_row_mismatch 텔레메트리 기록 확인
   const events = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 6);
+      const r = indexedDB.open('survey-011');
       r.onsuccess = () => res(r.result); r.onerror = () => res(null);
     });
     if (!db) return [] as string[];
@@ -337,7 +328,7 @@ test('C1 — append updatedRange 파싱 실패: synced-without-sheetRow (재appe
   await expect(page.locator('text=실패').first()).toBeHidden().catch(() => {});
   const events = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
-      const r = indexedDB.open('survey-011', 6);
+      const r = indexedDB.open('survey-011');
       r.onsuccess = () => res(r.result); r.onerror = () => res(null);
     });
     if (!db) return [] as string[];

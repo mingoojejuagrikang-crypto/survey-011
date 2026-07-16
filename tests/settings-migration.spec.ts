@@ -24,6 +24,7 @@
  * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
  */
 import { test, expect, type Page } from '@playwright/test';
+import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
 
 test.setTimeout(60_000);
 const BASE = 'http://localhost:5175';
@@ -269,7 +270,7 @@ test('W2 ① v8→v10 migrate — 유효 savedSheets 보존', async ({ page }) =
 test('W2 ② 전용 IDB 레코드에서 savedSheets 복원 (settings persist는 비어있음)', async ({ page }) => {
   // settings persist는 savedSheets:[]인 상태로 부팅하되, 전용 레코드를 미리 IDB에 심는다.
   await page.addInitScript(
-    ({ key, rec }) => {
+    ({ key, rec, idb, schemaSrc }) => {
       // settings persist 시드(savedSheets 비어있음 — 업데이트로 풀린 상태 모사).
       const persisted = {
         state: {
@@ -283,14 +284,10 @@ test('W2 ② 전용 IDB 레코드에서 savedSheets 복원 (settings persist는 
         version: 10,
       };
       if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(persisted));
-      // 전용 IDB 레코드 __saved_sheets__를 'kv' 스토어에 직접 심는다(앱 db.ts와 동일 스키마).
-      const open = indexedDB.open('survey-011', 6);
-      open.onupgradeneeded = () => {
-        const db = open.result;
-        if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
-          if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots'); // v0.33.0 10-B
-          if (!db.objectStoreNames.contains('feedbackQueue')) db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true }); // v0.33.0 항목11
-      };
+      // 전용 IDB 레코드 __saved_sheets__를 'kv' 스토어에 직접 심는다(스키마는 fixture 미러 SSOT).
+      const applySchema = (0, eval)(`(${schemaSrc})`) as (db: IDBDatabase) => void;
+      const open = indexedDB.open(idb.name, idb.version);
+      open.onupgradeneeded = () => applySchema(open.result);
       open.onsuccess = () => {
         try {
           const db = open.result;
@@ -299,7 +296,7 @@ test('W2 ② 전용 IDB 레코드에서 savedSheets 복원 (settings persist는 
         } catch { /* ignore */ }
       };
     },
-    { key: STORE_KEY, rec: VALID_SHEETS },
+    { key: STORE_KEY, rec: VALID_SHEETS, idb: IDB, schemaSrc: APPLY_APP_SCHEMA_SOURCE },
   );
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
 
