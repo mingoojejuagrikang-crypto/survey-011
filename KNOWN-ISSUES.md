@@ -447,7 +447,11 @@
 ### [ENV-12] ESLint max-lines(500) 예외 목록 — GL-006 헌장 §5 도입 시점의 기존 초과 파일
 - **배경:** 공통 개발 헌장(GL-006, 민구 채택 2026-07-16) §5 — 파일 크기는 책임 크기의 신호(권장 150~250줄, 300줄 분리 검토, **500줄 리팩토링 대상**). v0.35.1 Stage 1-8에서 ESLint `max-lines`(500, `src/` 한정)를 오류 게이트로 도입(`npm run lint`, predeploy에 포함).
 - **예외(파일 상단 `eslint-disable max-lines`, 해소 시 주석 제거 + 이 목록에서 삭제):**
-  1. `src/lib/useVoiceSession.ts` (~3,248) — Stage 3(음성 코어 재설계)에서 해소
+  1. `src/lib/useVoiceSession.ts` (~3,125) — **Stage 3(v0.35.3)에서 코어 재설계 완료**(판별 유니온·
+     resolveFinal 결정표·clipPointer/trendEvaluate 모듈·logCell·proceedAfterCommit — 무효 상태 조합은
+     이제 컴파일이 차단). 줄수 해소는 후속 서브 훅 시리즈(클립 캡처 `useClipCapture` → persist →
+     내비게이션 순, ref 공유 없는 인터페이스)로 계속 — v0.34~35 기능 유입으로 플랜 당시 추정
+     (1,200~1,500 잔존)보다 몸집이 커서 한 릴리스에 끝내지 않고 릴리스당 1개 서브 훅씩 검증하며 진행
   2. ~~`src/screens/SettingsScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/settings 16파일 + useSettingsActions 훅 분리, 3,114→489줄)
   3. ~~`src/screens/DataScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/data 15파일 + useDataActions 훅 분리, 2,420→315줄)
   4. ~~`src/screens/VoiceScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/voice 7파일 추출, 1,342→174줄)
