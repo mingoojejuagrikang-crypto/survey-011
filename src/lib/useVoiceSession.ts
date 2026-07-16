@@ -14,6 +14,7 @@ import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import { rowMarked } from './logEvents';
+import { resolveFinal } from './voiceFinalResolver';
 import { getCachedIndex, getFallbackIndex, getFallbackBuiltAt, hydratePastIndexFallback, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { buildAnomalyAlert } from './anomalyAlert';
@@ -1312,41 +1313,135 @@ export function useVoiceSession() {
     //   (게이트 SSOT = isManualHoldBlocked — 터치 이동/일시정지도 같은 함수로 거부한다.)
     if (isManualHoldBlocked('stt')) return;
 
+    // ── Stage 3-2 명령 핸들러(액션 해석 계층) — 종전 인라인 if-체인 본문의 순수 이동. ──
+    // 경로 판정은 아래 resolveFinal(순수 결정표)이, 실행은 이 핸들러들이 담당한다.
+
+    /** '종료' — skip된 빈 행이 있으면 1회 안내 후 종료(v0.5.0 요청3, 민구 결정 4와 대칭).
+     *  아직 도달하지 않은 뒷 행은 '빈 행'으로 세지 않는다 — skip한 행만 대상. */
+    async function cmdEnd(): Promise<void> {
+      cancelTts();
+      const vcEnd = voiceColsList();
+      const skippedEmpty = useSessionStore.getState().skippedRows
+        .filter((r) => !isRowVoiceComplete(r, vcEnd));
+      if (skippedEmpty.length > 0) {
+        const msg = `${formatRowList(skippedEmpty)}이 비어 있습니다. 데이터 탭에서 확인해 주세요.`;
+        useSessionStore.getState().setLastTts(msg);
+        await say(msg);
+      }
+      await stop(true);
+    }
+
+    /** '유지' — 값이 있으면 그대로 진행, 없으면 안내(v0.5.0 NAV-2 일반화, 무음 금지 [REVIEW-4]).
+     *  값 커밋 경로를 안 타므로 announceField가 시작한 클립은 저장되지 않아 기존 클립이 보존된다. */
+    async function cmdKeep(a: AwaitingField): Promise<void> {
+      cancelTts();
+      const curVal = useSessionStore.getState().getRowValues(a.row)[a.colId] ?? '';
+      if (curVal !== '') {
+        await advance();
+        return;
+      }
+      logger.log({
+        type: 'command', parsed: 'keep', extra: 'keep_no_value',
+        sessionId: sessionIdRef.current, row: a.row, colId: a.colId,
+      });
+      const msg = `유지할 값이 없습니다. ${a.name} 말씀해 주세요.`;
+      useSessionStore.getState().setLastTts(msg);
+      await say(msg);
+    }
+
+    /** '확인'(추세 알림 밖) — 상태 변경 없이 짧은 재안내만(v0.7.0 B4, 무음 금지 REVIEW-4).
+     *  trendConfirm 중의 '확인'은 resolveFinal이 trendResolve로 먼저 처리한다. */
+    async function cmdConfirm(a: AwaitingField): Promise<void> {
+      cancelTts();
+      const msg = `확인할 알림이 없습니다. ${a.name} 말씀해 주세요.`;
+      useSessionStore.getState().setLastTts(msg);
+      await say(msg);
+    }
+
+    /** '수정' — 명령 발화 클립을 보존한 뒤 수정 모드 진입. 이미 수정 의미론이면 같은 셀 재질문.
+     *  reviewWait에선 v0.34.0 A3 확정 규칙: bare '수정'=포인터 컬럼, "수정 <컬럼명>"=지목 컬럼. */
+    async function cmdModify(a: AwaitingField, utterance: string): Promise<void> {
+      cancelTts();
+      // Capture the '수정'/'정정' utterance itself (spoken into the awaiting cell's active clip)
+      // before enterModifyMode starts a fresh clip. The SAVE is deferred: enterModifyMode resolves
+      // the modify TARGET cell, and a direct "수정 <값>" re-keys the clip to that target so its
+      // pointer isn't orphaned (CLIP-CMD). Background save — never blocks the voice flow.
+      const pendingCmd = preserveCommandClip(a.row, a.colId);
+      if (isModifyLike(a)) {
+        // No target re-link here (we're already re-listening for the value) — save against the
+        // awaiting cell so the utterance still survives for analysis.
+        pendingCmd?.saveDefault();
+        // [CLIP-VAL-1]①: preserveCommandClip above STOPPED the active clip — restart the slot
+        // before the re-ask TTS so the re-spoken value IS recorded (it deterministically wasn't:
+        // say() never starts a clip, unlike announceField). Also the landing path for a B4
+        // trendConfirm dismissed by '수정' (trendConfirm은 수정 의미론을 겸장한다).
+        armClipForCell(a.row, a.colId);
+        await say(`${a.name} 다시 말씀해 주세요.`);
+        return;
+      }
+      // 상호배타 순서 주의 — extractModifyValue는 '수정' 뒤 **임의 텍스트**를 값 후보로 돌려주므로
+      // ("수정 종경" → '종경'), reviewWait에선 컬럼명 매치를 먼저 확인해야 한다(숫자 발화는 컬럼명과
+      // 매치될 수 없어 "수정 30.7" 직접값 경로는 그대로 성립). reviewWait 스코프 한정 — 일반 수정
+      // 의미론(직전 필드·값 추출)은 불변. 직접값 적용 후엔 검토 대기 복귀(enterModifyMode).
+      let modifyVal = extractModifyValue(utterance);
+      let reviewTarget: { row: number; idx: number } | undefined;
+      if (a.kind === 'reviewWait') {
+        const vcRw = voiceColsList();
+        let idx = Math.max(0, vcRw.findIndex((c) => c.id === a.colId));
+        const named = extractModifyColumn(utterance, vcRw.map((c) => c.name));
+        const namedIdx = named ? vcRw.findIndex((c) => c.name === named) : -1;
+        if (namedIdx >= 0) {
+          idx = namedIdx;
+          modifyVal = null; // 컬럼명 지목 — 값 후보('종경' 등 비숫자 잔여)로 오적용 금지
+        }
+        reviewTarget = { row: a.row, idx };
+      }
+      await enterModifyMode(modifyVal || undefined, pendingCmd, reviewTarget);
+    }
+
+    /** '취소' — 인식값을 지우고 같은 필드 재질문. [CLIP-VAL-1]① (cancel sibling): '수정'→'취소'
+     *  체인 뒤 슬롯이 소비돼 있으므로 재발화 녹음 슬롯을 재무장한다(startClip은 멱등). */
+    async function cmdCancel(a: AwaitingField): Promise<void> {
+      cancelTts();
+      useSessionStore.getState().setRecognized('');
+      armClipForCell(a.row, a.colId);
+      await say(`${a.name} 다시 말씀해 주세요.`);
+    }
+
+    // ── 경로 판정(순수 결정표 — voiceFinalResolver, 특성화 spec 고정) ──
+    const action = resolveFinal({
+      cmd, confidence,
+      paused: useSessionStore.getState().phase === 'paused',
+      awaitingKind: awaiting.kind,
+    });
+
     // While paused, accept only 'resume' and 'end' (v0.15.0 A5); ignore everything else.
     // resume = 멈춘 입력 재개. end = 멈춘 채로 입력 종료·저장(일시정지 카드가 '재시작'/'종료' 둘 다
     // 안내하므로 음성 '종료'도 paused에서 작동해야 한다 — 민구 요청).
-    if (useSessionStore.getState().phase === 'paused') {
-      if (cmd === 'resume') {
-        epochRef.current++;
-        cancelTts();
-        await resumeRef.current('voice'); // v0.20.0 Phase 5 #3 — 음성 '재시작'으로 해제
-      } else if (cmd === 'end') {
-        epochRef.current++;
-        cancelTts();
-        await stop(true);
-      }
+    if (action.act === 'pausedResume') {
+      epochRef.current++;
+      cancelTts();
+      await resumeRef.current('voice'); // v0.20.0 Phase 5 #3 — 음성 '재시작'으로 해제
       return;
     }
+    if (action.act === 'pausedEnd') {
+      epochRef.current++;
+      cancelTts();
+      await stop(true);
+      return;
+    }
+    if (action.act === 'pausedIgnore') return;
 
     // v0.15.0 A6 — 스피커폰 모드 삭제. 모드로 게이트되던 TTS-중 명령차단(post-TTS 가드)을 함께
     // 제거했다(민구: 모드 ON시 barge-in 안 됨을 불편으로 지목 + Trace: 가드 1회만 발화, 제거 안전).
     // self-confirm 환각 위험은 v0.13.0 alertText "확인해주세요" 제거로 이미 구조적 해소됨. 이어폰
     // 기본 경로의 barge-in(명령 즉시 실행)은 원래대로 유지된다.
 
-    // T-2 (low-confidence command bypassing the gate): voice COMMANDS used to dispatch with no
-    // confidence check at all (the value gate at minConfidence ran only AFTER the command branch).
-    // A misrecognised "수정" at conf 0.16 on an empty cell replayed the whole prompt (~10s lost).
-    // Apply a command-specific threshold that is STRICTER than the value threshold: a command
-    // rewinds/destroys state, so it must clear a higher bar than a plain measurement value.
-    // confidence === 0 is the "unknown confidence" sentinel (some STT results carry no score) —
-    // we pass those through, exactly like the value gate's `confidence > 0` guard, to avoid
-    // dead-locking commands on engines that never report confidence.
-    // resume-from-paused is handled above this point and is intentionally NOT gated (it is the
-    // user's only way out of pause).
-    // Per-command floor from the registry (SSOT); defaults to 0.7. T-12: '수정'(modify) overrides
-    // to 0.55 because it is recoverable and a false-reject is cheap — see voiceCommands.ts.
-    const commandMinConfidence = VOICE_COMMANDS.find((c) => c.id === cmd)?.minConfidence ?? 0.7;
-    if (cmd && confidence > 0 && confidence < commandMinConfidence) {
+    // T-2 (low-confidence command bypassing the gate): 명령별 신뢰도 floor는 resolveFinal이
+    // 레지스트리(SSOT)에서 판정한다 — 명령은 상태를 되감거나 파괴하므로 값 게이트보다 엄격한 바를
+    // 넘어야 한다. confidence 0은 "미보고" 센티널로 통과(엔진별 미보고 대응). paused-resume은 위에서
+    // 이미 처리됐고 의도적으로 비게이트(일시정지 탈출의 유일한 경로).
+    if (action.act === 'rejectLowConfidence' && cmd) {
       logger.log({
         type: 'command',
         text,
@@ -1381,155 +1476,62 @@ export function useVoiceSession() {
 
     // ── v0.7.0 B4: 추세 확인 모드 해소 — 알림 TTS 직후의 첫 응답 ──
     // 커밋된 값은 이미 저장돼 있다(알림 ≠ 롤백). '확인'/'유지'는 그대로 확정·진행, 새 값 발화는
-    // 아래 값 경로로 폴스루해 기존 isModify 의미론으로 재커밋(재위반 시 재알림), 타 명령은 알림만
+    // 아래 값 경로로 폴스루해 기존 수정 의미론으로 재커밋(재위반 시 재알림), 타 명령은 알림만
     // 해제하고 정상 dispatch된다.
-    if (awaiting.kind === 'trendConfirm') {
-      if (cmd === 'confirm' || cmd === 'keep') {
-        cancelTts();
-        useSessionStore.getState().setAnomalyAlert(null); // 팝업 해제
-        logger.log({
-          type: 'trend', extra: 'trend_alert_confirmed', parsed: cmd,
-          sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
-          ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
-        });
-        awaitingFieldRef.current = null;
-        await advance();
-        return;
-      }
-      if (cmd) {
-        useSessionStore.getState().setAnomalyAlert(null); // 타 명령으로 해제 → 팝업 닫음
-        logger.log({
-          type: 'trend', extra: `trend_alert_dismissed:${cmd}`,
-          sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
-        });
-        // 알림만 해제 — 수정 의미론(종전 isModify 겸장)으로 강등 후 아래 정상 명령 dispatch로 폴스루.
-        awaiting = {
-          kind: 'modify', row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
-          previousValue: awaiting.previousValue,
-        };
-        awaitingFieldRef.current = awaiting;
-      }
-      // 명령이 아니면(새 값) 값 경로로 폴스루 — 커밋 지점에서 trend_alert_corrected 기록.
+    if (action.act === 'trendResolve' && cmd && awaiting.kind === 'trendConfirm') {
+      cancelTts();
+      useSessionStore.getState().setAnomalyAlert(null); // 팝업 해제
+      logger.log({
+        type: 'trend', extra: 'trend_alert_confirmed', parsed: cmd,
+        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+        ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
+      });
+      awaitingFieldRef.current = null;
+      await advance();
+      return;
     }
+    if (action.act === 'dispatch' && action.trendDemoted && awaiting.kind === 'trendConfirm') {
+      useSessionStore.getState().setAnomalyAlert(null); // 타 명령으로 해제 → 팝업 닫음
+      logger.log({
+        type: 'trend', extra: `trend_alert_dismissed:${cmd}`,
+        sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
+      });
+      // 알림만 해제 — 수정 의미론(종전 isModify 겸장)으로 강등 후 아래 정상 명령 dispatch로 폴스루.
+      awaiting = {
+        kind: 'modify', row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
+        previousValue: awaiting.previousValue,
+      };
+      awaitingFieldRef.current = awaiting;
+    }
+    // action 'value'의 trendCorrection(새 값 폴스루)은 값 경로가 처리 — 커밋 지점에서
+    // trend_alert_corrected 기록.
 
-    if (cmd === 'end') {
-      cancelTts();
-      // v0.5.0 요청3: 종료 시에도 skip된 빈 행이 있으면 1회 안내 후 종료(민구 결정 4와 대칭).
-      // 아직 도달하지 않은 뒷 행은 '빈 행'으로 세지 않는다 — skip한 행만 대상.
-      {
-        const vcEnd = voiceColsList();
-        const skippedEmpty = useSessionStore.getState().skippedRows
-          .filter((r) => !isRowVoiceComplete(r, vcEnd));
-        if (skippedEmpty.length > 0) {
-          const msg = `${formatRowList(skippedEmpty)}이 비어 있습니다. 데이터 탭에서 확인해 주세요.`;
-          useSessionStore.getState().setLastTts(msg);
-          await say(msg);
-        }
+    if (action.act === 'dispatch') {
+      switch (action.cmd) {
+        case 'end': await cmdEnd(); return;
+        case 'pause':
+          cancelTts();
+          await pause('voice'); // v0.20.0 Phase 5 #3 — 음성 명령으로 일시정지
+          return;
+        case 'resume':
+          cancelTts();
+          await resumeRef.current('voice'); // v0.20.0 Phase 5 #3 — 음성 명령으로 재개
+          return;
+        case 'prevRow':
+          // v0.33.0 백로그 A(민구 결정 1): 음성 '이전' = ◀ 버튼과 동일한 단순 행 이동(재입력 모드 폐지).
+          // 완료 행 착지는 jumpToRow가 "값 읽어주기 + 검토 대기"로 처리한다(결정 3).
+          await gotoAdjacentRow(-1, 'voice');
+          return;
+        case 'nextRow':
+          // v0.5.0 NAV-1: '다음'은 항상 단방향 전진(goNextRow) —
+          // 미완료 행은 skip(placeholder) 처리, returnRow 미등록, 완료 행 재프롬프트 없음.
+          await goNextRow('voice');
+          return;
+        case 'keep': await cmdKeep(awaiting); return;
+        case 'confirm': await cmdConfirm(awaiting); return;
+        case 'modify': await cmdModify(awaiting, text); return;
+        case 'cancel': await cmdCancel(awaiting); return;
       }
-      await stop(true);
-      return;
-    }
-    if (cmd === 'pause') {
-      cancelTts();
-      await pause('voice'); // v0.20.0 Phase 5 #3 — 음성 명령으로 일시정지
-      return;
-    }
-    if (cmd === 'resume') {
-      cancelTts();
-      await resumeRef.current('voice'); // v0.20.0 Phase 5 #3 — 음성 명령으로 재개
-      return;
-    }
-    if (cmd === 'prevRow') {
-      // v0.33.0 백로그 A(민구 결정 1): 음성 '이전' = ◀ 버튼과 동일한 단순 행 이동(재입력 모드 폐지).
-      // 완료 행 착지는 jumpToRow가 "값 읽어주기 + 검토 대기"로 처리한다(결정 3).
-      await gotoAdjacentRow(-1, 'voice');
-      return;
-    }
-    if (cmd === 'nextRow') {
-      // v0.5.0 NAV-1: '다음'은 항상 단방향 전진(goNextRow) —
-      // 미완료 행은 skip(placeholder) 처리, returnRow 미등록, 완료 행 재프롬프트 없음.
-      await goNextRow('voice');
-      return;
-    }
-    if (cmd === 'keep') {
-      // v0.5.0 NAV-2: '유지' 일반화 — 현재 칸에 값이 있으면(완료 행 검토 대기 포함) 그대로 두고
-      // 다음으로 진행. 값이 없으면 무엇을 유지할지 없음을 명시적으로 안내(무음 금지, [REVIEW-4]).
-      // (값 커밋 경로를 안 타므로 announceField가 시작한 클립은 저장되지 않아 기존 클립이 보존된다.)
-      cancelTts();
-      const curVal = useSessionStore.getState().getRowValues(awaiting.row)[awaiting.colId] ?? '';
-      if (curVal !== '') {
-        await advance();
-      } else {
-        logger.log({
-          type: 'command', parsed: 'keep', extra: 'keep_no_value',
-          sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
-        });
-        const msg = `유지할 값이 없습니다. ${awaiting.name} 말씀해 주세요.`;
-        useSessionStore.getState().setLastTts(msg);
-        await say(msg);
-      }
-      return;
-    }
-    if (cmd === 'confirm') {
-      // v0.7.0 B4: 추세 알림 상태 밖의 '확인' — 상태 변경 없이 짧은 재안내만(무음 금지, REVIEW-4).
-      // trendConfirm 중의 '확인'은 위 해소 분기에서 이미 처리됐다.
-      cancelTts();
-      const msg = `확인할 알림이 없습니다. ${awaiting.name} 말씀해 주세요.`;
-      useSessionStore.getState().setLastTts(msg);
-      await say(msg);
-      return;
-    }
-    if (cmd === 'modify') {
-      cancelTts();
-      // Capture the '수정'/'정정' utterance itself (spoken into the awaiting cell's active clip)
-      // before enterModifyMode starts a fresh clip. The SAVE is deferred: enterModifyMode resolves
-      // the modify TARGET cell, and a direct "수정 <값>" re-keys the clip to that target so its
-      // pointer isn't orphaned (CLIP-CMD). Background save — never blocks the voice flow.
-      const pendingCmd = preserveCommandClip(awaiting.row, awaiting.colId);
-      if (isModifyLike(awaiting)) {
-        // No target re-link here (we're already re-listening for the value) — save against the
-        // awaiting cell so the utterance still survives for analysis.
-        pendingCmd?.saveDefault();
-        // [CLIP-VAL-1]①: preserveCommandClip above STOPPED the active clip — restart the slot
-        // before the re-ask TTS so the re-spoken value IS recorded (it deterministically wasn't:
-        // say() never starts a clip, unlike announceField). Also the landing path for a B4
-        // trendConfirm dismissed by '수정' (trendConfirm arms isModify:true).
-        armClipForCell(awaiting.row, awaiting.colId);
-        await say(`${awaiting.name} 다시 말씀해 주세요.`);
-        return;
-      }
-      // v0.34.0 A3(확정 규칙): 완료 행 검토 대기 중의 bare '수정'은 **포인터 컬럼**(awaiting.colId —
-      // enterReviewWait가 첫 음성 필드에 무장)을 타깃하고, "수정 <컬럼명>"이면 그 컬럼을 타깃한다.
-      // 상호배타 순서 주의 — extractModifyValue는 '수정' 뒤 **임의 텍스트**를 값 후보로 돌려주므로
-      // ("수정 종경" → '종경'), reviewWait에선 컬럼명 매치를 먼저 확인해야 한다(숫자 발화는 컬럼명과
-      // 매치될 수 없어 "수정 30.7" 직접값 경로는 그대로 성립). reviewWait 스코프 한정 — 일반 수정
-      // 의미론(직전 필드·값 추출)은 불변. 직접값 적용 후엔 검토 대기 복귀(enterModifyMode).
-      let modifyVal = extractModifyValue(text);
-      let reviewTarget: { row: number; idx: number } | undefined;
-      if (awaiting.kind === 'reviewWait') {
-        const vcRw = voiceColsList();
-        let idx = Math.max(0, vcRw.findIndex((c) => c.id === awaiting.colId));
-        const named = extractModifyColumn(text, vcRw.map((c) => c.name));
-        const namedIdx = named ? vcRw.findIndex((c) => c.name === named) : -1;
-        if (namedIdx >= 0) {
-          idx = namedIdx;
-          modifyVal = null; // 컬럼명 지목 — 값 후보('종경' 등 비숫자 잔여)로 오적용 금지
-        }
-        reviewTarget = { row: awaiting.row, idx };
-      }
-      await enterModifyMode(modifyVal || undefined, pendingCmd, reviewTarget);
-      return;
-    }
-    if (cmd === 'cancel') {
-      cancelTts();
-      useSessionStore.getState().setRecognized('');
-      // [CLIP-VAL-1]① (cancel sibling): same structure as the isModify re-ask — make sure a
-      // recording slot is armed for the re-utterance. After a '수정'→'취소' chain the previous
-      // slot was consumed by preserveCommandClip; without this the next value goes unrecorded.
-      // startClip() safely truncates/replaces a still-active slot, so arming is idempotent here.
-      armClipForCell(awaiting.row, awaiting.colId);
-      await say(`${awaiting.name} 다시 말씀해 주세요.`);
-      return;
     }
 
     // Input-2 → barge-in (v0.4.3): TTS 재생 중 들어온 값을 폐기하지 않고, 재생 중 TTS를 끊고
