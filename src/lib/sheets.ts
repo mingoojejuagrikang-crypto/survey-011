@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- [ENV-12] 기존 초과 파일(GL-006 §5 도입 시점), Sheets API 도메인 — 분리 경계 검토 후 해소. 해소 시 이 주석 제거. */
 /**
  * Google Sheets API v4 helpers.
  * All requests use the user's access token from googleAuth.ts.

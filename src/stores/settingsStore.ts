@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- [ENV-12] 기존 초과 파일(GL-006 §5 도입 시점), persist migrate 이력 포함 — 분리 경계 검토 후 해소. 해소 시 이 주석 제거. */
 import { create } from 'zustand';
 import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
 import type { Column, SheetConfig, SavedSheet, LegacyInputMode } from '../types';

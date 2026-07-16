@@ -330,7 +330,8 @@
 - **원인:** 폴더 ensure 로직에 캐시·정렬·에러 throw 부재.
 - **해결·회피:** `settingsStore.teamFolderId` 캐시(다음 업로드부터 검색 생략), 검색 시 `orderBy=createdTime asc`(중복 시 가장 오래된 것으로 통일), admin 실패 시 캐시 무효화, Drive Q 문자열 escape 강화(backslash), 검색 실패 시 throw.
 - **출처:** `growth-survey-010@8ce8dca` (v0.10.1, HIGH-2)
-- **현재 상태:** ⚠️주시 (survey-011 `src/lib/driveUpload.ts` 멀티 Drive 경로 점검 권장)
+- **회귀 확보(2026-07-16, v0.35.1 Stage 1-3):** ensure 로직을 `src/lib/driveFolders.ts` `ensureEmailSubFolder`(캐시 주입형)로 통합 — 캐시는 호출부가 parent별 분리 주입(로그=teamFolderId, 개선요청=무캐시)해 다른 parent로의 오업로드를 구조로 차단. `tests/driveFolders.spec.ts`(Node 러너 6케이스: 캐시 분리·최고참 선택·검색 실패 throw·생성·escape)가 계약을 고정.
+- **현재 상태:** ✅수정됨+회귀 확보 (2026-07-16)
 
 ### [CLIP-2] 음성 클립에 발화 전후 무음이 과다하게 포함됨
 - **증상:** 저장된 클립 재생 시 앞뒤 공백이 김. 06-08 로그 녹음 길이 평균 5.7초·최대 20.9초인데 실제 발화는 1–3초.
@@ -440,7 +441,24 @@
 - **해결·회피:** ① 전 테스트 `open('survey-011', 4)` → `5` 일괄 치환 + 스키마 미러 6곳(`v54-voice-data`·`settings-migration`·`recover-list-stage`·`sync-header-mapping`·`sync-skip-rows`·`sync-token-expiry`)에 `screenshots` 스토어 추가. ② 앱 `deleteSession`은 `objectStoreNames.contains('screenshots')` 방어 — 구스키마 DB(미갱신 미러)에서도 cascade가 throw하지 않는다. **다음 DB_VERSION bump 때도 같은 일괄 갱신 필요**(grep `indexedDB.open('survey-011'`). 사후 시딩(post-boot)은 버전 인자 없이 여는 게 근본 회피지만, pre-boot 시딩은 스키마 미러가 필요해 버전 명시가 불가피 — 미러와 앱 upgrade 블록을 함께 고칠 것.
 - **출처:** `2026-07-13 세션` (survey-011 v0.33.0 항목10-B 작업 중)
 - **재발 1회(2026-07-13, v0.33.0 항목11 DB v5→6):** 리터럴 grep(`indexedDB.open('survey-011'`)로 27곳을 치환했는데 `v54-voice-data.spec.ts`만 **상수 변수 형태**(`const DB_VERSION = 5` → `open(dbName, dbVersion)`)라 grep을 빠져나가 11케이스 VersionError. **체크리스트 보강: 리터럴 grep + `grep -rn "DB_VERSION" tests/`(변수 형태) 둘 다 돌릴 것.** 스키마 미러 6곳에는 `feedbackQueue`(keyPath:'id', autoIncrement)도 추가됨.
-- **현재 상태:** ✅수정됨(전 스위트 588 passed로 검증) | ⚠️주시(다음 bump 시 재발 소지 — 위 grep 체크리스트 2종)
+- **근절(2026-07-16, v0.35.1 Stage 1-5):** `tests/fixtures/idb.ts` 신설 — 이름·버전은 앱 `db.ts`의 export를 재수출(SSOT), 스키마 미러는 `applyAppSchema` **한 벌**(브라우저 주입용 소스 문자열 제공). 사후(post-boot) 시딩 27곳은 **버전 무지정 open**으로, pre-boot 시딩 6곳은 fixture 주입으로 전환. `tests/idb-fixture.spec.ts` 가드가 버전 하드코딩 재유입을 테스트로 차단한다. **다음 bump 절차 = `db.ts` DB_VERSION 올리고 fixture `applyAppSchema`에 신규 스토어 반영, 끝** (grep 체크리스트 불필요).
+- **현재 상태:** ✅근절(픽스처 SSOT + 가드 spec — 2026-07-16)
+
+### [ENV-12] ESLint max-lines(500) 예외 목록 — GL-006 헌장 §5 도입 시점의 기존 초과 파일
+- **배경:** 공통 개발 헌장(GL-006, 민구 채택 2026-07-16) §5 — 파일 크기는 책임 크기의 신호(권장 150~250줄, 300줄 분리 검토, **500줄 리팩토링 대상**). v0.35.1 Stage 1-8에서 ESLint `max-lines`(500, `src/` 한정)를 오류 게이트로 도입(`npm run lint`, predeploy에 포함).
+- **예외(파일 상단 `eslint-disable max-lines`, 해소 시 주석 제거 + 이 목록에서 삭제):**
+  1. `src/lib/useVoiceSession.ts` (~3,248) — Stage 3(음성 코어 재설계)에서 해소
+  2. `src/screens/SettingsScreen.tsx` (~3,113) — Stage 2(컴포넌트 추출)에서 해소
+  3. `src/screens/DataScreen.tsx` (~2,420) — Stage 2(components/data 분리)에서 해소
+  4. `src/screens/VoiceScreen.tsx` (~1,341) — Stage 2(컴포넌트 추출)에서 해소
+  5. `src/lib/audioRecorder.ts` (854) — 단일 책임 클래스, 분리 경계 검토 후 해소
+  6. `src/lib/pastValues.ts` (573) — 과거값 인덱스 도메인, 분리 경계 검토 후 해소
+  7. `src/lib/sheets.ts` (545) — Sheets API 도메인, 분리 경계 검토 후 해소
+  8. `src/stores/settingsStore.ts` (~521) — persist migrate 이력 포함, 분리 경계 검토 후 해소
+  9. `src/lib/speech.ts` (~514) — STT 컨트롤러, 분리 경계 검토 후 해소
+- **규칙:** 신규 파일은 예외 금지(500 초과 = lint 실패). 기존 예외 파일에 코드를 얹기 전에 분리를 먼저 검토한다(GL-006 AI 행동 규칙 #4). 기계적 part1/part2 분할 금지 — 경계는 항상 책임 단위.
+- **출처:** GL-006 채택 + v0.35.1 리팩토링 (2026-07-16)
+- **현재 상태:** ⚠️주시 (Stage 2·3 진행에 따라 순차 해소)
 
 ---
 

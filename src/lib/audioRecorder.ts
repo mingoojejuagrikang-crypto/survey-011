@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- [ENV-12] 기존 초과 파일(GL-006 §5 도입 시점), 단일 책임 클래스 — 분리 경계 검토 후 해소. 해소 시 이 주석 제거. */
 /**
  * MediaRecorder wrapper for per-field voice clip recording.
  * Records from the microphone independently of SpeechRecognition.

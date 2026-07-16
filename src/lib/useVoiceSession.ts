@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- [ENV-12] 기존 초과 파일(GL-006 §5 도입 시점), Stage 3(음성 코어 재설계)에서 해소. 해소 시 이 주석 제거. */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSettingsStore, minConfidenceForTolerance } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
@@ -69,6 +70,14 @@ interface AwaitingField {
 /** v0.9.0 빠른 인식(조기확정): interim 숫자가 이 시간(ms) 동안 같은 값으로 안정되면 final을
  *  기다리지 않고 커밋한다. 짧을수록 빠르지만 미완성 숫자(소수점 추가 전) 절단 위험이 커진다. */
 const EARLY_COMMIT_STABLE_MS = 400;
+
+/** 빈/극소 클립 판정 임계(바이트) — webm/opus 컨테이너 헤더만 담긴 캡처가 이 이하로 온다.
+ *  이하이면 저장하지 않고 clip_empty/clip_cmd_empty로 계측한다([CLIP-3] 가드). */
+const EMPTY_CLIP_BYTES = 200;
+
+/** pause()가 recorder dispose 전에 in-flight 클립 저장을 기다리는 상한(ms). 경로별 유예는
+ *  의도적 차등 — stop() 5초(세션 종료, 최대 보존), 아카이브 flush 1.5초(백그라운드, UX 무영향). */
+const PAUSE_FLUSH_GRACE_MS = 3000;
 
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
@@ -257,7 +266,7 @@ export function useVoiceSession() {
       const savePromise = (async () => {
         try {
           const { blob, raw } = await stopPromise;
-          if (!blob || blob.size <= 200) {
+          if (!blob || blob.size <= EMPTY_CLIP_BYTES) {
             logger.log({ type: 'clip', extra: `clip_cmd_empty:${blob ? blob.size : 'null'}`, kind: 'command', sessionId: sessionIdRef.current, row: targetRow, colId: targetColId });
             return;
           }
@@ -1982,7 +1991,7 @@ export function useVoiceSession() {
           await resolveFailedCapture(savePromiseSelf);
           return;
         }
-        if (clipBlob.size <= 200) {
+        if (clipBlob.size <= EMPTY_CLIP_BYTES) {
           logger.log({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, sessionId: sessionIdRef.current, row: clipAwaitingRow, colId: clipAwaitingColId });
           maybeAutoRecoverOrLatch('clip_too_small');
           await resolveFailedCapture(savePromiseSelf);
@@ -2522,7 +2531,7 @@ export function useVoiceSession() {
     if (pendingClipSavesRef.current.size > 0) {
       await Promise.race([
         Promise.allSettled(Array.from(pendingClipSavesRef.current)),
-        new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+        new Promise<void>((resolve) => setTimeout(resolve, PAUSE_FLUSH_GRACE_MS)),
       ]);
     }
     recorderRef.current?.dispose();

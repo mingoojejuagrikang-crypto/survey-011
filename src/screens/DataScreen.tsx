@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- [ENV-12] 기존 초과 파일(GL-006 §5 도입 시점), Stage 2(components/data 분리)에서 해소. 해소 시 이 주석 제거. */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { T } from '../tokens';
 import { I } from '../components/icons';

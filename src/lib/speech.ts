@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- [ENV-12] 기존 초과 파일(GL-006 §5 도입 시점), STT 컨트롤러 — 분리 경계 검토 후 해소. 해소 시 이 주석 제거. */
 /**
  * Web Speech API wrapper:
  *  - SpeechRecognition: continuous, interim, ko-KR

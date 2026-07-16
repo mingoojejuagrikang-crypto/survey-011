@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- [ENV-12] 기존 초과 파일(GL-006 §5 도입 시점), Stage 2(컴포넌트 추출)에서 해소. 해소 시 이 주석 제거. */
 import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { T } from '../tokens';
 import { I } from '../components/icons';
