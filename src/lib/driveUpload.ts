@@ -30,6 +30,22 @@ async function authHeader(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${token}` };
 }
 
+/** 업로드 작업 단위 인증 스냅샷(TOCTOU — 리뷰 라운드4 Codex High). 이중 업로드는 **작업 진입 시
+ *  1회** 캡처해 사용자·관리자 두 레그가 같은 계정으로 완결되게 한다 — 레그 사이에 A→B 재로그인이
+ *  끼어도 같은 zip이 user=A/admin=B로 갈라져 귀속되지 않는다. */
+interface UploadAuth {
+  email: string | null;
+  headers: Record<string, string>;
+}
+
+/** 스냅샷 캡처. 미로그인이면 null — 각 레그가 자체 authHeader()에서 기존 문구로 실패하게 둔다
+ *  (진입 시 throw하면 errors[] 수집 계약이 깨진다). */
+function captureUploadAuth(): UploadAuth | null {
+  const token = getAccessToken();
+  if (!token) return null;
+  return { email: getCurrentEmail(), headers: { Authorization: `Bearer ${token}` } };
+}
+
 /** zip 업로드. headers를 넘기면 그 인증으로 고정 실행 — 폴더 ensure와 같은 작업 단위에서 계정이
  *  바뀌어도(리뷰 라운드2 Codex High TOCTOU) 다른 계정 토큰으로 남의 폴더에 올리지 않는다.
  *  미지정 시 호출 시점 토큰(단독 업로드 경로용). */
@@ -140,9 +156,8 @@ async function ensureUserLogFolder(email: string | null, headers: Record<string,
  *  v0.35.1(리뷰 라운드3 Codex High): 이메일·토큰을 작업 시작 시 1회 스냅샷해 폴더 탐색·생성·zip
  *  업로드·캐시 기록 전 과정에 주입 — 응답 대기 중 A→B 재로그인이 끼어도 폴더는 B에, 캐시는
  *  {A, B폴더}로 갈라지는 혼입이 생기지 않는다(admin 레그와 동일 방어). */
-export async function uploadLogToUserDrive(zipBlob: Blob, filename: string): Promise<string> {
-  const email = getCurrentEmail();
-  const headers = await authHeader();
+export async function uploadLogToUserDrive(zipBlob: Blob, filename: string, auth?: UploadAuth): Promise<string> {
+  const { email, headers } = auth ?? { email: getCurrentEmail(), headers: await authHeader() };
   const folderId = await ensureUserLogFolder(email, headers);
   return uploadZip(zipBlob, filename, folderId, headers);
 }
@@ -216,15 +231,15 @@ export async function downloadDriveFile(fileId: string): Promise<Blob> {
  *  v0.35.1(리뷰 라운드2 Codex High, TOCTOU): 이메일·토큰을 작업 시작 시 **한 번만** 확정해 폴더
  *  ensure와 zip 업로드 양쪽에 주입 — 네트워크 대기 중 A→B 재로그인이 끼어도 B 토큰으로 A 폴더에
  *  올리는 혼입이 생기지 않는다(양쪽 다 A 인증으로 완결되거나 A 토큰 만료로 실패). */
-export async function uploadLogToAdminTeamFolder(zipBlob: Blob, filename: string): Promise<string> {
+export async function uploadLogToAdminTeamFolder(zipBlob: Blob, filename: string, auth?: UploadAuth): Promise<string> {
   if (!LOG_FOLDER_ID) throw new Error('관리자 폴더 ID 미설정');
-  const verifiedEmail = getCurrentEmail();
+  const resolved = auth ?? { email: getCurrentEmail(), headers: await authHeader() };
+  const verifiedEmail = resolved.email;
   if (!verifiedEmail || !isLikelyEmail(verifiedEmail)) {
     throw new Error('토큰에서 검증된 이메일을 가져올 수 없음');
   }
-  const headers = await authHeader(); // 이메일과 같은 시점의 토큰으로 고정
-  const teamFolderId = await ensureTeamSubFolder(LOG_FOLDER_ID, verifiedEmail, headers);
-  return uploadZip(zipBlob, filename, teamFolderId, headers);
+  const teamFolderId = await ensureTeamSubFolder(LOG_FOLDER_ID, verifiedEmail, resolved.headers);
+  return uploadZip(zipBlob, filename, teamFolderId, resolved.headers);
 }
 
 export interface DualUploadResult {
@@ -268,10 +283,11 @@ export async function uploadLogToBothDrives(
   zipBlob: Blob,
   filename: string,
 ): Promise<DualUploadResult> {
+  const auth = captureUploadAuth(); // 작업 단위 스냅샷 — 두 레그가 같은 계정으로 완결
   return uploadToBothLegs({
     adminConfigured: !!LOG_FOLDER_ID,
-    userLeg: () => uploadLogToUserDrive(zipBlob, filename),
-    adminLeg: () => uploadLogToAdminTeamFolder(zipBlob, filename),
+    userLeg: () => uploadLogToUserDrive(zipBlob, filename, auth ?? undefined),
+    adminLeg: () => uploadLogToAdminTeamFolder(zipBlob, filename, auth ?? undefined),
     // 캐시된 폴더 ID가 삭제/이동돼 실패했을 수 있음 — 무효화해 다음 시도에 재탐색/재생성.
     onUserError: () => {
       if (useSettingsStore.getState().userLogFolderCache) {
@@ -315,23 +331,23 @@ async function ensureFeedbackSubFolder(
 
 /** 사용자 Drive `survey-011/feedback/`에 업로드. TOCTOU — 로그 사용자 레그와 동일하게 토큰을
  *  작업 시작 시 1회 스냅샷해 전 과정에 주입. */
-export async function uploadFeedbackToUserDrive(zipBlob: Blob, filename: string): Promise<string> {
-  const headers = await authHeader();
+export async function uploadFeedbackToUserDrive(zipBlob: Blob, filename: string, auth?: UploadAuth): Promise<string> {
+  const headers = auth?.headers ?? (await authHeader());
   const folderId = await ensureUserFeedbackFolder(headers);
   return uploadZip(zipBlob, filename, folderId, headers);
 }
 
 /** 관리자 feedback 폴더의 {검증된 이메일}/ 하위 폴더에 업로드. FEEDBACK_FOLDER_ID 미설정이면 throw
  *  하지 않도록 호출 전에 adminConfigured로 분기할 것(uploadFeedbackToBothDrives가 담당). */
-export async function uploadFeedbackToAdminFolder(zipBlob: Blob, filename: string): Promise<string> {
+export async function uploadFeedbackToAdminFolder(zipBlob: Blob, filename: string, auth?: UploadAuth): Promise<string> {
   if (!FEEDBACK_FOLDER_ID) throw new Error('관리자 피드백 폴더 ID 미설정');
-  const verifiedEmail = getCurrentEmail();
+  const resolved = auth ?? { email: getCurrentEmail(), headers: await authHeader() };
+  const verifiedEmail = resolved.email;
   if (!verifiedEmail || !isLikelyEmail(verifiedEmail)) {
     throw new Error('토큰에서 검증된 이메일을 가져올 수 없음');
   }
-  const headers = await authHeader(); // TOCTOU — 이메일과 같은 시점의 토큰으로 고정(로그 경로 동일)
-  const subId = await ensureFeedbackSubFolder(FEEDBACK_FOLDER_ID, verifiedEmail, headers);
-  return uploadZip(zipBlob, filename, subId, headers);
+  const subId = await ensureFeedbackSubFolder(FEEDBACK_FOLDER_ID, verifiedEmail, resolved.headers);
+  return uploadZip(zipBlob, filename, subId, resolved.headers);
 }
 
 /** 개선요청 이중 업로드 결과 — DualUploadResult와 동일 형태(adminConfigured=FEEDBACK_FOLDER_ID
@@ -345,9 +361,10 @@ export async function uploadFeedbackToBothDrives(
   zipBlob: Blob,
   filename: string,
 ): Promise<FeedbackUploadResult> {
+  const auth = captureUploadAuth(); // 작업 단위 스냅샷 — 두 레그가 같은 계정으로 완결
   return uploadToBothLegs({
     adminConfigured: !!FEEDBACK_FOLDER_ID,
-    userLeg: () => uploadFeedbackToUserDrive(zipBlob, filename),
-    adminLeg: () => uploadFeedbackToAdminFolder(zipBlob, filename),
+    userLeg: () => uploadFeedbackToUserDrive(zipBlob, filename, auth ?? undefined),
+    adminLeg: () => uploadFeedbackToAdminFolder(zipBlob, filename, auth ?? undefined),
   });
 }
