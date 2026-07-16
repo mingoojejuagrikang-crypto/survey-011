@@ -13,7 +13,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { ensureEmailSubFolder, escapeDriveQ, FILES_API } from '../src/lib/driveFolders';
+import { ensureEmailSubFolder, escapeDriveQ, FILES_API, cachedFolderIdFor } from '../src/lib/driveFolders';
 
 const HEADERS = { Authorization: 'Bearer test-token' };
 const LABELS = { search: '검색 실패', create: '생성 실패' };
@@ -123,6 +123,31 @@ test.describe('ensureEmailSubFolder — [RACE-6] 계약', () => {
     } finally { restore(); }
   });
 
+  test('동시 호출 dedup: 같은 (parent,email) 2건이 겹치면 검색·생성 각 1회 + 동일 ID (중복 폴더 방지)', async () => {
+    const { calls, restore } = stubFetch({ searchFiles: [], createdId: 'only-one' });
+    try {
+      const [a, b] = await Promise.all([
+        ensureEmailSubFolder('parent-log', 'race@x.y', { headers: HEADERS, errorLabels: LABELS }),
+        ensureEmailSubFolder('parent-log', 'race@x.y', { headers: HEADERS, errorLabels: LABELS }),
+      ]);
+      expect(a).toBe('only-one');
+      expect(b).toBe('only-one');
+      expect(calls.filter((c) => c.method === 'GET').length).toBe(1);
+      expect(calls.filter((c) => c.method === 'POST').length).toBe(1);
+    } finally { restore(); }
+  });
+
+  test('동시 호출 dedup: 다른 (parent,email)은 공유하지 않는다', async () => {
+    const { calls, restore } = stubFetch({ searchFiles: [{ id: 'found' }] });
+    try {
+      await Promise.all([
+        ensureEmailSubFolder('parent-log', 'a@x.y', { headers: HEADERS, errorLabels: LABELS }),
+        ensureEmailSubFolder('parent-feedback', 'a@x.y', { headers: HEADERS, errorLabels: LABELS }),
+      ]);
+      expect(calls.filter((c) => c.method === 'GET').length).toBe(2);
+    } finally { restore(); }
+  });
+
   test('Drive Q escape: single-quote·backslash가 리터럴로 이스케이프된다', async () => {
     expect(escapeDriveQ(`o'brien\\x`)).toBe(`o\\'brien\\\\x`);
     const { calls, restore } = stubFetch({ searchFiles: [{ id: 'sub' }] });
@@ -132,5 +157,25 @@ test.describe('ensureEmailSubFolder — [RACE-6] 계약', () => {
       expect(q).toContain(`'p\\'id' in parents`);
       expect(q).toContain(`name='o\\'brien@x.y'`);
     } finally { restore(); }
+  });
+});
+
+test.describe('cachedFolderIdFor — 계정 결합 캐시 (v0.35.1 리뷰 Codex High 반영)', () => {
+  test('이메일 일치: 캐시 ID 반환', () => {
+    expect(cachedFolderIdFor({ email: 'a@b.c', id: 'sub-a' }, 'a@b.c')).toBe('sub-a');
+  });
+
+  test('이메일 불일치(A 로그아웃 → B 로그인): 캐시 미스 — A의 폴더로 오업로드 차단', () => {
+    expect(cachedFolderIdFor({ email: 'a@b.c', id: 'sub-a' }, 'b@b.c')).toBeNull();
+  });
+
+  test('legacy 맨 문자열 캐시(계정 미상)·손상·null: 전부 미스', () => {
+    expect(cachedFolderIdFor('bare-folder-id', 'a@b.c')).toBeNull();
+    expect(cachedFolderIdFor({ id: 'no-email' }, 'a@b.c')).toBeNull();
+    expect(cachedFolderIdFor(null, 'a@b.c')).toBeNull();
+  });
+
+  test('현재 이메일 미확인(null): 캐시 사용 안 함', () => {
+    expect(cachedFolderIdFor({ email: 'a@b.c', id: 'sub-a' }, null)).toBeNull();
   });
 });

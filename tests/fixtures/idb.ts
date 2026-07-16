@@ -55,3 +55,9 @@ export function applyAppSchema(db: IDBDatabase): void {
 
 /** 브라우저 주입용 소스 문자열 — `(0, eval)(\`(${src})\`)`로 복원한다. */
 export const APPLY_APP_SCHEMA_SOURCE = applyAppSchema.toString();
+
+/** 미러가 만드는 스토어 목록 — tests/idb-fixture.spec.ts의 드리프트 가드가 실제 앱이 만든 DB와
+ *  대조한다(applyAppSchema에 스토어를 추가/삭제하면 여기도 함께). */
+export const APP_STORE_NAMES = [
+  'sessions', 'audioClips', 'logEvents', 'kv', 'screenshots', 'feedbackQueue',
+] as const;

@@ -21,8 +21,11 @@
 
 import type { Page } from '@playwright/test';
 
-/** 브라우저 주입 스크립트 (correction-flow.spec.ts 계보의 정본):
- *  - speechSynthesis 목: speak 즉시 onstart/onend 발화 + window.__ttsLog에 문구 적재.
+/** 브라우저 주입 스크립트 (correction-flow.spec.ts 계보의 정본 + [TEST-TTS-MOCK-1] 반영):
+ *  - speechSynthesis 목: speak가 onstart를 즉시, **onend는 항상 비동기**(기본 200ms — 실기기
+ *    수백ms~수초의 축약)로 발화 + window.__ttsLog에 문구 적재. 동기 onend는 TTS를 기다리는
+ *    상태 전이(advance/review/확인 플래시)를 페인트 없이 접어 false-green을 만든다
+ *    ([TEST-TTS-MOCK-1] 코드 확정 — 그래서 복붙 원본과 달리 여기서는 비동기가 기본).
  *  - 애니메이션/트랜지션 0ms 스타일(타이밍 flake 제거).
  *  - SpeechRecognition/webkitSpeechRecognition → MockSTT. 인스턴스는 window.__mockSTT로 노출되고
  *    fireResult(단일)·fireResultWithAlts(대안 포함, [STT-15] 재현)를 제공한다. */
@@ -33,7 +36,11 @@ export const VOICE_MOCK_INIT_SCRIPT = `
     speak: function(utterance) {
       window.__ttsLog.push(utterance.text);
       try { if (utterance.onstart) utterance.onstart(new Event('start')); } catch(e) {}
-      try { if (utterance.onend)   utterance.onend(new Event('end'));     } catch(e) {}
+      // [TEST-TTS-MOCK-1] onend는 항상 비동기(>=1 태스크). 지연은 installVoiceMocks 옵션으로 조절.
+      var delay = typeof window.__ttsOnendDelayMs === 'number' ? window.__ttsOnendDelayMs : 200;
+      setTimeout(function() {
+        try { if (utterance.onend) utterance.onend(new Event('end')); } catch(e) {}
+      }, delay);
     },
     cancel: function() {}, pause: function() {}, resume: function() {},
     getVoices: function() { return [{ name: 'Mock Korean', lang: 'ko-KR', default: true, localService: true, voiceURI: 'mock' }]; },
@@ -86,8 +93,16 @@ export const VOICE_MOCK_INIT_SCRIPT = `
 })();
 `;
 
-/** 페이지에 STT/TTS 목 주입 — page.goto 전에 호출한다. */
-export async function installVoiceMocks(page: Page): Promise<void> {
+/** 페이지에 STT/TTS 목 주입 — page.goto 전에 호출한다.
+ *  ttsOnendDelayMs: TTS onend 비동기 지연(기본 200ms — [TEST-TTS-MOCK-1] 권장). TTS-대기 전이를
+ *  단언하지 않는 순수 파서/즉답 spec만 0으로 낮춰라(그래도 setTimeout(0) = 비동기 유지). */
+export async function installVoiceMocks(page: Page, opts?: { ttsOnendDelayMs?: number }): Promise<void> {
+  if (opts?.ttsOnendDelayMs !== undefined) {
+    await page.addInitScript(
+      (d) => { (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = d; },
+      opts.ttsOnendDelayMs,
+    );
+  }
   await page.addInitScript({ content: VOICE_MOCK_INIT_SCRIPT });
 }
 

@@ -1,6 +1,6 @@
 import { getAccessToken, getCurrentEmail } from './googleAuth';
 import { useSettingsStore } from '../stores/settingsStore';
-import { FILES_API, escapeDriveQ, ensureEmailSubFolder } from './driveFolders';
+import { FILES_API, escapeDriveQ, ensureEmailSubFolder, cachedFolderIdFor } from './driveFolders';
 
 /**
  * Drive log backup target — 관리자(팀 리더) 드라이브의 공유 폴더 ID.
@@ -58,13 +58,14 @@ async function uploadZip(zipBlob: Blob, filename: string, parentId?: string): Pr
  * 관리자 공유 폴더 내에 팀원 이메일 이름의 하위 폴더를 찾거나 생성한다.
  * Codex 리뷰 반영: race condition 방지를 위해 settingsStore에 캐시, 검색 시 createdTime 정렬로
  * 중복 폴더가 있어도 가장 오래된 것을 선택해 일관성 유지. 공용 로직은 ensureEmailSubFolder
- * (driveFolders.ts — [RACE-6] 계약)로 통합, 여기서는 **로그 폴더 전용** 캐시(teamFolderId)만 배선한다.
+ * (driveFolders.ts — [RACE-6] 계약)로 통합, 여기서는 **로그 폴더 전용** 캐시만 배선한다.
+ * v0.35.1(리뷰 Codex High): 캐시는 계정 결합(FolderCache) — 다른 계정의 캐시는 미스 처리.
  */
 async function ensureTeamSubFolder(parentId: string, userEmail: string): Promise<string> {
   return ensureEmailSubFolder(parentId, userEmail, {
     headers: await authHeader(),
-    readCache: () => useSettingsStore.getState().teamFolderId,
-    writeCache: (id) => useSettingsStore.getState().set({ teamFolderId: id }),
+    readCache: () => cachedFolderIdFor(useSettingsStore.getState().teamFolderCache, userEmail),
+    writeCache: (id) => useSettingsStore.getState().set({ teamFolderCache: { email: userEmail, id } }),
     errorLabels: { search: '팀원 폴더 검색 실패', create: '팀원 하위 폴더 생성 실패' },
   });
 }
@@ -111,13 +112,16 @@ async function ensureFolder(name: string, parentId?: string): Promise<string> {
   return created.id;
 }
 
-/** 사용자 Drive `survey-011/log/` 폴더 ID (settingsStore 캐시 우선). */
+/** 사용자 Drive `survey-011/log/` 폴더 ID (settingsStore 캐시 우선).
+ *  v0.35.1 — 캐시는 계정 결합: 같은 기기에서 계정을 바꾸면 다른 사용자 Drive의 폴더 ID가
+ *  재사용되지 않는다(불일치 = 재검색). 이메일 미확인 상태면 무캐시로 진행. */
 async function ensureUserLogFolder(): Promise<string> {
-  const cached = useSettingsStore.getState().userLogFolderId;
+  const email = getCurrentEmail();
+  const cached = cachedFolderIdFor(useSettingsStore.getState().userLogFolderCache, email);
   if (cached) return cached;
   const appId = await ensureFolder(APP_FOLDER_NAME);
   const logId = await ensureFolder(USER_LOG_SUBFOLDER, appId);
-  useSettingsStore.getState().set({ userLogFolderId: logId });
+  if (email) useSettingsStore.getState().set({ userLogFolderCache: { email, id: logId } });
   return logId;
 }
 
@@ -128,24 +132,25 @@ export async function uploadLogToUserDrive(zipBlob: Blob, filename: string): Pro
 }
 
 // ─── v0.5.0 W8: 로그 zip 기반 세션 복구 — Drive 읽기 경로 ──────────────────────
-// 업로드와 같은 폴더 규약(`survey-011/log`)·캐시(settingsStore.userLogFolderId)를 재사용하되,
+// 업로드와 같은 폴더 규약(`survey-011/log`)·캐시(settingsStore.userLogFolderCache)를 재사용하되,
 // 복구는 읽기 전용이므로 폴더를 **생성하지 않는다**(없으면 백업도 없음).
 
 /** `survey-011/log` 폴더 ID를 검색만으로 찾는다(캐시 우선, 생성 없음). 미존재 시 null. */
 export async function findUserLogFolderId(): Promise<string | null> {
-  const cached = useSettingsStore.getState().userLogFolderId;
+  const email = getCurrentEmail();
+  const cached = cachedFolderIdFor(useSettingsStore.getState().userLogFolderCache, email);
   if (cached) return cached;
   const appId = await findFolder(APP_FOLDER_NAME);
   if (!appId) return null;
   const logId = await findFolder(USER_LOG_SUBFOLDER, appId);
-  if (logId) useSettingsStore.getState().set({ userLogFolderId: logId });
+  if (logId && email) useSettingsStore.getState().set({ userLogFolderCache: { email, id: logId } });
   return logId;
 }
 
 /** 캐시된 로그 폴더 ID 무효화 — 폴더 삭제/이동으로 stale해진 캐시를 재탐색하게 한다. */
 export function invalidateUserLogFolderCache(): void {
-  if (useSettingsStore.getState().userLogFolderId) {
-    useSettingsStore.getState().set({ userLogFolderId: null });
+  if (useSettingsStore.getState().userLogFolderCache) {
+    useSettingsStore.getState().set({ userLogFolderCache: null });
   }
 }
 
@@ -250,13 +255,13 @@ export async function uploadLogToBothDrives(
     adminLeg: () => uploadLogToAdminTeamFolder(zipBlob, filename),
     // 캐시된 폴더 ID가 삭제/이동돼 실패했을 수 있음 — 무효화해 다음 시도에 재탐색/재생성.
     onUserError: () => {
-      if (useSettingsStore.getState().userLogFolderId) {
-        useSettingsStore.getState().set({ userLogFolderId: null });
+      if (useSettingsStore.getState().userLogFolderCache) {
+        useSettingsStore.getState().set({ userLogFolderCache: null });
       }
     },
     onAdminError: () => {
-      if (useSettingsStore.getState().teamFolderId) {
-        useSettingsStore.getState().set({ teamFolderId: null });
+      if (useSettingsStore.getState().teamFolderCache) {
+        useSettingsStore.getState().set({ teamFolderCache: null });
       }
     },
   });
@@ -266,7 +271,7 @@ export async function uploadLogToBothDrives(
 
 const USER_FEEDBACK_SUBFOLDER = 'feedback';
 
-/** 사용자 Drive `survey-011/feedback/` 폴더 ID. 로그 폴더(userLogFolderId 캐시)와 달리 별도
+/** 사용자 Drive `survey-011/feedback/` 폴더 ID. 로그 폴더(userLogFolderCache)와 달리 별도
  *  settings 캐시를 두지 않는다 — 개선요청은 빈도가 낮아 검색 2회 비용이 무해하고, persist 필드
  *  추가(마이그레이션 비용)를 피한다. */
 async function ensureUserFeedbackFolder(): Promise<string> {
@@ -275,7 +280,7 @@ async function ensureUserFeedbackFolder(): Promise<string> {
 }
 
 /** 관리자 feedback 폴더 내 {userEmail}/ 하위 폴더를 찾거나 생성한다.
- *  ⚠️ **무캐시**인 이유([RACE-6] parent별 캐시 분리): settingsStore.teamFolderId 캐시는 **로그
+ *  ⚠️ **무캐시**인 이유([RACE-6] parent별 캐시 분리): settingsStore.teamFolderCache는 **로그
  *  폴더의** 하위 폴더 ID를 담고 있어, 다른 parent(feedback 폴더)에 재사용하면 로그 하위 폴더로
  *  오업로드된다. 개선요청은 빈도가 낮아 검색 비용이 무해하고 persist 필드 추가도 피한다(v0.33.0). */
 async function ensureFeedbackSubFolder(parentId: string, userEmail: string): Promise<string> {

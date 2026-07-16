@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
 import type { Column, SheetConfig, SavedSheet, LegacyInputMode } from '../types';
 import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
+import { isFolderCache, type FolderCache } from '../lib/driveFolders';
 import { isCycling } from '../lib/autoValue';
 import {
   DEFAULT_POSITIVE_BEEP_ID,
@@ -131,10 +132,14 @@ interface SettingsState {
   beepVolume: number;
   /** Preferred Web Speech API voice name for ko-KR TTS. Empty string = auto (first available). */
   preferredVoiceName: string;
-  /** v0.10.1: 캐시된 관리자 폴더 내 본인 팀 하위 폴더 ID — race 방지용. 첫 결정 후 재사용. */
-  teamFolderId: string | null;
-  /** v0.4.5 Q1b: 캐시된 사용자 Drive 내 `survey-011/log/` 폴더 ID — 매 업로드 검색 방지. */
-  userLogFolderId: string | null;
+  /** v0.10.1: 캐시된 관리자 폴더 내 본인 팀 하위 폴더 — race 방지용, 첫 결정 후 재사용.
+   *  v0.35.1(리뷰 Codex High): 어느 계정의 캐시인지(email) 결합 — A 로그아웃 → B 로그인 시
+   *  A의 폴더 ID 재사용으로 관리자 공유 폴더에서 로그가 계정 간 혼입되던 결함 차단.
+   *  검증·해석은 driveFolders.cachedFolderIdFor가 SSOT(이메일 불일치 = 캐시 미스). */
+  teamFolderCache: FolderCache | null;
+  /** v0.4.5 Q1b: 캐시된 사용자 Drive 내 `survey-011/log/` 폴더 — 매 업로드 검색 방지.
+   *  v0.35.1: teamFolderCache와 동일하게 계정 결합. */
+  userLogFolderCache: FolderCache | null;
   /** v0.7.0 — 조사시기(회차) 컬럼 id. null = 자동(첫 date 컬럼, '조사일자' 우선) —
    *  해석은 pastValues.resolveRoundCol. */
   roundDateColId: string | null;
@@ -181,6 +186,16 @@ export function applySemanticDefaults(col: Column): Column {
   if (col.type === 'name') return { ...col, type: 'text' };
   return col;
 }
+
+/** v0.35.1 — 인터페이스에서 제거돼 더는 존재하지 않는 영속 키. 하이드레이션 merge에서 걷어낸다
+ *  (아래 persist 옵션 merge 참조). 새 필드를 폐기할 땐 여기 추가만 하면 된다.
+ *   - review* 6종: 비교탭 정식 제거(Stage 0).
+ *   - teamFolderId/userLogFolderId: 계정 미결합 legacy 폴더 캐시 → teamFolderCache/userLogFolderCache로 대체. */
+const DEPRECATED_PERSIST_KEYS = [
+  'reviewFilters', 'reviewTargetRound', 'reviewBaselineBack',
+  'reviewGroupCols', 'reviewMeasureCols', 'reviewSelectedRows',
+  'teamFolderId', 'userLogFolderId',
+] as const;
 
 /** Migrate legacy mode-based columns to new input/ttsAnnounce shape. */
 function migrateColumn(c: unknown): Column {
@@ -244,8 +259,8 @@ export function makeSettingsDefaults(): SettingsDefaults {
     beepNegativeId: DEFAULT_NEGATIVE_BEEP_ID,
     beepVolume: 0.5,
     preferredVoiceName: '',
-    teamFolderId: null,
-    userLogFolderId: null,
+    teamFolderCache: null,
+    userLogFolderCache: null,
     roundDateColId: null,
   };
 }
@@ -324,6 +339,15 @@ export const useSettingsStore = create<SettingsState>()(
       version: 11,
       // v0.14.0 C — localStorage + IDB 내구 미러(eviction 방어).
       storage: createJSONStorage(() => mirroredStorage),
+      // v0.35.1 — 폐기된 영속 키 제거의 SSOT. migrate가 아닌 merge에 두는 이유: version 11
+      // 동결([ENV-9]) 상태에선 저장본도 11이라 zustand가 migrate를 호출하지 않는다 — merge는
+      // 모든 하이드레이션에서 돌므로 같은 버전의 기존 기기에서도 잔존 키가 확실히 제거된다
+      // (리뷰 라운드1 Codex·Flash 공통 지적). 제거 후 첫 저장부터 직렬화에도 안 남는다.
+      merge: (persisted, current) => {
+        const p = { ...(persisted as Record<string, unknown>) };
+        for (const k of DEPRECATED_PERSIST_KEYS) delete p[k];
+        return { ...current, ...(p as Partial<SettingsState>) };
+      },
       // v0.14.0 C — 하이드레이션 breadcrumb. 다음 강제종료/시간경과 테스트 로그에서 시트 등록이
       // 살아있었는지(eviction 여부)와 IDB 복원이 작동했는지 판별할 계측. token은 별도 키라 함께 본다.
       onRehydrateStorage: () => (state) => {
@@ -376,13 +400,6 @@ export const useSettingsStore = create<SettingsState>()(
           noisyMode?: unknown;
           trendRuleClearedV6?: boolean;
           savedSheets?: unknown;
-          // v0.35.1 Stage 0 — 비교탭 제거로 인터페이스에서 빠진 영속 필드(잔존 키 삭제용).
-          reviewFilters?: unknown;
-          reviewTargetRound?: unknown;
-          reviewBaselineBack?: unknown;
-          reviewGroupCols?: unknown;
-          reviewMeasureCols?: unknown;
-          reviewSelectedRows?: unknown;
         };
         if (Array.isArray(s.columns)) {
           // 기존 컬럼 전부에 샘플키 유추 기본값 부여(사용자가 이미 토글한 boolean은 보존:
@@ -419,21 +436,20 @@ export const useSettingsStore = create<SettingsState>()(
           s.beepVolume = 0.5;
         }
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
-        if (typeof s.teamFolderId !== 'string' && s.teamFolderId !== null) s.teamFolderId = null;
-        if (typeof s.userLogFolderId !== 'string' && s.userLogFolderId !== null) s.userLogFolderId = null;
+        // v0.35.1 — 계정 결합 폴더 캐시(형태 손상은 null로 치유). legacy 맨 문자열 캐시
+        // (teamFolderId/userLogFolderId)는 계정 미상이라 승계하지 않는다(DEPRECATED strip —
+        // 업데이트 후 첫 업로드에서 1회 재검색, 무해).
+        if (s.teamFolderCache !== null && !isFolderCache(s.teamFolderCache)) s.teamFolderCache = null;
+        if (s.userLogFolderCache !== null && !isFolderCache(s.userLogFolderCache)) s.userLogFolderCache = null;
         // v0.7.0 — 조사시기(회차) 컬럼 id는 유지(UI만 v0.8.0 조회탭으로 이전 — WS4).
         if (typeof s.roundDateColId !== 'string' && s.roundDateColId !== null) s.roundDateColId = null;
 
-        // ── v0.35.1 Stage 0 — 비교탭(ReviewScreen) 정식 제거. v0.10.0에 도입된 영속 상태 6필드를
-        // 인터페이스에서 없앴으므로 잔존 영속값을 무조건 삭제한다(v7 speakerOutput 패턴 — 필드가
-        // 더는 존재하지 않아 다운그레이드 마커 불필요). persist version은 11 동결 유지([ENV-9],
-        // settings-migration.spec의 version===11 단정 — 필드 delete는 bump 불요).
-        delete s.reviewFilters;
-        delete s.reviewTargetRound;
-        delete s.reviewBaselineBack;
-        delete s.reviewGroupCols;
-        delete s.reviewMeasureCols;
-        delete s.reviewSelectedRows;
+        // v0.35.1 Stage 0 — 비교탭 영속 6필드 제거는 migrate가 아니라 **merge 단계의
+        // DEPRECATED_PERSIST_KEYS strip**이 담당한다(아래 persist 옵션). 이유(리뷰 라운드1
+        // Codex·Flash 공통 지적): persist version이 11로 동결돼 있어(저장본도 11) zustand는
+        // 버전이 같으면 migrate를 아예 호출하지 않는다 — migrate 안의 delete는 구버전(<11)
+        // 업그레이드에만 돌고, 이미 v11인 기존 기기의 잔존 키는 영원히 남는다. merge는 모든
+        // 하이드레이션에서 돌므로 같은 버전이어도 확실히 걷어낸다.
 
         // ── v6 (v0.8.0) — "추세 검증" → "이상치 알람" 전환 ──────────────────────────
         // 의미가 정반대로 반전됐으므로(increase: 작아지면 알람 → 커지면 알람) 기존 저장값을

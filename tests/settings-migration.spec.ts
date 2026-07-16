@@ -313,3 +313,48 @@ test('W2 ② 전용 IDB 레코드에서 savedSheets 복원 (settings persist는 
   const saved = stored.state.savedSheets as Array<{ sheetId: string }>;
   expect(saved.map((s) => s.sheetId).sort()).toEqual(['SHEET_A', 'SHEET_B']);
 });
+
+// ─── v0.35.1 — 같은 버전(v11) 폐기 키 제거: merge-strip (리뷰 라운드1 Codex·Flash 공통 지적) ───
+// persist version이 11로 동결돼 있어(저장본도 11) zustand는 migrate를 호출하지 않는다.
+// 폐기 키 제거는 merge 단계(DEPRECATED_PERSIST_KEYS strip)가 담당해야 하고, 이 테스트가 그 계약을
+// 고정한다: 이미 v11인 기기에 남은 review* 6키 + legacy 폴더 캐시 2키가 하이드레이션에서 제거되고
+// 다음 저장(설정 조작)에 다시 직렬화되지 않는다.
+test('v11 동일 버전: 폐기 키(review* 6종 + legacy 폴더 캐시)가 merge에서 제거되어 다음 저장에 안 남는다', async ({ page }) => {
+  const V11_LEFTOVER_PAYLOAD = {
+    state: {
+      googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+      availableSheets: [], savedSheets: [], manualMode: false, columns: [], tableGenerated: false,
+      totalRows: 50, ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: null,
+      fastRecognition: false, preferredVoiceName: '', roundDateColId: null,
+      // 폐기 키 8종 — v0.35.0 이하가 남긴 잔존값 모사.
+      reviewFilters: [{ colId: 'c3', value: 'A' }], reviewTargetRound: '2026-07-01',
+      reviewBaselineBack: 2, reviewGroupCols: ['c3'], reviewMeasureCols: null, reviewSelectedRows: null,
+      teamFolderId: 'stale-team-folder', userLogFolderId: 'stale-log-folder',
+    },
+    version: 11,
+  };
+  await bootWith(page, V11_LEFTOVER_PAYLOAD);
+  await page.waitForTimeout(400);
+
+  // 설정 하나를 조작해 재직렬화를 트리거(자동 캡처 토글 off→on — 순수 쓰기 트리거).
+  await page.locator('[data-testid="tab-settings"]').click();
+  const toggle = page.locator('[data-testid="auto-capture-toggle"]');
+  await toggle.scrollIntoViewIfNeeded();
+  await toggle.click();
+  await page.waitForTimeout(200);
+  await toggle.click();
+  await page.waitForTimeout(200);
+
+  const stored = await readStore(page);
+  expect(stored.version).toBe(11); // [ENV-9] 동결 유지
+  for (const k of [
+    'reviewFilters', 'reviewTargetRound', 'reviewBaselineBack',
+    'reviewGroupCols', 'reviewMeasureCols', 'reviewSelectedRows',
+    'teamFolderId', 'userLogFolderId',
+  ]) {
+    expect(stored.state[k], `${k} 잔존`).toBeUndefined();
+  }
+  // 대체 필드는 기본값으로 존재(계정 결합 캐시 — 초기 null).
+  expect(stored.state.teamFolderCache).toBeNull();
+  expect(stored.state.userLogFolderCache).toBeNull();
+});
