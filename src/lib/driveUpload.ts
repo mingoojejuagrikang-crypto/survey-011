@@ -1,5 +1,6 @@
 import { getAccessToken, getCurrentEmail } from './googleAuth';
 import { useSettingsStore } from '../stores/settingsStore';
+import { FILES_API, escapeDriveQ, ensureEmailSubFolder } from './driveFolders';
 
 /**
  * Drive log backup target — 관리자(팀 리더) 드라이브의 공유 폴더 ID.
@@ -17,12 +18,6 @@ export const LOG_FOLDER_ID =
 export const FEEDBACK_FOLDER_ID = import.meta.env.VITE_ADMIN_FEEDBACK_FOLDER_ID || '';
 
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-const FILES_API = 'https://www.googleapis.com/drive/v3/files';
-
-/** Google Drive Q 문자열 리터럴 escape — backslash, single-quote 모두 처리. */
-function escapeDriveQ(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
 
 /** RFC 5322 단순 검증 (Drive 폴더명으로 받기 전에). */
 function isLikelyEmail(s: string): boolean {
@@ -62,51 +57,16 @@ async function uploadZip(zipBlob: Blob, filename: string, parentId?: string): Pr
 /**
  * 관리자 공유 폴더 내에 팀원 이메일 이름의 하위 폴더를 찾거나 생성한다.
  * Codex 리뷰 반영: race condition 방지를 위해 settingsStore에 캐시, 검색 시 createdTime 정렬로
- * 중복 폴더가 있어도 가장 오래된 것을 선택해 일관성 유지.
+ * 중복 폴더가 있어도 가장 오래된 것을 선택해 일관성 유지. 공용 로직은 ensureEmailSubFolder
+ * (driveFolders.ts — [RACE-6] 계약)로 통합, 여기서는 **로그 폴더 전용** 캐시(teamFolderId)만 배선한다.
  */
 async function ensureTeamSubFolder(parentId: string, userEmail: string): Promise<string> {
-  // 1. 캐시 확인
-  const cached = useSettingsStore.getState().teamFolderId;
-  if (cached) {
-    return cached;
-  }
-
-  const safeName = escapeDriveQ(userEmail);
-  const safeParent = escapeDriveQ(parentId);
-  // createdTime asc 정렬 → 중복이 있더라도 가장 오래된 폴더로 통일
-  const q = `'${safeParent}' in parents and name='${safeName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const searchUrl = `${FILES_API}?q=${encodeURIComponent(q)}&fields=files(id,name,createdTime)&orderBy=createdTime&spaces=drive`;
-  const headers = await authHeader();
-  const sr = await fetch(searchUrl, { headers });
-  if (sr.ok) {
-    const data = (await sr.json()) as { files?: { id: string; createdTime?: string }[] };
-    if (data.files && data.files.length > 0) {
-      const canonicalId = data.files[0].id;
-      // 캐시에 저장 → 다음부터 검색 안 함
-      useSettingsStore.getState().set({ teamFolderId: canonicalId });
-      return canonicalId;
-    }
-  } else {
-    const errText = await sr.text().catch(() => `HTTP ${sr.status}`);
-    throw new Error(`팀원 폴더 검색 실패: ${errText}`);
-  }
-  // 2. 없으면 생성
-  const createRes = await fetch(FILES_API, {
-    method: 'POST',
-    headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: userEmail,
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: [parentId],
-    }),
+  return ensureEmailSubFolder(parentId, userEmail, {
+    headers: await authHeader(),
+    readCache: () => useSettingsStore.getState().teamFolderId,
+    writeCache: (id) => useSettingsStore.getState().set({ teamFolderId: id }),
+    errorLabels: { search: '팀원 폴더 검색 실패', create: '팀원 하위 폴더 생성 실패' },
   });
-  if (!createRes.ok) {
-    const err = await createRes.text().catch(() => `HTTP ${createRes.status}`);
-    throw new Error(`팀원 하위 폴더 생성 실패: ${err}`);
-  }
-  const created = (await createRes.json()) as { id: string };
-  useSettingsStore.getState().set({ teamFolderId: created.id });
-  return created.id;
 }
 
 const APP_FOLDER_NAME = 'survey-011';
@@ -251,38 +211,55 @@ export interface DualUploadResult {
   errors: string[];
 }
 
+/** v0.35.1 Stage 1-3 — 사용자 Drive + 관리자 폴더 이중 업로드 공용 골격. 한 레그 실패해도 다른
+ *  레그는 진행하고, 실패는 기존 접두('user_drive: '/'admin_drive: ') 그대로 errors[]에 쌓는다
+ *  (로그 zip 하위호환). 레그별 실패 후처리(캐시 무효화 등)는 훅으로 주입한다. */
+async function uploadToBothLegs(opts: {
+  adminConfigured: boolean;
+  userLeg: () => Promise<string>;
+  adminLeg: () => Promise<string>;
+  onUserError?: () => void;
+  onAdminError?: () => void;
+}): Promise<DualUploadResult> {
+  const result: DualUploadResult = { errors: [], adminConfigured: opts.adminConfigured };
+  try {
+    result.userDriveId = await opts.userLeg();
+  } catch (e) {
+    result.errors.push(`user_drive: ${e instanceof Error ? e.message : String(e)}`);
+    opts.onUserError?.();
+  }
+  if (opts.adminConfigured) {
+    try {
+      result.adminDriveId = await opts.adminLeg();
+    } catch (e) {
+      result.errors.push(`admin_drive: ${e instanceof Error ? e.message : String(e)}`);
+      opts.onAdminError?.();
+    }
+  }
+  return result;
+}
+
 /** 사용자 본인 드라이브 + 관리자 공유 폴더 둘 다 업로드. 하나 실패해도 다른 쪽은 진행. */
 export async function uploadLogToBothDrives(
   zipBlob: Blob,
   filename: string,
 ): Promise<DualUploadResult> {
-  const result: DualUploadResult = { errors: [], adminConfigured: !!LOG_FOLDER_ID };
-
-  // 1. 사용자 본인 드라이브 (survey-011/log/)
-  try {
-    result.userDriveId = await uploadLogToUserDrive(zipBlob, filename);
-  } catch (e) {
-    result.errors.push(`user_drive: ${e instanceof Error ? e.message : String(e)}`);
+  return uploadToBothLegs({
+    adminConfigured: !!LOG_FOLDER_ID,
+    userLeg: () => uploadLogToUserDrive(zipBlob, filename),
+    adminLeg: () => uploadLogToAdminTeamFolder(zipBlob, filename),
     // 캐시된 폴더 ID가 삭제/이동돼 실패했을 수 있음 — 무효화해 다음 시도에 재탐색/재생성.
-    if (useSettingsStore.getState().userLogFolderId) {
-      useSettingsStore.getState().set({ userLogFolderId: null });
-    }
-  }
-
-  // 2. 관리자 폴더의 팀원 하위 폴더 — LOG_FOLDER_ID 설정된 경우만
-  if (LOG_FOLDER_ID) {
-    try {
-      result.adminDriveId = await uploadLogToAdminTeamFolder(zipBlob, filename);
-    } catch (e) {
-      result.errors.push(`admin_drive: ${e instanceof Error ? e.message : String(e)}`);
-      // 캐시된 폴더 ID로 업로드 실패 시 캐시 무효화 — 다음 시도에 재검색
+    onUserError: () => {
+      if (useSettingsStore.getState().userLogFolderId) {
+        useSettingsStore.getState().set({ userLogFolderId: null });
+      }
+    },
+    onAdminError: () => {
       if (useSettingsStore.getState().teamFolderId) {
         useSettingsStore.getState().set({ teamFolderId: null });
       }
-    }
-  }
-
-  return result;
+    },
+  });
 }
 
 // ─── v0.33.0 항목11 — 개선요청(feedback) 이중 업로드 ─────────────────────────
@@ -298,36 +275,14 @@ async function ensureUserFeedbackFolder(): Promise<string> {
 }
 
 /** 관리자 feedback 폴더 내 {userEmail}/ 하위 폴더를 찾거나 생성한다.
- *  ⚠️ ensureTeamSubFolder를 재사용하지 않는 이유: 그쪽은 settingsStore.teamFolderId 캐시가
- *  **로그 폴더의** 하위 폴더 ID를 담고 있어, 다른 parent(feedback 폴더)에 재사용하면 로그
- *  하위 폴더로 오업로드된다. 여기는 무캐시 검색+생성(createdTime asc 최고참 선택 규칙 동일). */
+ *  ⚠️ **무캐시**인 이유([RACE-6] parent별 캐시 분리): settingsStore.teamFolderId 캐시는 **로그
+ *  폴더의** 하위 폴더 ID를 담고 있어, 다른 parent(feedback 폴더)에 재사용하면 로그 하위 폴더로
+ *  오업로드된다. 개선요청은 빈도가 낮아 검색 비용이 무해하고 persist 필드 추가도 피한다(v0.33.0). */
 async function ensureFeedbackSubFolder(parentId: string, userEmail: string): Promise<string> {
-  const q =
-    `'${escapeDriveQ(parentId)}' in parents and name='${escapeDriveQ(userEmail)}'` +
-    ` and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const searchUrl = `${FILES_API}?q=${encodeURIComponent(q)}&fields=files(id,createdTime)&orderBy=createdTime&spaces=drive`;
-  const headers = await authHeader();
-  const sr = await fetch(searchUrl, { headers });
-  if (!sr.ok) {
-    const errText = await sr.text().catch(() => `HTTP ${sr.status}`);
-    throw new Error(`피드백 하위 폴더 검색 실패: ${errText}`);
-  }
-  const data = (await sr.json()) as { files?: { id: string }[] };
-  if (data.files && data.files.length > 0) return data.files[0].id;
-  const createRes = await fetch(FILES_API, {
-    method: 'POST',
-    headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: userEmail,
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: [parentId],
-    }),
+  return ensureEmailSubFolder(parentId, userEmail, {
+    headers: await authHeader(),
+    errorLabels: { search: '피드백 하위 폴더 검색 실패', create: '피드백 하위 폴더 생성 실패' },
   });
-  if (!createRes.ok) {
-    const err = await createRes.text().catch(() => `HTTP ${createRes.status}`);
-    throw new Error(`피드백 하위 폴더 생성 실패: ${err}`);
-  }
-  return ((await createRes.json()) as { id: string }).id;
 }
 
 /** 사용자 Drive `survey-011/feedback/`에 업로드. */
@@ -348,36 +303,20 @@ export async function uploadFeedbackToAdminFolder(zipBlob: Blob, filename: strin
   return uploadZip(zipBlob, filename, subId);
 }
 
-export interface FeedbackUploadResult {
-  userDriveId?: string;
-  adminDriveId?: string;
-  /** 관리자 폴더(FEEDBACK_FOLDER_ID) 설정 여부 — 미설정이면 admin 레그는 '해당 없음'. */
-  adminConfigured: boolean;
-  errors: string[];
-}
+/** 개선요청 이중 업로드 결과 — DualUploadResult와 동일 형태(adminConfigured=FEEDBACK_FOLDER_ID
+ *  설정 여부, 미설정이면 admin 레그는 '해당 없음'). */
+export type FeedbackUploadResult = DualUploadResult;
 
-/** 사용자 Drive + 관리자 폴더 이중 업로드(uploadLogToBothDrives 패턴). 한 레그 실패해도 다른
+/** 사용자 Drive + 관리자 폴더 이중 업로드(uploadToBothLegs 공용 골격). 한 레그 실패해도 다른
  *  레그는 진행. 관리자 레그 실패는 non-fatal — 호출자(feedback.ts)가 사용자 레그 성공 시 성공
- *  처리하고 관리자 레그만 재시도 큐에 남긴다. */
+ *  처리하고 관리자 레그만 재시도 큐에 남긴다(캐시가 없는 경로라 실패 훅도 없음). */
 export async function uploadFeedbackToBothDrives(
   zipBlob: Blob,
   filename: string,
 ): Promise<FeedbackUploadResult> {
-  const result: FeedbackUploadResult = { errors: [], adminConfigured: !!FEEDBACK_FOLDER_ID };
-
-  try {
-    result.userDriveId = await uploadFeedbackToUserDrive(zipBlob, filename);
-  } catch (e) {
-    result.errors.push(`user_drive: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  if (FEEDBACK_FOLDER_ID) {
-    try {
-      result.adminDriveId = await uploadFeedbackToAdminFolder(zipBlob, filename);
-    } catch (e) {
-      result.errors.push(`admin_drive: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  return result;
+  return uploadToBothLegs({
+    adminConfigured: !!FEEDBACK_FOLDER_ID,
+    userLeg: () => uploadFeedbackToUserDrive(zipBlob, filename),
+    adminLeg: () => uploadFeedbackToAdminFolder(zipBlob, filename),
+  });
 }
