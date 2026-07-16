@@ -198,7 +198,7 @@ export function useVoiceSession() {
    *  sessionId 고정 인자를 여기서 1회 주입한다. 나머지 필드(extra 문자열 포함)는 호출부 그대로
    *  전개 — SOP-003 파서 계약 불변. */
   const logCell = (entry: Omit<Parameters<typeof logger.log>[0], 'sessionId'>): void => {
-    logCell({ ...entry } as Parameters<typeof logger.log>[0]);
+    logger.log({ sessionId: sessionIdRef.current, ...entry } as Parameters<typeof logger.log>[0]);
   };
   const say = useCallback(async (text: string, interrupt = true) => {
     if (!text) return;
