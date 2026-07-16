@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { T } from '../../tokens';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { logger } from '../../lib/logger';
+import { settingChanged } from '../../lib/logEvents';
 import { speak } from '../../lib/speech';
 
 /** v0.20.0 입력탭#1·#2 — 입력 컨트롤바: [인식 허용범위] · [안내 속도] 두 다이얼을 수평 배치.
@@ -20,7 +21,7 @@ export function ActiveControlSteppers() {
       void speak('이 속도로 안내합니다.', { interrupt: true, rate });
       // v0.33.0 B-5 — ttsRate 스탭퍼 변경 로깅(이전엔 무로깅). 샘플 TTS와 같은 디바운스 창에서
       // 최종값만 1회 기록해 연타가 링버퍼(2000)를 잠식하지 않게 한다.
-      logger.log({ type: 'app', extra: `setting_changed:ttsRate=${rate}` });
+      logger.log({ type: 'app', extra: settingChanged('ttsRate', rate) });
     }, 350);
   };
   // v0.33.0 B-6 — recognitionTolerance 로깅 디바운스(이전엔 탭마다 즉시 로깅 → 연타 시 링버퍼 잠식).
@@ -32,7 +33,7 @@ export function ActiveControlSteppers() {
     s.set({ recognitionTolerance: value });
     if (tolLogDebounceRef.current !== null) window.clearTimeout(tolLogDebounceRef.current);
     tolLogDebounceRef.current = window.setTimeout(() => {
-      logger.log({ type: 'app', extra: `setting_changed:recognitionTolerance=${value}` });
+      logger.log({ type: 'app', extra: settingChanged('recognitionTolerance', value) });
     }, 350);
   };
   const setTtsRate = (next: number) => {

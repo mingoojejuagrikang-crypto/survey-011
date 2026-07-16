@@ -2,6 +2,7 @@ import { T } from '../../tokens';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { buildSessionLabel, pickSessionLabelValue } from '../../lib/sessionLabel';
 import { logger } from '../../lib/logger';
+import { settingChanged } from '../../lib/logEvents';
 import { BeepPicker } from './BeepPicker';
 import { TtsVoiceSelector } from './TtsVoiceSelector';
 
@@ -139,7 +140,7 @@ export function SessionOptionsSection({ prospectiveSessionLabel }: { prospective
                 onClick={() => {
                   const next = !s.fastRecognition;
                   s.set({ fastRecognition: next });
-                  logger.log({ type: 'app', extra: `setting_changed:fastRecognition=${next}` });
+                  logger.log({ type: 'app', extra: settingChanged('fastRecognition', next) });
                 }}
                 style={{
                   width: 60, height: 32, borderRadius: 16,
@@ -182,7 +183,7 @@ export function SessionOptionsSection({ prospectiveSessionLabel }: { prospective
                 onClick={() => {
                   const next = !s.autoScreenCapture;
                   s.set({ autoScreenCapture: next });
-                  logger.log({ type: 'app', extra: `setting_changed:autoScreenCapture=${next}` });
+                  logger.log({ type: 'app', extra: settingChanged('autoScreenCapture', next) });
                 }}
                 style={{
                   width: 60, height: 32, borderRadius: 16,

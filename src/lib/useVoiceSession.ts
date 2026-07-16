@@ -13,6 +13,7 @@ import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
+import { rowMarked } from './logEvents';
 import { getCachedIndex, getFallbackIndex, getFallbackBuiltAt, hydratePastIndexFallback, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { buildAnomalyAlert } from './anomalyAlert';
@@ -1076,14 +1077,14 @@ export function useVoiceSession() {
     if (!isRowVoiceComplete(row, vc)) {
       sess.markRowSkipped(row);
       logger.log({
-        type: 'command', parsed: 'nextRow', extra: `row_skipped:${row},src=${source}`,
+        type: 'command', parsed: 'nextRow', extra: rowMarked('row_skipped', row, source),
         sessionId: sessionIdRef.current, row,
       });
       void persistSession(); // skip 즉시 영속화 — 데이터탭에 빈 행 placeholder가 바로 보이도록
     } else {
       // v0.33.0 B-3 — 완료 행에서의 '다음' 이동도 기록(이전엔 skip 시에만 로깅 → 이동 공백).
       logger.log({
-        type: 'command', parsed: 'nextRow', extra: `row_complete:${row},src=${source}`,
+        type: 'command', parsed: 'nextRow', extra: rowMarked('row_complete', row, source),
         sessionId: sessionIdRef.current, row,
       });
     }
