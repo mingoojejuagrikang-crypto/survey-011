@@ -5,7 +5,7 @@
  * duplicated (review F5/F6/F10 cleanup). Pure functions, no store/Drive/import.meta deps →
  * unit-testable under Node (tests/sessionSync.spec.ts).
  */
-import type { SessionRow } from '../types';
+import type { Session, SessionRow } from '../types';
 
 /** True if any row carries per-row sync state (v0.6.0+ session). Legacy sessions return false
  *  and fall back to the syncedRows counter. */
@@ -45,4 +45,29 @@ export function legacySyncedIndexSet(rows: SessionRow[], syncedRows: number): Se
 export function legacyDemoteCount(rows: SessionRow[], editedRowIndex: number, syncedRows: number): number {
   const completedBefore = rows.filter((r) => r.complete && r.index < editedRowIndex).length;
   return Math.max(0, Math.min(syncedRows, completedBefore));
+}
+
+/** v0.6.0 — count of rows that still need a push for a session (append OR in-place update).
+ *  Per-row syncState is authoritative; legacy sessions (no syncState) fall back to the
+ *  completedRows - syncedRows counter so their pending badge keeps working. */
+export function sessionPending(s: Session): number {
+  if (hasSyncState(s.rows)) return s.rows.filter((r) => r.syncState !== 'synced').length;
+  return Math.max(0, s.completedRows - s.syncedRows);
+}
+
+/** F9 — has this session EVER been uploaded (any row tracked on the sheet)? Row-based, so a
+ *  session whose uploaded rows were all later edited (now 'dirty') still reads as "uploaded",
+ *  not "미업로드". Legacy sessions fall back to the syncedRows counter. */
+export function sessionEverUploaded(s: Session): boolean {
+  if (hasSyncState(s.rows)) {
+    return s.rows.some(
+      (r) => r.sheetRow !== undefined || r.syncState === 'synced' || r.syncState === 'dirty',
+    );
+  }
+  return s.syncedRows > 0;
+}
+
+/** F9 — count of rows uploaded earlier but edited since (need an in-place UPDATE next sync). */
+export function sessionDirtyCount(s: Session): number {
+  return s.rows.filter((r) => r.syncState === 'dirty').length;
 }
