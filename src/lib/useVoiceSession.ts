@@ -15,6 +15,7 @@ import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import { rowMarked } from './logEvents';
 import { resolveFinal } from './voiceFinalResolver';
+import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
 import { getCachedIndex, getFallbackIndex, getFallbackBuiltAt, hydratePastIndexFallback, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { buildAnomalyAlert } from './anomalyAlert';
@@ -156,7 +157,7 @@ export function useVoiceSession() {
   // [CLIP-VAL-1]③ / [CLIP-3] unlink race: tombstones for clip keys whose capture FAILED
   // (clip_empty / clip_too_small / clip_save_failed). persistSession builds its rows
   // synchronously BEFORE its first await, so an in-flight persist could re-persist a pointer
-  // that unlinkBrokenPointer just removed (06-11 v0.6.0 row8 c7 — pointer resurrected in the
+  // that unlinkClipPointer just removed (06-11 v0.6.0 row8 c7 — pointer resurrected in the
   // harvested sessions.json). Every audioClips merge consults this set, and persistSession
   // re-checks it AFTER its await, so a tombstoned key can never be re-persisted. A key is
   // cleared only when a NEW clip is successfully saved under it. Reset in start().
@@ -1929,52 +1930,12 @@ export function useVoiceSession() {
     const clipStopPromise: Promise<ClipResult> =
       recorderRef.current?.stopClip()
       ?? Promise.resolve({ blob: null, raw: null, prerollMs: 0 });
-    // v0.6.0 CLIP-EMPTY: drop the cell's audioClip pointer when the clip never saved (empty/too
-    // small/failed). The pointer was pre-registered in pendingClipsRef AND may already be in the
-    // persisted session (persistSession ran above before the clip resolved) — clean BOTH so the
-    // data-tab doesn't render a broken (404) play button. Only unlink if the pointer still equals
-    // OUR clipKey (a later restart/modify may have re-pointed it). Telemetry is kept upstream.
-    const unlinkBrokenPointer = () => {
-      const m = pendingClipsRef.current[clipAwaitingRow];
-      if (m && m[clipAwaitingColId] === clipKey) delete m[clipAwaitingColId];
-      const sess = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
-      const prow = sess?.rows.find((r) => r.index === clipAwaitingRow);
-      if (sess && prow?.audioClips?.[clipAwaitingColId] === clipKey) {
-        const { [clipAwaitingColId]: _gone, ...rest } = prow.audioClips;
-        const updatedRow = { ...prow, audioClips: Object.keys(rest).length > 0 ? rest : undefined };
-        const updatedSession = {
-          ...sess,
-          rows: sess.rows.map((r) => (r.index === clipAwaitingRow ? updatedRow : r)),
-        };
-        useDataStore.getState().upsertSession(updatedSession);
-        void saveSession(updatedSession).catch(() => {});
-      }
-    };
-    // [CLIP-VAL-1]②: re-point the cell's audioClip from the failed canonical key to a healthy
-    // key (the modify-command clip). pendingClipsRef gate mirrors unlinkBrokenPointer: only act
-    // while WE still own the pointer (a later restart/modify re-owns the cell and is left alone).
-    // On the persisted side accept `undefined` too — the [CLIP-VAL-1]③ tombstone strip may have
-    // already removed our canonical entry from the persisted row.
-    const relinkPointer = (newKey: string): boolean => {
-      const m = pendingClipsRef.current[clipAwaitingRow];
-      if (!m || m[clipAwaitingColId] !== clipKey) return false;
-      m[clipAwaitingColId] = newKey;
-      const sess = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
-      const prow = sess?.rows.find((r) => r.index === clipAwaitingRow);
-      const persisted = prow?.audioClips?.[clipAwaitingColId];
-      if (sess && prow && (persisted === clipKey || persisted === undefined)) {
-        const updatedRow = {
-          ...prow,
-          audioClips: { ...(prow.audioClips ?? {}), [clipAwaitingColId]: newKey },
-        };
-        const updatedSession = {
-          ...sess,
-          rows: sess.rows.map((r) => (r.index === clipAwaitingRow ? updatedRow : r)),
-        };
-        useDataStore.getState().upsertSession(updatedSession);
-        void saveSession(updatedSession).catch(() => {});
-      }
-      return true;
+    // 포인터 정리/재연결은 clipPointer 모듈(Stage 3-3 순수 이동)이 담당 — 소유권 가드 계약 포함.
+    // 여기서는 이 커밋의 좌표(clipKey·row·colId)를 고정 인자로 묶는다.
+    const pointerArgs = {
+      sessionId: sessionIdRef.current,
+      row: clipAwaitingRow, colId: clipAwaitingColId, clipKey,
+      pendingClips: pendingClipsRef.current,
     };
     // [CLIP-VAL-1]②③ — a capture under the canonical key failed. Tombstone the key FIRST (so an
     // in-flight persistSession can never re-persist it), then: if this was a modify re-record and
@@ -1997,7 +1958,7 @@ export function useVoiceSession() {
             ]);
           }
           const cmdBlob = await loadAudioClip(cmdKey).catch(() => null);
-          if (cmdBlob && relinkPointer(cmdKey)) {
+          if (cmdBlob && relinkClipPointer(pointerArgs, cmdKey)) {
             logCell({
               type: 'clip', extra: 'clip_relink_cmd', kind: 'command', clipKey: cmdKey,
               row: clipAwaitingRow, colId: clipAwaitingColId,
@@ -2006,7 +1967,7 @@ export function useVoiceSession() {
           }
         }
       }
-      unlinkBrokenPointer();
+      unlinkClipPointer(pointerArgs);
     };
     // Holder for the savePromise's own identity (assigned right after creation, before the
     // IIFE's first await resumes) so resolveFailedCapture can exclude itself from the flush.
