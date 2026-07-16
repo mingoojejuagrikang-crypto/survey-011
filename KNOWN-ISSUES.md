@@ -448,7 +448,7 @@
 - **배경:** 공통 개발 헌장(GL-006, 민구 채택 2026-07-16) §5 — 파일 크기는 책임 크기의 신호(권장 150~250줄, 300줄 분리 검토, **500줄 리팩토링 대상**). v0.35.1 Stage 1-8에서 ESLint `max-lines`(500, `src/` 한정)를 오류 게이트로 도입(`npm run lint`, predeploy에 포함).
 - **예외(파일 상단 `eslint-disable max-lines`, 해소 시 주석 제거 + 이 목록에서 삭제):**
   1. `src/lib/useVoiceSession.ts` (~3,248) — Stage 3(음성 코어 재설계)에서 해소
-  2. `src/screens/SettingsScreen.tsx` (~3,113) — Stage 2(컴포넌트 추출)에서 해소
+  2. ~~`src/screens/SettingsScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/settings 16파일 + useSettingsActions 훅 분리, 3,114→489줄)
   3. ~~`src/screens/DataScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/data 15파일 + useDataActions 훅 분리, 2,420→315줄)
   4. ~~`src/screens/VoiceScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/voice 7파일 추출, 1,342→174줄)
   5. `src/lib/audioRecorder.ts` (854) — 단일 책임 클래스, 분리 경계 검토 후 해소
