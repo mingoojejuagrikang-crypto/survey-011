@@ -2024,16 +2024,22 @@ export function useVoiceSession() {
     const trendViolation = evaluateTrend(col, awaiting.row, awaiting.colId, parsed);
     if (trendViolation) {
       const v = trendViolation;
-      // 알람 종류·표시값·문구 산출은 buildAnomalyDisplay(모듈 하단)가 SSOT — v0.33.0 항목6에서 수동
-      // 커밋 경로(commitManualValue)와 공유하도록 추출했다(v0.9.0~v0.25.0 이력·근거 주석은 그쪽 참조).
+      // 알람 페이로드(extra 문자열·팝업 코어) 조립은 buildAnomalyAlert(모듈 하단)가 SSOT —
+      // v0.35.1 Stage 1-2에서 수동 커밋 경로(commitManualValue)와 통합했다(표시값 산출은 그 안의
+      // buildAnomalyDisplay — v0.9.0~v0.25.0 이력·근거 주석은 그쪽 참조).
       // alertText는 팝업 라벨(AnomalyAlertPopup)과 **글자까지 동일** 계약(시각·청각 일치, v0.20.0 입력탭#6).
-      const { alertKind, changeText, alertText, threshold: rangeThreshold } = buildAnomalyDisplay(col, v);
+      // v0.12.0 AREA2 V2 — 어떤 샘플·행/직전 회차의 비교인지 식별정보를 함께 싣는다(별도 재계산).
+      const alertExtra = getAnomalyAlertData(awaiting.row);
+      const { alertText, logExtra, alert } = buildAnomalyAlert({
+        col, v, colName: awaiting.name, next: formatForTts(parsed), row: awaiting.row,
+        sampleKey: alertExtra.sampleKey, prevDate: alertExtra.prevDate,
+      });
       // v0.26.0(Trace 권장, 2세션 연속 계측 갭) — 어떤 종류/트리거/문구로 알람이 나갔는지 extra에 동봉.
       //   직전까지는 extra='trend_alert_fired'뿐이라 기능3(both→범위 우선) 라우팅을 로그로 검증할 수
       //   없었다. 파서 호환을 위해 'trend_alert_fired' 접두는 유지하고 ':k=v' 목록을 덧붙인다.
       logger.log({
         type: 'trend',
-        extra: `trend_alert_fired:trigger=${v.trigger},kind=${alertKind},dir=${v.direction},change=${changeText || '?'},text=${alertText}`,
+        extra: logExtra,
         sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
         colName: awaiting.name, text, parsed, confidence, previousValue: String(v.prev),
       });
@@ -2057,20 +2063,8 @@ export function useVoiceSession() {
       // 응답 발화('확인'/새 값) 클립 시작 — announceField 패턴(TTS 이전 시작, barge-in 수록).
       armClipForCell(awaiting.row, awaiting.colId);
       // 시각 팝업: 이전값→현재값과 변화량을 띄운다(발화만으론 스쳐 지나가 확인이 어렵다는 요청).
-      // v0.12.0 AREA2 V2 — 어떤 샘플·행/직전 회차의 비교인지 식별정보를 함께 싣는다(별도 재계산).
-      const alertExtra = getAnomalyAlertData(awaiting.row);
       useSessionStore.getState().setAnomalyAlert({
-        colName: awaiting.name,
-        prev: String(v.prev),
-        next: formatForTts(parsed),
-        direction: v.direction,
-        changeText,
-        row: awaiting.row,
-        sampleKey: alertExtra.sampleKey,
-        prevDate: alertExtra.prevDate,
-        status: 'pending', // v0.13.0 R2 — 이상치(빨강) 상태. 정정 정상 시 'corrected'(초록)로 갱신.
-        kind: alertKind, // v0.20.0 입력탭#6 — 팝업이 추세/범위 표시를 가르는 신호.
-        ...(rangeThreshold != null ? { threshold: rangeThreshold } : {}),
+        ...alert,
         // v0.33.0 항목7 — 응답 대기 알람: 팝업이 [확인][수정] 터치 버튼을 그린다(음성 명령과 동일
         // 동작·동일 로그, 07-10 QA P1 #2). 수동 커밋의 정보성 팝업(확인 루프 없음)과 구분.
         awaitingResponse: true,
@@ -2809,27 +2803,22 @@ export function useVoiceSession() {
     // 원래 결함이 그대로 남는다. hold면 아래에서 후보+태그를 단일 IDB put으로 저장한다.
     const violation = evaluateTrend(col, row, colId, value);
     const fireManualAlert = (v: TrendViolation, hold: boolean) => {
-      const { alertKind, changeText, alertText, threshold } = buildAnomalyDisplay(col, v);
+      // 알람 페이로드 조립은 buildAnomalyAlert가 SSOT(v0.35.1 Stage 1-2) — 수동 경로 전용 접미사
+      // ',src=manual[,hold=1]'만 여기서 이어 붙인다(SOP-003 파서 계약 바이트 불변).
+      const alertExtra = getAnomalyAlertData(row);
+      const { logExtra, alert } = buildAnomalyAlert({
+        col, v, colName: col.name, next: formatForTts(value), row,
+        sampleKey: alertExtra.sampleKey, prevDate: alertExtra.prevDate,
+      });
       logger.log({
         type: 'trend',
-        extra: `trend_alert_fired:trigger=${v.trigger},kind=${alertKind},dir=${v.direction},change=${changeText || '?'},text=${alertText},src=manual${hold ? ',hold=1' : ''}`,
+        extra: `${logExtra},src=manual${hold ? ',hold=1' : ''}`,
         sessionId: sessionIdRef.current, row, colId,
         colName: col.name, text: value, parsed: value, previousValue: String(v.prev),
       });
-      const alertExtra = getAnomalyAlertData(row);
       useSessionStore.getState().setAnomalyAlert({
-        colName: col.name,
-        prev: String(v.prev),
-        next: formatForTts(value),
-        direction: v.direction,
-        changeText,
-        row,
+        ...alert,
         colId, // v0.34.0 A1 — [수정]의 시트 재오픈 키(VoiceScreen)
-        sampleKey: alertExtra.sampleKey,
-        prevDate: alertExtra.prevDate,
-        status: 'pending',
-        kind: alertKind,
-        ...(threshold != null ? { threshold } : {}),
         // v0.34.0 A1 — hold면 [확인][수정] 버튼 표시(awaitingResponse 재사용) + manualHold 라우팅.
         //   음성 확인 루프(trendConfirm)는 여전히 무장하지 않는다(민구 기존 결정).
         //   비-hold(awaiting이 다른 셀)는 종전 그대로 정보성 팝업(버튼 없음).
@@ -3147,6 +3136,62 @@ function buildAnomalyDisplay(col: Column | null, v: TrendViolation): {
       ? `범위 알람 ${rangeSign}${rangePct}%`
       : `추세 알람 ${v.direction === 'up' ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
   return { alertKind, changeText, alertText, threshold: rangeThreshold };
+}
+
+/** v0.35.1 Stage 1-2 — 이상치 알람 발동 페이로드 조립 SSOT. 음성 커밋(handleFinal)과 수동 커밋
+ *  (commitManualValue의 fireManualAlert)이 따로 조립하던 `trend_alert_fired` extra 문자열과 팝업
+ *  (setAnomalyAlert) 공통 코어를 한 곳으로 모은다.
+ *  - logExtra는 SOP-003 파서 계약 — **바이트 불변**. 호출부 전용 접미사(수동 경로의
+ *    ',src=manual[,hold=1]')는 호출부가 이어 붙인다.
+ *  - alert는 공통 코어만 담는다. 호출부가 자기 필드(awaitingResponse/colId/manualHold)를 spread로 얹는다. */
+function buildAnomalyAlert(args: {
+  col: Column | null;
+  v: TrendViolation;
+  colName: string;
+  /** 팝업 next 표시값 — 이미 formatForTts 적용본. */
+  next: string;
+  row: number;
+  sampleKey?: string;
+  prevDate?: string;
+}): {
+  /** 알람 TTS/팝업 라벨 문구(글자까지 동일 계약) — 음성 경로가 say()에 쓴다. */
+  alertText: string;
+  logExtra: string;
+  alert: {
+    colName: string;
+    prev: string;
+    next: string;
+    direction: 'up' | 'down';
+    changeText: string;
+    row: number;
+    sampleKey?: string;
+    prevDate?: string;
+    /** v0.13.0 R2 — 이상치(빨강) 상태. 정정 정상 시 호출부가 'corrected'(초록)로 갱신. */
+    status: 'pending';
+    /** v0.20.0 입력탭#6 — 팝업이 추세/범위 표시를 가르는 신호. */
+    kind: 'trend' | 'range';
+    threshold?: number;
+  };
+} {
+  const { col, v, colName, next, row, sampleKey, prevDate } = args;
+  const { alertKind, changeText, alertText, threshold } = buildAnomalyDisplay(col, v);
+  return {
+    alertText,
+    logExtra: `trend_alert_fired:trigger=${v.trigger},kind=${alertKind},dir=${v.direction},change=${changeText || '?'},text=${alertText}`,
+    alert: {
+      colName,
+      prev: String(v.prev),
+      next,
+      direction: v.direction,
+      changeText,
+      row,
+      sampleKey,
+      prevDate,
+      status: 'pending',
+      kind: alertKind,
+      ...(threshold != null ? { threshold } : {}),
+    },
+  };
 }
 
 /** 로컬(기기) 기준 오늘 ISO — toISOString()은 UTC라 자정 부근에 하루 어긋난다. */
