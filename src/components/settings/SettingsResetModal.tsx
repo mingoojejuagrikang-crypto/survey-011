@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { T } from '../../tokens';
+import { ModalBase } from '../ModalBase';
 
 function ResetOptionRow({ checked, onToggle, label, testid }: {
   checked: boolean;
@@ -40,23 +41,14 @@ export function SettingsResetModal({ onCancel, onConfirm }: {
   const [clearLogin, setClearLogin] = useState(false);
   const [clearSheets, setClearSheets] = useState(false);
   return (
-    <div
-      onClick={onCancel}
-      data-testid="settings-reset-modal"
+    <ModalBase
+      onClose={onCancel}
+      testid="settings-reset-modal"
       role="dialog"
-      aria-modal="true"
-      aria-label="설정 초기화"
-      style={{
-        position: 'fixed', inset: 0, zIndex: 100,
-        background: 'rgba(0,0,0,0.6)',
-        backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        paddingTop: 'max(16px, var(--sat))',
-        paddingBottom: 'max(16px, var(--sab))',
-        paddingLeft: 'max(16px, var(--sal))',
-        paddingRight: 'max(16px, var(--sar))',
-        animation: 'fade-up 200ms ease-out',
-      }}
+      ariaModal
+      ariaLabel="설정 초기화"
+      blur
+      animation="fade-up 200ms ease-out"
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -141,6 +133,6 @@ export function SettingsResetModal({ onCancel, onConfirm }: {
           </button>
         </div>
       </div>
-    </div>
+    </ModalBase>
   );
 }

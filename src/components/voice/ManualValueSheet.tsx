@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { T } from '../../tokens';
 import type { Column } from '../../types';
 import { choicesFor, validateManual } from '../../lib/manualInput';
+import { ModalBase } from '../ModalBase';
 
 /** v0.33.0 항목6 — 칩 터치 수동 입력 하단 시트.
  *
@@ -56,14 +57,7 @@ export function ManualValueSheet({
   const isKeypad = choices.kind === 'int' || choices.kind === 'float';
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 50,
-        background: 'rgba(0,0,0,0.6)',
-        display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-      }}
-    >
+    <ModalBase onClose={onClose} zIndex={50} pad={null} align="end">
       <div
         role="dialog"
         aria-modal="true"
@@ -313,6 +307,6 @@ export function ManualValueSheet({
           </button>
         </div>
       </div>
-    </div>
+    </ModalBase>
   );
 }

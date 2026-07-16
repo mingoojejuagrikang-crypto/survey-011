@@ -1,24 +1,11 @@
+import { ModalBase, OVERLAY_DIM_SOFT } from '../ModalBase';
 
+/** 데이터탭 공용 backdrop — ModalBase 셸(Stage 2 통합)에 데이터탭 프리셋(dim 0.55+blur+fade-up)만
+ *  고정한 thin 래퍼. v0.33.0 safe-area 계약(패딩 max(16px, var(--sa*)))은 ModalBase가 소유. */
 export function Backdrop({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 100,
-        background: 'rgba(0,0,0,0.55)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        // v0.33.0 safe-area — position:fixed라 App 셸 패딩 밖. 노치/홈인디케이터 침범 방지
-        //   (SettingsScreen backdrop 패턴). 일반 Safari 탭에선 var(--sa*)=0 → 기존 16px 유지.
-        paddingTop: 'max(16px, var(--sat))',
-        paddingBottom: 'max(16px, var(--sab))',
-        paddingLeft: 'max(16px, var(--sal))',
-        paddingRight: 'max(16px, var(--sar))',
-        animation: 'fade-up 200ms ease-out',
-      }}
-    >
+    <ModalBase onClose={onClose} dim={OVERLAY_DIM_SOFT} blur animation="fade-up 200ms ease-out">
       {children}
-    </div>
+    </ModalBase>
   );
 }

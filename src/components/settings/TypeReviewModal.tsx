@@ -1,5 +1,6 @@
 import { T, TYPE_LABELS } from '../../tokens';
 import type { DataType } from '../../types';
+import { ModalBase } from '../ModalBase';
 
 export function TypeReviewModal({
   checked, mismatches, onApplyAll, onClose,
@@ -11,19 +12,7 @@ export function TypeReviewModal({
 }) {
   const ok = mismatches.length === 0;
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.6)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        // v0.21.0 설정탭#2 — standalone PWA safe-area(노치/상태바/홈인디케이터 침범 방지). backdrop
-        //   패딩에 safe-area 변수(global.css SSOT) 흡수. Safari 탭에선 0이라 기존 24px 유지.
-        paddingTop: 'max(24px, var(--sat))',
-        paddingBottom: 'max(24px, var(--sab))',
-        paddingLeft: 'max(24px, var(--sal))',
-        paddingRight: 'max(24px, var(--sar))',
-      }}
-    >
+    <ModalBase onClose={onClose} zIndex={60} pad={24}>
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -89,7 +78,7 @@ export function TypeReviewModal({
           </>
         )}
       </div>
-    </div>
+    </ModalBase>
   );
 }
 

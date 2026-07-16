@@ -2,6 +2,7 @@ import { T } from '../../tokens';
 import { I } from '../icons';
 import type { Column } from '../../types';
 import { SettingsSummary, SummaryStatusRow } from './SettingsSummary';
+import { ModalBase } from '../ModalBase';
 
 export function SettingsSummaryModal({
   googleConnected, userEmail, sheetLabel, columns, totalRows, sessionLabel,
@@ -21,23 +22,14 @@ export function SettingsSummaryModal({
   onClose: () => void;
 }) {
   return (
-    <div
-      onClick={onClose}
-      data-testid="settings-summary-modal"
+    <ModalBase
+      onClose={onClose}
+      testid="settings-summary-modal"
       role="dialog"
-      aria-modal="true"
-      aria-label="설정 요약"
-      style={{
-        position: 'fixed', inset: 0, zIndex: 100,
-        background: 'rgba(0,0,0,0.6)',
-        backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        paddingTop: 'max(16px, var(--sat))',
-        paddingBottom: 'max(16px, var(--sab))',
-        paddingLeft: 'max(16px, var(--sal))',
-        paddingRight: 'max(16px, var(--sar))',
-        animation: 'fade-up 200ms ease-out',
-      }}
+      ariaModal
+      ariaLabel="설정 요약"
+      blur
+      animation="fade-up 200ms ease-out"
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -111,7 +103,7 @@ export function SettingsSummaryModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalBase>
   );
 }
 

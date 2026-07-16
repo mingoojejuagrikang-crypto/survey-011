@@ -5,6 +5,7 @@ import { nestedAutoValue, buildCyclingValues } from '../../lib/autoValue';
 import { SegmentToggle } from './SegmentToggle';
 import { ColumnDetailRow, ColumnGridCell } from './ColumnPreviewParts';
 import { SettingsSummary } from './SettingsSummary';
+import { ModalBase } from '../ModalBase';
 
 // ─── table preview modal ───────────────────────────────────────
 export function TablePreviewModal({
@@ -31,24 +32,7 @@ export function TablePreviewModal({
   const isGate = !!onConfirm;
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 100,
-        background: 'rgba(0,0,0,0.6)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        // v0.21.0 설정탭#2 — standalone PWA safe-area. position:fixed라 phoneStyle 셸 패딩을 벗어나므로
-        //   노치/상태바/홈인디케이터를 침범했다. backdrop 패딩에 safe-area 변수(global.css SSOT)를
-        //   흡수(중앙 정렬 카드가 inset만큼 안쪽으로 들어옴). 일반 Safari 탭에선 0이라 기존 16px 유지.
-        paddingTop: 'max(16px, var(--sat))',
-        paddingBottom: 'max(16px, var(--sab))',
-        paddingLeft: 'max(16px, var(--sal))',
-        paddingRight: 'max(16px, var(--sar))',
-        animation: 'fade-up 200ms ease-out',
-      }}
-    >
+    <ModalBase onClose={onClose} blur animation="fade-up 200ms ease-out">
       <div
         onClick={(e) => e.stopPropagation()}
         data-testid={isGate ? 'gate-card' : 'table-preview-card'}
@@ -247,6 +231,6 @@ export function TablePreviewModal({
           )}
         </div>
       </div>
-    </div>
+    </ModalBase>
   );
 }

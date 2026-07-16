@@ -1,5 +1,6 @@
 import { T } from '../../tokens';
 import type { HelpItem } from './helpCopy';
+import { ModalBase } from '../ModalBase';
 
 /** v0.23.0 설정탭#4(Vance) — `?` 도움말 아이콘 버튼. 접근성: 진짜 <button>, aria-label, ≥44px 터치
  *  타깃(장갑 손가락). 탭하면 호출자가 SettingsHelpModal을 연다. */
@@ -38,22 +39,7 @@ export function SettingsHelpModal({
   testid?: string;
 }) {
   return (
-    <div
-      onClick={onClose}
-      data-testid={testid}
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.6)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        // standalone PWA safe-area(노치/상태바/홈인디케이터 침범 방지) — TypeReviewModal 패턴.
-        paddingTop: 'max(24px, var(--sat))',
-        paddingBottom: 'max(24px, var(--sab))',
-        paddingLeft: 'max(24px, var(--sal))',
-        paddingRight: 'max(24px, var(--sar))',
-      }}
-    >
+    <ModalBase onClose={onClose} testid={testid} role="dialog" ariaModal ariaLabel={title} zIndex={60} pad={24}>
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -96,6 +82,6 @@ export function SettingsHelpModal({
           ))}
         </div>
       </div>
-    </div>
+    </ModalBase>
   );
 }

@@ -9,6 +9,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { T } from '../tokens';
+import { ModalBase } from './ModalBase';
 
 export function FeedbackModal({
   screenshot, onSubmit, onClose,
@@ -27,23 +28,14 @@ export function FeedbackModal({
   const canSend = text.trim().length > 0 && !sending;
 
   return (
-    <div
-      onClick={() => { if (!sending) onClose(); }}
-      data-testid="feedback-modal"
+    <ModalBase
+      onClose={() => { if (!sending) onClose(); }}
+      testid="feedback-modal"
       role="dialog"
-      aria-modal="true"
-      aria-label="개선요청 보내기"
-      style={{
-        position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.6)',
-        backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        // standalone PWA safe-area(노치/홈인디케이터 침범 방지) — SettingsHelpModal 패턴.
-        paddingTop: 'max(16px, var(--sat))',
-        paddingBottom: 'max(16px, var(--sab))',
-        paddingLeft: 'max(16px, var(--sal))',
-        paddingRight: 'max(16px, var(--sar))',
-        animation: 'fade-up 200ms ease-out',
-      }}
+      ariaModal
+      ariaLabel="개선요청 보내기"
+      blur
+      animation="fade-up 200ms ease-out"
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -164,6 +156,6 @@ export function FeedbackModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalBase>
   );
 }

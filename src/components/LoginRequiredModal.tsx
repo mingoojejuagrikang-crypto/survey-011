@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { T } from '../tokens';
 import { AuthMark } from './icons';
+import { ModalBase } from './ModalBase';
 
 /**
  * v0.20.0 Phase 2 — 로그인 필요 안내 팝업(범용, 표시 전용).
@@ -40,24 +41,7 @@ export function LoginRequiredModal({
   }, [onClose]);
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 120,
-        background: 'rgba(0,0,0,0.6)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        // v0.21.0 설정탭#2 — standalone PWA safe-area. position:fixed라 앱 셸(phoneStyle) 패딩을 벗어나
-        //   노치/상태바/홈인디케이터를 침범했다. backdrop 패딩에 env(safe-area-inset-*) 흡수(중앙
-        //   정렬 카드가 inset만큼 안쪽으로). Safari 탭에선 env(...)=0이라 기존 20px 유지.
-        paddingTop: 'max(20px, var(--sat))',
-        paddingBottom: 'max(20px, var(--sab))',
-        paddingLeft: 'max(20px, var(--sal))',
-        paddingRight: 'max(20px, var(--sar))',
-        animation: 'fade-up 200ms ease-out',
-      }}
-    >
+    <ModalBase onClose={onClose} zIndex={120} blur pad={20} animation="fade-up 200ms ease-out">
       <div
         role="dialog"
         aria-modal="true"
@@ -132,6 +116,6 @@ export function LoginRequiredModal({
           닫기
         </button>
       </div>
-    </div>
+    </ModalBase>
   );
 }

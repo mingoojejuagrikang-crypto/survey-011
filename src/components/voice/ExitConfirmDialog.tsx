@@ -1,28 +1,17 @@
 import { T } from '../../tokens';
 import { VoiceActionButton } from './VoiceActionButton';
+import { ModalBase, OVERLAY_DIM_STRONG } from '../ModalBase';
 
 export function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
   return (
-    <div
+    <ModalBase
+      onClose={onCancel}
       role="dialog"
-      aria-modal="true"
-      aria-labelledby="exit-confirm-title"
-      onClick={onCancel}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 55,
-        background: 'rgba(0,0,0,0.68)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        // v0.33.0 safe-area — fixed 오버레이라 App 셸 패딩 밖. 노치/홈인디케이터 침범 방지.
-        //   Safari 탭에선 var(--sa*)=0 → 기존 20px 유지.
-        paddingTop: 'max(20px, var(--sat))',
-        paddingBottom: 'max(20px, var(--sab))',
-        paddingLeft: 'max(20px, var(--sal))',
-        paddingRight: 'max(20px, var(--sar))',
-      }}
+      ariaModal
+      ariaLabelledby="exit-confirm-title"
+      zIndex={55}
+      dim={OVERLAY_DIM_STRONG}
+      pad={20}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -57,6 +46,6 @@ export function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => voi
           <VoiceActionButton label="종료" title="종료 확인" tone="danger" onClick={onConfirm} />
         </div>
       </div>
-    </div>
+    </ModalBase>
   );
 }
