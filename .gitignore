@@ -29,3 +29,6 @@ scripts/fetch-latest-growth-log.sh
 
 # 디자인 핸드오프(claude.ai/design 산출물) — 로컬 전용, 앱 커밋 제외
 design-sync/
+
+# 라운드별 리뷰 브리핑(AI 팀 운영 파일) — 로컬 전용
+REVIEW-BRIEF.md
