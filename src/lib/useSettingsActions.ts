@@ -33,7 +33,11 @@ import { buildSessionLabel, pickSessionLabelValue } from './sessionLabel';
 import { getPickerApiKey, openDrivePicker } from './drivePicker';
 import { setPreferredVoiceName } from './speech';
 import { logger } from './logger';
-import { SETTINGS_TIP_SEEN_KEY } from '../components/settings/helpCopy';
+
+/** localStorage 키 — 첫 진입 안내를 본 적 있는지(스토리지 네임스페이스 survey-011 준수).
+ *  종전 components/settings/helpCopy.ts 소유였으나 유일 소비자가 이 훅이라 여기로 이동
+ *  (v0.35.2 리뷰 r1 공통 지적 — lib→components 역참조 해소). */
+export const SETTINGS_TIP_SEEN_KEY = 'survey-011-settings-tip-seen';
 
 /** S-2: a column whose saved type differs from the sheet's inferred data type. */
 export interface TypeMismatch { id: string; name: string; saved: DataType; sheet: DataType; }

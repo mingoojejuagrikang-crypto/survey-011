@@ -18,6 +18,7 @@
  */
 import JSZip from 'jszip';
 import { logger } from './logger';
+import { withErr } from './logEvents';
 import {
   enqueueFeedback,
   loadFeedbackQueue,
@@ -101,13 +102,13 @@ export async function buildFeedbackZip(input: {
     const events = await loadLogEvents();
     zip.file('events.json', JSON.stringify(events, null, 2));
   } catch (e) {
-    logger.log({ type: 'app', extra: `feedback_events_failed:${String((e as Error)?.message ?? e)}` });
+    logger.log({ type: 'app', extra: withErr('feedback_events_failed', e) });
   }
   try {
     const sessions = await loadAllSessions();
     zip.file('sessions.json', buildSessionsSnapshot(sessions, device.appVersion));
   } catch (e) {
-    logger.log({ type: 'app', extra: `feedback_sessions_failed:${String((e as Error)?.message ?? e)}` });
+    logger.log({ type: 'app', extra: withErr('feedback_sessions_failed', e) });
   }
 
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
@@ -230,7 +231,7 @@ export async function flushFeedbackQueue(): Promise<void> {
       }
     }
   } catch (e) {
-    logger.log({ type: 'app', extra: `feedback_failed:flush:${String((e as Error)?.message ?? e)}` });
+    logger.log({ type: 'app', extra: withErr('feedback_failed:flush', e) });
   } finally {
     flushInFlight = false;
   }

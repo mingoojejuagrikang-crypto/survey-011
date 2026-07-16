@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { logger } from './logger';
+import { withErr } from './logEvents';
 import {
   loadAudioClip, loadAllAudioClipKeys, loadLogEvents, loadAllSessions,
   loadScreenshot, loadAllScreenshotKeys,
@@ -53,7 +54,7 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
       .map(withoutPendingCandidate);
     zip.file('sessions.json', buildSessionsSnapshot(scopedSessions, deviceWithUser.appVersion));
   } catch (e) {
-    logger.log({ type: 'app', extra: `export_sessions_json_failed:${String((e as Error)?.message ?? e)}` });
+    logger.log({ type: 'app', extra: withErr('export_sessions_json_failed', e) });
   }
 
   // Include audio clips
@@ -94,7 +95,7 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
       );
     }
   } catch (e) {
-    logger.log({ type: 'app', extra: `screens_export_failed:${String((e as Error)?.message ?? e)}` });
+    logger.log({ type: 'app', extra: withErr('screens_export_failed', e) });
   }
 
   // v0.27.0: clips-manifest.json — 클립 감사(SOP-003 §3) 자동화용 매핑(클립 파일 ↔ 커밋값 ↔
@@ -104,7 +105,7 @@ export async function exportLogZip(sessionIds?: string[]): Promise<Blob> {
   try {
     attachClipsManifest(zip, scopedSessions, events as ManifestSourceEvent[], deviceWithUser.appVersion);
   } catch (e) {
-    logger.log({ type: 'app', extra: `manifest_error:${String((e as Error)?.message ?? e)}` });
+    logger.log({ type: 'app', extra: withErr('manifest_error', e) });
   }
 
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });

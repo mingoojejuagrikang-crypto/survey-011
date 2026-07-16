@@ -1,11 +1,15 @@
 /**
  * v0.35.2 Stage 2-6 — 기능 격리(상시 원칙 #2: 활성/비활성 무영향) 확인 spec.
  *
- * 토글 보유 기능은 "꺼짐 상태에서 배선 지점이 조용한 no-op"이어야 한다. 기능당 1개 보장:
- *  - 자동 캡처   → tests/v033-auto-capture.spec.ts ([node] 토글 off 스킵 케이스) — 기존
- *  - 개선요청    → tests/v033-feedback.spec.ts (admin env 미주입 시 admin 레그 skip) — 기존
- *  - 비프음      → tests/v033-beep-help.spec.ts (기본값 sanitize·복원 — 기본값=현행 계약) — 기존
- *  - 빠른 인식   → **이 파일** (기본 OFF에서 interim 안정화가 아무 커밋/계측도 만들지 않음)
+ * 토글 보유 기능은 "꺼짐 상태에서 배선 지점이 조용한 no-op"이어야 한다. 현재 커버리지 지도
+ * (정확한 주장 — v0.35.2 리뷰 r1 Codex 지적 반영):
+ *  - 빠른 인식   → **이 파일** (기본 OFF에서 interim 안정화가 아무 커밋/계측도 만들지 않음 — 완전한 off no-op 검증)
+ *  - 자동 캡처   → tests/v033-auto-capture.spec.ts ([node] createAutoCapture 토글 off 스킵 케이스)
+ *  - 개선요청    → tests/v033-feedback.spec.ts — admin env 미주입 시 admin 레그 skip(부분 격리).
+ *                  기능 전체에는 off 토글이 없음(탭 자체가 기능) — 캡처 실패 non-fatal은 v0.33.0 계약.
+ *  - 비프음      → on/off 플래그 없음(변형 선택형, 기본값=현행이 격리 계약) —
+ *                  tests/v033-beep-help.spec.ts가 기본값 sanitize·복원을 고정. 재생 실패 non-fatal의
+ *                  직접 단언은 미보유(갭 — beep.ts previewBeep try/catch 계약, 백로그).
  *
  * 빠른 인식(fastRecognition, 조기확정)의 배선은 useVoiceSession.handleInterim의 단일 게이트
  * (`if (!fastRecognition) return`) 1곳이다. OFF면: ① interim이 아무리 안정돼도 커밋 없음

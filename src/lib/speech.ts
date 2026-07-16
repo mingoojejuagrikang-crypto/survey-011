@@ -11,6 +11,7 @@
  */
 
 import { logger } from './logger';
+import { kv } from './logEvents';
 
 type SRCtor = new () => SpeechRecognitionLike;
 
@@ -382,7 +383,7 @@ export function refreshVoices(): { total: number; ko: number } {
   const total = voicesCache.length;
   const ko = voicesCache.filter(isKo).length;
   if (total !== prevTotal || ko !== prevKo) {
-    logger.log({ type: 'app', extra: `tts_voices_loaded:total=${total},ko=${ko}` });
+    logger.log({ type: 'app', extra: `tts_voices_loaded:${kv({ total, ko })}` });
   }
   // v0.6.0 (Pax iOS research): per-device diagnostic of WHICH voices the OS actually exposes to
   // the web (iOS hides Enhanced/Premium/Siri/Personal Voice — only isSystemVoice surfaces). Record
@@ -392,7 +393,7 @@ export function refreshVoices(): { total: number; ko: number } {
   if (hash !== _lastVoicesSnapshotHash) {
     _lastVoicesSnapshotHash = hash;
     const list = voicesCache.map((v) => `${v.name}~${v.lang}~${v.localService ? 'L' : 'R'}`).join(', ');
-    logger.log({ type: 'app', extra: `tts_voices_snapshot:total=${total},ko=${ko}`, text: list });
+    logger.log({ type: 'app', extra: `tts_voices_snapshot:${kv({ total, ko })}`, text: list });
   }
   return { total, ko };
 }
