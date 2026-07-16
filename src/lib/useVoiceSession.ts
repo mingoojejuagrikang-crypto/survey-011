@@ -38,35 +38,58 @@ interface PendingCommandClip {
   saveDefault: () => void;
 }
 
-interface AwaitingField {
+/** 대기 셀 공통 좌표. */
+interface AwaitingBase {
   row: number;
   colId: string;
   name: string;
-  /** When true the next final result is treated as the modify value */
-  isModify?: boolean;
-  /** #3 error-vs-intent: the value committed for this cell BEFORE this correction started.
-   *  Captured at modify-entry (pre-clear) and logged with the final value so analysis can tell
-   *  STT prefix-drop (e.g. 133.3→33.3) apart from deliberate user re-entry. */
-  previousValue?: string;
-  /** v0.7.0 B4: 추세 검증 확인 모드 — 위반 알림 직후 '확인'/'유지'(값 확정·진행) 또는 새 값
-   *  (기존 isModify 의미론으로 재커밋 → 재검증)을 기다리는 상태. 이때 isModify=true,
-   *  previousValue=방금 커밋된 값으로 함께 무장된다. 커밋된 값 자체는 유효하게 저장돼 있다. */
-  trendConfirm?: boolean;
-  /** v0.10.0 A1: 소수점 타깃 재질문 모드. STT가 소수부를 유실("111 점 에" → decimal_fraction_lost)했을
-   *  때, 파싱된 정수부("111")를 여기 담고 "소수점 아래만 다시 말씀해 주세요"로 재질문한다. 다음 발화가
-   *  소수 한 자리면 `${fractionWhole}.${digit}`로 합성해 커밋(전체 재발화 불필요). 값 추측(에→1)은
-   *  하지 않는다 — 같은 STT 문자열이 111.1·111.5 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정). */
-  fractionWhole?: string;
-  /** v0.23.0 입력탭#4 — 마지막 행까지 입력 완료 후의 "종료 대기" 센티넬. 명령(종료/수정 등)이 계속
-   *  처리되도록 awaiting을 null로 두지 않되, handleFinal의 atEnd 가드가 일반 값 발화를 새 행으로
-   *  커밋하지 않고 종료 안내로 흡수한다(자동 종료 제거). */
-  atEnd?: boolean;
-  /** v0.33.0 백로그 A(민구 결정 3) — 완료 행 착지 "검토 대기" 센티넬. '이전'/행 점프로 완료 행에
-   *  착지하면 기록값을 TTS로 읽어준 뒤 이 상태로 대기한다. 명령('수정'/'유지'/'다음' 등)은 계속
-   *  dispatch되되, bare 값 발화는 handleFinal의 reviewWait 가드가 흡수한다(덮어쓰기 금지 —
-   *  수정은 '수정' 명령으로만). awaiting은 그 행 **포인터(첫) 음성 필드**를 가리킨다(v0.34.0 A3 —
-   *  이전의 '마지막 필드' 착지는 첫 항목을 음성으로 수정할 수 없게 했던 실기기 피드백으로 전환). */
-  reviewWait?: boolean;
+}
+
+/**
+ * v0.35.3 Stage 3 — 대기 상태 판별 유니온(종전 boolean 5개: isModify/trendConfirm/fractionWhole/
+ * atEnd/reviewWait). 실측 상태기계를 그대로 옮겼고 무효 조합(atEnd/reviewWait가 수정·소수 페이로드를
+ * 갖는 것 등)은 컴파일이 차단한다. 상태 의미(각 boolean 시절 주석 요약):
+ *
+ *  - 'value'        일반 값 대기. fractionWhole(v0.10.0 A1): STT가 소수부를 유실("111 점 에" →
+ *                   decimal_fraction_lost)하면 정수부를 담고 "소수점 아래만" 재질문 — 다음 발화가
+ *                   소수 한 자리면 `${fractionWhole}.${digit}` 합성 커밋. 값 추측(에→1)은 하지
+ *                   않는다(같은 STT 문자열이 111.1·111.5 양쪽에서 나옴 — 민구 결정).
+ *  - 'modify'       다음 final을 수정 값으로 처리. previousValue(#3 error-vs-intent): 정정 시작 전
+ *                   커밋돼 있던 값 — 최종 값과 함께 로깅해 STT 앞자리 유실(133.3→33.3)과 의도적
+ *                   재입력을 분석에서 구분. fractionWhole은 수정 중 소수부 유실 재질문에서도 유지.
+ *  - 'trendConfirm' v0.7.0 B4 추세 확인 — 위반 알림 직후 '확인'/'유지'(확정·진행) 또는 새 값
+ *                   (수정 의미론으로 재커밋 → 재검증) 대기. **수정 의미론을 포함**한다(종전
+ *                   isModify=true 겸장) — isModifyLike()로 판별. 커밋된 값 자체는 유효하게 저장돼
+ *                   있다. 재커밋 발화가 소수부 유실이면 fractionWhole 재질문도 이 모드에서 가능.
+ *  - 'atEnd'        v0.23.0 입력탭#4 — 마지막 행 완료 후 "종료 대기" 센티넬. 명령은 계속 처리하되
+ *                   일반 값 발화는 handleFinal의 atEnd 가드가 종료 안내로 흡수.
+ *  - 'reviewWait'   v0.33.0 백로그 A(민구 결정 3) — 완료 행 착지 "검토 대기" 센티넬. 값 낭독 후
+ *                   대기, bare 값 발화는 흡수(덮어쓰기 금지 — 수정은 '수정' 명령으로만). 포인터는
+ *                   그 행 첫 음성 필드(v0.34.0 A3 확정 규칙).
+ */
+type AwaitingField =
+  | (AwaitingBase & { kind: 'value'; fractionWhole?: string })
+  | (AwaitingBase & { kind: 'modify'; previousValue?: string; fractionWhole?: string })
+  | (AwaitingBase & { kind: 'trendConfirm'; previousValue: string; fractionWhole?: string })
+  | (AwaitingBase & { kind: 'atEnd' })
+  | (AwaitingBase & { kind: 'reviewWait' });
+
+/** 수정 의미론 보유 여부 — 종전 `awaiting.isModify`(trendConfirm은 isModify를 겸장했다). */
+function isModifyLike(a: AwaitingField): boolean {
+  return a.kind === 'modify' || a.kind === 'trendConfirm';
+}
+
+/** 종전 `awaiting.previousValue` 접근(모드 무관 optional 읽기 지점용). */
+function previousValueOf(a: AwaitingField): string | undefined {
+  return a.kind === 'modify' || a.kind === 'trendConfirm' ? a.previousValue : undefined;
+}
+
+/** 종전 `awaiting.fractionWhole` 접근(모드 무관 optional 읽기 지점용). 추세확인 중 소수부 유실
+ *  재질문(trendConfirm+fractionWhole)도 실측 도달 조합이라 포함한다. */
+function fractionWholeOf(a: AwaitingField): string | undefined {
+  return a.kind === 'value' || a.kind === 'modify' || a.kind === 'trendConfirm'
+    ? a.fractionWhole
+    : undefined;
 }
 
 /** v0.9.0 빠른 인식(조기확정): interim 숫자가 이 시간(ms) 동안 같은 값으로 안정되면 final을
@@ -577,13 +600,9 @@ export function useVoiceSession() {
       useSessionStore.getState().setModifyIndicator(
         opts?.isModify ? { name: col.name, colId: col.id } : null,
       );
-      awaitingFieldRef.current = {
-        row,
-        colId: col.id,
-        name: col.name,
-        isModify: opts?.isModify,
-        previousValue: opts?.previousValue,
-      };
+      awaitingFieldRef.current = opts?.isModify
+        ? { kind: 'modify', row, colId: col.id, name: col.name, previousValue: opts?.previousValue }
+        : { kind: 'value', row, colId: col.id, name: col.name };
       // v0.4.4 barge-in 클립 복구: 클립을 announce TTS '이전에' 시작한다. 레코더(audioRecorder)는
       // TTS mute와 무관하게 영구 mic 스트림에서 연속 캡처하므로, 안내 음성이 나가는 동안 사용자가
       // 값을 말하면(barge-in) 그 발화가 클립에 담긴다. 이전엔 announce 후 시작이라 barge-in 구간이
@@ -628,7 +647,7 @@ export function useVoiceSession() {
     const lastCol = vc[vc.length - 1] ?? null;
     // 명령 컨텍스트 유지용 atEnd 센티넬(마지막 음성 필드). 값 커밋은 handleFinal의 atEnd 가드가 차단.
     awaitingFieldRef.current = lastCol
-      ? { row: total, colId: lastCol.id, name: lastCol.name, atEnd: true }
+      ? { kind: 'atEnd', row: total, colId: lastCol.id, name: lastCol.name }
       : null;
     sess.setReaskReason(null);
     sess.setRecognized('');
@@ -672,7 +691,7 @@ export function useVoiceSession() {
     sess.setReaskReason(null);
     sess.setPhase('complete');
     awaitingFieldRef.current = firstCol
-      ? { row, colId: firstCol.id, name: firstCol.name, reviewWait: true }
+      ? { kind: 'reviewWait', row, colId: firstCol.id, name: firstCol.name }
       : null;
     // v0.34.0 A3 계측(D11c) — 검토 대기 진입은 이전까지 무로깅이라 실기기 분석에서 착지 컬럼을
     // 재구성할 수 없었다. 기존 command 타입 재사용(신규 LogEntry type 없음 — log-replay 호환).
@@ -1276,7 +1295,8 @@ export function useVoiceSession() {
     // `text` is mutable so the redo-with-inline-value path (e.g. "다시 8.4") can rewrite the
     // effective utterance to just the value and fall through to the normal value-commit path.
     let text = textArg;
-    const awaiting = awaitingFieldRef.current;
+    // 판별 유니온 전환(v0.35.3): trendConfirm 해제 시 'modify'로 강등 재대입하므로 let.
+    let awaiting = awaitingFieldRef.current;
     if (!awaiting) return;
     const cmd = detectCommand(text);
 
@@ -1363,7 +1383,7 @@ export function useVoiceSession() {
     // 커밋된 값은 이미 저장돼 있다(알림 ≠ 롤백). '확인'/'유지'는 그대로 확정·진행, 새 값 발화는
     // 아래 값 경로로 폴스루해 기존 isModify 의미론으로 재커밋(재위반 시 재알림), 타 명령은 알림만
     // 해제하고 정상 dispatch된다.
-    if (awaiting.trendConfirm) {
+    if (awaiting.kind === 'trendConfirm') {
       if (cmd === 'confirm' || cmd === 'keep') {
         cancelTts();
         useSessionStore.getState().setAnomalyAlert(null); // 팝업 해제
@@ -1382,7 +1402,12 @@ export function useVoiceSession() {
           type: 'trend', extra: `trend_alert_dismissed:${cmd}`,
           sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
         });
-        awaiting.trendConfirm = false; // 알림만 해제 — 아래 정상 명령 dispatch로 폴스루
+        // 알림만 해제 — 수정 의미론(종전 isModify 겸장)으로 강등 후 아래 정상 명령 dispatch로 폴스루.
+        awaiting = {
+          kind: 'modify', row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
+          previousValue: awaiting.previousValue,
+        };
+        awaitingFieldRef.current = awaiting;
       }
       // 명령이 아니면(새 값) 값 경로로 폴스루 — 커밋 지점에서 trend_alert_corrected 기록.
     }
@@ -1461,7 +1486,7 @@ export function useVoiceSession() {
       // the modify TARGET cell, and a direct "수정 <값>" re-keys the clip to that target so its
       // pointer isn't orphaned (CLIP-CMD). Background save — never blocks the voice flow.
       const pendingCmd = preserveCommandClip(awaiting.row, awaiting.colId);
-      if (awaiting.isModify) {
+      if (isModifyLike(awaiting)) {
         // No target re-link here (we're already re-listening for the value) — save against the
         // awaiting cell so the utterance still survives for analysis.
         pendingCmd?.saveDefault();
@@ -1481,7 +1506,7 @@ export function useVoiceSession() {
       // 의미론(직전 필드·값 추출)은 불변. 직접값 적용 후엔 검토 대기 복귀(enterModifyMode).
       let modifyVal = extractModifyValue(text);
       let reviewTarget: { row: number; idx: number } | undefined;
-      if (awaiting.reviewWait) {
+      if (awaiting.kind === 'reviewWait') {
         const vcRw = voiceColsList();
         let idx = Math.max(0, vcRw.findIndex((c) => c.id === awaiting.colId));
         const named = extractModifyColumn(text, vcRw.map((c) => c.name));
@@ -1555,7 +1580,7 @@ export function useVoiceSession() {
 
     // v0.23.0 입력탭#4 — 마지막 행 종료 대기(atEnd): 명령(종료/수정/이동 등)은 위에서 이미 dispatch됐다.
     // 여기 도달한 것은 일반 값 발화이므로 새 행으로 커밋하지 않고 종료 안내만 재생한다(자동 종료 제거).
-    if (awaiting.atEnd) {
+    if (awaiting.kind === 'atEnd') {
       useSessionStore.getState().setRecognized('');
       await say("입력이 끝났습니다. 종료하려면 '종료'라고 말씀하거나 종료 버튼을 누르세요.");
       return;
@@ -1564,7 +1589,7 @@ export function useVoiceSession() {
     // v0.33.0 백로그 A(민구 결정 3) — 완료 행 검토 대기(reviewWait): 명령은 위에서 이미 dispatch됐다.
     // 여기 도달한 것은 일반 값 발화 — 완료 행을 bare 값으로 덮어쓰지 않고 안내만 한다(수정은
     // '수정' 명령으로만). atEnd 가드와 동일한 흡수 패턴.
-    if (awaiting.reviewWait) {
+    if (awaiting.kind === 'reviewWait') {
       useSessionStore.getState().setRecognized('');
       await say(`${awaiting.row}행은 완료된 행입니다. 수정하려면 '수정', 다음 행은 '다음'이라고 말씀해 주세요.`);
       return;
@@ -1601,8 +1626,9 @@ export function useVoiceSession() {
         logger.log({ type: 'stt_rejected_ambiguous_syllable', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId, extra: 'response_word' });
         useSessionStore.getState().setRecognized('');
         useSessionStore.getState().setReaskReason('parse_failed');
-        if (awaiting.fractionWhole != null) {
-          await say(`${awaiting.fractionWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
+        const respFracWhole = fractionWholeOf(awaiting);
+        if (respFracWhole != null) {
+          await say(`${respFracWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
         } else {
           recorderRef.current?.startClip();
           await say(`${awaiting.name} 다시 말씀해 주세요.`);
@@ -1634,7 +1660,7 @@ export function useVoiceSession() {
     // v0.10.0 A1: 소수점 타깃 재질문 중(awaiting.fractionWhole)에는 이 게이트를 건너뛴다 — 사용자가
     // "소수점 아래만" 명시적으로 한 자리(예: "오"=5)를 말하는 상황이라 단일 음절이 모호하지 않다.
     // (정수부 컨텍스트가 이미 있어, 아래 fractionWhole 분기가 `111.5`로 합성한다.)
-    if (currentCol && (currentCol.type === 'int' || currentCol.type === 'float') && awaiting.fractionWhole == null) {
+    if (currentCol && (currentCol.type === 'int' || currentCol.type === 'float') && fractionWholeOf(awaiting) == null) {
       if (alts.length <= 1 && isAmbiguousSingleSyllable(text)) {
         logger.log({ type: 'stt_rejected_ambiguous_syllable', text, confidence, sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId });
         recorderRef.current?.startClip();
@@ -1670,8 +1696,9 @@ export function useVoiceSession() {
     // v0.10.0 A1 타깃 재질문 후속: 소수부만 기다리는 중이면(직전 발화가 decimal_fraction_lost) 이번
     // 발화를 소수부로 합성 시도. 모드는 한 번만 적용하고 즉시 해제한다 — 합성 실패 시 아래 평소 파싱이
     // 전체 발화로 처리하므로, 사용자가 "111.5" 전체를 다시 말한 경우도 그대로 커밋된다.
-    const fractionWhole = awaiting.fractionWhole;
+    const fractionWhole = fractionWholeOf(awaiting);
     if (fractionWhole != null) {
+      // 여기 도달 시 kind는 value|modify|trendConfirm — atEnd/reviewWait는 위 가드가 return(내로잉 증명).
       awaitingFieldRef.current = { ...awaiting, fractionWhole: undefined };
       if (col) {
         const frac = parseKoreanNumber(text);
@@ -1751,7 +1778,7 @@ export function useVoiceSession() {
         extra: parseFailReason ?? undefined,
         sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
         colName: awaiting.name,
-        ...(awaiting.fractionWhole != null ? { originalText: `frac_ctx:${awaiting.fractionWhole}` } : {}),
+        ...(fractionWhole != null ? { originalText: `frac_ctx:${fractionWhole}` } : {}),
       });
       // v0.23.0 입력탭#2 — 파싱 실패도 재질문 사유로 표면화(높은 신뢰도인데 재질문되는 혼동 해소).
       useSessionStore.getState().setReaskReason('parse_failed');
@@ -1802,7 +1829,7 @@ export function useVoiceSession() {
     // `valueBurst && !anomalyAlert` 조건이 참이 되며 같은 값이 CenterValueBurst로 한 번 더 떠
     // "정상 입력 내용이 한 번 더 팝업"되던 중복(민구 제보)이 발생한다. 정정-출처 커밋에선 burst를
     // 건너뛰어 중앙 팝업이 1회(초록 corrected)만 뜨게 한다. 일반(비-정정) 커밋의 burst는 그대로 유지.
-    if (!awaiting.trendConfirm) {
+    if (awaiting.kind !== 'trendConfirm') {
       sess.pushValueBurst(awaiting.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
     }
     awaitingFieldRef.current = null;
@@ -1810,7 +1837,7 @@ export function useVoiceSession() {
     // v0.7.0 B4: 추세 알림에 새 값으로 응답한 재커밋 — 정정 기록(오알림률 분모) + 이전 값 발화
     // 클립 보존. 새 저장이 같은 bare key(`sess:row:colId`)를 덮어쓰므로 :a<n>로 먼저 보관한다
     // (RACE-4 보존 원칙 — enterModifyMode의 archive 패턴과 동일, 백그라운드).
-    if (awaiting.trendConfirm) {
+    if (awaiting.kind === 'trendConfirm') {
       logger.log({
         type: 'trend', extra: 'trend_alert_corrected',
         sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
@@ -1829,7 +1856,7 @@ export function useVoiceSession() {
     // pointer is re-linked to the modify-command clip (`…:cmd<n>`) instead of being left on the
     // canonical key (which still holds the PREVIOUS value's audio — the "155.5 cell plays 177.7"
     // defect) or silently unlinked.
-    const wasModify = !!awaiting.isModify;
+    const wasModify = isModifyLike(awaiting);
     pendingClipsRef.current[clipAwaitingRow] = {
       ...pendingClipsRef.current[clipAwaitingRow],
       [clipAwaitingColId]: clipKey,
@@ -1844,7 +1871,7 @@ export function useVoiceSession() {
     // (07-14 실기기 r8c8 — 정정 09:23:38 검사 vs value 09:23:40, 실피해 0). persist는 그대로
     // fire-and-forget으로 발사하되, 검사는 커밋 경로 종단(value 이벤트 이후 — 알람 분기는 알람 TTS
     // 이후)에 스케줄해 durable 반영이 정착한 뒤 1회만 판정한다(로직 최소 변경 — 비교식 동일).
-    const wasTrendCorrected = awaiting.trendConfirm;
+    const wasTrendCorrected = awaiting.kind === 'trendConfirm';
     const persistPromise = persistSession();
     void persistPromise.catch(() => {});
     const runCorrectedPersistCheck = () => {
@@ -2069,15 +2096,16 @@ export function useVoiceSession() {
         row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
         text, parsed, confidence,
         durationMs: commitLatencyMs, // v0.20.0 Phase 5 #4 — 발화 확정→커밋 반응속도(ms)
-        ...(awaiting.isModify && awaiting.previousValue != null
-          ? { previousValue: awaiting.previousValue }
+        ...(isModifyLike(awaiting) && previousValueOf(awaiting) != null
+          ? { previousValue: previousValueOf(awaiting) }
           : {}),
       });
       // 응답 대기 상태 무장 — 새 값 발화가 기존 수정(isModify) 의미론으로 재커밋되도록
       // previousValue=방금 커밋된 값과 함께 세팅한다.
       awaitingFieldRef.current = {
+        kind: 'trendConfirm',
         row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
-        isModify: true, previousValue: parsed, trendConfirm: true,
+        previousValue: parsed,
       };
       // 응답 발화('확인'/새 값) 클립 시작 — announceField 패턴(TTS 이전 시작, barge-in 수록).
       armClipForCell(awaiting.row, awaiting.colId);
@@ -2103,7 +2131,7 @@ export function useVoiceSession() {
     // 전혀 갱신하지 않아 옛 이상치 값이 남은 채 echo TTS("수정 …")만 새 값을 말해 시각/청각이 어긋났다.
     // 팝업 닫힘은 기존대로 advance()→announceField의 setAnomalyAlert(null)이 담당하므로, echo TTS가
     // 발화되는 동안 초록 팝업이 노출된다(별도 타이머 없이 '초록 전환 + 즉시 반영' 성립).
-    if (awaiting.trendConfirm) {
+    if (awaiting.kind === 'trendConfirm') {
       const cur = useSessionStore.getState().anomalyAlert;
       if (cur) {
         useSessionStore.getState().setAnomalyAlert({
@@ -2113,11 +2141,11 @@ export function useVoiceSession() {
         });
         playBeep('corrected');
       }
-    } else if (awaiting.isModify) {
+    } else if (awaiting.kind === 'modify') {
       playBeep('modify');
     }
 
-    const echoText = awaiting.isModify
+    const echoText = isModifyLike(awaiting)
       ? `수정 ${awaiting.name} ${formatForTts(parsed)}`
       : formatForTts(parsed);
     const echoEnqueuedAt = Date.now();
@@ -2149,8 +2177,8 @@ export function useVoiceSession() {
       durationMs: commitLatencyMs, // v0.20.0 Phase 5 #4 — 발화 확정→커밋 반응속도(ms)
       // #3 error-vs-intent: present only when this value re-commits a corrected cell.
       // previousValue (pre-modify) vs parsed (final) discriminates STT prefix-drop from re-entry.
-      ...(awaiting.isModify && awaiting.previousValue != null
-        ? { previousValue: awaiting.previousValue }
+      ...(isModifyLike(awaiting) && previousValueOf(awaiting) != null
+        ? { previousValue: previousValueOf(awaiting) }
         : {}),
     });
 
@@ -2181,7 +2209,7 @@ export function useVoiceSession() {
         row: awaitingFieldRef.current?.row, colId: awaitingFieldRef.current?.colId,
         extra: `attempt:${extra}` });
     const awaiting = awaitingFieldRef.current;
-    if (!awaiting || awaiting.trendConfirm || awaiting.atEnd || awaiting.reviewWait) return;
+    if (!awaiting || awaiting.kind === 'trendConfirm' || awaiting.kind === 'atEnd' || awaiting.kind === 'reviewWait') return;
     if (useSessionStore.getState().phase !== 'active') return;
     if (ctrlRef.current?.isTtsMuted()) {
       // TTS 중 barge-in은 final 경로가 처리 — 안정화 후보가 무장돼 있었다면 무산 사유를 기록.
@@ -2617,8 +2645,8 @@ export function useVoiceSession() {
     const col = getColById(pending.colId);
     if (!col) return;
     awaitingFieldRef.current = pending.reviewWait
-      ? { row: pending.row, colId: pending.colId, name: col.name, reviewWait: true }
-      : { row: pending.row, colId: pending.colId, name: col.name, isModify: true, previousValue: pending.candidateValue };
+      ? { kind: 'reviewWait', row: pending.row, colId: pending.colId, name: col.name }
+      : { kind: 'modify', row: pending.row, colId: pending.colId, name: col.name, previousValue: pending.candidateValue };
     // reload 전 컨트롤러 인스턴스는 사라진다. 팝업만 복원하면 테스트의 fireResult가 optional no-op이고,
     // [확인] 뒤 다음 셀도 영구 무음이 된다. 실제 SpeechController를 다시 만들되 manualHold 중앙 게이트가
     // 복구 직후 STT 결과를 모두 거부하므로 후보는 터치 전용 계약을 유지한다.
@@ -2840,12 +2868,12 @@ export function useVoiceSession() {
 
     const awaiting = awaitingFieldRef.current;
     const ownsFlow = !!awaiting
-      && (awaiting.reviewWait || (!awaiting.atEnd && awaiting.row === row && awaiting.colId === colId));
+      && (awaiting.kind === 'reviewWait' || (awaiting.kind !== 'atEnd' && awaiting.row === row && awaiting.colId === colId));
     if (violation && ownsFlow) {
       epochRef.current++;
       cancelTts();
-      if (!awaiting!.reviewWait) {
-        awaitingFieldRef.current = { row, colId, name: col.name, isModify: true, previousValue: value };
+      if (awaiting!.kind !== 'reviewWait') {
+        awaitingFieldRef.current = { kind: 'modify', row, colId, name: col.name, previousValue: value };
       }
       sess.setRowValue(row, colId, value);
       sess.setRecognized(value);
@@ -2863,7 +2891,7 @@ export function useVoiceSession() {
         previousValue: oldPending?.previousValue ?? originalRow?.values[colId] ?? prevValue,
         previousSyncState: oldPending?.previousSyncState ?? originalRow?.syncState,
         previousAudioClip: oldPending?.previousAudioClip ?? originalRow?.audioClips?.[colId],
-        reviewWait: !!awaiting.reviewWait,
+        reviewWait: awaiting.kind === 'reviewWait',
         activeColIdx: useSessionStore.getState().activeColIdx,
         alert: { ...alert, colId, awaitingResponse: true, manualHold: true },
       };
@@ -2898,13 +2926,13 @@ export function useVoiceSession() {
       // 성공적인 정상 재커밋만 보류를 해소한다. 시트 취소는 이 함수에 들어오지 않으므로 유지된다.
       useSessionStore.getState().setAnomalyAlert(null);
     }
-    if (awaiting?.reviewWait) {
+    if (awaiting?.kind === 'reviewWait') {
       // v0.33.0 항목2 상호작용 — 검토 대기 중 칩 수동 수정: 검토 대기를 재무장해 갱신값을 재낭독
       // 하고 다시 명령 대기한다(advance로 검토를 강제 종료하지 않는다).
       epochRef.current++;
       cancelTts();
       await enterReviewWait(awaiting.row);
-    } else if (awaiting && !awaiting.atEnd && awaiting.row === row && awaiting.colId === colId) {
+    } else if (awaiting && awaiting.kind !== 'atEnd' && awaiting.row === row && awaiting.colId === colId) {
       epochRef.current++;
       cancelTts();
       awaitingFieldRef.current = null;
@@ -2921,7 +2949,7 @@ export function useVoiceSession() {
    *  선행 command 이벤트의 extra('touch' vs 음성의 tts_*)로 구분되고 trend 이벤트는 글자 동일. */
   const confirmAnomalyTouch = useCallback(async () => {
     const awaiting = awaitingFieldRef.current;
-    if (!awaiting?.trendConfirm) return; // 응답 대기 중이 아니면 no-op(정보성 팝업 등)
+    if (awaiting?.kind !== 'trendConfirm') return; // 응답 대기 중이 아니면 no-op(정보성 팝업 등)
     epochRef.current++;
     cancelTts();
     logger.log({
@@ -2943,7 +2971,7 @@ export function useVoiceSession() {
    *  preserveCommandClip 없이 클립 슬롯만 재무장한다. */
   const modifyAnomalyTouch = useCallback(async () => {
     const awaiting = awaitingFieldRef.current;
-    if (!awaiting?.trendConfirm) return;
+    if (awaiting?.kind !== 'trendConfirm') return;
     epochRef.current++;
     cancelTts();
     logger.log({
@@ -2955,8 +2983,11 @@ export function useVoiceSession() {
       type: 'trend', extra: 'trend_alert_dismissed:modify',
       sessionId: sessionIdRef.current, row: awaiting.row, colId: awaiting.colId,
     });
-    // 음성 경로의 trendConfirm 해제(awaiting.trendConfirm=false 후 isModify 재질문)와 동일 상태.
-    awaitingFieldRef.current = { ...awaiting, trendConfirm: false };
+    // 음성 경로의 trendConfirm 해제('modify' 강등 후 재질문)와 동일 상태.
+    awaitingFieldRef.current = {
+      kind: 'modify', row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
+      previousValue: awaiting.previousValue,
+    };
     armClipForCell(awaiting.row, awaiting.colId);
     await say(`${awaiting.name} 다시 말씀해 주세요.`);
   }, [armClipForCell, say]);
@@ -3008,7 +3039,7 @@ export function useVoiceSession() {
       sessionId: sessionIdRef.current, row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
     });
     const awaiting = awaitingFieldRef.current;
-    if (awaiting?.reviewWait) {
+    if (awaiting?.kind === 'reviewWait') {
       // 보류 시 재무장을 미뤘던 검토 대기 재진입(commitManualValue의 reviewWait 경로와 동일 착지).
       await enterReviewWait(awaiting.row);
       return;
