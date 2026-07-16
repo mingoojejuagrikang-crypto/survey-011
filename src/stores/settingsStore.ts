@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage, type StateStorage } from 'zustand/middleware';
 import type { Column, SheetConfig, SavedSheet, LegacyInputMode } from '../types';
-import type { ReviewFilter } from '../lib/reviewQuery';
 import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
 import { isCycling } from '../lib/autoValue';
 import {
@@ -143,20 +142,6 @@ interface SettingsState {
    *  다시 지우지 않도록 한다. 사용자 설정 아님(UI 미노출). */
   trendRuleClearedV6?: boolean;
 
-  // ── v0.10.0 — 비교탭(ReviewScreen) 영속 상태. 해석/파생은 src/lib/reviewQuery.ts가 SSOT. ──
-  /** 차원 AND 필터 칩 목록(모두 만족 샘플만, 교집합). 기본 []. */
-  reviewFilters: ReviewFilter[];
-  /** 비교 기준 회차(ISO). null = 인덱스의 최근 회차. */
-  reviewTargetRound: string | null;
-  /** baseline = target 기준 N회차 전(strictly before). 기본 1(직전). 최소 1. */
-  reviewBaselineBack: number;
-  /** 표시 차원(키) 컬럼 id 목록. null = 자동(가변 키 차원). */
-  reviewGroupCols: string[] | null;
-  /** 표시 측정 컬럼 id 목록. null = 자동(전 적격 측정). */
-  reviewMeasureCols: string[] | null;
-  /** 표시 행(샘플키) 목록. null = 후보 전체. 필터/회차 변경으로 후보가 바뀌면 호출자가 null 리셋. */
-  reviewSelectedRows: string[] | null;
-
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns' | 'saveSheet' | 'removeSavedSheet'>>) => void;
   updateColumn: (id: string, next: Column) => void;
   addColumn: () => void;
@@ -194,11 +179,6 @@ export function applySemanticDefaults(col: Column): Column {
   if (nm === '비고' && col.input !== 'touch') return { ...col, input: 'touch' };
   if (col.type === 'name') return { ...col, type: 'text' };
   return col;
-}
-
-/** string[] 타입가드 — 비교탭 영속 배열(reviewGroupCols 등) 손상 방어용. */
-function isStringArray(v: unknown): v is string[] {
-  return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
 
 /** Migrate legacy mode-based columns to new input/ttsAnnounce shape. */
@@ -266,13 +246,6 @@ export function makeSettingsDefaults(): SettingsDefaults {
     teamFolderId: null,
     userLogFolderId: null,
     roundDateColId: null,
-    // v0.10.0 — 비교탭 기본값(전부 자동/미선택 → 최근 회차·직전 baseline·후보 전체).
-    reviewFilters: [],
-    reviewTargetRound: null,
-    reviewBaselineBack: 1,
-    reviewGroupCols: null,
-    reviewMeasureCols: null,
-    reviewSelectedRows: null,
   };
 }
 
@@ -402,6 +375,13 @@ export const useSettingsStore = create<SettingsState>()(
           noisyMode?: unknown;
           trendRuleClearedV6?: boolean;
           savedSheets?: unknown;
+          // v0.35.1 Stage 0 — 비교탭 제거로 인터페이스에서 빠진 영속 필드(잔존 키 삭제용).
+          reviewFilters?: unknown;
+          reviewTargetRound?: unknown;
+          reviewBaselineBack?: unknown;
+          reviewGroupCols?: unknown;
+          reviewMeasureCols?: unknown;
+          reviewSelectedRows?: unknown;
         };
         if (Array.isArray(s.columns)) {
           // 기존 컬럼 전부에 샘플키 유추 기본값 부여(사용자가 이미 토글한 boolean은 보존:
@@ -443,26 +423,16 @@ export const useSettingsStore = create<SettingsState>()(
         // v0.7.0 — 조사시기(회차) 컬럼 id는 유지(UI만 v0.8.0 조회탭으로 이전 — WS4).
         if (typeof s.roundDateColId !== 'string' && s.roundDateColId !== null) s.roundDateColId = null;
 
-        // ── v0.10.0 — 비교탭 영속 상태 기본값/타입가드. 손상·구버전 누락은 안전 기본값으로. ──
-        if (
-          !Array.isArray(s.reviewFilters) ||
-          !s.reviewFilters.every(
-            (f) =>
-              f !== null &&
-              typeof f === 'object' &&
-              typeof (f as ReviewFilter).colId === 'string' &&
-              typeof (f as ReviewFilter).value === 'string',
-          )
-        ) {
-          s.reviewFilters = [];
-        }
-        if (typeof s.reviewTargetRound !== 'string' && s.reviewTargetRound !== null) s.reviewTargetRound = null;
-        if (typeof s.reviewBaselineBack !== 'number' || !Number.isFinite(s.reviewBaselineBack) || s.reviewBaselineBack < 1) {
-          s.reviewBaselineBack = 1;
-        }
-        if (s.reviewGroupCols !== null && !isStringArray(s.reviewGroupCols)) s.reviewGroupCols = null;
-        if (s.reviewMeasureCols !== null && !isStringArray(s.reviewMeasureCols)) s.reviewMeasureCols = null;
-        if (s.reviewSelectedRows !== null && !isStringArray(s.reviewSelectedRows)) s.reviewSelectedRows = null;
+        // ── v0.35.1 Stage 0 — 비교탭(ReviewScreen) 정식 제거. v0.10.0에 도입된 영속 상태 6필드를
+        // 인터페이스에서 없앴으므로 잔존 영속값을 무조건 삭제한다(v7 speakerOutput 패턴 — 필드가
+        // 더는 존재하지 않아 다운그레이드 마커 불필요). persist version은 11 동결 유지([ENV-9],
+        // settings-migration.spec의 version===11 단정 — 필드 delete는 bump 불요).
+        delete s.reviewFilters;
+        delete s.reviewTargetRound;
+        delete s.reviewBaselineBack;
+        delete s.reviewGroupCols;
+        delete s.reviewMeasureCols;
+        delete s.reviewSelectedRows;
 
         // ── v6 (v0.8.0) — "추세 검증" → "이상치 알람" 전환 ──────────────────────────
         // 의미가 정반대로 반전됐으므로(increase: 작아지면 알람 → 커지면 알람) 기존 저장값을

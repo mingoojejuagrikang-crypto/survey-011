@@ -1,7 +1,7 @@
 import { T } from '../tokens';
 import { I } from './icons';
 
-export type TabId = 'settings' | 'voice' | 'data' | 'review' | 'feedback';
+export type TabId = 'settings' | 'voice' | 'data' | 'feedback';
 
 interface Props {
   tab: TabId;
@@ -12,8 +12,6 @@ const tabs: { id: TabId; label: string; icon: (s?: number, c?: string) => JSX.El
   { id: 'settings', label: '설정', icon: I.settings },
   { id: 'voice', label: '입력', icon: I.mic },
   { id: 'data', label: '데이터', icon: I.data },
-  // 비교 탭 v0.12 숨김 — 재구축 시 해제 (TabId 'review' 유니온·ReviewScreen·persist는 유지)
-  // { id: 'review', label: '비교', icon: I.search },
   // v0.33.0 항목11 — 개선요청. 화면 전환 없는 팝업 방식(민구 확정): App.tsx가 setTab 없이
   // 인터셉트해 현재 화면 위에 캡처+FeedbackModal을 띄운다 → active 하이라이트가 생기지 않는다.
   { id: 'feedback', label: '개선요청', icon: I.feedback },

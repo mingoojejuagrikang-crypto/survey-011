@@ -27,12 +27,6 @@ export const I: Record<string, IconFn> = {
       <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
     </svg>
   ),
-  search: (s = 24, c = 'currentColor') => (
-    <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="11" cy="11" r="7" />
-      <line x1="21" y1="21" x2="16" y2="16" />
-    </svg>
-  ),
   // v0.33.0 항목11 — 개선요청 탭(말풍선 + 연필).
   feedback: (s = 24, c = 'currentColor') => (
     <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

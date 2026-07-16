@@ -404,8 +404,8 @@ export function useVoiceSession() {
     const session: Session = {
       id: resolvedId,
       // v0.7.0: LOCAL date, not UTC — toISOString() stamped KST 00:00~08:59 sessions with
-      // yesterday's date, so the 조회 탭(ReviewScreen)의 localTodayISO() 오늘-세션 매칭에서
-      // 그날 아침 세션이 사라졌다. 코드베이스 지배 규약도 로컬(autoValue.ts 날짜 컬럼).
+      // yesterday's date, so localTodayISO() 오늘-세션 매칭에서 그날 아침 세션이 사라졌다.
+      // 코드베이스 지배 규약도 로컬(autoValue.ts 날짜 컬럼).
       date: localTodayISO(),
       label: sessionLabelRef.current || sess.sessionLabel,
       columns: settings.columns,

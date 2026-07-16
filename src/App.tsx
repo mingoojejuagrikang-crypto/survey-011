@@ -4,7 +4,6 @@ import { UpdateBanner } from './components/UpdateBanner';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { VoiceScreen } from './screens/VoiceScreen';
 import { DataScreen } from './screens/DataScreen';
-import { ReviewScreen } from './screens/ReviewScreen';
 import { T, DEVICE } from './tokens';
 import { hydrateSessions } from './lib/hydrate';
 import { hydratePastIndexFallback, getCachedIndex, getFallbackIndex, ensurePastIndex } from './lib/pastValues';
@@ -159,7 +158,6 @@ export default function App() {
           </div>
         )}
         {tab === 'data' && <DataScreen />}
-        {tab === 'review' && <ReviewScreen />}
       </div>
       <TabBar tab={tab} setTab={changeTab} />
       {/* v0.33.0 항목11 — 개선요청 모달. 현재 화면 위 오버레이(탭 인터셉트 — setTab 없음).

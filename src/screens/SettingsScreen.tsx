@@ -1381,12 +1381,6 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
       sessionAutoLabel: d.sessionAutoLabel,
       sessionCustomLabel: d.sessionCustomLabel,
       roundDateColId: d.roundDateColId,
-      reviewFilters: d.reviewFilters,
-      reviewTargetRound: d.reviewTargetRound,
-      reviewBaselineBack: d.reviewBaselineBack,
-      reviewGroupCols: d.reviewGroupCols,
-      reviewMeasureCols: d.reviewMeasureCols,
-      reviewSelectedRows: d.reviewSelectedRows,
     });
     setPreferredVoiceName(''); // 라이브 speech 모듈도 스토어 기본값과 동기화
     setTypeReview(null);
