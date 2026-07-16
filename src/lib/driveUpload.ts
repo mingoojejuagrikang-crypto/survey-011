@@ -285,11 +285,6 @@ export async function uploadLogToBothDrives(
   return result;
 }
 
-/** @deprecated v0.10부터 uploadLogToBothDrives 사용 권장. 호환성을 위해 유지. */
-export async function uploadLogToDrive(zipBlob: Blob, filename: string): Promise<string> {
-  return uploadZip(zipBlob, filename, LOG_FOLDER_ID);
-}
-
 // ─── v0.33.0 항목11 — 개선요청(feedback) 이중 업로드 ─────────────────────────
 
 const USER_FEEDBACK_SUBFOLDER = 'feedback';

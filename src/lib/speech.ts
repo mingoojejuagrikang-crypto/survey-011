@@ -82,10 +82,6 @@ export class SpeechController {
   private restartingTimer: number | null = null;
   /** True while TTS is speaking — prevents STT restart to avoid echo feedback */
   private ttsMuted = false;
-  /** v0.11.0 post-TTS 가드: TTS가 끝난(unmuteForTts) 시각(ms). 스피커폰 모드에서 onend 직후
-   *  스피커 잔향/리버브가 마이크로 새어 들어와 가짜 final로 수락되는 빈틈을 닫기 위해,
-   *  useVoiceSession이 종료 후 짧은 가드 윈도우 동안 입력을 추가로 차단한다. 0 = TTS 종료 이력 없음. */
-  private ttsEndedAt = 0;
   /** P0(영구 인식사멸): muteForTts가 대기 중 재시작 타이머를 취소하면 true — TTS 종료
    *  (unmuteForTts) 시 반드시 재예약해야 한다. 이 플래그가 없던 시절, iOS가 TTS 재생 중
    *  인식기를 죽이면(end→100ms 타이머) 그 타이머를 mute가 취소한 채 아무도 되살리지 않아
@@ -153,10 +149,9 @@ export class SpeechController {
   }
 
   /** Called when TTS utterance ends — STT was never aborted so no restart needed.
-   *  즉시 unmute는 유지(이어폰 barge-in 경로 불변). 종료 시각만 찍어 post-TTS 가드의 기준점으로 쓴다. */
+   *  즉시 unmute는 유지(이어폰 barge-in 경로 불변). */
   unmuteForTts() {
     this.ttsMuted = false;
-    this.ttsEndedAt = Date.now();
     // P0: muteForTts가 취소했던 재시작을 여기서 되살린다.
     if (this.active && this.restartPendingAfterTts) {
       this.restartPendingAfterTts = false;
@@ -168,13 +163,6 @@ export class SpeechController {
   /** True while TTS is actively playing — used by handleFinal to filter value inputs. */
   isTtsMuted(): boolean {
     return this.ttsMuted;
-  }
-
-  /** v0.11.0 post-TTS 가드: 마지막 TTS 종료(unmuteForTts) 이후 경과 ms. 종료 이력이 없으면(0)
-   *  매우 큰 값을 반환해 가드가 절대 걸리지 않게 한다. */
-  msSinceTtsEnd(): number {
-    if (this.ttsEndedAt === 0) return Number.POSITIVE_INFINITY;
-    return Date.now() - this.ttsEndedAt;
   }
 
   start() {
@@ -199,7 +187,6 @@ export class SpeechController {
   stop() {
     this.active = false;
     this.ttsMuted = false;
-    this.ttsEndedAt = 0;
     this.restartPendingAfterTts = false;
     this.recRunning = false;
     this.restartDelayMs = this.baseRestartDelayMs;
