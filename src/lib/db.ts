@@ -1,11 +1,50 @@
 import { openDB, type IDBPDatabase } from 'idb';
 import type { Session } from '../types';
 
-/** [ENV-11] SSOT — 테스트는 tests/fixtures/idb.ts가 이 상수를 재수출해 쓴다(하드코딩 금지,
- *  tests/idb-fixture.spec.ts 가드가 강제). 버전 bump 시 fixture의 스키마 미러(applyAppSchema)에
- *  신규 스토어를 함께 반영할 것. */
+/** [ENV-11] SSOT — 테스트는 tests/fixtures/idb.ts가 이 상수와 applyAppSchema를 재수출해 쓴다
+ *  (하드코딩 금지, tests/idb-fixture.spec.ts 가드가 강제). */
 export const DB_NAME = 'survey-011';
 export const DB_VERSION = 6;
+
+/** applyAppSchema가 받는 최소 인터페이스 — idb 래퍼(IDBPDatabase)와 원시 IDBDatabase 모두 충족
+ *  (테스트가 브라우저 컨텍스트에 toString() 주입해 원시 DB에 실행한다). */
+interface SchemaTarget {
+  objectStoreNames: { contains(name: string): boolean };
+  createObjectStore(
+    name: string,
+    opts?: IDBObjectStoreParameters,
+  ): { createIndex(name: string, keyPath: string): unknown };
+}
+
+/** 앱 IDB 스키마 SSOT — **멱등**(존재 확인 후 생성)이라 어떤 oldVersion에서 시작해도 최종 형태로
+ *  수렴한다(현행 이력은 전부 "스토어 추가"뿐이라 버전 게이트와 동등 — 스토어를 삭제/개조하는
+ *  마이그레이션이 생기면 그 단계만 upgrade에서 버전 게이트로 처리할 것).
+ *  테스트 픽스처(tests/fixtures/idb.ts)가 이 함수를 재수출하므로 프로덕션·테스트 스키마가 절대
+ *  드리프트하지 않는다([ENV-3]/[ENV-11] 근절 — v0.35.1 리뷰 라운드3 Pro 제안 채택).
+ *  ⚠️ 클로저 금지 — toString() 직렬화로 브라우저에 주입되므로 바깥 식별자를 참조할 수 없다.
+ *  각 스토어의 도입 배경 주석은 아래 upgrade 핸들러가 아닌 여기서 유지한다:
+ *  - sessions(v1) / audioClips(v2)
+ *  - logEvents(v3): Logger events 영속화 — autoIncrement + sessionId 인덱스로 reload 후 조회.
+ *  - kv(v4, v0.14.0 C): 설정 내구 미러 — iOS Safari localStorage evict 방어선.
+ *  - screenshots(v5, v0.33.0 10-B): 자동 캡처 JPEG. 키 `${sessionId}:...` 접두 규약(cascade).
+ *  - feedbackQueue(v6, v0.33.0 항목11): 개선요청 오프라인/미로그인 재전송 큐. */
+export function applyAppSchema(db: SchemaTarget): void {
+  if (!db.objectStoreNames.contains('sessions')) {
+    const store = db.createObjectStore('sessions', { keyPath: 'id' });
+    store.createIndex('byDate', 'date');
+    store.createIndex('bySync', 'syncedRows');
+  }
+  if (!db.objectStoreNames.contains('audioClips')) db.createObjectStore('audioClips');
+  if (!db.objectStoreNames.contains('logEvents')) {
+    const logs = db.createObjectStore('logEvents', { keyPath: 'id', autoIncrement: true });
+    logs.createIndex('bySessionId', 'sessionId');
+  }
+  if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+  if (!db.objectStoreNames.contains('screenshots')) db.createObjectStore('screenshots');
+  if (!db.objectStoreNames.contains('feedbackQueue')) {
+    db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true });
+  }
+}
 
 let dbPromise: Promise<IDBPDatabase> | null = null;
 
@@ -15,39 +54,10 @@ function getDb() {
     // - rethrowing-catch: open이 실패하면 캐시를 비워 다음 호출이 새 연결을 연다(현재 호출자는 거부 수신).
     // - terminated: 연결이 비정상 종료되면 캐시를 비워 다음 접근 시 재오픈.
     dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion) {
-        if (oldVersion < 1) {
-          const store = db.createObjectStore('sessions', { keyPath: 'id' });
-          store.createIndex('byDate', 'date');
-          store.createIndex('bySync', 'syncedRows');
-        }
-        if (oldVersion < 2) {
-          db.createObjectStore('audioClips');
-        }
-        if (oldVersion < 3) {
-          // v5.2 Codex 4차 MEDIUM: Logger events 영속화.
-          // autoIncrement key + sessionId 인덱스로 reload 후에도 세션별 이벤트 조회 가능.
-          const logs = db.createObjectStore('logEvents', { keyPath: 'id', autoIncrement: true });
-          logs.createIndex('bySessionId', 'sessionId');
-        }
-        if (oldVersion < 4) {
-          // v0.14.0 C: 설정(스프레드시트 URL·컬럼·저장시트)의 내구 미러. iOS Safari가 일정시간
-          // 경과/강제종료 후 localStorage를 evict하면 시트 등록이 통째로 풀리던 문제(민구 보고)의
-          // 방어선 — localStorage가 비면 여기서 복원한다. 키=persist name, 값=JSON 문자열.
-          db.createObjectStore('kv');
-        }
-        if (oldVersion < 5) {
-          // v0.33.0 항목10-B: 입력화면 자동 캡처(JPEG 저화질) 저장소. 키 `${sessionId}:${ts}:${trigger}`
-          // — audioClips와 같은 `${sessionId}:` 접두 규약이라 세션 삭제 cascade가 prefix 매칭으로 동작.
-          db.createObjectStore('screenshots');
-        }
-        if (oldVersion < 6) {
-          // v0.33.0 항목11: 개선요청(feedback) 오프라인/미로그인 큐. 전송 실패/불가 시 zip을 통째로
-          // 보관했다가 온라인·로그인 복귀 시 자동 재전송한다(feedback.ts flushFeedbackQueue).
-          // [ENV-11] DB_VERSION bump 시 tests/fixtures/idb.ts의 스키마 미러(applyAppSchema)에
-          // 신규 스토어를 함께 반영할 것 — spec별 하드코딩은 v0.35.1에 근절(가드 spec이 강제).
-          db.createObjectStore('feedbackQueue', { keyPath: 'id', autoIncrement: true });
-        }
+      upgrade(db) {
+        // 스키마 정의는 applyAppSchema(멱등, 위)가 SSOT — oldVersion 무관하게 부족한 스토어만
+        // 생성한다. 스토어 삭제/개조 마이그레이션이 필요해지면 그 단계만 여기서 버전 게이트로.
+        applyAppSchema(db);
       },
       terminated() {
         // 연결이 예기치 않게 닫힘(브라우저 회수, PWA 업데이트 등) → 캐시 무효화.
