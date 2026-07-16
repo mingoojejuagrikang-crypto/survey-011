@@ -16,7 +16,8 @@ import { logger } from './logger';
 import { rowMarked } from './logEvents';
 import { resolveFinal } from './voiceFinalResolver';
 import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
-import { getCachedIndex, getFallbackIndex, getFallbackBuiltAt, hydratePastIndexFallback, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
+import { getCachedIndex, hydratePastIndexFallback, prefetchPastIndex, resetPastIndexRetries } from './pastValues';
+import { evaluateTrendForRow, anomalyAlertContext } from './trendEvaluate';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { buildAnomalyAlert } from './anomalyAlert';
 import { onTokenSettled } from './googleAuth';
@@ -1156,45 +1157,26 @@ export function useVoiceSession() {
   const evaluateTrend = useCallback(
     (col: Column | null, row: number, colId: string, nextRaw: string): TrendViolation | null => {
       const s = useSettingsStore.getState();
-      const rule = col?.trendRule;
-      const hasRule = rule === 'increase' || rule === 'decrease' || col?.pctThreshold != null;
-      if (!col || !hasRule) return null;
-      // v0.33.0 항목5 — 신선 캐시가 없으면 IDB 영속 폴백(fp 일치 + 14일 이내)으로 평가한다.
-      // 07-13 실기기에서 토큰 만료 → `past_index_skip:not_signed_in` → 알람 침묵으로 -99.5%
-      // 오데이터("1")가 무알람 통과한 근인의 잔여 해소 — **미로그인이어도 알람이 작동**한다.
-      const freshIndex = getCachedIndex();
-      const index = freshIndex ?? getFallbackIndex();
-      // v0.14.0 A — 캐시 미스 시 백오프 재시도를 nudge(자가 제한). prefetch가 transient "Load
-      // failed"로 실패해도 이후 행 입력마다 재시도되어 세션 중반부터 이상치 알람이 살아난다.
-      if (!index) { ensurePastIndex(); logTrendSkip('no_index', row, colId); return null; } // 오프라인/프리페치 실패/TTL 만료
-      if (!freshIndex) {
-        // 폴백 사용 계측(세션당 1회 — trend_skip과 동일 dedupe 컨벤션, 신규 LogEntry type 없음).
-        // age_h로 "얼마나 오래된 비교선인지"를 로그만으로 판독 가능하게 한다.
-        if (!trendSkipLoggedRef.current.has('used_stale_index')) {
+      return evaluateTrendForRow({
+        col,
+        columns: s.columns,
+        // 현재 행의 전체 값(자동·고정·음성) — persistSession과 같은 composeRowValues 합성.
+        // thunk로 넘겨 인덱스/키 검사 통과 시에만 계산(종전 순서 보존).
+        composeRow: () => composeRowValues(s.columns, row),
+        // 로컬 날짜(UTC 아님) — start()에서 세션당 1회 계산(핫패스 호이스팅), ref 빈 경우만 지연 계산.
+        today: sessionTodayRef.current || localTodayISO(),
+        nextRaw,
+        onSkip: (cause) => logTrendSkip(cause, row, colId),
+        // 폴백 사용 계측(세션당 1회 — trend_skip과 동일 dedupe 컨벤션). age_h = 비교선 나이.
+        onStaleIndex: (ageH) => {
+          if (trendSkipLoggedRef.current.has('used_stale_index')) return;
           trendSkipLoggedRef.current.add('used_stale_index');
-          const builtAt = getFallbackBuiltAt();
-          const ageH = builtAt != null ? Math.round((Date.now() - builtAt) / 3_600_000) : -1;
           logCell({
             type: 'trend', extra: `trend_used_stale_index:age_h=${ageH}`,
             row, colId,
           });
-        }
-        ensurePastIndex(); // 폴백으로 평가는 계속하되, 백그라운드에선 신선 인덱스를 계속 시도(자가 제한).
-      }
-      const kc = keyColumns(s.columns);
-      if (kc.length === 0) { logTrendSkip('no_key_cols', row, colId); return null; } // 기능 비활성 케이스
-      // 현재 행의 전체 값(자동·고정·음성) — persistSession과 같은 composeRowValues 합성.
-      const rowValues = composeRowValues(s.columns, row);
-      const key = buildSampleKey(kc, rowValues);
-      if (!key) { logTrendSkip('incomplete_key', row, colId); return null; }
-      // 로컬 날짜(UTC 아님 — KST 자정 직후 어긋남 방지). previousRound는 오늘 미만 strictly.
-      // start()에서 세션당 1회 계산(핫패스 호이스팅) — ref가 빈 경우(이론상 hook 재마운트)만 지연 계산.
-      const today = sessionTodayRef.current || localTodayISO();
-      const round = previousRound(index, key, today);
-      if (!round) { logTrendSkip('no_prev_round', row, colId); return null; }
-      const prevRaw = pastValue(index, key, round, colId);
-      if (prevRaw === null) { logTrendSkip('no_past_value', row, colId); return null; }
-      return checkAnomaly(col, prevRaw, nextRaw);
+        },
+      });
     },
     [logTrendSkip],
   );
@@ -1206,17 +1188,11 @@ export function useVoiceSession() {
   const getAnomalyAlertData = useCallback(
     (row: number): { sampleKey?: string; prevDate?: string } => {
       const s = useSettingsStore.getState();
-      const kc = keyColumns(s.columns);
-      if (kc.length === 0) return {};
-      const rowValues = composeRowValues(s.columns, row);
-      const sampleKey = buildSampleKey(kc, rowValues) ?? undefined;
-      if (!sampleKey) return {};
-      // v0.33.0 항목5 — evaluateTrend와 같은 폴백 체인(신선 캐시 ?? 영속 폴백). 폴백 알람일 때도
-      // 팝업의 직전 조사일(prevDate)이 함께 나온다.
-      const index = getCachedIndex() ?? getFallbackIndex();
-      if (!index) return { sampleKey };
-      const today = sessionTodayRef.current || localTodayISO();
-      return { sampleKey, prevDate: previousRound(index, sampleKey, today) ?? undefined };
+      return anomalyAlertContext({
+        columns: s.columns,
+        composeRow: () => composeRowValues(s.columns, row),
+        today: sessionTodayRef.current || localTodayISO(),
+      });
     },
     [],
   );
