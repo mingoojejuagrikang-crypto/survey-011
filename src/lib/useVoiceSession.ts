@@ -788,6 +788,24 @@ export function useVoiceSession() {
     if (vc[targetCol]) await announceField(vc[targetCol]);
   }, [announceField, announceRowComplete, announceRowDiff, announceEndReached, persistSession, say]);
 
+  /** v0.35.3 Stage 3-5 — 커밋 경로 진행 공용. 검토 대기(reviewWait) 출신 커밋은 검토 대기를
+   *  재무장해 갱신값을 재낭독하고(advance로 검토를 강제 종료하지 않음 — v0.33.0 항목2 계약),
+   *  그 외에는 대기를 해제하고 다음 셀로 진행한다. echoValue를 주면 advance 전에 값을 에코
+   *  (수동 칩 커밋의 청각 확인 — 음성 커밋과 동일). 종전 commitManualValue·confirmManualAnomaly의
+   *  이중 구현을 흡수(순수 이동 — epoch/cancelTts는 호출부가 커밋 확정 시점에 이미 수행). */
+  const proceedAfterCommit = useCallback(async (
+    awaiting: AwaitingField | null,
+    opts?: { echoValue?: string },
+  ) => {
+    if (awaiting?.kind === 'reviewWait') {
+      await enterReviewWait(awaiting.row);
+      return;
+    }
+    awaitingFieldRef.current = null;
+    if (opts?.echoValue != null) await say(formatForTts(opts.echoValue));
+    await advance();
+  }, [advance, enterReviewWait, say]);
+
   // ── modify (cross-row) ─────────────────────────────────────
   const enterModifyMode = useCallback(async (
     preExtractedValue?: string,
@@ -2916,22 +2934,18 @@ export function useVoiceSession() {
       useSessionStore.getState().setAnomalyAlert(null);
     }
     if (awaiting?.kind === 'reviewWait') {
-      // v0.33.0 항목2 상호작용 — 검토 대기 중 칩 수동 수정: 검토 대기를 재무장해 갱신값을 재낭독
-      // 하고 다시 명령 대기한다(advance로 검토를 강제 종료하지 않는다).
       epochRef.current++;
       cancelTts();
-      await enterReviewWait(awaiting.row);
+      await proceedAfterCommit(awaiting); // 검토 대기 재무장(갱신값 재낭독)
     } else if (awaiting && awaiting.kind !== 'atEnd' && awaiting.row === row && awaiting.colId === colId) {
       epochRef.current++;
       cancelTts();
-      awaitingFieldRef.current = null;
-      await say(formatForTts(value)); // echo — 음성 커밋과 동일한 청각 확인
-      await advance();
+      await proceedAfterCommit(awaiting, { echoValue: value }); // echo 후 진행
     }
     // (awaiting이 다른 셀이면 흐름 불변 — 값만 반영되고 현재 안내 상태 유지.)
 
     if (violation) fireManualAlert(violation, false);
-  }, [advance, archiveCellClip, enterReviewWait, evaluateTrend, getAnomalyAlertData, persistCellValue, persistSession, say]);
+  }, [archiveCellClip, evaluateTrend, getAnomalyAlertData, persistCellValue, persistSession, proceedAfterCommit]);
 
   // ── v0.33.0 항목7 — 이상치 응답 대기(trendConfirm) 중 터치 버튼: 음성 명령과 동일 동작·동일 로그 ──
   /** [확인] 버튼 — 음성 '확인'과 동일: 커밋된 값 확정 + 팝업 해제 + advance 1회. attribution은
@@ -3027,15 +3041,10 @@ export function useVoiceSession() {
       type: 'trend', extra: 'trend_alert_confirmed', parsed: 'confirm',
       row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
     });
-    const awaiting = awaitingFieldRef.current;
-    if (awaiting?.kind === 'reviewWait') {
-      // 보류 시 재무장을 미뤘던 검토 대기 재진입(commitManualValue의 reviewWait 경로와 동일 착지).
-      await enterReviewWait(awaiting.row);
-      return;
-    }
-    awaitingFieldRef.current = null;
-    await advance();
-  }, [advance, enterReviewWait]);
+    // 보류 시 재무장을 미뤘던 진행 재개 — reviewWait 출신은 검토 대기 재진입, 그 외 advance
+    // (commitManualValue와 동일 착지, proceedAfterCommit SSOT).
+    await proceedAfterCommit(awaitingFieldRef.current);
+  }, [proceedAfterCommit]);
 
   /** [수정] — 팝업 해제만 수행. 해당 셀 ManualValueSheet 재오픈은 시트 open 상태를 소유한
    *  VoiceScreen이 조립한다(이 콜백 직후 alert.colId로 openManualSheet). awaiting은
