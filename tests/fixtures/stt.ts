@@ -75,6 +75,12 @@ export const VOICE_MOCK_INIT_SCRIPT = `
     var event = { resultIndex: 0, results: { length: 1, 0: { isFinal: true, length: 1, 0: { transcript: transcript, confidence: confidence } } } };
     (this._ls['result'] || []).forEach(function(cb) { cb(event); });
   };
+  // interim(중간) 결과 주입 — fastRecognition(조기확정) 경로 검증용(리뷰 라운드2 Flash Medium).
+  MockSTT.prototype.fireInterim = function(transcript, confidence) {
+    if (confidence === undefined) confidence = 0.6;
+    var event = { resultIndex: 0, results: { length: 1, 0: { isFinal: false, length: 1, 0: { transcript: transcript, confidence: confidence } } } };
+    (this._ls['result'] || []).forEach(function(cb) { cb(event); });
+  };
   // v0.33.0 [STT-15] 재현용 — 대안(alternatives) 포함 final 결과 주입.
   MockSTT.prototype.fireResultWithAlts = function(transcript, confidence, alts) {
     var alternatives = [{ transcript: transcript, confidence: confidence }];
@@ -111,6 +117,19 @@ export async function fireStt(page: Page, transcript: string, waitMs = 300, conf
   await page.evaluate(
     ({ t, c }) => {
       (window as unknown as { __mockSTT?: { fireResult: (t: string, c: number) => void } }).__mockSTT?.fireResult(t, c);
+    },
+    { t: transcript, c: confidence },
+  );
+  await page.waitForTimeout(waitMs);
+}
+
+/** interim(중간) 결과 주입 — fastRecognition 조기확정 경로 재현용. 조기확정은 interim이
+ *  EARLY_COMMIT_STABLE_MS(400ms) 동안 같은 값으로 안정돼야 발동하므로, 같은 transcript로
+ *  2회 이상 간격을 두고 호출하라. */
+export async function fireSttInterim(page: Page, transcript: string, waitMs = 100, confidence = 0.6): Promise<void> {
+  await page.evaluate(
+    ({ t, c }) => {
+      (window as unknown as { __mockSTT?: { fireInterim: (t: string, c: number) => void } }).__mockSTT?.fireInterim(t, c);
     },
     { t: transcript, c: confidence },
   );

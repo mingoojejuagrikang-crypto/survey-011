@@ -30,7 +30,15 @@ async function authHeader(): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${token}` };
 }
 
-async function uploadZip(zipBlob: Blob, filename: string, parentId?: string): Promise<string> {
+/** zip 업로드. headers를 넘기면 그 인증으로 고정 실행 — 폴더 ensure와 같은 작업 단위에서 계정이
+ *  바뀌어도(리뷰 라운드2 Codex High TOCTOU) 다른 계정 토큰으로 남의 폴더에 올리지 않는다.
+ *  미지정 시 호출 시점 토큰(단독 업로드 경로용). */
+async function uploadZip(
+  zipBlob: Blob,
+  filename: string,
+  parentId?: string,
+  headers?: Record<string, string>,
+): Promise<string> {
   const metadata: Record<string, unknown> = {
     name: filename,
     mimeType: 'application/zip',
@@ -43,7 +51,7 @@ async function uploadZip(zipBlob: Blob, filename: string, parentId?: string): Pr
 
   const res = await fetch(UPLOAD_API, {
     method: 'POST',
-    headers: await authHeader(),
+    headers: headers ?? (await authHeader()),
     body: form,
   });
   if (!res.ok) {
@@ -61,9 +69,13 @@ async function uploadZip(zipBlob: Blob, filename: string, parentId?: string): Pr
  * (driveFolders.ts — [RACE-6] 계약)로 통합, 여기서는 **로그 폴더 전용** 캐시만 배선한다.
  * v0.35.1(리뷰 Codex High): 캐시는 계정 결합(FolderCache) — 다른 계정의 캐시는 미스 처리.
  */
-async function ensureTeamSubFolder(parentId: string, userEmail: string): Promise<string> {
+async function ensureTeamSubFolder(
+  parentId: string,
+  userEmail: string,
+  headers: Record<string, string>,
+): Promise<string> {
   return ensureEmailSubFolder(parentId, userEmail, {
-    headers: await authHeader(),
+    headers,
     readCache: () => cachedFolderIdFor(useSettingsStore.getState().teamFolderCache, userEmail),
     writeCache: (id) => useSettingsStore.getState().set({ teamFolderCache: { email: userEmail, id } }),
     errorLabels: { search: '팀원 폴더 검색 실패', create: '팀원 하위 폴더 생성 실패' },
@@ -197,15 +209,18 @@ export async function downloadDriveFile(fileId: string): Promise<Blob> {
 
 /** 관리자 공유 폴더 내 {userEmail}/ 하위 폴더에 업로드.
  *  Codex 리뷰: 이메일은 토큰의 검증된 값(`getCurrentEmail`)을 사용 — settingsStore stale 방지.
- */
+ *  v0.35.1(리뷰 라운드2 Codex High, TOCTOU): 이메일·토큰을 작업 시작 시 **한 번만** 확정해 폴더
+ *  ensure와 zip 업로드 양쪽에 주입 — 네트워크 대기 중 A→B 재로그인이 끼어도 B 토큰으로 A 폴더에
+ *  올리는 혼입이 생기지 않는다(양쪽 다 A 인증으로 완결되거나 A 토큰 만료로 실패). */
 export async function uploadLogToAdminTeamFolder(zipBlob: Blob, filename: string): Promise<string> {
   if (!LOG_FOLDER_ID) throw new Error('관리자 폴더 ID 미설정');
   const verifiedEmail = getCurrentEmail();
   if (!verifiedEmail || !isLikelyEmail(verifiedEmail)) {
     throw new Error('토큰에서 검증된 이메일을 가져올 수 없음');
   }
-  const teamFolderId = await ensureTeamSubFolder(LOG_FOLDER_ID, verifiedEmail);
-  return uploadZip(zipBlob, filename, teamFolderId);
+  const headers = await authHeader(); // 이메일과 같은 시점의 토큰으로 고정
+  const teamFolderId = await ensureTeamSubFolder(LOG_FOLDER_ID, verifiedEmail, headers);
+  return uploadZip(zipBlob, filename, teamFolderId, headers);
 }
 
 export interface DualUploadResult {
@@ -283,9 +298,13 @@ async function ensureUserFeedbackFolder(): Promise<string> {
  *  ⚠️ **무캐시**인 이유([RACE-6] parent별 캐시 분리): settingsStore.teamFolderCache는 **로그
  *  폴더의** 하위 폴더 ID를 담고 있어, 다른 parent(feedback 폴더)에 재사용하면 로그 하위 폴더로
  *  오업로드된다. 개선요청은 빈도가 낮아 검색 비용이 무해하고 persist 필드 추가도 피한다(v0.33.0). */
-async function ensureFeedbackSubFolder(parentId: string, userEmail: string): Promise<string> {
+async function ensureFeedbackSubFolder(
+  parentId: string,
+  userEmail: string,
+  headers: Record<string, string>,
+): Promise<string> {
   return ensureEmailSubFolder(parentId, userEmail, {
-    headers: await authHeader(),
+    headers,
     errorLabels: { search: '피드백 하위 폴더 검색 실패', create: '피드백 하위 폴더 생성 실패' },
   });
 }
@@ -304,8 +323,9 @@ export async function uploadFeedbackToAdminFolder(zipBlob: Blob, filename: strin
   if (!verifiedEmail || !isLikelyEmail(verifiedEmail)) {
     throw new Error('토큰에서 검증된 이메일을 가져올 수 없음');
   }
-  const subId = await ensureFeedbackSubFolder(FEEDBACK_FOLDER_ID, verifiedEmail);
-  return uploadZip(zipBlob, filename, subId);
+  const headers = await authHeader(); // TOCTOU — 이메일과 같은 시점의 토큰으로 고정(로그 경로 동일)
+  const subId = await ensureFeedbackSubFolder(FEEDBACK_FOLDER_ID, verifiedEmail, headers);
+  return uploadZip(zipBlob, filename, subId, headers);
 }
 
 /** 개선요청 이중 업로드 결과 — DualUploadResult와 동일 형태(adminConfigured=FEEDBACK_FOLDER_ID

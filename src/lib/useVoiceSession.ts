@@ -15,6 +15,7 @@ import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import { getCachedIndex, getFallbackIndex, getFallbackBuiltAt, hydratePastIndexFallback, prefetchPastIndex, ensurePastIndex, resetPastIndexRetries, keyColumns, buildSampleKey, previousRound, pastValue } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
+import { buildAnomalyAlert } from './anomalyAlert';
 import { onTokenSettled } from './googleAuth';
 import { readonlySheetsAuth } from './sheets';
 import { withoutPendingCandidate } from './pendingValidation';
@@ -78,6 +79,19 @@ const EMPTY_CLIP_BYTES = 200;
 /** pause()가 recorder dispose 전에 in-flight 클립 저장을 기다리는 상한(ms). 경로별 유예는
  *  의도적 차등 — stop() 5초(세션 종료, 최대 보존), 아카이브 flush 1.5초(백그라운드, UX 무영향). */
 const PAUSE_FLUSH_GRACE_MS = 3000;
+
+/** in-flight 클립 저장을 유예 상한까지 기다린다(아카이브/stop/pause 3경로 공용).
+ *  타임아웃 타이머는 저장이 먼저 끝나면 clearTimeout으로 해제한다 — no-op이지만 세션 시작·정지를
+ *  반복할 때 고아 타이머가 누적되지 않게(리뷰 라운드1 Pro·라운드2 Flash 반복 지적). */
+async function flushPendingSaves(pending: Set<Promise<unknown>>, graceMs: number): Promise<void> {
+  if (pending.size === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    Promise.allSettled(Array.from(pending)),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, graceMs); }),
+  ]);
+  clearTimeout(timer);
+}
 
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
@@ -215,12 +229,7 @@ export function useVoiceSession() {
         // The prior attempt's clip save may still be in-flight (savePromise resolves after the
         // echo TTS, but a fast correction can race it). Flush pending saves before reading the
         // bare key so we archive the real blob rather than null. Background — no UX impact.
-        if (pendingClipSavesRef.current.size > 0) {
-          await Promise.race([
-            Promise.allSettled(Array.from(pendingClipSavesRef.current)),
-            new Promise<void>((resolve) => setTimeout(resolve, 1500)),
-          ]);
-        }
+        await flushPendingSaves(pendingClipSavesRef.current, 1500);
         const blob = await loadAudioClip(bareKey);
         if (!blob) return; // nothing recorded yet (e.g. direct-modify before any clip) — skip
         await saveAudioClip(archiveKey, blob);
@@ -2447,13 +2456,8 @@ export function useVoiceSession() {
     // Codex 3차 HIGH: 클립 저장을 dispose보다 먼저 flush.
     // dispose는 in-flight stopClip의 resolveStop을 null로 해소하지만(zombie 방지),
     // 가능하면 자연 onstop으로 실제 blob을 저장하는 것이 우선.
-    if (pendingClipSavesRef.current.size > 0) {
-      // 5초 안전 타임아웃: dispose가 즉시 해소하므로 일반적으로 즉시 끝나지만 race 대비.
-      await Promise.race([
-        Promise.allSettled(Array.from(pendingClipSavesRef.current)),
-        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
-      ]);
-    }
+    // 5초 안전 타임아웃: dispose가 즉시 해소하므로 일반적으로 즉시 끝나지만 race 대비.
+    await flushPendingSaves(pendingClipSavesRef.current, 5000);
     recorderRef.current?.dispose();
     recorderRef.current = null;
     // v0.10: await로 변경 — audioClips 키가 IDB session에 확실히 저장된 후 종료
@@ -2528,12 +2532,7 @@ export function useVoiceSession() {
     cancelTts();
     // dispose가 in-flight stopClip을 null로 해소해 정상 클립이 clip_empty로 떨어지는 것을 방지:
     // stop()과 동일하게 pending save를 먼저 flush.
-    if (pendingClipSavesRef.current.size > 0) {
-      await Promise.race([
-        Promise.allSettled(Array.from(pendingClipSavesRef.current)),
-        new Promise<void>((resolve) => setTimeout(resolve, PAUSE_FLUSH_GRACE_MS)),
-      ]);
-    }
+    await flushPendingSaves(pendingClipSavesRef.current, PAUSE_FLUSH_GRACE_MS);
     recorderRef.current?.dispose();
     recorderRef.current = null;
     useSessionStore.getState().setPhase('paused');
@@ -3108,98 +3107,6 @@ function composeRowValues(columns: Column[], row: number): Record<string, string
     ...autoNonCyclingValues(columns, row),
     ...buildCyclingValues(columns, row),
     ...useSessionStore.getState().getRowValues(row),
-  };
-}
-
-/** 이상치 알람 표시 산출 SSOT — v0.33.0 항목6에서 음성 커밋(handleFinal)과 수동 커밋
- *  (commitManualValue)이 공유하도록 추출. 이력·근거(원 handleFinal 블록에서 이전):
- *  - v0.9.0(민구 요청): 변동률(pct) 트리거는 % 유지, 증가/감소(direction)·both는 절대값 차이 —
- *    절대차는 부동소수 잔여(2.2000002) 방지로 컬럼 소수자리 반올림(float=col.decimals||1, int=0).
- *  - v0.20.0 입력탭#6: alertKind가 음성(alertText)·팝업(kind)을 동시에 가른다 — TTS 문구는
- *    팝업 라벨(AnomalyAlertPopup)과 **글자까지 동일** 계약(시각·청각 일치).
- *  - v0.24.0(민구 요청): 범위 알람은 설정 임계가 아니라 실제 편차%를 부호와 함께("+##%"/"-##%",
- *    정수 반올림, 미산출 시 설정 임계 폴백).
- *  - v0.25.0 기능3(WS-3, 민구 요청): 추세·범위 동시 발동(trigger:'both')은 범위 우선 —
- *    순수 'direction'만 추세, 'pct'·'both'는 범위.
- *  - self-confirm 환각 방어(v0.13.0 R7): 문구가 명령어로 끝나지 않는다('확인해주세요' 없음). */
-function buildAnomalyDisplay(col: Column | null, v: TrendViolation): {
-  alertKind: 'trend' | 'range';
-  changeText: string;
-  alertText: string;
-  threshold?: number;
-} {
-  const decForDiff = col?.type === 'float' ? (col.decimals ?? 1) : 0;
-  const alertKind: 'trend' | 'range' = v.trigger === 'direction' ? 'trend' : 'range';
-  // 표시값: 범위=실제 편차%(v.pctText; prev≠0이면 항상 산출) · 추세=절대 변화량. 팝업 changeText 동일 값.
-  const changeText =
-    alertKind === 'range'
-      ? (v.pctText ? `${v.pctText}%` : '')
-      : Math.abs(v.next - v.prev).toFixed(decForDiff);
-  // changeNum = 변화량 숫자만(팝업 changeText.replace와 동일 규칙) — 추세 발화/표시에 쓴다.
-  const changeNum = changeText.replace(/[^0-9.]/g, '');
-  const rangeThreshold = col?.pctThreshold;
-  const rangePct = changeNum ? Math.round(Number(changeNum)) : rangeThreshold;
-  const rangeSign = v.direction === 'up' ? '+' : '-';
-  const alertText =
-    alertKind === 'range'
-      ? `범위 알람 ${rangeSign}${rangePct}%`
-      : `추세 알람 ${v.direction === 'up' ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
-  return { alertKind, changeText, alertText, threshold: rangeThreshold };
-}
-
-/** v0.35.1 Stage 1-2 — 이상치 알람 발동 페이로드 조립 SSOT. 음성 커밋(handleFinal)과 수동 커밋
- *  (commitManualValue의 fireManualAlert)이 따로 조립하던 `trend_alert_fired` extra 문자열과 팝업
- *  (setAnomalyAlert) 공통 코어를 한 곳으로 모은다.
- *  - logExtra는 SOP-003 파서 계약 — **바이트 불변**. 호출부 전용 접미사(수동 경로의
- *    ',src=manual[,hold=1]')는 호출부가 이어 붙인다.
- *  - alert는 공통 코어만 담는다. 호출부가 자기 필드(awaitingResponse/colId/manualHold)를 spread로 얹는다. */
-function buildAnomalyAlert(args: {
-  col: Column | null;
-  v: TrendViolation;
-  colName: string;
-  /** 팝업 next 표시값 — 이미 formatForTts 적용본. */
-  next: string;
-  row: number;
-  sampleKey?: string;
-  prevDate?: string;
-}): {
-  /** 알람 TTS/팝업 라벨 문구(글자까지 동일 계약) — 음성 경로가 say()에 쓴다. */
-  alertText: string;
-  logExtra: string;
-  alert: {
-    colName: string;
-    prev: string;
-    next: string;
-    direction: 'up' | 'down';
-    changeText: string;
-    row: number;
-    sampleKey?: string;
-    prevDate?: string;
-    /** v0.13.0 R2 — 이상치(빨강) 상태. 정정 정상 시 호출부가 'corrected'(초록)로 갱신. */
-    status: 'pending';
-    /** v0.20.0 입력탭#6 — 팝업이 추세/범위 표시를 가르는 신호. */
-    kind: 'trend' | 'range';
-    threshold?: number;
-  };
-} {
-  const { col, v, colName, next, row, sampleKey, prevDate } = args;
-  const { alertKind, changeText, alertText, threshold } = buildAnomalyDisplay(col, v);
-  return {
-    alertText,
-    logExtra: `trend_alert_fired:trigger=${v.trigger},kind=${alertKind},dir=${v.direction},change=${changeText || '?'},text=${alertText}`,
-    alert: {
-      colName,
-      prev: String(v.prev),
-      next,
-      direction: v.direction,
-      changeText,
-      row,
-      sampleKey,
-      prevDate,
-      status: 'pending',
-      kind: alertKind,
-      ...(threshold != null ? { threshold } : {}),
-    },
   };
 }
 
