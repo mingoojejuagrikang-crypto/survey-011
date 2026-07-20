@@ -32,6 +32,7 @@ design-sync/
 
 # 라운드별 리뷰 브리핑(AI 팀 운영 파일) — 로컬 전용
 REVIEW-BRIEF.md
+HANDOFF.md
 CODEX-HANDOFF.md
 
 # UI 검증 스크린샷(로컬 확인용) — 레포 커밋 제외
