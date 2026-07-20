@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { T } from '../../tokens';
-import { I } from '../icons';
 import { useSessionStore } from '../../stores/sessionStore';
 import { nestedAutoValue, computeRowFromAutoChange } from '../../lib/autoValue';
 import type { Column } from '../../types';
@@ -10,15 +10,17 @@ import { ManualValueSheet } from './ManualValueSheet';
 import { PausedCard } from './PausedCard';
 import { ModifyIndicatorPill } from './ModifyIndicatorPill';
 import { type ReaskReason } from './ReaskCue';
+import { type GlowTone } from './EdgeGlow';
 import { VoiceHero } from './VoiceHero';
-import { VoiceActionButton } from './VoiceActionButton';
+import { LiveListenBand } from './LiveListenBand';
 import { ColumnChip } from './ColumnChip';
-import { ActiveControlSteppers } from './ActiveControlSteppers';
+import { useChipFlowFit } from './useChipFlowFit';
+import { ActiveControlBar } from './ActiveControlBar';
 import { ExitConfirmDialog } from './ExitConfirmDialog';
 
 // ─── ACTIVE ───────────────────────────────────────────────────
 export function ActiveState({
-  totalRows, columns, voiceCols, currentColId, completing, paused, anomalyPending, getAudioLevel,
+  totalRows, columns, voiceCols, currentColId, completing, paused, anomalyPending, tone, getAudioLevel,
   getTimeDomainData,
   reaskReason,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
@@ -35,6 +37,9 @@ export function ActiveState({
   paused: boolean;
   /** v0.34.0 B8 — 이상치 대기(파생 SSOT는 VoiceScreen — EdgeGlow 톤과 동일 신호). */
   anomalyPending: boolean;
+  /** v0.36.0 코덱스 시안 — 상태 톤(VoiceScreen glowTone SSOT). 파형 밴드·중앙 버튼 채움색이
+   *  엣지글로우와 같은 색으로 상태를 말한다(색 파생 중복 방지). */
+  tone: GlowTone;
   /** v0.34.0 B7 — 파동 레벨 getter(useVoiceSession, 안정 참조). VoiceHero로 내려간다. */
   getAudioLevel: () => number;
   /** v0.35.0 — 시간영역 파형 getter(useVoiceSession). VoiceHero → VoiceWaveform으로 내려간다. */
@@ -65,7 +70,19 @@ export function ActiveState({
   onExitConfirmOpen: () => void;
   onExitConfirmCancel: () => void;
 }) {
-  const sess = useSessionStore();
+  // 리뷰 라운드1(Codex, 수용) — 전체 store 구독 금지: 종전 `useSessionStore()`는 interimValue가
+  //   매 STT interim마다 바뀔 때 칩·컨트롤 전체를 리렌더시켰다. 필요한 필드만 useShallow로 구독해
+  //   interim 갱신은 hero 내부 라인(자체 selector)만 리렌더되게 한다. allRowValues는 칩 값 갱신
+  //   구독용(getRowValues가 파생하는 원본 상태).
+  const sess = useSessionStore(
+    useShallow((s) => ({
+      activeRow: s.activeRow,
+      allRowValues: s.allRowValues,
+      anomalyAlert: s.anomalyAlert,
+      modifyIndicator: s.modifyIndicator,
+      getRowValues: s.getRowValues,
+    })),
+  );
   const row = sess.activeRow;
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
@@ -151,46 +168,58 @@ export function ActiveState({
   }, [onCommandHelpClose]);
 
   // ── v0.19.0 W5 — 칩 영역이 스크롤 밖으로 나가면 "지금 어디" 표시가 사라진다.
-  //    활성 칩을 ref로 잡아 currentColId/row 변경 시 세로 그리드 안에서 가시영역으로 이동한다.
+  //    활성 칩을 ref로 잡아 currentColId/row 변경 시 세로 플로우 안에서 가시영역으로 이동한다.
   const activeChipRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     activeChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   }, [currentColId, row]);
+  // v0.36.0 코덱스 시안 — 칩 플로우 글자 배율(--chip-fit): 칩 수·값 길이가 3줄을 넘기면 단계 축소.
+  const chipFitRef = useChipFlowFit<HTMLDivElement>([columns, row, currentColId, JSON.stringify(rowValues)]);
 
   return (
-    // ── v0.19.0 W5 — ActiveState를 단일 CSS grid 루트로 재설계. 4개 독립 구역을 gridTemplateRows로
-    //    고정해 한 구역의 높이 변화가 다른 구역을 밀지 않게 한다:
-    //      1) auto  — 상단 상태바(행번호/진행/신뢰도)
-    //      2) <캡>  — 칩 스크롤영역(내부 overflowY:auto, 약 3줄 높이 고정 → 칩 무제한 성장[버그A] 차단)
-    //      3) 1fr   — 중앙 흡수영역: VoiceHero + TTS 에코까지 모든 가변/조건부 내용을 여기에 모은다.
-    //                  hero가 팝업 표시로 숨겨져도 이 구역만 리플로우 → 아래 컨트롤바는 안 밀림(버그B)
-    //      4) auto  — 하단 컨트롤바: 이전/다음·마이크·종료·도움말·속도(한자리 고정)
-    //    fixed 오버레이(이상치/수정/일시정지/명령어)는 grid track을 만들지 않으므로 자식으로 둬도 무영향.
+    // ── v0.19.0 W5 → v0.36.0 코덱스 시안(2026-07-20) — 단일 CSS grid 루트, 4구역:
+    //      1) auto          — 상단: 소형 행 스트립(행번호/진행/도움말) + 칩 플로우(전체 ≤30dvh 캡,
+    //                         3줄 초과분은 내부 스크롤 — 민구 확정 칩 스펙)
+    //      2) minmax(0,1fr) — 중앙 흡수영역: hero/일시정지/이상치/수정 카드 중 정확히 하나
+    //      3) auto          — 상시 파형 밴드(78~100px — 모든 상태 유지, paused=주황 평선)
+    //      4) auto          — 하단 컨트롤바(이전/일시정지·재개/다음 + 접힘 스테퍼)
+    //    한 구역의 높이 변화가 다른 구역을 밀지 않는다(컨트롤바 Y 인변량 — v0.19.0 버그B).
+    //    fixed 오버레이(명령어 도움말/수동입력 시트/종료확인)는 grid track을 만들지 않는다.
     <div
       style={{
         flex: 1, minHeight: 0,
         display: 'grid',
-        gridTemplateRows: 'auto auto 1fr auto',
+        gridTemplateRows: 'auto minmax(0, 1fr) auto auto',
       }}
       data-testid="voice-active-state"
     >
-      {/* 1) Top: row indicator + progress */}
-      <div style={{ padding: '10px 18px 4px' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+      {/* 1) 상단: 소형 행 스트립 + 칩 플로우. 시안(§3.1)엔 행 표시가 없으므로 눈에 안 걸리는 소형
+          pill로 축소하되 data-testid="active-row" 노드 의미(행 번호)는 유지한다. */}
+      <div style={{ paddingTop: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 16px 4px' }}>
           <div
             style={{
-              display: 'flex', alignItems: 'baseline', gap: 6,
+              display: 'inline-flex', alignItems: 'baseline', gap: 4,
+              padding: '3px 12px', borderRadius: 999,
+              background: T.cardAlt, border: `1px solid ${T.lineStrong}`,
               whiteSpace: 'nowrap',
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             }}
           >
-            <span data-testid="active-row" style={{ fontSize: 60, fontWeight: 800, color: T.text, letterSpacing: -3, lineHeight: 1 }}>
+            <span data-testid="active-row" style={{ fontSize: 18, fontWeight: 800, color: T.text, letterSpacing: -0.5, lineHeight: 1.2 }}>
               {row}
             </span>
-            <span style={{ fontSize: 22, fontWeight: 700, color: T.textMute, letterSpacing: -0.5 }}>
-              / {totalRows}
-            </span>
-            <span style={{ fontSize: 14, color: T.textDim, marginLeft: 6 }}>행</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: T.textMute }}>/ {totalRows}행</span>
+          </div>
+          <div style={{ flex: 1, position: 'relative', height: 4, borderRadius: 2, background: T.line }}>
+            <div
+              style={{
+                position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 2,
+                width: `${pct}%`,
+                background: progressAccent,
+                transition: 'width 400ms ease-out, background 200ms',
+              }}
+            />
           </div>
           <button
             type="button"
@@ -198,61 +227,42 @@ export function ActiveState({
             aria-label="음성 명령어 도움말"
             title="음성 명령어 도움말"
             style={{
+              // 리뷰 라운드1(Codex, 수용) — 44px 최소 터치 타깃(PRINCIPLES §2 장갑 조작).
               width: 44, height: 44, borderRadius: '50%',
               border: `1px solid ${T.lineStrong}`,
-              background: T.card,
-              color: T.textDim,
-              fontSize: 22, fontWeight: 900,
+              background: 'transparent',
+              color: T.textMute,
+              fontSize: 18, fontWeight: 900,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              cursor: 'pointer',
+              cursor: 'pointer', flexShrink: 0,
             }}
           >
             ?
           </button>
         </div>
+        {/* 칩 플로우 — 유동 폭 pill(내용 길이대로), 최대 3줄 + 초과분 내부 스크롤, 영역 전체는 화면
+            높이 30% 상한(스트립 몫 제외). 글자 배율은 useChipFlowFit(--chip-fit). 알람 중에는 활성
+            칩/진행색을 RED로 맞춰 상태 신호를 동기화한다. */}
         <div
+          data-testid="voice-chip-grid"
+          ref={chipFitRef}
           style={{
-            marginTop: 6, position: 'relative', height: 5, borderRadius: 3,
-            background: T.line,
+            maxHeight: 'min(calc(30dvh - 50px), calc((44px * 3) + (8px * 2) + 12px))',
+            overflowX: 'hidden',
+            overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            position: 'relative',
+            padding: '6px 12px',
+            display: 'flex',
+            flexWrap: 'wrap',
+            justifyContent: 'center',
+            alignItems: 'flex-start',
+            alignContent: 'flex-start',
+            gap: 8,
+            borderBottom: `1px solid ${anomalyPending ? 'rgba(255,82,82,0.42)' : T.line}`,
+            transition: 'border-color 180ms ease',
           }}
         >
-          <div
-            style={{
-              position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 2,
-              width: `${pct}%`,
-              background: progressAccent,
-              transition: 'width 400ms ease-out, background 200ms',
-              boxShadow: anomalyPending
-                ? '0 0 12px rgba(255,82,82,0.5)'
-                : completing
-                ? `0 0 12px ${T.green}`
-                : paused
-                ? '0 0 8px rgba(255,179,0,0.4)'
-                : `0 0 8px ${T.blueGlow}`,
-            }}
-          />
-        </div>
-      </div>
-
-      {/* 2) Chip grid — 항상 세로 3행 캡. 알람 중에는 활성 칩/진행색을 RED로 맞춰 상태 신호를 동기화한다. */}
-      <div
-        data-testid="voice-chip-grid"
-        style={{
-          maxHeight: 'calc((44px * 3) + (8px * 2) + 20px)',
-          overflowX: 'hidden',
-          overflowY: 'auto',
-          WebkitOverflowScrolling: 'touch',
-          padding: '10px 12px',
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-          gridAutoRows: 'minmax(44px, auto)',
-          gap: 8,
-          borderTop: `1px solid ${T.line}`,
-          borderBottom: `1px solid ${anomalyPending ? 'rgba(255,82,82,0.42)' : T.line}`,
-          alignContent: 'flex-start',
-          transition: 'border-color 180ms ease',
-        }}
-      >
         {columns.map((c) => {
           const isVoice = c.input === 'voice';
           const isTouch = c.input === 'touch';
@@ -299,26 +309,21 @@ export function ActiveState({
             />
           );
         })}
+        </div>
       </div>
 
-      {/* 3) 1fr 흡수영역 — v0.23.0 입력탭#1(중앙 흡수, Vance): 기존엔 일시정지·이상치·수정 카드가
-          전부 position:fixed; inset:0 오버레이로 떠 실기기(특히 375px)에서 잘렸다(핸드오프 최우선).
-          이 세 카드를 **이 흡수영역(grid row3, 1fr, overflow:hidden)** 안으로 옮겨, 가용공간에 맞춰
-          크게·잘림없이 렌더한다. 트랙이 1fr 고정이라 어떤 카드가 떠도 아래 컨트롤바 Y는 불변(v0.19.0
-          W5 인변량 보존 — 버그B). 각 카드는 ABSORB_CLAMP(maxHeight:100%+minHeight:0+overflowY:auto)로
-          짧은 기기/긴 음수소수(-355.5)에서도 부모 overflow:hidden에 잘리지 않고 내부 스크롤.
-          상호배타 우선순위: 일시정지 > 이상치 > 수정 > hero(현재값). 정확히 하나만 렌더한다.
-          (상단 MicReconnectBanner·？명령어 CommandHelpPopup은 흡수 대상 아님 — 현행 fixed 유지.)
-          TTS 음성 안내는 그대로 유지(useVoiceSession의 say()/setLastTts 무수정). */}
+      {/* 2) 중앙 흡수영역(grid row2, minmax(0,1fr), overflow:hidden) — 상호배타 카드 하나를 중앙
+          정렬. 각 카드는 ABSORB_CLAMP/useFitScale로 이 영역 높이에 맞춰 축소(무스크롤 fit 계약).
+          트랙이 1fr 고정이라 어떤 카드가 떠도 아래 파형 밴드·컨트롤바 Y는 불변(v0.19.0 인변량).
+          상호배타 우선순위: 일시정지 > 이상치 > 수정 > hero. 정확히 하나만 렌더한다.
+          (상단 MicReconnectBanner·？명령어 CommandHelpPopup은 흡수 대상 아님 — 현행 fixed 유지.
+          TTS 음성 안내는 그대로 — useVoiceSession의 say()/setLastTts 무수정.) */}
       <div
         style={{
-          minHeight: 0, overflow: 'hidden',
+          minHeight: 0, overflow: 'hidden', width: '100%',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          padding: '12px 20px', gap: 12,
-          // v0.34.0 A5 — 시각 영수증(v0.33.0 항목8)은 실기기 피드백으로 제거. 이 wrapper는
-          // 흡수영역 자식들의 포지셔닝 컨텍스트로 계속 쓰이므로 position:relative는 보존한다.
-          position: 'relative',
+          padding: '8px 20px', gap: 10,
         }}
       >
         {paused ? (
@@ -362,72 +367,34 @@ export function ActiveState({
             col={currentCol}
             review={completing}
             row={row}
+            tone={tone}
             reaskReason={completing ? null : reaskReason}
-            getAudioLevel={getAudioLevel}
-            getTimeDomainData={getTimeDomainData}
           />
         ) : null}
-        {/* v0.34.0 A5 — 시각 영수증(commit-receipt, v0.33.0 항목8) 삭제(실기기 피드백: 불필요 중복).
-            커밋 확인 경로는 칩 값 갱신 + echo TTS로 일원화. */}
       </div>
 
-      {/* 4) 하단 컨트롤바 — 행동만 노출. 입력중에는 종료를 숨기고, 일시정지 후 확인을 거쳐 종료한다.
-          v0.35.0 FB-G(Vance) — 완료(completing)면 '일시정지'가 무의미하므로 중앙 버튼을 종료로.
-          기존 ExitConfirmDialog/onEnd를 그대로 재사용(최소 변경). 마지막 행 완료 안내와 짝을 맞춘다. */}
-      <div
-        style={{
-          borderTop: `1px solid ${T.line}`,
-          background: 'rgba(255,255,255,0.015)',
-          display: 'flex', flexDirection: 'column', gap: 10,
-          padding: '10px 16px 8px',
-        }}
-      >
-        {paused ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(96px, 0.42fr)', gap: 18 }}>
-            <VoiceActionButton
-              label="재시작"
-              title="재시작"
-              icon={I.play(24, '#fff')}
-              tone="primary"
-              onClick={onTogglePause}
-            />
-            <VoiceActionButton
-              label="종료"
-              title="입력 종료"
-              icon={I.stop(20, T.red)}
-              tone="danger"
-              onClick={openExitConfirm}
-            />
-          </div>
-        ) : completing ? (
-          // 완료 상태: 이전/다음은 유지하되 중앙을 '종료'로(일시정지 대체).
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(78px, 0.62fr) minmax(124px, 1fr) minmax(78px, 0.62fr)', gap: 12 }}>
-            <VoiceActionButton label="이전" title="이전 행으로 이동" tone="secondary" onClick={onPrevRow} />
-            <VoiceActionButton
-              label="종료"
-              title="입력 종료"
-              icon={I.stop(20, T.red)}
-              tone="danger"
-              onClick={openExitConfirm}
-            />
-            <VoiceActionButton label="다음" title="다음 행으로 이동" tone="secondary" onClick={onNextRow} />
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(78px, 0.62fr) minmax(124px, 1fr) minmax(78px, 0.62fr)', gap: 12 }}>
-            <VoiceActionButton label="이전" title="이전 행으로 이동" tone="secondary" onClick={onPrevRow} />
-            <VoiceActionButton
-              label="일시정지"
-              title="일시정지"
-              icon={I.pause(22, '#fff')}
-              tone="primary"
-              onClick={onTogglePause}
-            />
-            <VoiceActionButton label="다음" title="다음 행으로 이동" tone="secondary" onClick={onNextRow} />
-          </div>
-        )}
+      {/* 3) 상시 파형 밴드(§6.2) — 입력 세션 동안 **모든 상태에서 유지**(민구 확정: 이상치 알람
+          중에도 제거하지 않는다 — 375×667은 밴드 높이만 축소). 활성 기준은 실제 청취 상태(리뷰
+          라운드1 Codex 수용): complete(검토 대기)에도 STT가 명령을 듣고 있으므로 파형은 살아
+          움직인다. paused만 active=false → rAF 중지 + 주황 평선. 색은 tone(엣지글로우 SSOT) 동기화. */}
+      <LiveListenBand
+        active={!paused}
+        tone={tone}
+        getAudioLevel={getAudioLevel}
+        getTimeDomainData={getTimeDomainData}
+      />
 
-        <ActiveControlSteppers />
-      </div>
+      {/* 4) 하단 컨트롤바 — 표현 전용 ActiveControlBar(GL-006 §3·§5). 입력중에는 종료를 숨기고,
+          일시정지/완료 상태에서만 종료를 노출한다(오조작 방지). */}
+      <ActiveControlBar
+        tone={tone}
+        paused={paused}
+        completing={completing}
+        onPrevRow={onPrevRow}
+        onNextRow={onNextRow}
+        onTogglePause={onTogglePause}
+        onExit={openExitConfirm}
+      />
 
       {/* v0.23.0 입력탭#1 — 일시정지/이상치/수정 카드는 더 이상 여기(fixed 오버레이)에서 그리지
           않는다. 위 row3(1fr) 흡수영역으로 이전했다(잘림 방지). 여기 남는 fixed 오버레이는 흡수

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { computeTotalRows } from '../lib/autoValue';
@@ -15,7 +16,15 @@ import { MicReconnectBanner } from '../components/voice/MicReconnectBanner';
 
 export function VoiceScreen() {
   const s = useSettingsStore();
-  const sess = useSessionStore();
+  // interimValue는 VoiceHero가 직접 구독한다. 화면 루트가 전체 store를 구독하면 interim 한 조각마다
+  // ActiveState/칩 전체가 다시 렌더되므로, 이 화면이 실제로 쓰는 수명주기 필드만 고정 구독한다.
+  const sess = useSessionStore(useShallow((st) => ({
+    phase: st.phase,
+    activeColIdx: st.activeColIdx,
+    anomalyAlert: st.anomalyAlert,
+    reaskReason: st.reaskReason,
+    persistError: st.persistError,
+  })));
   const voiceSession = useVoiceSession();
   // v0.23.0 입력탭#3(쿨다운 피드백, Vance) — 재연결 버튼 탭 후 audioRecorder의 RECOVER_COOLDOWN_MS
   //   (~3s) 동안 두 번째 탭이 무반응처럼 보이던 문제. 탭 즉시 로컬 "reconnecting" 상태를 켜고
@@ -95,14 +104,15 @@ export function VoiceScreen() {
     >
       {/* v0.34.0 B8 — 화면 외곽 상태 글로우. 루트(position:relative) 직하 absolute inset:0,
           pointer-events:none·zIndex 54(팝업/시트 55-60 아래). 세션 비활성 시 미렌더(no-op). */}
-      {/* v0.35.0 FB-B(Vance) — EdgeGlow의 레벨 rAF는 입력 중(phase 'active')일 때만 돈다.
-          일시정지·완료(paused/complete)엔 발화가 없으므로 levelActive=false로 rAF를 멈춰 배터리를
-          아끼고, 글로우는 정적 baseline으로 톤만 표시한다. */}
+      {/* v0.35.0 FB-B → v0.36.0 리뷰 라운드1(Codex, 수용) — 레벨 rAF 활성 기준은 phase가 아니라
+          **실제 청취 상태**다: complete(검토 대기)에서도 STT는 종료/수정/이동 명령을 계속 듣고
+          있으므로 파형·글로우가 죽으면 "안 듣는다"로 오인된다. active+complete 활성, paused만
+          정지(발화 없음 — 배터리 보호 + 정적 baseline 톤 표시). */}
       {sessionLive && (
         <EdgeGlow
           tone={glowTone}
           getLevel={voiceSession.getAudioLevel}
-          levelActive={sess.phase === 'active'}
+          levelActive={sess.phase === 'active' || sess.phase === 'complete'}
         />
       )}
       <ActiveState
@@ -113,6 +123,7 @@ export function VoiceScreen() {
         completing={sess.phase === 'complete'}
         paused={sess.phase === 'paused'}
         anomalyPending={anomalyPending}
+        tone={glowTone}
         getAudioLevel={voiceSession.getAudioLevel}
         getTimeDomainData={voiceSession.getTimeDomainData}
         reaskReason={(sess.reaskReason ?? null) as ReaskReason}

@@ -2,9 +2,14 @@ import { useEffect, useRef, useState, type Ref } from 'react';
 import { T } from '../../tokens';
 import type { Column } from '../../types';
 
-// ─── A-hero → components/voice/VoiceHero.tsx로 추출(v0.35.0, Vance). 3-상태 카드(대기: 항목+파형 / 확인: ✓+값 / 검토: N행 완료). HeroStatusLine·HeroPrimaryLine·HERO_PANEL도 이전.
-
-// ─── chip with optional inline edit ────────────────────────────
+/** v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 기능형 컬럼 칩을 **유동 폭 pill 플로우**로 재스타일.
+ *  고정 간격 그리드 대신 칩 내부 "항목+값" 길이에 맞는 자연 폭(flex-wrap 플로우, 코덱스 pill 느낌).
+ *  글자 크기는 부모(voice-chip-grid)의 `--chip-fit` 배율을 따른다(칩 수·길이에 따라 3줄 안에
+ *  들어오도록 축소 — useChipFlowFit).
+ *
+ *  기능 불변: 점프(auto 편집→행 점프)·수동 수정(음성 칩 탭→시트, touch/auto 인라인 편집)·현재값
+ *  표시·활성 스크롤 추적. data-testid="column-chip"·data-col-name·data-active 동일 노드 유지
+ *  (테스트 직접 클릭 계약). */
 export function ColumnChip({
   col, value, isActive, activeTone, isDone, isEditing, onActivate, onCommit, onCancel, containerRef, compact = false,
 }: {
@@ -38,8 +43,8 @@ export function ColumnChip({
   // auto date 칩은 기존대로 비클릭(인라인 편집 미지원).
   const clickable = !isDate || col.input === 'voice';
 
-  let bg: string = 'rgba(255,255,255,0.05)';
-  let border: string = 'transparent';
+  let bg: string = T.cardAlt;
+  let border: string = T.lineStrong;
   let textColor: string = T.textDim;
   if (isActive) {
     const redActive = activeTone === T.red;
@@ -70,39 +75,39 @@ export function ColumnChip({
       data-col-name={col.name}
       onClick={() => { if (clickable && !isEditing) onActivate(); }}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '8px 10px',
-        borderRadius: 12,
-        fontSize: 'clamp(13px, 4vw, 16px)',
+        display: 'inline-flex', alignItems: 'center', gap: 'calc(7px * var(--chip-fit, 1))',
+        padding: '6px calc(14px * var(--chip-fit, 1))',
+        borderRadius: 999,
         background: bg,
-        border: `2px solid ${border}`,
+        border: `${isActive || isEditing ? 2 : 1.5}px solid ${border}`,
         color: textColor,
         fontWeight: isActive ? 800 : 700,
         cursor: clickable ? 'pointer' : 'default',
         letterSpacing: -0.1,
         minHeight: 44,
+        // 유동 폭 — 내용 길이대로. 편집 중엔 입력폭 확보를 위해 확장. compact(가로 레일)는 기존 유지.
+        flex: isEditing ? '1 1 220px' : compact ? '0 0 clamp(180px, 48vw, 260px)' : '0 1 auto',
+        maxWidth: '100%',
         minWidth: 0,
-        flex: compact ? '0 0 clamp(180px, 48vw, 260px)' : undefined,
         scrollSnapAlign: compact ? 'start' : undefined,
-        // Active chip anchors the floating value badge and must draw over its
-        // neighbours, so it unclips and lifts above sibling chips. Inactive
-        // chips keep overflow:hidden for value/label ellipsis.
         position: 'relative',
         zIndex: isActive ? 20 : undefined,
-        overflow: isActive ? 'visible' : 'hidden',
+        overflow: 'hidden',
         transition: 'background 150ms, border 150ms',
         animation: isActive ? 'chip-pulse 1.2s ease-in-out infinite' : 'none',
       }}
     >
       <span
         style={{
-          color: isActive ? activeTone : T.textMute,
-          fontSize: 'clamp(11px, 3.4vw, 13px)',
+          color: isActive ? activeTone : T.textDim,
+          fontSize: 'max(11px, calc(13px * var(--chip-fit, 1)))',
           fontWeight: 700,
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
+          maxWidth: '38vw',
           minWidth: 0,
+          flexShrink: 1,
         }}
       >
         {col.name}
@@ -124,44 +129,30 @@ export function ColumnChip({
             background: 'transparent', border: 'none', outline: 'none',
             color: T.text,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            fontSize: 'clamp(13px, 4vw, 17px)', fontWeight: 800,
+            fontSize: 'max(13px, calc(16px * var(--chip-fit, 1)))', fontWeight: 800,
             textAlign: 'right',
           }}
         />
       ) : (
         <span
+          key={popKey}
           style={{
-            flex: 1,
-            display: 'block',
-            textAlign: 'right',
+            display: 'inline-block',
+            lineHeight: 1,
+            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+            color: isActive ? T.text : isDone ? T.text : T.textDim,
+            fontSize: `max(12px, calc(${isActive ? 18 : 16}px * var(--chip-fit, 1)))`,
+            fontWeight: 800,
+            letterSpacing: -0.3,
             whiteSpace: 'nowrap',
             overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            maxWidth: '44vw',
             minWidth: 0,
+            flexShrink: 1,
           }}
         >
-          <span
-            key={popKey}
-            style={{
-              display: 'inline-block',
-              lineHeight: 1,
-              transformOrigin: 'right center',
-              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-              color: isActive ? T.text : isDone ? T.text : T.textDim,
-              // v0.17.0 A-hero: 거대 값은 중앙 hero가 담당 → 칩은 컴팩트 진행 레일로서
-              // 작은 확인값만 유지(활성도 과하게 키우지 않음).
-              fontSize: isActive ? 'clamp(14px, 4.4vw, 18px)' : 'clamp(13px, 4vw, 17px)',
-              fontWeight: 800,
-              letterSpacing: -0.3,
-              maxWidth: '100%',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              // The floating value badge below is now the recognition effect;
-              // the in-chip value stays as the persistent display.
-              animation: 'none',
-            }}
-          >
-            {value || '—'}
-          </span>
+          {value || '—'}
         </span>
       )}
     </div>

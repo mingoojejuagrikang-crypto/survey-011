@@ -6,6 +6,7 @@ import { useDataStore } from '../stores/dataStore';
 import { recountSynced } from './sessionSync';
 import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, isBareResponseWord, getLastParseFailReason, getLastParseFailWhole } from './koreanNum';
 import { VOICE_COMMANDS, extractModifyColumn } from './voiceCommands';
+import { decimalReaskPrompt } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow } from '../types';
@@ -726,6 +727,8 @@ export function useVoiceSession() {
     const startEpoch = epochRef.current;
     const settings = useSettingsStore.getState();
     const sess = useSessionStore.getState();
+    // 리뷰 라운드1(Codex+Flash, 수용) — 필드/행 이동 시 미확정 interim 표시 정리(표시 전용).
+    sess.setInterimValue(null);
     const vc = voiceColsList();
     const row = sess.activeRow;
     const total = computeTotalRows(settings.columns);
@@ -1285,6 +1288,9 @@ export function useVoiceSession() {
     });
     earlyCommitStableRef.current = null;
     lastInterimRef.current = null;
+    // 리뷰 라운드1(Codex+Flash, 수용) — 모달 suspend 진입 시 미확정 interim 표시 정리. 인식기가
+    // 멈추면 final이 안 와, 닫은 뒤 이전 발화가 현재 값처럼 남던 찌꺼기 차단(표시 전용, 계약 무해).
+    useSessionStore.getState().setInterimValue(null);
     setActiveController(null);
     ctrlRef.current?.stop();
     ctrlRef.current = null;
@@ -1297,6 +1303,9 @@ export function useVoiceSession() {
     // 진입한 순간을 찍어, 값 커밋 시점(아래 value 이벤트)까지의 경과ms를 commitLatencyMs로 동봉한다.
     // EOS 꼬리([STT-11], 브라우저 무음종료)와 달리 이건 **앱 파이프라인** 지연(파싱·추세검사·persist).
     const handleFinalAt = Date.now();
+    // v0.36.0 FB#2(Vance) — final 진입 = interim 발화 종결. 미확정 표시값을 즉시 정리한다(확정 흐름이
+    //   화면을 이어받으므로 흐린 임시값이 남지 않게). 순수 표시 정리 — 커밋/파싱/텔레메트리 무관.
+    useSessionStore.getState().setInterimValue(null);
     // `text` is mutable so the redo-with-inline-value path (e.g. "다시 8.4") can rewrite the
     // effective utterance to just the value and fall through to the normal value-commit path.
     let text = textArg;
@@ -1628,7 +1637,10 @@ export function useVoiceSession() {
         useSessionStore.getState().setReaskReason('parse_failed');
         const respFracWhole = fractionWholeOf(awaiting);
         if (respFracWhole != null) {
-          await say(`${respFracWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
+          // FB#4 — 화면 재질문 큐도 TTS와 같은 문구를 표시(SSOT 상수 공유). 정수부를 store에 실어
+          //   ReaskCue가 decimalReaskPrompt로 렌더한다(글자까지 일치).
+          useSessionStore.getState().setDecimalReason(String(respFracWhole));
+          await say(decimalReaskPrompt(respFracWhole));
         } else {
           recorderRef.current?.startClip();
           await say(`${awaiting.name} 다시 말씀해 주세요.`);
@@ -1798,7 +1810,9 @@ export function useVoiceSession() {
         // `:raw`도 재시작이 없어 1회만 보존됨.
         logCell({ type: 'clip', extra: 'clip_decimal_kept', row: awaiting.row, colId: awaiting.colId });
         awaitingFieldRef.current = { ...awaiting, fractionWhole: parseFailWhole };
-        await say(`${parseFailWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
+        // FB#4 — 화면 재질문 큐를 TTS와 글자 일치시키기 위해 정수부를 store에 싣는다(SSOT 공유).
+        useSessionStore.getState().setDecimalReason(String(parseFailWhole));
+        await say(decimalReaskPrompt(parseFailWhole));
       } else if (fractionWhole != null) {
         // v0.33.0 [STT-15] 재질문 유지 — 소수부 재질문 응답이 소수부(합성)로도 전체값(primary)로도
         // 해석되지 않으면 문맥(fractionWhole)을 버리지 않고 같은 타깃 재질문을 반복한다. 이전엔
@@ -1806,7 +1820,9 @@ export function useVoiceSession() {
         // 클립도 decimal_fraction_lost 분기와 동일하게 재시작하지 않는다(원본+조각 연속 보존).
         logCell({ type: 'clip', extra: 'clip_decimal_kept', row: awaiting.row, colId: awaiting.colId });
         awaitingFieldRef.current = { ...awaiting };
-        await say(`${fractionWhole} 점, 소수점 아래 숫자만 말씀해 주세요.`);
+        // FB#4 — 화면 재질문 큐를 TTS와 글자 일치(SSOT 공유).
+        useSessionStore.getState().setDecimalReason(String(fractionWhole));
+        await say(decimalReaskPrompt(fractionWhole));
       } else {
         recorderRef.current?.startClip(); // restart clip (전체 재발화 유도 분기 — 새 클립이 옳다)
         await say(`${awaiting.name} 다시 말씀해 주세요.`);
@@ -2161,6 +2177,21 @@ export function useVoiceSession() {
     // EOS 계측: 마지막 interim 도착 시각 기록 — handleFinal이 final.ts와의 차로 꼬리를 산출.
     lastInterimRef.current = { text, at: now };
 
+    // v0.36.0 FB#2(Vance) — 미확정 인식 텍스트를 **표시 전용** store 필드에 기록(파형과 함께 "지금
+    //   이렇게 들었다"를 원거리에 노출). 값-대기(value/trendConfirm) 문맥에서만 — 이동/종료 대기
+    //   중엔 임시값을 띄우지 않는다. 명령어는 확정값이 아니므로 제외. 순수 표시 — 조기확정·커밋·
+    //   텔레메트리 경로는 아래 로직 그대로(이 write는 그 앞에서 무조건 실행, fastRecognition 무관).
+    const trimmedInterim = text.trim();
+    const awaitingForDisplay = awaitingFieldRef.current;
+    const showInterim =
+      !!trimmedInterim &&
+      !!awaitingForDisplay &&
+      awaitingForDisplay.kind !== 'atEnd' &&
+      awaitingForDisplay.kind !== 'reviewWait' &&
+      useSessionStore.getState().phase === 'active' &&
+      !detectCommand(trimmedInterim);
+    useSessionStore.getState().setInterimValue(showInterim ? trimmedInterim : null);
+
     // 조기확정(빠른 인식) — 기본 OFF(실험). 브라우저 final(무음 종료감지)을 기다리지 않고
     // interim 숫자가 안정되면 커밋해 체감 딜레이를 줄인다. 보수적으로 숫자 컬럼 + 명령어 아님 +
     // TTS중 아님 + active 단계에서만. 절단 리스크가 있어 실기기 A/B 전까지 default off.
@@ -2403,6 +2434,8 @@ export function useVoiceSession() {
     ctrlRef.current = null;
     cancelTts();
     awaitingFieldRef.current = null;
+    // 리뷰 라운드1(Codex+Flash, 수용) — 종료 전환 시 미확정 interim 표시 정리(표시 전용).
+    useSessionStore.getState().setInterimValue(null);
     // v0.35.0 R3-FIX-1 — 종료 확인 '확인' 경로는 resume 없이 여기로 온다. 래치를 여기서 풀지 않으면
     //   다음 세션의 모달 suspend가 전부 조기 반환돼 STT가 안 멈춘다. 복원은 불필요(세션 종료 중).
     clearUiSuspendLatch('stop');
@@ -2524,6 +2557,9 @@ export function useVoiceSession() {
     recorderRef.current?.dispose();
     recorderRef.current = null;
     useSessionStore.getState().setPhase('paused');
+    // 리뷰 라운드1(Codex+Flash, 수용) — 일시정지 진입 시 미확정 interim 표시 정리. 발화 도중
+    // 정지하면 final이 안 와, 재개 화면에 이전 발화가 현재 값처럼 남던 찌꺼기 차단(표시 전용).
+    useSessionStore.getState().setInterimValue(null);
     useSessionStore.getState().setLastTts('일시정지됨. 마이크 다시 탭하면 재개됩니다.');
     await say('일시정지됨.');
   }, [say]);

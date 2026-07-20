@@ -19,6 +19,11 @@ interface SessionState {
   activeColIdx: number;
   /** value currently shown on screen (recognized or being entered) */
   recognizedValue: string;
+  /** v0.36.0 FB#2(Vance) — **미확정(interim) 인식 텍스트**의 표시 전용 필드. handleInterim이 매
+   *  interim마다 기록(조기확정·커밋·텔레메트리와 무관한 순수 표시용). 실시간 파형과 함께 "지금
+   *  이렇게 들었다(틀렸을 수 있음)"를 원거리에서 보여준다. 확정값(valueBurst)과 시각적으로 명확히
+   *  구분(점선·흐림)한다. 커밋(handleFinal 진입)·리셋 시 null로 정리한다. null=표시 안 함. */
+  interimValue: string | null;
   /** last TTS message echoed to screen */
   lastTts: string;
   /** I-3: most recent recognized value, shown as a screen-centered "항목 : 값" burst.
@@ -89,6 +94,11 @@ interface SessionState {
    *  VoiceScreen(Vance)의 ReaskCue가 이 값으로 "소리가 불확실" vs "숫자로 인식 실패"를 구분 표시한다.
    *  성공 커밋·다음 필드 진입 시 null로 리셋한다(큐가 남지 않도록). 상단 인식률 %와는 독립. */
   reaskReason: 'low_confidence' | 'parse_failed' | null;
+  /** v0.36.0 FB#4(Vance) — 소수점 유실 재질문의 **정수부**. null이 아니면 ReaskCue가 일반 사유 문구
+   *  대신 소수 재질문 프롬프트(TTS와 글자 일치, voicePrompts.decimalReaskPrompt)를 표시한다. 소수
+   *  재질문 진입 시 정수부로 설정, 그 외 모든 재질문·성공 커밋·리셋에서 null(setReaskReason이 함께
+   *  정리 → 스테일 방지). 단일 작성 경로 = setDecimalReason. */
+  reaskDecimalWhole: string | null;
   /** All row values, keyed by row index → col id → value */
   allRowValues: Record<number, Record<string, string>>;
   /** Row indices that have been fully completed */
@@ -104,6 +114,7 @@ interface SessionState {
   setPhase: (p: VoicePhase) => void;
   setSessionMeta: (meta: { sessionId: string; startedAt: number; label?: string }) => void;
   setRecognized: (v: string) => void;
+  setInterimValue: (v: string | null) => void;
   setLastTts: (v: string) => void;
   pushValueBurst: (name: string, value: string) => void;
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
@@ -111,6 +122,8 @@ interface SessionState {
   setPersistError: (e: SessionState['persistError']) => void;
   setModifyIndicator: (m: SessionState['modifyIndicator']) => void;
   setReaskReason: (r: SessionState['reaskReason']) => void;
+  /** v0.36.0 FB#4 — 소수 재질문 진입: reason='parse_failed' + 정수부를 함께 세운다(원자적). */
+  setDecimalReason: (whole: string) => void;
   setActiveCol: (i: number) => void;
   setActiveRow: (r: number) => void;
   setRowValue: (row: number, colId: string, v: string) => void;
@@ -132,6 +145,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   activeRow: 1,
   activeColIdx: 0,
   recognizedValue: '',
+  interimValue: null,
   lastTts: '',
   valueBurst: null,
   anomalyAlert: null,
@@ -139,6 +153,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   persistError: null,
   modifyIndicator: null,
   reaskReason: null,
+  reaskDecimalWhole: null,
   allRowValues: {},
   completedRows: [],
   skippedRows: [],
@@ -149,14 +164,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setSessionMeta: ({ sessionId, startedAt, label }) =>
     set({ sessionId, startedAt, sessionLabel: label }),
   setRecognized: (recognizedValue) => set({ recognizedValue }),
+  setInterimValue: (interimValue) => set({ interimValue }),
   setLastTts: (lastTts) => set({ lastTts }),
   pushValueBurst: (name, value) =>
     set((s) => ({ valueBurst: { name, value, seq: (s.valueBurst?.seq ?? 0) + 1 } })),
-  setAnomalyAlert: (anomalyAlert) => set({ anomalyAlert }),
+  // v0.36.0 리뷰 라운드1(Codex+Flash, 수용) — 알람이 **서는** 순간 미확정 interim 표시를 함께
+  //   정리한다(모든 알람 경로의 단일 지점). 알람 대기 중 final이 안 오면 이전 발화 찌꺼기가 재개
+  //   화면에 현재 값처럼 남던 경로의 차단축. 표시 전용 필드라 커밋/텔레메트리 계약 무해.
+  setAnomalyAlert: (anomalyAlert) =>
+    set(anomalyAlert ? { anomalyAlert, interimValue: null } : { anomalyAlert }),
   setUiModalOpen: (uiModalOpen) => set({ uiModalOpen }),
   setPersistError: (persistError) => set({ persistError }),
   setModifyIndicator: (modifyIndicator) => set({ modifyIndicator }),
-  setReaskReason: (reaskReason) => set({ reaskReason }),
+  // reaskReason의 모든 일반 갱신은 소수 정수부를 함께 정리한다(스테일 방지). 소수 재질문만
+  //   setDecimalReason이 이 뒤에 정수부를 다시 세운다(호출 순서: 일반 setReaskReason → setDecimalReason).
+  setReaskReason: (reaskReason) => set({ reaskReason, reaskDecimalWhole: null }),
+  setDecimalReason: (whole) => set({ reaskReason: 'parse_failed', reaskDecimalWhole: whole }),
   setActiveCol: (activeColIdx) => set({ activeColIdx }),
   setActiveRow: (activeRow) => set({ activeRow }),
 
@@ -226,6 +249,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       activeRow: 1,
       activeColIdx: 0,
       recognizedValue: '',
+      interimValue: null,
       lastTts: '',
       valueBurst: null,
       anomalyAlert: null,
@@ -235,6 +259,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       persistError: null,
       modifyIndicator: null,
       reaskReason: null,
+      reaskDecimalWhole: null,
       allRowValues: {},
       completedRows: [],
       skippedRows: [],

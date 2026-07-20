@@ -1,4 +1,6 @@
 import { T } from '../../tokens';
+import { useSessionStore } from '../../stores/sessionStore';
+import { decimalReaskPrompt } from '../../lib/voicePrompts';
 
 /** v0.23.0 입력탭#2(재질문 사유 큐, Vance) — 상단 인식률 %(허용범위 기준 색)와 **구분되는** 짧은
  *  사유 큐. 인식률은 높은데도 재질문되는 경우(파싱 실패) vs 신뢰도 자체가 낮은 경우를 사용자가 알게
@@ -15,8 +17,12 @@ const REASK_COPY: Record<NonNullable<ReaskReason>, string> = {
 };
 
 export function ReaskCue({ reason }: { reason: ReaskReason }) {
+  // v0.36.0 FB#4(Vance) — 소수점 유실 재질문이면 TTS와 **글자까지 일치**하는 프롬프트를 화면에도
+  //   표시한다(voicePrompts SSOT 공유). 정수부(reaskDecimalWhole)가 실려 있을 때만 특화 문구,
+  //   그 외엔 기존 짧은 사유 큐. 소수 재질문은 항상 reason='parse_failed'와 함께 세워진다.
+  const decimalWhole = useSessionStore((s) => s.reaskDecimalWhole);
   if (!reason) return null;
-  const copy = REASK_COPY[reason];
+  const copy = decimalWhole != null ? decimalReaskPrompt(decimalWhole) : REASK_COPY[reason];
   return (
     <div
       data-testid="reask-cue"

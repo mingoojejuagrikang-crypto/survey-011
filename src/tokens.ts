@@ -18,6 +18,17 @@ export const T = {
   greenGlow: 'rgba(0,200,83,0.32)',
   amberGlow: 'rgba(255,179,0,0.32)',
   redGlow: 'rgba(255,82,82,0.32)',
+  // v0.36.0 FB#5(Vance) — EdgeGlow "Siri 활성화급" 강화용 고-alpha 변형. 밝고 좁은 안쪽 링에 겹쳐
+  //   최근 iPhone Siri처럼 또렷하고 생동감 있는 외곽 밴드를 만든다(넓은 저-alpha 블룸 + 이 선명한
+  //   코어). tone 의미(green/amber/red)·red 우선순위 SSOT는 불변 — 색만 같은 계열로 진하게.
+  greenGlowStrong: 'rgba(0,200,83,0.60)',
+  amberGlowStrong: 'rgba(255,179,0,0.60)',
+  redGlowStrong: 'rgba(255,82,82,0.60)',
+  // v0.36.0 코덱스 시안(2026-07-20) — 화면 안쪽 4겹 엣지글로우의 최외곽 저-alpha 블룸(≈94px).
+  //   soft(0.32)·strong(0.60)과 같은 계열의 faint(0.14) 변형 — 인라인 rgba 일회값 금지 원칙 유지.
+  greenGlowFaint: 'rgba(0,200,83,0.14)',
+  amberGlowFaint: 'rgba(255,179,0,0.14)',
+  redGlowFaint: 'rgba(255,82,82,0.14)',
   google: '#4285F4',
 } as const;
 

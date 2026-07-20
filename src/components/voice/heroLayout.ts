@@ -13,6 +13,20 @@ export function heroFontSize(value: string): string {
   return 'clamp(34px, min(11vw, 6.5vh), 50px)';
 }
 
+/** v0.36.0 코덱스 시안 보정(2026-07-20, 민구 확정) — hero 타이포 SSOT. 절대 px 단독 금지:
+ *  전부 `clamp(최소, vw/vh 비례, 최대)` 뷰포트 비례(코덱스 스펙 38~44px/80~100px은 402×874 목표치).
+ *  **항목명 크기는 모든 상태(listening/confirm/review/reask)에서 동일**해야 한다 — 민구 지적:
+ *  "상태에 따라 식별이 불가할 만큼 작아지는 경우가 존재". 상태별 인라인 정의 금지, 여기 상수만 소비.
+ *  `--fit-lo/--fit-hi`(useFitScale)는 오버플로 시에만 개입 — 상태 간 기본 크기 차이는 없다. */
+export const HERO_TYPE = {
+  /** 항목명(38~44px @402×874 목표) — 모든 hero 상태 공용. */
+  name: 'max(20px, calc(clamp(30px, min(11vw, 5.2vh), 44px) * var(--fit-lo, 1)))',
+  /** 확정값·행번호(80~100px 목표, tabular). */
+  value: 'calc(clamp(56px, min(23vw, 12.5vh), 100px) * var(--fit-hi, 1))',
+  /** 인식 중 원문 문자열(56~72px 목표). */
+  interim: 'calc(clamp(38px, min(15vw, 8.6vh), 72px) * var(--fit-hi, 1))',
+} as const;
+
 /** v0.23.0 입력탭#1 — 흡수영역(grid row3, 1fr, overflow:hidden) 안에서 카드가 부모에 잘리지 않게
  *  하는 공통 가드. maxHeight:100% + minHeight:0.
  *  v0.27.0 — overflowY:auto는 이제 **폴백**이다: 정상 경로에선 useFitScale이 폰트를 줄여 스크롤

@@ -2,15 +2,11 @@ import { T } from '../../tokens';
 import { ABSORB_CLAMP } from './heroLayout';
 import { useFitScale } from './useFitScale';
 
-/** v0.15.0 A5 — 일시정지 상태를 화면 중앙·대형 카드로 안내한다. 기존 상단 작은 'PAUSE' 표시를 대체.
- *  톤은 AMBER(일시정지=주의/대기, 이상치 RED·수정 BLUE와 구분). 그 아래 후속 음성명령('재시작'으로
- *  재개 / '종료'로 저장)을 안내해, 화면을 보지 않아도/봐도 다음 행동을 알 수 있게 한다.
- *  v0.23.0 입력탭#1(중앙 흡수, Vance): 기존 position:fixed; inset:0 + safe-area 오버레이를 제거하고
- *   카드만 반환한다. ActiveState 중앙 흡수영역(grid row3, 1fr, overflow:hidden)이 자식으로 직접
- *   렌더·중앙 정렬한다(safe-area는 셸 패딩이 이미 흡수 — fixed가 아니므로 노치 침범 없음).
- *  v0.27.0 무스크롤·반응형(민구 07-03): 양손 측정 중이라 스크롤 불가 → 고정 px 폰트를 vh/vw clamp로
- *   비례화하고, useFitScale이 넘칠 때만(--fit-lo 안내문 먼저, --fit-hi 상태명 완만) 축소해 스크롤
- *   잔여 0을 보장한다(가로모드·iOS 텍스트 확대 내성). 하단 컨트롤바는 흡수영역 밖이라 항상 탭 가능. */
+/** v0.15.0 A5 → v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 일시정지 상태 표시. 카드 chrome(배경
+ *  박스·테두리) 제거 — hero와 같은 문법으로 [주황 pause 심볼 원] + [행·항목 대형] + [안내]만 남긴다.
+ *  화면 전체의 주황 엣지글로우(2.4s 호흡) + 파형 주황 평선이 상태를 함께 말한다(§5.2).
+ *  v0.27.0 무스크롤 계약 유지: vh/vw clamp + useFitScale로 스크롤 잔여 0(양손 측정 중 스크롤 불가).
+ *  data-testid="paused-card"·aria-live 불변. */
 export function PausedCard({ row, colName }: { row?: number; colName?: string }) {
   const fitRef = useFitScale<HTMLDivElement>([row, colName]);
   const target = row && colName ? `${row}행 · ${colName}` : colName || (row ? `${row}행` : '');
@@ -20,15 +16,13 @@ export function PausedCard({ row, colName }: { row?: number; colName?: string })
       data-testid="paused-card"
       aria-live="polite"
       style={{
-        // v0.23.0 — 중앙 흡수영역 가용 높이에 맞춤(부모 overflow:hidden 클립 방지).
         maxWidth: 'min(560px, 94vw)', width: '100%', ...ABSORB_CLAMP,
-        padding: 'clamp(12px, 2.6vh, 24px) clamp(16px, 5vw, 30px)', borderRadius: 18,
-        background: 'rgba(40,32,12,0.96)', border: `2px solid ${T.amber}`,
-        boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
-        display: 'flex', flexDirection: 'column', gap: 'clamp(6px, 1.2vh, 10px)', alignItems: 'center',
-        animation: 'card-breathe-amber 2.6s ease-in-out infinite',
+        padding: 'clamp(8px, 1.6vh, 16px) clamp(16px, 5vw, 30px)',
+        display: 'flex', flexDirection: 'column', gap: 'clamp(8px, 1.6vh, 14px)', alignItems: 'center',
+        textAlign: 'center',
       }}
     >
+      <PauseBadge />
       <span
         style={{
           fontSize: 'max(14px, calc(clamp(17px, min(4.6vw, 2.6vh), 24px) * var(--fit-lo, 1)))',
@@ -70,5 +64,27 @@ export function PausedCard({ row, colName }: { row?: number; colName?: string })
         재시작 또는 종료
       </span>
     </div>
+  );
+}
+
+/** 주황 pause 심볼 원(76~82px, 5px stroke — hero 상태 심볼과 동일 문법, §6.1). */
+function PauseBadge() {
+  const size = 'clamp(56px, min(18vw, 9vh), 82px)';
+  return (
+    <span
+      aria-hidden
+      style={{
+        flexShrink: 0,
+        width: size, height: size, minWidth: size, borderRadius: '50%',
+        border: `5px solid ${T.amber}`,
+        boxShadow: `0 0 18px ${T.amberGlow}`,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <svg viewBox="0 0 24 24" width="46%" height="46%" fill={T.amber}>
+        <rect x="7" y="5" width="3.6" height="14" rx="1.4" />
+        <rect x="13.4" y="5" width="3.6" height="14" rx="1.4" />
+      </svg>
+    </span>
   );
 }

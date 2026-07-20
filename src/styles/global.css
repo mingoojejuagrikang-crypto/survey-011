@@ -102,11 +102,39 @@ input::placeholder {
   100% { transform: scale(1); }
 }
 
-/* v0.35.0 FB-B (Vance) — EdgeGlow의 느리고 부드러운 점멸. opacity만 변조(합성기 전용, box-shadow
-   재페인트 없음). 정상(초록)·이상치(빨강) 공통. reduced-motion에선 미적용(정적). */
+/* v0.35.0 FB-B → v0.36.0 코덱스 시안(2026-07-20) — EdgeGlow 코어 호흡. opacity만 변조(합성기
+   전용, box-shadow 재페인트 없음). cadence(듣는 중 1.75s / 경고 0.7s / 일시정지 2.4s)는 EdgeGlow가
+   인라인 animation-duration으로 조절한다. reduced-motion에선 미적용(정적). */
 @keyframes edge-pulse {
-  0%, 100% { opacity: 0.5; }
+  0%, 100% { opacity: 0.58; }
   50% { opacity: 1; }
+}
+
+/* v0.36.0 코덱스 시안 — 화면 안쪽 가장자리를 따라 흐르는 스윕 바(transform 전용, 합성기 컴포지팅).
+   가로 바는 화면폭의 42%, 세로 바는 높이의 29%로, 시계방향 순환처럼 읽히게 상/하·좌/우가 역방향. */
+@keyframes edge-sweep-x {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(340%); }
+}
+@keyframes edge-sweep-x-reverse {
+  from { transform: translateX(340%); }
+  to { transform: translateX(-120%); }
+}
+@keyframes edge-sweep-y {
+  from { transform: translateY(-120%); }
+  to { transform: translateY(445%); }
+}
+@keyframes edge-sweep-y-reverse {
+  from { transform: translateY(445%); }
+  to { transform: translateY(-120%); }
+}
+
+/* v0.36.0 코덱스 시안 — 값 확인 1회 확산 후 안정(opacity/transform만, forwards 없음 — 레이어는
+   애니메이션 종료 시 제거된다). */
+@keyframes edge-confirm {
+  0% { opacity: 0; transform: scale(0.992); }
+  45% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
 }
 
 /* Floating value badge: pops out over the active chip on each new recognition,
