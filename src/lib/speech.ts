@@ -11,7 +11,7 @@
  */
 
 import { logger } from './logger';
-import { kv } from './logEvents';
+import { kv, zombieRestart } from './logEvents';
 
 type SRCtor = new () => SpeechRecognitionLike;
 
@@ -76,6 +76,21 @@ export interface SpeechCallbacks {
   onEnd?: () => void;
 }
 
+/** 좀비(started-but-silent) 인식기 판정 임계값(ms). recRunning=true인데 onresult가 이 시간을
+ *  넘게 0건이면, iOS 자연 무음→end 순환을 넘겨 recRunning=true로 고착된 좀비로 본다(실기기 로그
+ *  FB#3: audio-capture 후 fresh 인스턴스가 start까지 성공했으나 57초간 onresult 0건 → 영구 사망).
+ *  ⚠️ device-gated: 소스에서 도출 불가, 다음 실기기 로그로 튜닝. watchdog interval(4000ms)의 3배 =
+ *  정상 iOS 무음→end 주기(수 초)를 확실히 초과하는 보수적 시작값(순진한 stale-only는 정상 무음
+ *  중 인식기를 들쑤신다 — 임계값이 자연 순환 주기보다 커야 오발동을 막는다).
+ *  [STT-18] 이 값은 백오프(연속 좀비 시 ×2, cap)의 **기본값**이며, 판정 자체는 에러 이력 있는
+ *  무결과 인스턴스에만 적용된다(restartIfZombie 참조 — 에러 없는 건강한 장기 무음은 면제). */
+const DEFAULT_ZOMBIE_STALE_MS = 12_000;
+
+/** [STT-18] 좀비 백오프 상한(ms). 연속 좀비 재시작(결과 0건 반복)마다 유효 임계가 ×2로 커지되
+ *  (12→24→48s) 이 값을 넘지 않는다 — 에러 직후 진짜 무음 대기가 길어질 때 12초마다 인식기를
+ *  들쑤시는 잔여 churn 방지와 "영영 안 되살림" 사이의 절충. onresult가 오면 기본값으로 리셋. */
+const ZOMBIE_BACKOFF_CAP_MS = 60_000;
+
 /** A long-running recognition controller that auto-restarts. */
 export class SpeechController {
   private rec: SpeechRecognitionLike | null = null;
@@ -84,6 +99,8 @@ export class SpeechController {
   private restartingTimer: number | null = null;
   /** True while TTS is speaking — prevents STT restart to avoid echo feedback */
   private ttsMuted = false;
+  /** TTS mute가 시작된 시각. stale liveness에서 **mute 구간만** 제외하기 위한 앵커다. */
+  private ttsMutedAt: number | null = null;
   /** P0(영구 인식사멸): muteForTts가 대기 중 재시작 타이머를 취소하면 true — TTS 종료
    *  (unmuteForTts) 시 반드시 재예약해야 한다. 이 플래그가 없던 시절, iOS가 TTS 재생 중
    *  인식기를 죽이면(end→100ms 타이머) 그 타이머를 mute가 취소한 채 아무도 되살리지 않아
@@ -94,20 +111,40 @@ export class SpeechController {
   private recRunning = false;
   /** 마지막 rec.start() 시도 시각(ms). watchdog이 "시도 후 응답 없음" 판정에 쓴다. */
   private lastStartAttemptAt = 0;
+  /** 마지막 liveness 시각(ms): onStart(가동 시작) + onresult(interim 포함) 시 갱신. watchdog의
+   *  좀비 판정 근거(recRunning=true인데 이 값이 zombieStaleMs 넘게 정체 = started-but-silent). */
+  private lastResultAt = 0;
+  /** [STT-18] 현 인스턴스가 onresult(interim 포함)를 한 건이라도 냈는가. onStart에서 false 리셋.
+   *  lastResultAt의 onStart 앵커는 유예용 타임스탬프일 뿐이므로, "앵커"와 "실제 결과"를 구분하는
+   *  것이 이 필드의 목적 — 좀비 판정은 실제 결과 0건인 인스턴스만 대상으로 한다. */
+  private hadResultSinceStart = false;
+  /** [STT-18] 마지막 onresult 이후 `audio-capture` 에러가 있었는가. 실기기 사망 사례의 확인된
+   *  시그니처만 좀비 자격으로 쓴다. no-speech/aborted/권한 오류 같은 정상·사용자 유도 이벤트는
+   *  fresh 인스턴스까지 자격을 운반하지 않는다. 에러 이력이 전혀 없는 건강한
+   *  인식기의 장기 무음(Web Speech 명세는 continuous 무음 중 end 발생을 보장하지 않는다)을
+   *  좀비로 오판해 abort→재시작 churn(경계 발화 절단 위험)을 만들지 않기 위한 판별자.
+   *  onStart에서 리셋하지 않는다 — 진짜 좀비가 재시작 후에도 무결과면 이 플래그가 유지되어
+   *  재시도 루프가 계속된다(백오프로 간격만 늘어남). */
+  private erroredSinceLastResult = false;
+  /** [STT-18] 결과 없이 반복된 연속 좀비 재시작 횟수 — 유효 임계 백오프(×2, cap)의 지수.
+   *  onresult에서 0으로 리셋. 텔레메트리에 n=<count>로 동봉된다. */
+  private zombieRestartStreak = 0;
   /** 재시작 지연(ms). 기본 base에서 시작, start() throw마다 ×2(상한 5000), 'start' 성공 시 리셋. */
   private restartDelayMs: number;
   private readonly baseRestartDelayMs: number;
   private readonly watchdogIntervalMs: number;
+  private readonly zombieStaleMs: number;
   private watchdogTimer: number | null = null;
   /** lifecycle 텔레메트리 스로틀 상태 (kind별 마지막 기록 시각 + 억제 카운트). */
   private lifecycleLastLoggedAt: Record<string, number> = {};
   private lifecycleSuppressed: Record<string, number> = {};
 
-  constructor(cb: SpeechCallbacks, opts?: { restartDelayMs?: number; watchdogIntervalMs?: number }) {
+  constructor(cb: SpeechCallbacks, opts?: { restartDelayMs?: number; watchdogIntervalMs?: number; zombieStaleMs?: number }) {
     this.cb = cb;
     this.baseRestartDelayMs = opts?.restartDelayMs ?? 100;
     this.restartDelayMs = this.baseRestartDelayMs;
     this.watchdogIntervalMs = opts?.watchdogIntervalMs ?? 4000;
+    this.zombieStaleMs = opts?.zombieStaleMs ?? DEFAULT_ZOMBIE_STALE_MS;
   }
 
   /** 인식기 수명주기 텔레메트리. 사멸 시그니처(항상 기록)와 고빈도 이벤트(10초 스로틀 +
@@ -138,6 +175,7 @@ export class SpeechController {
    *  so command keywords (수정/정정/스킵/종료) can still be detected during playback.
    *  handleFinal in useVoiceSession ignores non-command results while synth.speaking=true. */
   muteForTts() {
+    if (!this.ttsMuted) this.ttsMutedAt = Date.now();
     this.ttsMuted = true;
     // Cancel any pending STT restart from a previous unmuteForTts()
     if (this.restartingTimer !== null) {
@@ -153,6 +191,15 @@ export class SpeechController {
   /** Called when TTS utterance ends — STT was never aborted so no restart needed.
    *  즉시 unmute는 유지(이어폰 barge-in 경로 불변). */
   unmuteForTts() {
+    const now = Date.now();
+    // [STT-18] liveness 이력을 unmute 시점으로 덮지 않고, watchdog이 보지 못한 TTS mute **구간만**
+    // stale에서 뺀다. 반복 TTS가 이미 누적된 실제 무응답 시간을 매번 0으로 만들면 좀비 복구를
+    // 무기한 미룰 수 있다. mute 중 결과가 왔다면 그 결과 이후 남은 mute 구간만 제외한다.
+    if (this.ttsMutedAt !== null && this.lastResultAt > 0) {
+      const excludedFrom = Math.max(this.ttsMutedAt, this.lastResultAt);
+      this.lastResultAt += Math.max(0, now - excludedFrom);
+    }
+    this.ttsMutedAt = null;
     this.ttsMuted = false;
     // P0: muteForTts가 취소했던 재시작을 여기서 되살린다.
     if (this.active && this.restartPendingAfterTts) {
@@ -189,8 +236,12 @@ export class SpeechController {
   stop() {
     this.active = false;
     this.ttsMuted = false;
+    this.ttsMutedAt = null;
     this.restartPendingAfterTts = false;
     this.recRunning = false;
+    this.hadResultSinceStart = false;
+    this.erroredSinceLastResult = false;
+    this.zombieRestartStreak = 0;
     this.restartDelayMs = this.baseRestartDelayMs;
     if (this.restartingTimer !== null) {
       window.clearTimeout(this.restartingTimer);
@@ -221,6 +272,13 @@ export class SpeechController {
       // stale-instance 가드: 버려진 구 인식기 인스턴스의 늦은 이벤트가 중복 재시작(이중 start)을
       // 예약하지 못하게, 현재 인스턴스가 아니면 무시한다(onError/onStart/onEnd 동일).
       if (this.rec !== rec) return;
+      // 좀비 감지용 liveness 갱신 — interim 포함(가장 이르고 잦은 liveness 증거; final-only는
+      // 지연됨). watchdog이 recRunning=true인데 이 값이 오래 정체되면 좀비로 판정한다.
+      this.lastResultAt = Date.now();
+      // [STT-18] 실제 결과 1건 = 인식기 건강 증명: 에러 이력·좀비 streak을 모두 해제한다.
+      this.hadResultSinceStart = true;
+      this.erroredSinceLastResult = false;
+      this.zombieRestartStreak = 0;
       const e = raw as SREvent;
       const r = e.results[e.results.length - 1];
       const final = r.isFinal;
@@ -256,12 +314,21 @@ export class SpeechController {
     const onError = (e: Event) => {
       if (this.rec !== rec) return;
       const err = (e as unknown as { error?: string }).error || 'unknown';
+      // [STT-18] 확인된 사망 시그니처(audio-capture)만 좀비 자격을 연다. no-speech/aborted/
+      // permission 계열은 정상 무음·앱 abort·사용자 조치 오류라 stale 재시작 근거가 아니다.
+      this.erroredSinceLastResult = err === 'audio-capture';
       this.logLifecycle(`error:${err}`, true);
       this.cb.onError?.(err);
     };
     const onStart = () => {
       if (this.rec !== rec) return;
       this.recRunning = true;
+      // recRunning=true가 되는 순간을 liveness 기준점으로 앵커링한다 — 갓 시작해 아직 결과가
+      // 없는 정상 무음 인식기를 좀비로 오판(lastResultAt=0 → 즉시 stale)하지 않도록.
+      this.lastResultAt = Date.now();
+      // [STT-18] 새 인스턴스 수명 시작: 아직 실제 결과 0건. (erroredSinceLastResult는 의도적으로
+      // 유지 — 에러→재시작으로 태어난 인스턴스가 무결과면 좀비 재시도 루프가 이어져야 한다.)
+      this.hadResultSinceStart = false;
       // 성공적으로 가동됐으니 백오프를 기본값으로 리셋.
       this.restartDelayMs = this.baseRestartDelayMs;
       this.logLifecycle('start');
@@ -326,11 +393,40 @@ export class SpeechController {
     if (this.ttsMuted) return;                   // TTS 재생 중 — unmute 경로가 처리
     if (this.restartingTimer !== null) return;   // 이미 재시작 예약됨
     if (this.restartPendingAfterTts) return;     // unmuteForTts가 재예약할 예정
-    if (this.recRunning) return;                 // 정상 가동 중
-    if (Date.now() - this.lastStartAttemptAt <= this.watchdogIntervalMs) return; // 시도 직후 유예
+    const now = Date.now();
+    // recRunning=true지만 결과가 안 오는 좀비면 restartIfZombie가 처리, 아니면 정상 가동 → no-op.
+    if (this.recRunning) { this.restartIfZombie(now); return; }
+    if (now - this.lastStartAttemptAt <= this.watchdogIntervalMs) return; // 시도 직후 유예
     this.logLifecycle('watchdog_restart', true);
     try { this.rec?.abort(); } catch { /* ignore */ }
     this.attemptStart();
+  }
+
+  /** [STT-18] 백오프 반영 유효 좀비 임계(ms): 연속 좀비 재시작(zombieRestartStreak)마다 ×2
+   *  (12→24→48s), ZOMBIE_BACKOFF_CAP_MS 상한. onresult가 오면 streak 리셋으로 기본값 복귀. */
+  private effectiveZombieStaleMs(): number {
+    return Math.min(this.zombieStaleMs * 2 ** this.zombieRestartStreak, ZOMBIE_BACKOFF_CAP_MS);
+  }
+
+  /** 좀비(started-but-silent) 감지 공통 로직 (watchdog + kick SSOT). [STT-18] 정밀화(r1 3모델
+   *  공통 지적): 좀비 = "에러 후 재시작으로 태어난 인스턴스(erroredSinceLastResult)가 실제 결과
+   *  0건(!hadResultSinceStart)으로 유효 임계(백오프 반영)를 초과". Web Speech 명세는 continuous
+   *  무음 중 end 발생을 보장하지 않으므로, 에러 이력 없는 건강한 장기 무음은 stale이 아무리
+   *  커도 절대 발동하지 않는다(abort→재시작 churn의 경계 발화 절단 방지). 감지 시 abort 후
+   *  fresh 재시작하고 true 반환. 재시작 직후 gap(새 인스턴스 onStart 미도착 + recRunning=true·
+   *  옛 앵커 잔존)에서의 오판 방지용 lastStartAttemptAt 유예는 유지. */
+  private restartIfZombie(now: number): boolean {
+    if (!this.recRunning) return false;
+    if (!this.erroredSinceLastResult || this.hadResultSinceStart) return false;
+    const threshold = this.effectiveZombieStaleMs();
+    const stale = now - this.lastResultAt;
+    if (stale <= threshold) return false;
+    if (now - this.lastStartAttemptAt <= threshold) return false;
+    this.zombieRestartStreak++;
+    logger.log({ type: 'stt', extra: zombieRestart(stale, this.zombieRestartStreak) });
+    try { this.rec?.abort(); } catch { /* ignore */ }
+    this.attemptStart();
+    return true;
   }
 
   /** v0.33.0 항목4 — 워치독 1회 즉시 실행(외부 트리거). 포그라운드 복귀(visibilitychange/pageshow)
@@ -344,8 +440,10 @@ export class SpeechController {
     if (this.ttsMuted) return 'tts_muted';
     if (this.restartingTimer !== null) return 'restart_scheduled';
     if (this.restartPendingAfterTts) return 'pending_after_tts';
-    if (this.recRunning) return 'running';
-    if (Date.now() - this.lastStartAttemptAt <= this.watchdogIntervalMs) return 'recent_attempt';
+    const now = Date.now();
+    // recRunning=true여도 좀비면 재시작(포그라운드 복귀가 죽은 좀비를 즉시 되살림), 아니면 running.
+    if (this.recRunning) return this.restartIfZombie(now) ? 'restarted' : 'running';
+    if (now - this.lastStartAttemptAt <= this.watchdogIntervalMs) return 'recent_attempt';
     this.logLifecycle('kick_restart', true);
     try { this.rec?.abort(); } catch { /* ignore */ }
     this.attemptStart();

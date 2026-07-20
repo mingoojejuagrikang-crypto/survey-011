@@ -37,3 +37,9 @@ export function settingChanged(key: string, value: string | number | boolean): s
 export function rowMarked(kind: 'row_complete' | 'row_skipped', row: number, source: string): string {
   return `${kind}:${row},src=${source}`;
 }
+
+/** `lifecycle:zombie_restart:stale_ms=<ms>,n=<streak>` — STT 좀비 재시작 진단.
+ *  stale_ms/n 순서는 SOP-003 판독 계약이므로 이 빌더와 특성화 테스트에서 고정한다. */
+export function zombieRestart(staleMs: number, streak: number): string {
+  return `lifecycle:zombie_restart:${kv({ stale_ms: staleMs, n: streak })}`;
+}

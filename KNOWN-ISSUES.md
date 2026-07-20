@@ -174,6 +174,13 @@
 - **출처:** `2026-07-14 실기기 로그`(S2 r1c8) → v0.34.0 수정. 회귀 `tests/koreanNum.spec.ts`·`correction-flow.spec.ts`.
 - **현재 상태:** ✅수정됨(v0.34.0) — 실기기 검증 대기.
 
+### [STT-18] 알림음 등 오디오 세션 점유 후 인식기가 **좀비(started-but-silent)로 영구 사망** — recRunning=true인데 onresult 0건
+- **증상(v0.35.3 실기기, FB#3):** iOS 실기기에서 문자 수신음 등이 오디오 세션을 점유하면 `webkitSpeechRecognition`이 `error:audio-capture` 발생. 이후 `end→restart_scheduled→start`로 fresh 인스턴스가 **start까지 성공(recRunning=true)** 하지만 `onresult`를 0건 방출하는 좀비가 된다. 한 세션은 40초 내 자동 회복 ✅, 다른 세션은 **57초간 onresult 0건**으로 영구 사망(사용자 포기) ❌. 파형(audioRecorder의 별도 getUserMedia 스트림)은 계속 작동 → STT만 죽음.
+- **원인(코드 확정):** [STT-14]의 watchdog/kick은 `if(recRunning) return`으로 조기 종료 → **recRunning=true로 고착된** 좀비는 감지 불가였다. [STT-14] watchdog은 `recRunning=false`(end 후 재시작 예약도 없는) 사망만 봤고, 이 running-but-silent 케이스는 사각지대였다. fresh 인스턴스 재생성(attemptStart)·백오프 ×2 cap 5s는 이미 있었으나 "좀비 감지" 하나가 부족했다.
+- **해결·회피(v0.36.0):** `speech.ts` SpeechController에 **`lastResultAt` liveness 타임스탬프** 신설 — `onResult`(interim 포함, 가장 이르고 잦은 liveness 증거)와 `onStart`(갓 시작한 무음 인식기 오판 방지 앵커)에서 갱신. 좀비 자격은 실기기에서 확인된 **`audio-capture` 오류 이력 + fresh 인스턴스 결과 0건**으로 한정한다(`no-speech`·앱 `aborted`·권한 오류 제외). `watchdogTick`/`kick`이 이 자격과 유효 stale 임계(연속 실패마다 ×2, 최대 60초)를 모두 만족할 때만 현재 인스턴스 `abort()` 후 fresh 재시작한다. **마이크 재취득 없음**([IOS-5] — STT 인스턴스만 재생성). 기본 임계 `12000ms`는 **device-gated**이며, TTS 중에는 watchdog을 멈추되 `unmute` 때 liveness를 현재로 덮지 않고 **실제 mute 구간만** stale에서 제외해 반복 TTS가 복구를 무기한 미루지 않게 했다. 텔레메트리 `lifecycle:zombie_restart:stale_ms=<N>,n=<streak>`(항상 기록)는 `logEvents.ts` 빌더로 바이트 계약을 고정한다. 회귀 `tests/speech-lifecycle.spec.ts`가 audio-capture 양성·비자격 오류 3종·정상 무음·interim liveness·백오프·반복 TTS를 고정한다.
+- **출처:** `2026-07-xx v0.35.3 실기기 로그 FB#3` → **survey-011 v0.36.0** 수정.
+- **현재 상태:** ✅수정됨(v0.36.0) — **실기기 검증 대기**: 다음 로그에서 `lifecycle:error:audio-capture`→`zombie_restart:stale_ms=<N>,n=<streak>`→회복(onresult 재개) 연쇄 + 비자격 오류/정상 무음의 zombie_restart 0건 + 기본 임계 튜닝 필요성 확인.
+
 ### [STT-ALT-1] `stt_alt_used` 폴백이 primary 재질문 가드의 **우회로** (구조적 함정)
 - **증상:** primary가 재질문 가드(`decimal_fraction_lost` 등)에 걸려도, alts 루프가 문맥 없이 alt를 수용하면 재질문이 무산되고 잘못된 값이 침묵 커밋된다. 실사례 2건: [STT-15]("하나"→alt "1"), 07-14 "266 점요"(primary lost 재질문 → alt "266" 정수 커밋).
 - **해결·회피(v0.34.0):** alts 루프에 소수-의도 게이트(`parseFailReason==='decimal_fraction_lost'`면 소수점 없는 alt skip) + 응답어 alt skip([STT-17]). **일반 교훈: 재질문 계열 가드를 추가할 때는 반드시 alts 루프 게이트를 함께 검토할 것** — primary만 막으면 alt가 우회한다.
@@ -679,6 +686,7 @@
 - **해결·회피(v0.31.0):** UI 상태에는 안정적인 테스트 계약을 둔다. 활성 화면은 `data-testid="voice-active-state"`, 활성 행은 `data-testid="active-row"`, 칩은 `data-testid="column-chip"` + `data-active="true"` + `data-col-name="<컬럼명>"`로 확인한다. 새 입력탭 테스트를 작성할 때 시각 아이콘/텍스트 장식 대신 이 속성을 사용한다.
 - **출처:** `2026-07-08 survey-011 v0.31.0 입력탭 UI 재정리`, 커밋 `bbf6a1e`.
 - **현재 상태:** ✅수정됨(`src/screens/VoiceScreen.tsx`, `tests/*` 활성 칩 helper 갱신). 새 UI 테스트 작성 시 계속 준수.
+- **재발 변형(2026-07-20, v0.36.0 코덱스 시안 재작업):** [TEST-UI-1]의 같은 계열 — `v019-active-layout`/`v020-dials-layout`이 칩 구역을 셀렉터가 아니라 **계산 스타일 탐색**(`display:grid && overflowY:auto`인 div 검색)으로 잡고 있었다. 칩 구역이 grid → flex-wrap pill 플로우로 바뀌자 탐색이 null을 반환하며 실패. 두 스펙 모두 `data-testid="voice-chip-grid"`(§ 셀렉터 보존표의 그 노드)로 교체해 해결 — **레이아웃 스펙도 요소 탐색은 반드시 testid 계약으로, 계산 스타일은 단언(assert) 대상으로만** 쓸 것.
 
 ### [TEST-UI-2] 활성 상태 하단에는 `입력 종료` 버튼이 없다 — 종료 버튼 테스트는 일시정지 패널 경로로
 - **증상:** `v023-voice.spec.ts`, `correction-flow.spec.ts`가 활성 상태에서 `button[title="입력 종료"]`를 기다리다 실패했다.

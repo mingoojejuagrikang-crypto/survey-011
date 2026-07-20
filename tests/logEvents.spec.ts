@@ -6,7 +6,7 @@
  * 이 테스트를 고치고 싶어지면, 그것은 외부 파서 계약 위반 신호다(anomalyAlert.spec 패턴).
  */
 import { test, expect } from '@playwright/test';
-import { kv, withErr, settingChanged, rowMarked } from '../src/lib/logEvents';
+import { kv, withErr, settingChanged, rowMarked, zombieRestart } from '../src/lib/logEvents';
 
 test('settingChanged — 기존 4개 콜사이트 산출과 바이트 동일', () => {
   expect(settingChanged('ttsRate', 1.2)).toBe('setting_changed:ttsRate=1.2');
@@ -34,4 +34,8 @@ test('kv — 신규 이벤트 표준 표기(key=val 쉼표 연결, 삽입 순서
   expect(kv({ row: 3, src: 'voice' })).toBe('row=3,src=voice');
   expect(kv({ total: 12, ko: 4 })).toBe('total=12,ko=4');
   expect(kv({ ok: true })).toBe('ok=true');
+});
+
+test('zombieRestart — lifecycle 텔레메트리 바이트 계약(stale_ms → n 순서)', () => {
+  expect(zombieRestart(12_345, 2)).toBe('lifecycle:zombie_restart:stale_ms=12345,n=2');
 });
