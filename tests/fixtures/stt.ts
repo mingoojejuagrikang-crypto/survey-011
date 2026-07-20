@@ -32,13 +32,16 @@ import type { Page } from '@playwright/test';
 export const VOICE_MOCK_INIT_SCRIPT = `
 (function() {
   window.__ttsLog = [];
+  window.__ttsInFlight = 0;
   var mockSynth = {
     speak: function(utterance) {
       window.__ttsLog.push(utterance.text);
+      window.__ttsInFlight++;
       try { if (utterance.onstart) utterance.onstart(new Event('start')); } catch(e) {}
       // [TEST-TTS-MOCK-1] onend는 항상 비동기(>=1 태스크). 지연은 installVoiceMocks 옵션으로 조절.
       var delay = typeof window.__ttsOnendDelayMs === 'number' ? window.__ttsOnendDelayMs : 200;
       setTimeout(function() {
+        window.__ttsInFlight = Math.max(0, window.__ttsInFlight - 1);
         try { if (utterance.onend) utterance.onend(new Event('end')); } catch(e) {}
       }, delay);
     },
@@ -151,4 +154,15 @@ export async function fireSttAlts(page: Page, transcript: string, alts: string[]
 /** 지금까지 mockSynth가 발화한 TTS 문구 목록. */
 export async function ttsLog(page: Page): Promise<string[]> {
   return page.evaluate(() => (window as unknown as { __ttsLog?: string[] }).__ttsLog ?? []);
+}
+
+/** 비동기 mock TTS가 모두 끝날 때까지 대기. 다음 queued 발화가 같은 onend에서 이어지는 경우까지
+ * 한 프레임 안정화 후 재확인한다([TEST-TTS-MOCK-1] 상태 전이 spec용). */
+export async function waitForTtsIdle(page: Page): Promise<void> {
+  const idle = () => page.waitForFunction(
+    () => ((window as unknown as { __ttsInFlight?: number }).__ttsInFlight ?? 0) === 0,
+  );
+  await idle();
+  await page.waitForTimeout(50);
+  await idle();
 }

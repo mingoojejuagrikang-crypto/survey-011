@@ -111,12 +111,10 @@ test('입력탭 — 입력 조절 스탭퍼 패널(402×874)', async ({ page }) 
   await assertStepperPanel(page, PHONE_402.width);
 
   // 칩 구역 캡 회귀 없음(v0.19.0 4구역 인변량).
+  //   v0.36.0 코덱스 시안(민구 확정) — 칩 구역이 grid → 유동 폭 pill 플로우(flex-wrap)로 바뀌어
+  //   계산-스타일(display:grid) 탐색 대신 셀렉터 계약(voice-chip-grid)으로 잡는다. 캡 검증은 동일.
   const chipClientH = await page.evaluate(() => {
-    const grids = Array.from(document.querySelectorAll('div')).filter((el) => {
-      const s = getComputedStyle(el);
-      return s.display === 'grid' && s.overflowY === 'auto';
-    });
-    const g = grids[0] as HTMLElement | undefined;
+    const g = document.querySelector('[data-testid="voice-chip-grid"]') as HTMLElement | null;
     return g ? g.clientHeight : null;
   });
   expect(chipClientH).not.toBeNull();
