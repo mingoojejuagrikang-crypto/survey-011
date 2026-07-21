@@ -18,6 +18,7 @@ test.setTimeout(90_000);
 
 const BASE = 'http://localhost:5175';
 const PHONE_402 = { width: 402, height: 874 };
+const PHONE_375 = { width: 375, height: 667 };
 
 // 1 auto(seq) + 12 voice float — 402px 폭에서 확실히 2줄을 넘긴다.
 const VOICE_COLS = Array.from({ length: 12 }, (_, i) => ({
@@ -69,9 +70,17 @@ const MOCK_INIT_SCRIPT = `
 })();
 `;
 
-async function boot(page: Page) {
-  await page.setViewportSize(PHONE_402);
+async function boot(page: Page, opts?: { viewport?: { width: number; height: number }; sab?: number }) {
+  await page.setViewportSize(opts?.viewport ?? PHONE_402);
   await page.addInitScript(MOCK_INIT_SCRIPT);
+  // FB-I — 홈인디케이터(--sab) 시뮬레이션: 나비 실측 높이(--nav-h)에 safe-area가 포함되는지,
+  //   시트가 그 위에 정확히 올라앉는지 검증하기 위해 fixtures/safeArea.ts와 동일 방식으로 주입.
+  if (opts?.sab != null) {
+    const sab = opts.sab;
+    await page.addInitScript((v) => {
+      document.documentElement.style.setProperty('--sab', `${v}px`);
+    }, sab);
+  }
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate((s) => {
     localStorage.clear();
@@ -110,29 +119,47 @@ test('FB-B — 칩 그리드가 2줄 캡 + 초과분 내부 스크롤(전체 그
   expect(scrollH, '2줄 초과 → 내부 스크롤 존재').toBeGreaterThan(clientH + 20);
 });
 
-test('FB-I — full-bleed 글로우 아래에서도 하단 나비 탭 가능 + 수동 입력 시트가 글로우 위에 뜬다', async ({ page }) => {
-  await boot(page);
-  const glow = page.locator('[data-testid="edge-glow"]');
-  await expect(glow).toBeVisible();
-  const glowZ = await glow.evaluate((el) => parseInt(getComputedStyle(el).zIndex || '0', 10));
+// FB-I(민구, "네비는 항상 보여야 함") — 수동 입력 시트가 **열려 있는 동안** 하단 나비가
+//   ① 시트에 덮이지 않고(geometry: 나비 top ≥ 시트 bottom) ② 보이고 ③ 탭 가능해야 한다.
+//   402×874(sab 0) + 375×667(sab 34)에서 검증. z-index 단언은 하지 않는다 — bottomInset로 나비/
+//   시트가 공간상 안 겹치므로 z 순서는 무의미하고, z만 보면 잘림을 놓친다(geometry가 진짜 오라클).
+for (const vp of [
+  { name: '402×874(sab 0)', viewport: PHONE_402, sab: undefined },
+  { name: '375×667(sab 34)', viewport: PHONE_375, sab: 34 },
+]) {
+  test(`FB-I — 수동 입력 시트 열림 중 하단 나비 상시 노출·탭 가능(시트가 나비를 덮지 않음) @ ${vp.name}`, async ({ page }) => {
+    await boot(page, { viewport: vp.viewport, sab: vp.sab });
 
-  // 나비 '유지': full-bleed 글로우(fixed z-54, pointer-events:none)가 하단 나비 위를 덮어도
-  //   나비 버튼은 실제로 히트테스트(탭) 가능해야 한다(trial 클릭 = 실제 클릭 없이 가림 여부만 검증).
-  await page.locator('[data-testid="tab-voice"]').click({ trial: true });
-  await page.locator('[data-testid="tab-data"]').click({ trial: true });
+    // 시트가 글로우 위에 뜨는 기존 계약도 유지(입력 UI 오염 차단).
+    const glow = page.locator('[data-testid="edge-glow"]');
+    await expect(glow).toBeVisible();
+    const glowZ = await glow.evaluate((el) => parseInt(getComputedStyle(el).zIndex || '0', 10));
 
-  // 활성 음성 칩 탭 → 수동 입력 시트. 시트 오버레이(ModalBase)는 글로우(54)보다 위에 있어야
-  //   초록 가장자리 링/블룸이 입력 UI를 덮지 않는다(FB-I 오염 차단).
-  const activeChip = page.locator('[data-testid="column-chip"][data-active="true"]');
-  await activeChip.click();
-  const sheet = page.locator('[data-testid="manual-value-sheet"]');
-  await expect(sheet).toBeVisible({ timeout: 3000 });
-  const sheetZ = await sheet.evaluate((el) => parseInt(getComputedStyle(el.parentElement as HTMLElement).zIndex || '0', 10));
-  console.log(`z-index: glow=${glowZ} sheet=${sheetZ}`);
-  expect(sheetZ, '수동 입력 시트가 full-bleed 글로우 위에 있어야').toBeGreaterThan(glowZ);
-  // 시트가 실제로 조작 가능(키패드 키 히트테스트) — 글로우가 위를 막지 않는다.
-  await page.locator('[data-testid="manual-key-1"]').click({ trial: true });
-});
+    // 활성 음성 칩 탭 → 수동 입력 시트 open.
+    await page.locator('[data-testid="column-chip"][data-active="true"]').click();
+    const sheet = page.locator('[data-testid="manual-value-sheet"]');
+    await expect(sheet).toBeVisible({ timeout: 3000 });
+    const sheetZ = await sheet.evaluate((el) => parseInt(getComputedStyle(el.parentElement as HTMLElement).zIndex || '0', 10));
+    expect(sheetZ, '시트가 글로우 위').toBeGreaterThan(glowZ);
+    // 시트가 실제 조작 가능(글로우가 위를 막지 않음).
+    await page.locator('[data-testid="manual-key-1"]').click({ trial: true });
+
+    // ── FB-I 핵심 오라클: 시트가 열린 상태에서 나비가 살아 있다 ──
+    const sheetBox = await sheet.boundingBox();
+    expect(sheetBox, '시트 boundingBox').not.toBeNull();
+    for (const id of ['settings', 'voice', 'data']) {
+      const tab = page.locator(`[data-testid="tab-${id}"]`);
+      await expect(tab, `tab-${id} 보임`).toBeVisible();
+      const tabBox = await tab.boundingBox();
+      expect(tabBox, `tab-${id} boundingBox`).not.toBeNull();
+      // ① 시트가 나비를 덮지 않는다: 나비 top ≥ 시트 bottom(0.5px 서브픽셀 슬랙).
+      expect(tabBox!.y, `tab-${id} top(${tabBox!.y})이 시트 bottom(${sheetBox!.y + sheetBox!.height}) 아래`).
+        toBeGreaterThanOrEqual(sheetBox!.y + sheetBox!.height - 0.5);
+      // ②③ 시트 열림 중에도 실제 탭 가능(히트테스트 — 시트 오버레이/dim이 가리지 않음).
+      await tab.click({ trial: true });
+    }
+  });
+}
 
 test('FB-B — 뒤쪽 음성 컬럼으로 진행하면 활성 칩이 가시영역으로 자동 스크롤', async ({ page }) => {
   await boot(page);

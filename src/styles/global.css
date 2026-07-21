@@ -8,6 +8,9 @@
   --sab: env(safe-area-inset-bottom, 0px);
   --sal: env(safe-area-inset-left, 0px);
   --sar: env(safe-area-inset-right, 0px);
+  /* v0.37.0 FB-I — 하단 나비(TabBar) 실측 높이. TabBar가 마운트 시 offsetHeight로 덮어쓴다(SSOT).
+     이 100px는 err-large 첫 페인트 폴백(측정 전 한 프레임): 크면 무해한 여백, 작으면 나비 잘림. */
+  --nav-h: 100px;
 }
 
 html, body {

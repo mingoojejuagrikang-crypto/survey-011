@@ -57,12 +57,12 @@ export function ManualValueSheet({
   const isKeypad = choices.kind === 'int' || choices.kind === 'float';
 
   return (
-    // v0.37.0 FB-I(민구) — 종전 z-50은 EdgeGlow(54) **아래**라, full-bleed 글로우로 바뀐 뒤 초록
-    //   가장자리 링/블룸이 수동 입력 시트 위를 덮었다(입력 UI 오염). z-55로 올려 글로우(54) 위,
-    //   일반 모달(100) 아래에 둔다(종료 확인 55와 같은 입력탭 오버레이 대역). 시트는 모달로서 하단
-    //   나비를 덮는 기존 계약 유지(입력 집중) — 나비를 '띄운 채' 두는 배치는 시트 버튼이 나비 뒤로
-    //   숨는 상충이 있어 민구 기기 확인 후 결정(KNOWN-ISSUES [REGION-1]).
-    <ModalBase onClose={onClose} zIndex={55} pad={null} align="end">
+    // v0.37.0 FB-I(민구, "네비는 항상 보여야 함") — z-55는 EdgeGlow(54) 위·일반 모달(100) 아래로
+    //   글로우가 입력 UI를 덮지 않게 한다. bottomInset='var(--nav-h)'로 오버레이(dim+시트)의 하단을
+    //   하단 나비(TabBar 실측 높이)만큼 끌어올려 시트가 나비를 **덮지도 dim하지도** 않게 배치 — 나비는
+    //   상시 노출·탭 가능(탭 전환 가능). 종전 [REGION-1]의 "나비 유지 vs 시트 버튼 노출" 상충은
+    //   시트를 나비 위에 올려앉히는 배치(뷰포트 바닥이 아니라 나비 상단이 시트 바닥)로 해소했다.
+    <ModalBase onClose={onClose} zIndex={55} pad={null} align="end" bottomInset="var(--nav-h)">
       <div
         role="dialog"
         aria-modal="true"
@@ -75,8 +75,9 @@ export function ManualValueSheet({
           background: T.card, borderRadius: '24px 24px 0 0',
           border: `1px solid ${T.lineStrong}`, borderBottom: 'none',
           padding: '16px 16px 0',
-          // safe-area — 홈 인디케이터 위로 하단 버튼 전체가 올라오게.
-          paddingBottom: 'max(16px, var(--sab))',
+          // v0.37.0 FB-I — 시트가 나비(--nav-h) 위에 올라앉고 나비가 홈인디케이터(--sab)를 이미
+          //   흡수하므로 시트 자체 하단은 flat 16px(--sab 이중 패딩 제거).
+          paddingBottom: 16,
           overflowY: 'auto',
         }}
       >

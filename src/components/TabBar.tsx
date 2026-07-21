@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react';
 import { T } from '../tokens';
 import { I } from './icons';
 
@@ -21,8 +22,24 @@ const tabs: { id: TabId; label: string; icon: (s?: number, c?: string) => JSX.El
  *  초고대비 흰색 pill 채움(원거리에서 현재 탭 즉시 판독). 라벨은 소형으로 유지 — 4탭(개선요청 포함)
  *  구분과 기존 텍스트 셀렉터 계약을 지킨다. tab-* testid·최소 56px 타깃·safe-area 불변. */
 export function TabBar({ tab, setTab }: Props) {
+  // v0.37.0 FB-I(민구, "네비는 항상 보여야 함) — 나비의 **실측 높이**를 --nav-h로 발행(SSOT).
+  //   수동 입력 시트(ModalBase bottomInset)가 이 값만큼 위로 올라앉아 나비를 덮지 않는다. 손계산은
+  //   버튼 padding/border/폰트/노치(--sab)로 언더슈트해 나비 상단을 자르므로(잘림=실패 방향), 렌더된
+  //   offsetHeight(패딩·보더·라이브 --sab 포함)를 ResizeObserver로 추종한다 — 회전·safe-area·폰트
+  //   변화에도 정확. :root의 --nav-h:100px는 err-large 첫 페인트 폴백.
+  const barRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const publish = () => document.documentElement.style.setProperty('--nav-h', `${el.offsetHeight}px`);
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   return (
     <div
+      ref={barRef}
       style={{
         // v0.37.0 FB-I(민구) — full-bleed EdgeGlow(fixed z-54)가 하단 나비 위를 씻고 지나가지 않도록
         //   지속 chrome(나비)를 글로우와 같은 대역(z-54)에 두되 App DOM 순서상 VoiceScreen보다 뒤라
