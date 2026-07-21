@@ -191,10 +191,14 @@ export function useVoiceSession() {
   const resumeRef = useRef<(source?: 'voice' | 'touch') => Promise<void>>(async () => {});
   // UI modal hard-suspend. This is deliberately narrower than pause(): it stops STT delivery
   // while a full-screen UI modal is open, but it does not change session phase or recorder state.
-  const uiSuspendRef = useRef<{ active: boolean; hadController: boolean; reason: string | null }>({
-    active: false,
+  // v0.37.0 리뷰(3모델 공통, 민구 인가) — **소스 집합(reference-count) 래치**. 종전 단일 boolean
+  //   래치는 두 suspend 소스(예: 수동 시트 + 개선요청 모달)가 겹칠 때, 하나만 닫혀도 래치가 풀려
+  //   나머지 오버레이 뒤에서 STT가 조기 재개됐다(데이터무결성). 이제 **모든 소스가 해제될 때만**
+  //   실제 재개한다. hadController는 **첫 suspend 시점** 스냅샷(집합이 빌 때까지 유지). active 여부는
+  //   reasons.size>0로 파생(별도 boolean 없음).
+  const uiSuspendRef = useRef<{ hadController: boolean; reasons: Set<string> }>({
     hadController: false,
-    reason: null,
+    reasons: new Set<string>(),
   });
   // v0.22.0 P0 — 클립 레코더 스트림이 죽어 자동복구 불가(= 사용자 제스처로 재연결 필요)일 때 true.
   // 근인: iOS Safari가 제스처 밖 getUserMedia를 거부하므로, 스트림이 죽으면 자동 recoverStream을
@@ -1257,16 +1261,19 @@ export function useVoiceSession() {
    *  세션 경계(stop/start)에서 쓴다. resumeRecognitionForUi와 달리 인식기를 다시 만들지 않는다 —
    *  세션이 끝나는(또는 새로 시작하는) 시점이라 복원 대상 자체가 없기 때문.
    *
-   *  왜 필요한가: 래치(uiSuspendRef.active)는 suspend→resume 쌍으로만 풀린다. 그런데 종료 확인
+   *  왜 필요한가: 래치(uiSuspendRef.reasons)는 suspend→resume 쌍으로만 풀린다. 그런데 종료 확인
    *  다이얼로그의 **확인(confirm)** 경로는 resume 없이 곧장 stop()으로 간다(R2-FIX-2 배선: 취소만
-   *  resume). stop()도 start()도 래치를 안 만졌으므로 래치가 **영구히 active로 잔존**했다. 그러면
-   *  같은 입력탭에서 다음 세션을 시작한 뒤 수동입력·명령어 도움말·피드백·종료 모달을 열 때
-   *  suspendRecognitionForUi가 `if (active) return`으로 **조기 반환** → STT가 계속 살아 배경 발화가
-   *  값을 커밋하거나 행을 이동시킬 수 있었다(데이터 무결성). */
+   *  resume). stop()도 start()도 래치를 안 만졌으므로 래치가 **영구히 잔존**했다(집합에 소스가 남음).
+   *  그러면 같은 입력탭에서 다음 세션을 시작한 뒤 수동입력·명령어 도움말·피드백·종료 모달을 열 때
+   *  suspend가 이미-active로 **조기 반환**(집합 비우지 못함) → STT가 계속 살아 배경 발화가 값을
+   *  커밋하거나 행을 이동시킬 수 있었다(데이터 무결성). */
   const clearUiSuspendLatch = useCallback((reason: string) => {
-    if (!uiSuspendRef.current.active) return;
-    const prev = uiSuspendRef.current.reason;
-    uiSuspendRef.current = { active: false, hadController: false, reason: null };
+    const latch = uiSuspendRef.current;
+    if (latch.reasons.size === 0) return;
+    // 세션 경계 — 남은 **모든** suspend 소스를 통째로 비운다(복원 없음). 중첩 소스가 있었으면
+    //   was=a+b로 함께 남겨 어떤 소스들이 걸려 있었는지 로그로 판별한다(단일 소스는 종전과 동일).
+    const prev = [...latch.reasons].join('+') || 'unknown';
+    uiSuspendRef.current = { hadController: false, reasons: new Set<string>() };
     // 기존 ui_resume/ui_suspend와 같은 command 레인 — 신규 이벤트 타입 무첨가(log-replay 호환).
     logCell({
       type: 'command',
@@ -1277,9 +1284,15 @@ export function useVoiceSession() {
   }, []);
 
   const suspendRecognitionForUi = useCallback((reason = 'ui_modal') => {
-    if (uiSuspendRef.current.active) return;
-    const hadController = !!ctrlRef.current;
-    uiSuspendRef.current = { active: true, hadController, reason };
+    const latch = uiSuspendRef.current;
+    if (latch.reasons.has(reason)) return; // 같은 소스 재진입 — 멱등(중복 add·중복 로그 방지)
+    const wasActive = latch.reasons.size > 0;
+    latch.reasons.add(reason);
+    // 이미 다른 소스가 suspend 중이면(중첩) 집합에만 추가하고 실제 STT 상태는 건드리지 않는다.
+    //   ui_suspend/ui_resume 로그는 **실제 STT 상태 전이**(빈집합↔비빈집합)에만 남겨(단일 소스 계약
+    //   바이트 불변), 중첩 add/remove는 조용한 래치 부기다. hadController는 첫 suspend에서만 스냅샷.
+    if (wasActive) return;
+    latch.hadController = !!ctrlRef.current;
     logCell({
       type: 'command',
       parsed: 'ui_suspend',
@@ -2247,9 +2260,15 @@ export function useVoiceSession() {
   }, [handleFinal]);
 
   const resumeRecognitionForUi = useCallback((reason = 'ui_modal') => {
-    const suspended = uiSuspendRef.current;
-    if (!suspended.active) return;
-    uiSuspendRef.current = { active: false, hadController: false, reason: null };
+    const latch = uiSuspendRef.current;
+    if (!latch.reasons.has(reason)) return; // 이 소스는 suspend 중이 아님 — no-op(스퓨리어스 resume 방어)
+    latch.reasons.delete(reason);
+    // v0.37.0 리뷰(3모델 공통) — **다른 suspend 소스가 아직 남아 있으면 실제 재개하지 않는다.**
+    //   수동 시트 + 개선요청 모달 중첩 시, 개선요청만 닫혀도 시트 뒤에서 STT가 살아나던 레이스의 차단축.
+    //   집합이 완전히 빌 때만 인식기를 복원한다(모든 오버레이 해제 확인).
+    if (latch.reasons.size > 0) return;
+    const hadController = latch.hadController;
+    latch.hadController = false;
     logCell({
       type: 'command',
       parsed: 'ui_resume',
@@ -2258,7 +2277,7 @@ export function useVoiceSession() {
     });
     const phase = useSessionStore.getState().phase;
     const shouldRestore =
-      suspended.hadController &&
+      hadController &&
       (phase === 'active' || phase === 'complete' || phase === 'paused') &&
       isSpeechSupported();
     if (!shouldRestore || ctrlRef.current) return;
