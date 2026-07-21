@@ -17,8 +17,9 @@ import type { Column } from '../../types';
  *     변화로 진입, CONFIRM_MS 뒤 대기 복귀.
  *     ⚠️ 반드시 valueBurst.name/value에서만 읽는다 — advance()가 TTS 전에 포인터를 다음 항목으로
  *     옮기므로 currentCol을 쓰면 "다음 항목 값"으로 오해된다(v0.34.0 A4가 값 표시를 없앤 이유).
- *  3) 검토(phase 'complete'): ◯✓ + 행 번호(대형). 스크린리더 의미는 aria-label("N행 완료, 명령
- *     대기")로 보존. completing이 확인 플래시보다 우선(렌더 순서로 강제 — 타이머 레이스 방지).
+ *  3) 검토(phase 'complete'): ◯✓ + **방금 입력한 값**(대형, v0.37.0 FB-E — 종전의 대형 행 번호를
+ *     제거). 값 출처는 행의 마지막 음성 컬럼 실제 커밋값(ActiveState 파생). 행 번호 의미는
+ *     aria-label("N행 완료, 명령 대기")로 보존. completing이 확인 플래시보다 우선(렌더 순서로 강제).
  *
  *  재질문 프롬프트(ReaskCue)는 TTS say()와 글자까지 일치(voicePrompts SSOT, FB#4) — hero 한 영역에서
  *  인식값과 상호 배타로 표시하고 별도 echo strip은 두지 않는다(§10).
@@ -34,16 +35,21 @@ function prefersReducedMotion(): boolean {
 }
 
 export function VoiceHero({
-  col, review, row, tone, reaskReason,
+  col, review, row, tone, reaskReason, reviewName, reviewValue,
 }: {
   col: Column;
-  /** true면 phase 'complete'의 검토 표시(✓ + 행 번호). 확인 플래시보다 우선. */
+  /** true면 phase 'complete'의 검토 표시(✓ + 방금 입력한 값). 확인 플래시보다 우선. */
   review: boolean;
   row: number;
   /** VoiceScreen이 파생한 화면 상태 톤 SSOT(마이크 소실 red 포함). */
   tone: GlowTone;
   /** 대기(listening)일 때만 비-null. 재질문 사유/소수 재질문 프롬프트(TTS 글자 일치). */
   reaskReason: ReaskReason;
+  /** v0.37.0 FB-E(민구) — 검토(complete) 표시에서 큰 **행 번호** 대신 방금 입력한 값을 크게 보인다.
+   *  값의 출처는 현재 행의 **마지막 음성 컬럼 실제 커밋값**(ActiveState가 rowValues에서 파생) —
+   *  valueBurst(네비게이션으로 stale 가능) 대신 행 자체 데이터라 검토 진입 경로와 무관하게 정확하다. */
+  reviewName?: string;
+  reviewValue?: string;
 }) {
   const confirmed = useConfirmFlash(review);
   const interim = useSessionStore((st) => st.interimValue);
@@ -73,6 +79,9 @@ export function VoiceHero({
       }}
     >
       {review ? (
+        // v0.37.0 FB-E(민구) — 큰 행 번호 제거. 방금 입력한 값(reviewValue)을 크게 보인다(§6.1
+        //   확정 숫자). 값이 있으면 [항목명 + 값], 없으면(빈 행/비정상 경로) 소형 검토 라벨로 폴백해
+        //   거대한 숫자가 화면을 지배하지 않게 한다. 행 번호 의미는 aria-label로 보존(스크린리더).
         <div
           data-testid="hero-review-status"
           role="status"
@@ -82,7 +91,14 @@ export function VoiceHero({
           style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'clamp(8px, 1.6vh, 16px)', minWidth: 0, maxWidth: '100%' }}
         >
           <StateBadge kind="check" tone={tone} reduced={reduced} />
-          <HeroPrimaryLine value={String(row)} kind="value" reduced={reduced} live={false} />
+          {reviewValue ? (
+            <>
+              {reviewName ? <HeroNameLine>{reviewName}</HeroNameLine> : null}
+              <HeroPrimaryLine value={reviewValue} kind="value" reduced={reduced} live={false} />
+            </>
+          ) : (
+            <HeroPrimaryLine value={`${row}행 검토`} kind="name" reduced={reduced} live={false} />
+          )}
         </div>
       ) : showConfirm && confirmed ? (
         <>

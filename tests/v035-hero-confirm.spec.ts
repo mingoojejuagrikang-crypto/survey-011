@@ -236,12 +236,12 @@ test('R3-FIX-5 — 행 마지막 음성 컬럼 커밋: ✓ 대신 "N행 완료"(
   const tl = await readHeroTimeline(page);
   console.log('hero timeline(행 마지막 커밋):', JSON.stringify(tl));
 
-  // 스펙 (a): 행 마지막 커밋엔 review(✓ + 행 번호)가 뜬다.
-  //   v0.36.0 코덱스 시안(민구 확정) — review 표시가 "N행 완료" 문자 라벨에서 ✓ 심볼 + 행 번호
-  //   (hero-primary='1')로 바뀌었다(원거리 판독·언어무관 심볼, 의미는 aria-label로 보존). 오라클을
-  //   문자에서 상태+행번호로 교체 — "행 마지막은 confirm이 아니라 review" 메커니즘 검증은 동일.
-  const reviewAt = tl.findIndex((f) => f.st === 'review' && f.prim === '1');
-  expect(reviewAt, '행 마지막 컬럼은 review(✓+행번호 "1")를 낸다').toBeGreaterThanOrEqual(0);
+  // 스펙 (a): 행 마지막 커밋엔 review(✓ + 방금 입력한 값)가 뜬다.
+  //   v0.37.0 FB-E(민구 확정) — review 표시가 대형 **행 번호**('1')에서 **방금 입력한 값**으로
+  //   바뀌었다(hero-primary=행 마지막 음성 컬럼 '산도'의 커밋값 '4.2'). 행 번호 의미는 aria-label로
+  //   보존. 오라클을 행번호→입력값으로 교체 — "행 마지막은 confirm이 아니라 review" 메커니즘은 동일.
+  const reviewAt = tl.findIndex((f) => f.st === 'review' && f.prim === '4.2');
+  expect(reviewAt, '행 마지막 컬럼은 review(✓+입력값 "4.2")를 낸다').toBeGreaterThanOrEqual(0);
 
   // 정밀화(실측): ✓ 확인 플래시가 **아예 안 뜨는 게 아니라**, echo TTS 동안 잠깐 떴다가 advance()가
   //   phase를 'complete'로 올리는 순간 review가 **덮어쓴다**(렌더 우선순위 review > confirm). 즉
