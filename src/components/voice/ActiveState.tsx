@@ -170,6 +170,21 @@ export function ActiveState({
     }
   }, [onCommandHelpClose]);
 
+  // v0.37.0 리뷰#2(민구: 탭 탭 = 시트 닫고 재개) — App.tsx가 탭 전환 직전 overlayCloseSeq를 증가시키면,
+  //   열린 수동 입력 시트/？명령어 도움말을 닫는다(→ onClose→resumeRecognitionForUi로 STT 재개). 시트는
+  //   FB-I bottomInset로 나비를 남겨 탭 가능해졌는데, onClose 없이 전환되면 STT가 정지된 채 남아 발화가
+  //   유실됐다(데이터무결성). 항상 마운트된 ActiveState가 소비 단일 지점. close 함수는 매 렌더 새로
+  //   조립되므로 latest-ref로 잡아 seq만 dep에 둔다(매 렌더 재실행 방지). seenRef로 마운트 초기값엔 무동작.
+  const overlayCloseSeq = useSessionStore((s) => s.overlayCloseSeq);
+  const closeOverlaysRef = useRef<() => void>(() => {});
+  closeOverlaysRef.current = () => { closeManualSheet(); closeCommandHelp(); };
+  const seenOverlayCloseRef = useRef(overlayCloseSeq);
+  useEffect(() => {
+    if (overlayCloseSeq === seenOverlayCloseRef.current) return; // 마운트 초기값 — no-op
+    seenOverlayCloseRef.current = overlayCloseSeq;
+    closeOverlaysRef.current();
+  }, [overlayCloseSeq]);
+
   // ── v0.19.0 W5 — 칩 영역이 스크롤 밖으로 나가면 "지금 어디" 표시가 사라진다.
   //    활성 칩을 ref로 잡아 currentColId/row 변경 시 세로 플로우 안에서 가시영역으로 이동한다.
   const activeChipRef = useRef<HTMLDivElement | null>(null);

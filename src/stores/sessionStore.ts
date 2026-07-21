@@ -79,6 +79,13 @@ interface SessionState {
    *  다시 말해야 하는지 화면에 파란 pill로 띄운다. 일반 안내로 진입하면 null로 해제. anomalyAlert가
    *  떠 있을 땐 렌더하지 않는다(중앙 팝업과 겹침 방지 — VoiceScreen에서 상호배타 처리). */
   modifyIndicator: { name: string; colId: string } | null;
+  /** v0.37.0 리뷰#2(Critical, 민구: 탭 탭 = 시트 닫고 재개) — 탭 전환 시 열린 오버레이(수동 입력
+   *  시트·？명령어 도움말)를 닫으라는 신호(단조 증가 nonce). App.tsx changeTab이 실제 탭 전환 직전
+   *  1 증가시키고, ActiveState(세션 내내 마운트)의 구독 effect가 증가를 감지해 시트/도움말을 닫는다
+   *  (→ onClose→resumeRecognitionForUi로 STT 재개). FB-I가 나비를 상시 탭 가능하게 만든 뒤, 시트가
+   *  열린(STT suspend) 채 탭을 누르면 onClose 없이 전환돼 STT가 정지된 채 남아 발화가 유실되던
+   *  데이터무결성 구멍의 차단축. 단일 작성자=App.tsx, 단일 소비자=ActiveState. */
+  overlayCloseSeq: number;
   /** v0.34.0 A2 — 전역 UI 모달 열림 신호. 'feedback'=개선요청 팝업(App.tsx 탭 인터셉트) 열림.
    *  useVoiceSession의 구독 effect가 열림에 suspendRecognitionForUi('feedback_modal'), 닫힘에
    *  resumeRecognitionForUi를 배선한다(세션 없으면 자연 no-op — 단일 배선·기능 격리).
@@ -128,6 +135,8 @@ interface SessionState {
   pushCommitReceipt: (row: number, colId: string, name: string, value: string) => void;
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
   setUiModalOpen: (m: SessionState['uiModalOpen']) => void;
+  /** v0.37.0 리뷰#2 — 열린 오버레이 닫기 요청(탭 전환 직전). nonce를 1 증가시킨다. */
+  requestOverlayClose: () => void;
   setPersistError: (e: SessionState['persistError']) => void;
   setModifyIndicator: (m: SessionState['modifyIndicator']) => void;
   setReaskReason: (r: SessionState['reaskReason']) => void;
@@ -159,6 +168,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   valueBurst: null,
   commitReceipt: null,
   anomalyAlert: null,
+  overlayCloseSeq: 0,
   uiModalOpen: null,
   persistError: null,
   modifyIndicator: null,
@@ -186,6 +196,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setAnomalyAlert: (anomalyAlert) =>
     set(anomalyAlert ? { anomalyAlert, interimValue: null } : { anomalyAlert }),
   setUiModalOpen: (uiModalOpen) => set({ uiModalOpen }),
+  requestOverlayClose: () => set((s) => ({ overlayCloseSeq: s.overlayCloseSeq + 1 })),
   setPersistError: (persistError) => set({ persistError }),
   setModifyIndicator: (modifyIndicator) => set({ modifyIndicator }),
   // reaskReason의 모든 일반 갱신은 소수 정수부를 함께 정리한다(스테일 방지). 소수 재질문만

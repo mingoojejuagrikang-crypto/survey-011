@@ -98,6 +98,11 @@ export default function App() {
       return;
     }
     if (next !== tab) {
+      // v0.37.0 리뷰#2(민구) — 실제 탭 전환 직전, 음성 화면에 열린 오버레이(수동 입력 시트·？명령어
+      //   도움말)를 먼저 닫는다(→ onClose→STT resume). FB-I로 나비가 상시 탭 가능해진 뒤, 시트가 열린
+      //   채(STT suspend) 탭을 누르면 onClose 없이 전환돼 STT가 정지된 채 남아 발화가 유실되던 구멍의
+      //   차단축. 열린 오버레이가 없으면 ActiveState 구독이 자연 no-op.
+      useSessionStore.getState().requestOverlayClose();
       logger.log({ type: 'command', parsed: 'tab', extra: `tab:${tab}->${next}` });
     }
     setTab(next);
