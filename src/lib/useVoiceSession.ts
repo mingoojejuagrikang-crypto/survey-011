@@ -2792,6 +2792,11 @@ export function useVoiceSession() {
   const commitTouchValue = useCallback(async (row: number, colId: string, value: string) => {
     logCell({ type: 'command', parsed: 'touch_commit', extra: 'touch', text: value, row, colId });
     await persistCellValue(row, colId, value);
+    // v0.37.0 리뷰#1 후속(Codex Medium) — 터치 인라인 커밋도 검토 영수증을 발행한다(음성·수동·이상치
+    //   정정과 동일 패턴). 검토(complete) 중 터치 컬럼을 편집하면 검토 화면이 그 값을 보여야 오표시가
+    //   없다. 커밋/전진 조건 무수정 — 기존 persist 뒤 표시 전용 영수증만 추가.
+    const col = getColById(colId);
+    if (col) useSessionStore.getState().pushCommitReceipt(row, colId, col.name, value);
   }, [persistCellValue]);
 
   /** v0.33.0 항목6 — 칩 터치 수동 입력(ManualValueSheet) 커밋. 음성 없이 값이 서므로:

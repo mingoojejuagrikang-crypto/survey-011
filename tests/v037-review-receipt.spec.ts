@@ -239,3 +239,43 @@ test('(d) 완료행을 "이전"으로 재방문(새 커밋 없음) → 검토는
   await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('1행 완료');
   await expect(page.getByRole('status', { name: '1행 완료, 명령 대기' })).toBeVisible();
 });
+
+// ─── (e) 검토 중 터치 컬럼 인라인 편집 → 검토는 터치값을 보인다(Codex Medium #2, 터치 영수증) ─────
+// 행 완료(voice)는 phase 'complete'로 검토를 띄운다. 그 상태에서 **터치 컬럼**을 인라인 편집하면
+//   commitTouchValue가 커밋 영수증을 발행해 검토가 방금 입력한 터치값으로 갱신돼야 한다. 종전엔
+//   터치 커밋이 영수증을 안 남겨 검토가 앞선 음성값(30.7)을 그대로 오표시했다.
+test('(e) 검토 중 터치 컬럼 인라인 편집 → 검토는 터치값(88)을 보인다(앞 음성값 30.7 오표시 금지)', async ({ page }) => {
+  const settings = {
+    state: {
+      googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+      availableSheets: [], manualMode: false,
+      columns: [
+        { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 1 } },
+        { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+        { id: 'cT', name: '수량', type: 'int', input: 'touch', ttsAnnounce: false, auto: { kind: 'fixed', value: '' }, sampleKey: false },
+      ],
+      tableGenerated: true, totalRows: 1,
+      ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: 'review-receipt-touch', noisyMode: false, preferredVoiceName: '',
+    },
+    version: 3,
+  };
+  await bootAndStart(page, settings);
+  await waitForActiveChip(page, '횡경');
+
+  // 유일 음성 컬럼(횡경) 커밋 → 행 완료(터치 컬럼은 완료 판정에 무관) → 검토 머묾, 값=30.7.
+  await fireStt(page, '30.7');
+  await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
+  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('30.7');
+
+  // 검토 중(phase complete) 터치 칩을 인라인 편집: 칩 탭 → input → 88 → Enter(커밋).
+  const touchChip = page.locator('[data-testid="column-chip"][data-col-name="수량"]');
+  await touchChip.click();
+  const input = touchChip.locator('input');
+  await expect(input).toBeVisible({ timeout: 2000 });
+  await input.fill('88');
+  await input.press('Enter');
+
+  // 핵심: 검토가 방금 커밋된 터치값(88)으로 갱신된다 — 종전엔 앞 음성값 30.7이 그대로 남았다.
+  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('88', { timeout: 4000 });
+  await expect(page.locator('[data-testid="column-chip"][data-col-name="수량"]')).toContainText('88');
+});
