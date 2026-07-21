@@ -161,6 +161,44 @@ for (const vp of [
   });
 }
 
+// v0.37.0 리뷰#2(Critical, 민구: 탭 탭 = 시트 닫고 재개) — FB-I가 나비를 상시 탭 가능하게 만든 뒤의
+//   데이터 무결성 구멍: 수동 입력 시트가 열려(STT hard-suspend) 있는데 탭을 누르면 onClose가 발화하지
+//   않아 STT가 **정지된 채** 화면만 전환돼 이후 발화가 유실됐다. 수정: 탭 탭이 시트를 먼저 닫고(→resume)
+//   전환한다. 오라클(계약): ① 탭 후 시트가 닫힌다 ② 음성 탭 복귀 후 즉시 STT 결과가 커밋된다(유실 없음).
+//   종전 FB-I 테스트의 trial:true 히트테스트(line 159)를 **실제 탭 전환**으로 승격한다.
+async function activeChipName(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+    return chip?.dataset.colName ?? '';
+  });
+}
+
+test('리뷰#2 — 수동 시트 열림 중 탭 탭 → 시트 닫힘 + STT 재개(복귀 후 즉시 커밋, 발화 유실 없음)', async ({ page }) => {
+  await boot(page);
+  // 활성 칩(측정항목01)에서 수동 입력 시트 open → STT hard-suspend.
+  await page.locator('[data-testid="column-chip"][data-active="true"]').click();
+  const sheet = page.locator('[data-testid="manual-value-sheet"]');
+  await expect(sheet).toBeVisible({ timeout: 3000 });
+  expect(await activeChipName(page), '커밋 전 활성 칩').toContain('측정항목01');
+
+  // 시트가 열린 채 **실제** 데이터 탭으로 전환(trial 아님).
+  await page.locator('[data-testid="tab-data"]').click();
+  await page.waitForTimeout(300);
+  // ① 시트가 닫혔다(숨겨진 채 남지 않음 — 복귀 시 유령 시트 방지 + resume 배선 발화).
+  await expect(sheet).toHaveCount(0, { timeout: 3000 });
+
+  // 음성 탭 복귀.
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(300);
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
+
+  // ② STT 재개 증명: 즉시 음성 결과가 커밋돼 활성 칩이 다음 항목으로 전진한다(suspend된 채였다면 유실).
+  await fireStt(page, '42.0');
+  await expect
+    .poll(async () => activeChipName(page), 'STT 재개 → 커밋 후 활성 칩 전진(측정항목02)')
+    .toContain('측정항목02');
+});
+
 test('FB-B — 뒤쪽 음성 컬럼으로 진행하면 활성 칩이 가시영역으로 자동 스크롤', async ({ page }) => {
   await boot(page);
   const grid = page.locator('[data-testid="voice-chip-grid"]');
