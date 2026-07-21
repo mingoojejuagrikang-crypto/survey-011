@@ -248,6 +248,27 @@ async function setupAndStartVoice(page: Page) {
   await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 }
 
+// ── ⑤ v0.37.0 FB-A+H — 엣지글로우 full-bleed(물리 화면 가장자리까지, safe-area 패딩 탈출) ──
+//   종전 absolute 글로우는 App 루트의 safe-area 패딩(--sat:62/--sab:34) 안쪽 VoiceScreen 사각형에
+//   갇혀 상단 레터박스가 생겼다. position:fixed inset:0으로 바꿔 뷰포트 전체(0,0)~(vw,vh)를 덮어야
+//   한다 — 이 테스트는 safe-area가 주입된 iphone17 프로젝트에서 글로우가 (0,0)에서 시작함을 단언한다.
+test('입력탭 — 엣지글로우가 safe-area를 넘어 물리 화면 가장자리까지 full-bleed', async ({ page }) => {
+  await setupAndStartVoice(page);
+  const vp = page.viewportSize()!;
+  const glow = page.locator('[data-testid="edge-glow"]');
+  await expect(glow).toBeVisible();
+  const box = await glow.boundingBox();
+  expect(box, 'edge-glow boundingBox').not.toBeNull();
+  const b = box!;
+  const EPS = 1;
+  // 상단이 노치(--sat=62) 아래로 밀려나지 않고 물리 상단(0)에서 시작한다(레터박스 해소의 핵심).
+  expect(b.y, `glow top(${b.y})은 safe-area(62)에 밀리지 않고 물리 상단 0`).toBeLessThanOrEqual(EPS);
+  expect(b.x, `glow left(${b.x})은 물리 좌측 0`).toBeLessThanOrEqual(EPS);
+  // 뷰포트 전체를 덮는다(하단 홈바 영역·탭바 뒤까지).
+  expect(b.width, `glow width(${b.width}) ≈ 뷰포트 폭(${vp.width})`).toBeGreaterThanOrEqual(vp.width - EPS);
+  expect(b.y + b.height, `glow bottom(${b.y + b.height}) ≈ 뷰포트 높이(${vp.height})`).toBeGreaterThanOrEqual(vp.height - EPS);
+});
+
 test('입력탭 — 명령어 도움말 팝업이 safe-area 안에 있고 하단 닫기가 잘리지 않음', async ({ page }) => {
   await setupAndStartVoice(page);
 

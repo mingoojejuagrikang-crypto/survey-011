@@ -9,7 +9,9 @@ import { useAudioLevelVar } from './useAudioLevelVar';
  *   - 상태별 모션 언어: 듣는 중 1.75s 순환(코어 호흡 + 가장자리 스윕), 경고 0.7s 빠른 흐름,
  *     일시정지 2.4s 느린 호흡(스윕 없음), 값 확인 1회 확산(edge-confirm) 후 안정.
  *
- *  배치: VoiceScreen 루트(position:relative) 직하 absolute inset:0, pointer-events:none. zIndex 54.
+ *  배치(v0.37.0 FB-A+H): **position:fixed inset:0**으로 뷰포트 full-bleed(물리 화면 가장자리까지).
+ *  마운트는 VoiceScreen에 그대로 둔다(레벨 getter가 useVoiceSession 인스턴스에 묶여 있어 상향 불가).
+ *  pointer-events:none, zIndex 54(팝업/시트 55-60 아래).
  *
  *  성능 규칙(§5.3): 큰 box-shadow는 톤별 정적 레이어로 1회 페인트하고 opacity 크로스페이드로만
  *  전환한다. 매 프레임 갱신은 wrapper opacity(--voice-level, rAF)와 keyframe의 opacity/transform뿐.
@@ -68,7 +70,12 @@ export function EdgeGlow({
       data-testid="edge-glow"
       data-tone={tone}
       aria-hidden
-      style={{ position: 'absolute', inset: 0, zIndex: 54, pointerEvents: 'none', overflow: 'hidden', opacity }}
+      // v0.37.0 FB-A+H(민구) — **full-bleed**: position:fixed inset:0으로 뷰포트(물리 화면 가장자리)를
+      //   덮는다. 종전 absolute는 App 루트의 safe-area 패딩 안쪽 VoiceScreen 사각형에 갇혀 상단 레터박스가
+      //   생기고 탭바 뒤까지 번지지 않았다. fixed는 그 패딩을 벗어나 화면 끝까지 안쪽 글로우가 닿는다
+      //   (조상에 transform/filter/backdrop-filter 없음 → 컨테이닝 블록 = 뷰포트, 확인함). pointer-events
+      //   :none이라 위를 덮어도 탭바/버튼 터치는 통과(B7 검증).
+      style={{ position: 'fixed', inset: 0, zIndex: 54, pointerEvents: 'none', overflow: 'hidden', opacity }}
     >
       {/* 호흡 레이어 — cadence는 톤별 duration. wrapper의 레벨 opacity와 곱해진다. */}
       <div
