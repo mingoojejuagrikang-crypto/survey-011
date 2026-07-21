@@ -128,9 +128,6 @@ export function ActiveState({
   //    예외는 completing(phase 'complete' — 완료행 검토 대기/종료 대기/행 완료 안내)의 정적 라벨
   //    "N행 완료 — 명령 대기"다. 정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(불변).
   const currentCol = voiceCols.find((c) => c.id === currentColId) || voiceCols[0];
-  // v0.37.0 FB-E — 검토(complete) 표시가 보여줄 '방금 입력한 값'의 대상 컬럼 = 행의 마지막 음성
-  //   컬럼(완료 행은 모든 음성 컬럼이 채워져 있어 그 값이 현재 행의 실제 데이터로 항상 유효하다).
-  const reviewVoiceCol = voiceCols[voiceCols.length - 1];
 
   // 직전값 캡처 — store에 prevValue가 없으므로 view 레이어 ref로 정정 직전의 값을 기억한다.
   //   매 렌더에서 필드별 "마지막 비어있지 않은 값"을 추적해 둔다(재프롬프트가 셀을 ''로 비우기
@@ -381,10 +378,6 @@ export function ActiveState({
             row={row}
             tone={tone}
             reaskReason={completing ? null : reaskReason}
-            // v0.37.0 FB-E(민구) — 검토 표시의 '방금 입력한 값'. 행의 **마지막 음성 컬럼** 실제
-            //   커밋값(rowValues)에서 파생 — valueBurst는 네비게이션으로 stale 가능하므로 쓰지 않는다.
-            reviewName={reviewVoiceCol?.name}
-            reviewValue={reviewVoiceCol ? (rowValues[reviewVoiceCol.id] ?? '') : ''}
           />
         ) : null}
       </div>

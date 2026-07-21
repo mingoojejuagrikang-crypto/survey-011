@@ -35,7 +35,7 @@ function prefersReducedMotion(): boolean {
 }
 
 export function VoiceHero({
-  col, review, row, tone, reaskReason, reviewName, reviewValue,
+  col, review, row, tone, reaskReason,
 }: {
   col: Column;
   /** true면 phase 'complete'의 검토 표시(✓ + 방금 입력한 값). 확인 플래시보다 우선. */
@@ -45,18 +45,17 @@ export function VoiceHero({
   tone: GlowTone;
   /** 대기(listening)일 때만 비-null. 재질문 사유/소수 재질문 프롬프트(TTS 글자 일치). */
   reaskReason: ReaskReason;
-  /** v0.37.0 FB-E(민구) — 검토(complete) 표시에서 큰 **행 번호** 대신 방금 입력한 값을 크게 보인다.
-   *  값의 출처는 현재 행의 **마지막 음성 컬럼 실제 커밋값**(ActiveState가 rowValues에서 파생) —
-   *  valueBurst(네비게이션으로 stale 가능) 대신 행 자체 데이터라 검토 진입 경로와 무관하게 정확하다. */
-  reviewName?: string;
-  reviewValue?: string;
 }) {
   const confirmed = useConfirmFlash(review);
+  // v0.37.0 리뷰 #2(Codex, 민구 Option 1) — 검토 표시의 '방금 입력한 값'을 **실제 방금 커밋된 셀**
+  //   (valueBurst 영수증)에서 파생한다. 종전 voiceCols[last]는 advance가 채워진 뒷 컬럼을 건너뛰고
+  //   완료할 때(부분작성 행) 방금 커밋한 앞 셀이 아니라 뒷 셀의 옛 값을 "방금 입력한 값"으로 오표시했다.
+  const reviewCommit = useReviewCommit(review, row);
   const interim = useSessionStore((st) => st.interimValue);
 
   // 렌더 우선순위(명시적 — 타이머 레이스 무관): review > confirm > listening.
   const showConfirm = !review && confirmed !== null;
-  const fitRef = useFitScale<HTMLDivElement>([review, showConfirm, col.name, row, reaskReason, confirmed?.value, interim]);
+  const fitRef = useFitScale<HTMLDivElement>([review, showConfirm, col.name, row, reaskReason, confirmed?.value, reviewCommit?.value, interim]);
   const reduced = prefersReducedMotion();
 
   return (
@@ -79,9 +78,10 @@ export function VoiceHero({
       }}
     >
       {review ? (
-        // v0.37.0 FB-E(민구) — 큰 행 번호 제거. 방금 입력한 값(reviewValue)을 크게 보인다(§6.1
-        //   확정 숫자). 값이 있으면 [항목명 + 값], 없으면(빈 행/비정상 경로) 소형 검토 라벨로 폴백해
-        //   거대한 숫자가 화면을 지배하지 않게 한다. 행 번호 의미는 aria-label로 보존(스크린리더).
+        // v0.37.0 FB-E(민구) + 리뷰 #2(민구 Option 1) — 검토 표시. 방금 커밋된 셀(reviewCommit)이 있으면
+        //   [항목명 + 값]을 크게 보인다(§6.1 확정 숫자). '이전'으로 완료행을 재방문(새 커밋 없음)했거나
+        //   커밋 행에서 벗어난 검토는 stale 값 대신 중립 라벨 "N행 완료"로 폴백한다(값 오표시/오해 방지).
+        //   행 번호 의미는 aria-label로 보존(스크린리더).
         <div
           data-testid="hero-review-status"
           role="status"
@@ -91,13 +91,13 @@ export function VoiceHero({
           style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'clamp(8px, 1.6vh, 16px)', minWidth: 0, maxWidth: '100%' }}
         >
           <StateBadge kind="check" tone={tone} reduced={reduced} />
-          {reviewValue ? (
+          {reviewCommit ? (
             <>
-              {reviewName ? <HeroNameLine>{reviewName}</HeroNameLine> : null}
-              <HeroPrimaryLine value={reviewValue} kind="value" reduced={reduced} live={false} />
+              <HeroNameLine>{reviewCommit.name}</HeroNameLine>
+              <HeroPrimaryLine value={reviewCommit.value} kind="value" reduced={reduced} live={false} />
             </>
           ) : (
-            <HeroPrimaryLine value={`${row}행 검토`} kind="name" reduced={reduced} live={false} />
+            <HeroPrimaryLine value={`${row}행 완료`} kind="name" reduced={reduced} live={false} />
           )}
         </div>
       ) : showConfirm && confirmed ? (
@@ -135,6 +135,36 @@ function useConfirmFlash(review: boolean): { name: string; value: string } | nul
     return () => window.clearTimeout(t); // seq 갱신·언마운트마다 정리(dangling timer 방지)
   }, [burst, review]);
   return confirmed;
+}
+
+/** v0.37.0 리뷰 #2(민구 Option 1) — 검토(complete) 표시가 보여줄 '방금 커밋된 셀'을 valueBurst
+ *  영수증에서 파생한다(§10 읽기 전용 — store/음성 로직 무수정, 표시 계층에서 seq/행으로만 판별).
+ *
+ *  fresh-commit(값 표시) vs navigation-revisit(중립 라벨) 판별:
+ *   - valueBurst.seq가 바뀌면 = 실제 커밋 발생 → 그 시점의 행(row prop = 커밋 셀의 activeRow)과 함께
+ *     'fresh'로 보관한다. 커밋 직후 완료(Path A)·마지막 행 완료(Path C)가 이 창으로 들어온다.
+ *   - 커밋 행을 벗어나면(row 변경) fresh 창을 닫는다 → 이후 '이전'/점프로 완료행을 재방문한 검토
+ *     (enterReviewWait, 새 burst 없음)는 stale 값 대신 null(중립 "N행 완료")을 낸다.
+ *  useConfirmFlash와 seq 추적을 **공유하지 않는다**(독립 seenSeqRef) — 확인 플래시가 burst를 소비해도
+ *  검토 파생이 같은 burst를 독립적으로 판별한다(커플링 회피, 민구 지시). */
+function useReviewCommit(review: boolean, row: number): { name: string; value: string } | null {
+  const burst = useSessionStore((st) => st.valueBurst);
+  const [reviewVal, setReviewVal] = useState<{ name: string; value: string } | null>(null);
+  const seenSeqRef = useRef<number | null>(null);
+  const freshRef = useRef<{ value: { name: string; value: string }; row: number } | null>(null);
+  useEffect(() => {
+    const seq = burst?.seq ?? 0;
+    if (seenSeqRef.current === null) { seenSeqRef.current = seq; return; } // 마운트: 과거 burst 재생 안 함
+    // 새 커밋(seq 변화) = 방금 커밋 영수증. 커밋 시점의 행과 함께 fresh 창을 연다.
+    if (seq !== seenSeqRef.current && burst) {
+      seenSeqRef.current = seq;
+      freshRef.current = { value: { name: burst.name, value: burst.value }, row };
+    }
+    // 커밋 행에서 벗어나면(다른 행으로 이동/재방문) fresh 창을 닫는다 → 재방문 검토는 중립.
+    if (freshRef.current && freshRef.current.row !== row) freshRef.current = null;
+    setReviewVal(review && freshRef.current ? freshRef.current.value : null);
+  }, [burst, review, row]);
+  return reviewVal;
 }
 
 /** 상태 심볼 원(76~82px, 5px stroke — 코덱스 §6.1). mic=듣는 중, check=확인/검토. 원거리(2~3m)

@@ -263,3 +263,48 @@ test('R3-FIX-5 — 행 마지막 음성 컬럼 커밋: ✓ 대신 "N행 완료"(
   expect(tl.some((f) => f.st === 'listening' && f.prim === '당도'), '다음 행 대기로 복귀').toBe(true);
   console.log('✓ 행 마지막 커밋: review "1행 완료" (✓ 아님 — 확정 스펙 고정)');
 });
+
+// v0.37.0 리뷰 #2(Codex, 민구 Option 1) — skip-완료 검토 오표시 회귀 ─────────────────────────
+//   완료 행의 **앞** 음성 컬럼(당도)을 '수정'으로 다시 커밋하면, advance()가 이미 채워진 **뒤** 컬럼
+//   (산도)을 건너뛰고 행을 완료한다(useVoiceSession advance skip). 이때 검토(complete) 표시는 방금
+//   커밋된 셀 = **당도**의 새 값을 보여야 한다. 종전 코드는 검토값을 무조건 voiceCols[last](산도)에서
+//   읽어, 방금 만진 앞 셀이 아니라 **뒤 셀의 옛 값**을 "방금 입력한 값"으로 오표시했다.
+//   이 테스트는 valueBurst(방금 커밋 영수증) 파생으로 고친 그 오표시를 박제한다.
+//   ⚠️ §10 무침해: 표시 계층(VoiceHero useReviewCommit)만 바뀌었다 — advance/commit/TTS 로직 불변.
+test('리뷰#2 — skip-완료 검토는 방금 커밋된 앞 셀(당도)을 보인다(뒤 셀 산도 옛값 오표시 금지)', async ({ page }) => {
+  await boot(page);
+  await startSession(page);
+
+  // 대기: 당도(row1, awaiting=당도).
+  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('당도', { timeout: 4000 });
+
+  // 뒤 컬럼 **산도**를 수동 키패드로 먼저 채운다. awaiting(당도)≠산도라 commitManualValue는
+  //   advance하지 않는다 → 포인터는 당도에 그대로, 산도(4.2)만 채워진 부분작성 행이 만들어진다.
+  await page.locator('[data-testid="column-chip"][data-col-name="산도"]').click();
+  await expect(page.locator('[data-testid="manual-value-sheet"]')).toBeVisible({ timeout: 3000 });
+  for (const k of ['4', '.', '2']) await page.locator(`[data-testid="manual-key-${k}"]`).click();
+  await page.locator('[data-testid="manual-commit"]').click();
+  await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="column-chip"][data-col-name="산도"]')).toContainText('4.2');
+  await expect(page.locator('[data-testid="hero-primary"]'), '포인터는 여전히 당도').toHaveText('당도');
+
+  // 이제 **당도**를 음성 커밋 → advance가 이미 채워진 산도(idx1)를 건너뛰고 row1 완료(skip) → 검토.
+  await recordHeroTimeline(page);
+  await fireStt(page, '30.7');
+  await page.waitForTimeout(2500);
+  const tl = await readHeroTimeline(page);
+  console.log('hero timeline(skip 완료):', JSON.stringify(tl));
+
+  // 핵심: 검토는 **방금 커밋된 당도 '30.7'** 를 보인다(뒤 셀 산도가 아니라).
+  expect(
+    tl.some((f) => f.st === 'review' && f.prim === '30.7'),
+    '검토는 방금 커밋된 앞 셀 당도(30.7)를 보인다',
+  ).toBe(true);
+  // 회귀 가드: 건너뛴 뒤 셀 산도(4.2)의 옛 값을 검토가 "방금 입력한 값"으로 오표시하면 안 된다
+  //   (종전 voiceCols[last] 파생의 버그 — 이 단언이 그 회귀를 박제한다).
+  expect(
+    tl.some((f) => f.st === 'review' && f.prim === '4.2'),
+    '검토가 건너뛴 뒤 셀 산도(4.2)의 옛 값을 오표시하면 안 된다',
+  ).toBe(false);
+  console.log('✓ skip-완료 검토: 당도 30.7(방금 커밋) — 산도 4.2 오표시 없음');
+});
