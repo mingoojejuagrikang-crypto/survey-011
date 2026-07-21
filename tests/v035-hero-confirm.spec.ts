@@ -271,8 +271,40 @@ test('R3-FIX-5 — 행 마지막 음성 컬럼 커밋: ✓ 대신 "N행 완료"(
 //   읽어, 방금 만진 앞 셀이 아니라 **뒤 셀의 옛 값**을 "방금 입력한 값"으로 오표시했다.
 //   이 테스트는 valueBurst(방금 커밋 영수증) 파생으로 고친 그 오표시를 박제한다.
 //   ⚠️ §10 무침해: 표시 계층(VoiceHero useReviewCommit)만 바뀌었다 — advance/commit/TTS 로직 불변.
+// 1행 전용 부트 — skip-완료가 **마지막 행**이라 검토(review)가 announceEndReached로 **머문다**
+//   (2행이면 다음 행으로 즉시 advance해 검토가 200ms 전이라 프레임 레이스). 머무는 검토를 안정적으로
+//   단언하기 위해 seq 1..1(1행) 컬럼 + totalRows:1로 부트한다(다른 테스트의 공용 SETTINGS 불변).
+async function bootOneRow(page: Page) {
+  await page.setViewportSize(PHONE_402);
+  await page.route('**://sheets.googleapis.com/**', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ json: { values: [HEADERS, ['2026-01-01', '1', '', '']] } });
+      return;
+    }
+    await route.fulfill({ status: 404, body: 'unexpected' });
+  });
+  await page.addInitScript(MOCK_INIT_SCRIPT);
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  const cols1 = COLUMNS.map((c) => (c.id === 'c0' ? { ...c, auto: { kind: 'seq', from: 1, to: 1 } } : c));
+  const settings1 = { ...SETTINGS, state: { ...SETTINGS.state, columns: cols1, totalRows: 1, sessionAutoLabel: 'v035-skip-1row' } };
+  await page.evaluate(
+    ({ settings, storeKey }) => {
+      localStorage.clear();
+      localStorage.setItem('gs10_google_token', JSON.stringify({
+        access_token: 'test-token', expires_at: Date.now() + 3600_000, email: 'tester@example.com',
+      }));
+      localStorage.setItem(storeKey, JSON.stringify(settings));
+    },
+    { settings: settings1, storeKey: STORE_KEY },
+  );
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(500);
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(200);
+}
+
 test('리뷰#2 — skip-완료 검토는 방금 커밋된 앞 셀(당도)을 보인다(뒤 셀 산도 옛값 오표시 금지)', async ({ page }) => {
-  await boot(page);
+  await bootOneRow(page);
   await startSession(page);
 
   // 대기: 당도(row1, awaiting=당도).
@@ -288,23 +320,16 @@ test('리뷰#2 — skip-완료 검토는 방금 커밋된 앞 셀(당도)을 보
   await expect(page.locator('[data-testid="column-chip"][data-col-name="산도"]')).toContainText('4.2');
   await expect(page.locator('[data-testid="hero-primary"]'), '포인터는 여전히 당도').toHaveText('당도');
 
-  // 이제 **당도**를 음성 커밋 → advance가 이미 채워진 산도(idx1)를 건너뛰고 row1 완료(skip) → 검토.
-  await recordHeroTimeline(page);
+  // 이제 **당도**를 음성 커밋 → advance가 이미 채워진 산도(idx1)를 건너뛰고 row1 완료(skip). 1행이라
+  //   다음 미완료 행이 없어 announceEndReached로 **검토가 머문다** → 안정적으로 단언한다.
   await fireStt(page, '30.7');
-  await page.waitForTimeout(2500);
-  const tl = await readHeroTimeline(page);
-  console.log('hero timeline(skip 완료):', JSON.stringify(tl));
+  await expect(page.getByRole('status', { name: '1행 완료, 명령 대기' })).toBeVisible({ timeout: 4000 });
 
-  // 핵심: 검토는 **방금 커밋된 당도 '30.7'** 를 보인다(뒤 셀 산도가 아니라).
-  expect(
-    tl.some((f) => f.st === 'review' && f.prim === '30.7'),
-    '검토는 방금 커밋된 앞 셀 당도(30.7)를 보인다',
-  ).toBe(true);
-  // 회귀 가드: 건너뛴 뒤 셀 산도(4.2)의 옛 값을 검토가 "방금 입력한 값"으로 오표시하면 안 된다
-  //   (종전 voiceCols[last] 파생의 버그 — 이 단언이 그 회귀를 박제한다).
-  expect(
-    tl.some((f) => f.st === 'review' && f.prim === '4.2'),
-    '검토가 건너뛴 뒤 셀 산도(4.2)의 옛 값을 오표시하면 안 된다',
-  ).toBe(false);
+  // 핵심: 검토는 **방금 커밋된 당도 '30.7'**(hero-primary=value)을 보인다. 종전 voiceCols[last] 파생은
+  //   여기서 뒤 셀 산도의 옛 값 '4.2'를 오표시했다 — 이 단언이 그 회귀를 박제한다(30.7 고정 = 4.2 아님).
+  await expect(
+    page.locator('[data-testid="hero-primary"]'),
+    '검토는 방금 커밋된 앞 셀 당도(30.7)를 보인다 — 건너뛴 산도(4.2)가 아니다',
+  ).toHaveText('30.7');
   console.log('✓ skip-완료 검토: 당도 30.7(방금 커밋) — 산도 4.2 오표시 없음');
 });
