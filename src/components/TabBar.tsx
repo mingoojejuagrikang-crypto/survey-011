@@ -33,9 +33,18 @@ export function TabBar({ tab, setTab }: Props) {
     if (!el) return;
     const publish = () => document.documentElement.style.setProperty('--nav-h', `${el.offsetHeight}px`);
     publish();
-    const ro = new ResizeObserver(publish);
-    ro.observe(el);
-    return () => ro.disconnect();
+    // v0.37.0 리뷰 #1(Codex) — 구형 WebView(ResizeObserver 미탑재)에서 앱 부트 크래시 방지.
+    //   TabBar는 모든 화면에 마운트되므로 여기서 던지면 전 화면이 죽는다(PRINCIPLES §6 iOS Safari,
+    //   v035-r3-fixes P2 "Observer 둘 다 없어도 크래시 없이 렌더" 계약). 리포 내 다른 RO 사용처
+    //   (useFitScale·useChipFlowFit)와 동일하게 feature-detect하고, RO 미가용 시 window resize로 폴백
+    //   추종한다(회전·safe-area 변화 재수렴). 초기 publish()는 위에서 이미 첫 페인트 값을 발행했다.
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(publish) : null;
+    ro?.observe(el);
+    if (!ro) window.addEventListener('resize', publish);
+    return () => {
+      ro?.disconnect();
+      if (!ro) window.removeEventListener('resize', publish);
+    };
   }, []);
   return (
     <div
