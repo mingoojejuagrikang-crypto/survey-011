@@ -600,6 +600,27 @@ test('FB-A — 듣는 중(green): traveling sweep 바 4개가 edge-sweep 4엣지
   console.log('✓ FB-A: 듣는 중 4엣지 sweep 흐름 + paused 제거');
 });
 
+// ─── v0.37.0 FB-I — 알람 영역 격리(인접 영역 침범 없음) ───────────────────────────────────────
+test('FB-I — 이상치 알람 카드가 흡수영역에 격리 — 파형/컨트롤 영역을 침범하지 않는다', async ({ page }) => {
+  await boot(page);
+  await startSession(page);
+
+  await fireStt(page, '120.5', 700);
+  const card = page.locator('[data-testid="anomaly-alert"]');
+  await expect(card).toBeVisible({ timeout: 3000 });
+
+  const cardBox = await card.boundingBox();
+  const waveBox = await page.locator('[data-testid="voice-waveform"]').boundingBox();
+  // 알람 카드는 파형 밴드(row3) 위(흡수영역 row2)에 머문다 — 파형/컨트롤을 덮지 않는다(격리).
+  expect(cardBox!.y + cardBox!.height, '알람 카드 하단이 파형 밴드 위').toBeLessThanOrEqual(waveBox!.y + 2);
+  // 컨트롤바(중앙 일시정지 버튼)는 알람과 겹치지 않고 정상 조작 가능(격리 = 컨트롤 접근 유지).
+  const pause = page.locator('button[title="일시정지"]');
+  const pauseBox = await pause.boundingBox();
+  expect(pauseBox!.y, '컨트롤바가 알람 카드보다 아래(비침범)').toBeGreaterThanOrEqual(cardBox!.y + cardBox!.height - 2);
+  await pause.click({ trial: true }); // 알람 중에도 컨트롤 히트테스트 가능
+  console.log(`✓ FB-I 격리: card.bottom=${Math.round(cardBox!.y + cardBox!.height)} wave.y=${Math.round(waveBox!.y)} pause.y=${Math.round(pauseBox!.y)}`);
+});
+
 // ─── v0.37.0 FB-F — 알람 중 미확정 인식값 스트립(카드 아래·파형 위, 실제 인식값만) ─────────────
 test('FB-F — 이상치 알람 중 정정 발화 interim이 카드 아래·파형 위 스트립에 실제 인식값으로 표시', async ({ page }) => {
   await boot(page);
