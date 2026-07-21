@@ -13,7 +13,12 @@ export function CommandHelpPopup({ onClose }: { onClose: () => void }) {
     <div
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, zIndex: 50,
+        // v0.37.0 리뷰 #4(Codex) — 모달 대역(≥55)으로 올려 TabBar(z-54) 위에 뜨게 한다. 종전 z-50은
+        //   나비 아래라, 도움말 모달이 열린 채 탭을 누르면 모달을 닫지 않고 화면만 바뀌어
+        //   onCommandHelpClose가 안 불려 STT가 suspend된 채 방치됐다(다른 모달 — ExitConfirmDialog·
+        //   ManualValueSheet z-55와 동일 대역). 나비를 항상 덮는 유일 예외는 수동 입력 시트(bottomInset
+        //   var(--nav-h)로 나비를 남김) — 그건 z-55여도 나비를 자르지 않게 별도 격리돼 있다.
+        position: 'fixed', inset: 0, zIndex: 55,
         background: 'rgba(0,0,0,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         // v0.33.0 safe-area — fixed 오버레이라 App 셸 패딩 밖. 노치/홈인디케이터 침범 방지
