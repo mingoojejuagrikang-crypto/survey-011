@@ -564,3 +564,28 @@ test('R1-4 — 일시정지: 파형 rAF 실중지(막대 정지), 재시작 시 
   expect(await waveMoved(page, 400), '재시작 후 막대 이동 재개').toBe(true);
   console.log('✓ R1-4: paused=정지 → resumed=이동');
 });
+
+// ─── v0.37.0 FB-F — 알람 중 미확정 인식값 스트립(카드 아래·파형 위, 실제 인식값만) ─────────────
+test('FB-F — 이상치 알람 중 정정 발화 interim이 카드 아래·파형 위 스트립에 실제 인식값으로 표시', async ({ page }) => {
+  await boot(page);
+  await startSession(page);
+
+  // 직전 100.0 → 120.5 = increase 알람.
+  await fireStt(page, '120.5', 700);
+  const card = page.locator('[data-testid="anomaly-alert"]');
+  await expect(card).toBeVisible({ timeout: 3000 });
+
+  // 정정 재발화 interim → 미확정 인식값 스트립. §10: 표시값은 STT 원문(interimValue)이지 lastTts/항목명이 아님.
+  await fireSttInterim(page, '110.0', 150);
+  const strip = page.locator('[data-testid="interim-value"]');
+  await expect(strip).toBeVisible({ timeout: 2000 });
+  await expect(strip, '스트립은 실제 인식 원문을 그대로 보인다').toHaveText('110.0');
+
+  // 위치: 알람 카드 아래 + 파형 위.
+  const cardBox = await card.boundingBox();
+  const stripBox = await strip.boundingBox();
+  const waveBox = await page.locator('[data-testid="voice-waveform"]').boundingBox();
+  expect(stripBox!.y, '스트립은 알람 카드 상단보다 아래').toBeGreaterThanOrEqual(cardBox!.y);
+  expect(stripBox!.y, '스트립은 파형 밴드보다 위').toBeLessThanOrEqual(waveBox!.y + 2);
+  console.log(`✓ FB-F: 알람 중 인식 스트립 '110.0' (card.y=${Math.round(cardBox!.y)} strip.y=${Math.round(stripBox!.y)} wave.y=${Math.round(waveBox!.y)})`);
+});

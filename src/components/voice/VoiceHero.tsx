@@ -239,6 +239,43 @@ function HeroPrimaryLine({
   );
 }
 
+/** v0.37.0 FB-F(민구) — 이상치/범위 알람 카드 **아래**, 파형 **위**에 뜨는 미확정 인식값 좁은 스트립.
+ *  알람 응답 대기 중(값 정정 발화) 사용자가 "지금 이렇게 들렸다"를 카드를 가리지 않고 확인한다.
+ *
+ *  ⚠️ §10 시각·청각 일치 — 여기 표시값은 **오직 실제 인식 원문**(store `interimValue`, handleInterim의
+ *  STT 원문 trim)만 쓴다. `lastTts`나 항목명으로 추정하지 않는다(그건 들은 문장과 어긋날 수 있다).
+ *  interim이 없으면 null(알람 카드만). ActiveState를 매 interim마다 리렌더하지 않도록 이 컴포넌트가
+ *  interimValue를 **자체 구독**한다(칩·컨트롤 리렌더 회피). */
+export function AlarmInterimStrip() {
+  const interim = useSessionStore((st) => st.interimValue);
+  if (!interim) return null;
+  return (
+    <div
+      data-testid="interim-value"
+      aria-label={`인식 중: ${interim}`}
+      style={{
+        flexShrink: 0,
+        marginTop: 8,
+        maxWidth: '100%',
+        padding: '4px 14px',
+        borderRadius: 999,
+        border: `1px solid ${T.lineStrong}`,
+        background: T.cardAlt,
+        color: T.text,
+        fontSize: 22,
+        fontWeight: 900,
+        lineHeight: 1.15,
+        letterSpacing: -0.5,
+        textAlign: 'center',
+        wordBreak: 'keep-all',
+        overflowWrap: 'anywhere',
+      }}
+    >
+      {interim}
+    </div>
+  );
+}
+
 /** 미확정 인식 원문(FB#2) — "지금 이렇게 들었다(틀렸을 수 있음)"를 STT 원문 그대로 크게(56~72px).
  *  확정값(✓ + tabular 100px)과는 심볼(mic)·크기·흐린 톤으로 구분된다. */
 function InterimLine({ value }: { value: string }) {

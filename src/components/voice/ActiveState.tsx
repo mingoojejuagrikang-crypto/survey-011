@@ -11,7 +11,7 @@ import { PausedCard } from './PausedCard';
 import { ModifyIndicatorPill } from './ModifyIndicatorPill';
 import { type ReaskReason } from './ReaskCue';
 import { type GlowTone } from './EdgeGlow';
-import { VoiceHero } from './VoiceHero';
+import { VoiceHero, AlarmInterimStrip } from './VoiceHero';
 import { LiveListenBand } from './LiveListenBand';
 import { ColumnChip } from './ColumnChip';
 import { useChipFlowFit } from './useChipFlowFit';
@@ -344,19 +344,24 @@ export function ActiveState({
           //   취소하면 팝업이 그대로 다시 나타나고 STT 게이트도 살아 있다 — [수정] 후 취소로 미확인
           //   이상값이 확정된 것처럼 남던 누수의 차단축. 해소는 성공적인 재커밋(advance→announceField)
           //   또는 [확인]뿐.
-          <AnomalyAlertPopup
-            a={sess.anomalyAlert}
-            onConfirm={sess.anomalyAlert.manualHold ? onManualAnomalyConfirm : onAnomalyConfirm}
-            onModify={
-              sess.anomalyAlert.manualHold
-                ? () => {
-                    const holdCol = columns.find((c) => c.id === sess.anomalyAlert?.colId);
-                    onManualAnomalyModify(); // 팝업 해제(+로그) — colId 캡처 후 호출
-                    if (holdCol) openManualSheet(holdCol);
-                  }
-                : onAnomalyModify
-            }
-          />
+          // v0.37.0 FB-F(민구) — 알람 카드 아래·파형 위에 미확정 인식값 스트립(정정 발화 확인).
+          //   AlarmInterimStrip이 interimValue를 자체 구독(§10 실제 인식 원문만, lastTts 금지).
+          <>
+            <AnomalyAlertPopup
+              a={sess.anomalyAlert}
+              onConfirm={sess.anomalyAlert.manualHold ? onManualAnomalyConfirm : onAnomalyConfirm}
+              onModify={
+                sess.anomalyAlert.manualHold
+                  ? () => {
+                      const holdCol = columns.find((c) => c.id === sess.anomalyAlert?.colId);
+                      onManualAnomalyModify(); // 팝업 해제(+로그) — colId 캡처 후 호출
+                      if (holdCol) openManualSheet(holdCol);
+                    }
+                  : onAnomalyModify
+              }
+            />
+            <AlarmInterimStrip />
+          </>
         ) : sess.modifyIndicator ? (
           // 수정 재안내 카드 — 직전값(취소선)→새값.
           <ModifyIndicatorPill
