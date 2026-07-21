@@ -565,6 +565,41 @@ test('R1-4 — 일시정지: 파형 rAF 실중지(막대 정지), 재시작 시 
   console.log('✓ R1-4: paused=정지 → resumed=이동');
 });
 
+// ─── v0.37.0 FB-A — 듣는 중 traveling sweep(4엣지 순환) 실제 적용 확인 ────────────────────────
+/** edge-glow 내부에서 edge-sweep-* 애니메이션을 가진 요소들의 animationName 목록. */
+async function sweepAnims(page: Page): Promise<string[]> {
+  return page.locator('[data-testid="edge-glow"]').evaluate((el) =>
+    Array.from(el.querySelectorAll('div'))
+      .map((d) => getComputedStyle(d as HTMLElement).animationName)
+      .filter((n) => n.startsWith('edge-sweep')),
+  );
+}
+
+test('FB-A — 듣는 중(green): traveling sweep 바 4개가 edge-sweep 4엣지 순환 애니메이션으로 흐른다(점멸 아님)', async ({ page }) => {
+  await boot(page);
+  await startSession(page);
+  const glow = page.locator('[data-testid="edge-glow"]');
+  await expect(glow).toHaveAttribute('data-tone', 'green');
+
+  // 호흡(점멸) 레이어는 sweep과 별개로 존재 — "점멸만"이 아니라 sweep도 함께 흐르는지 본다.
+  const pulseAnim = await page.locator('[data-glow-pulse]').evaluate((el) => getComputedStyle(el).animationName);
+  expect(pulseAnim, '호흡(edge-pulse) 레이어 존재').toBe('edge-pulse');
+
+  // 4엣지 순환 sweep: 상(x)·하(x-reverse)·우(y)·좌(y-reverse) — reference-ui inset-sweep 동형.
+  const sweeps = await sweepAnims(page);
+  console.log(`sweep anims: ${JSON.stringify(sweeps)}`);
+  expect(sweeps.length, '듣는 중 sweep 바 4개').toBe(4);
+  expect(new Set(sweeps)).toEqual(
+    new Set(['edge-sweep-x', 'edge-sweep-x-reverse', 'edge-sweep-y', 'edge-sweep-y-reverse']),
+  );
+
+  // 일시정지(amber) → sweep 제거(호흡만 — §5.2 배터리). "점멸만" 상태와 대비되는 대조군.
+  await page.locator('button[title="일시정지"]').click();
+  await expect(glow).toHaveAttribute('data-tone', 'amber');
+  expect(await sweepAnims(page), 'paused엔 sweep 없음(호흡만)').toHaveLength(0);
+  console.log('✓ FB-A: 듣는 중 4엣지 sweep 흐름 + paused 제거');
+});
+
 // ─── v0.37.0 FB-F — 알람 중 미확정 인식값 스트립(카드 아래·파형 위, 실제 인식값만) ─────────────
 test('FB-F — 이상치 알람 중 정정 발화 interim이 카드 아래·파형 위 스트립에 실제 인식값으로 표시', async ({ page }) => {
   await boot(page);
