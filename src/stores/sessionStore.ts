@@ -29,6 +29,13 @@ interface SessionState {
   /** I-3: most recent recognized value, shown as a screen-centered "항목 : 값" burst.
    *  `seq` increments per recognition so the UI can re-key and replay the animation. */
   valueBurst: { name: string; value: string; seq: number } | null;
+  /** v0.37.0 리뷰#1(Codex High, 민구: 커밋 영수증) — **방금 성공적으로 커밋된 셀**의 영수증.
+   *  모든 커밋 경로(음성 최종·수동 시트·이상치 정정)가 커밋 직후 원자적으로 발행한다. 검토(complete)
+   *  화면이 "방금 입력한 값"을 이 영수증에서 파생한다(valueBurst는 음성 확인 플래시·이상치 중복 억제
+   *  전용이라 수동/정정 마지막 셀에서 stale·거부값을 오표시했다 — REGION-1/review-value). seq는 커밋마다
+   *  증가해 fresh-commit(값 표시) vs navigation-revisit(중립 "N행 완료") 판별에 쓴다. valueBurst와
+   *  **병렬**로 존재한다(확인 플래시·EdgeGlow 확산·이상치 dedup 계약 불변 — 표시 전용, 로그 이벤트 아님). */
+  commitReceipt: { row: number; colId: string; name: string; value: string; seq: number } | null;
   /** v0.9.0 — 이상치 알람 팝업. 알람 발동 시 이전값→현재값과 변화량을 화면에 띄운다(발화만으론
    *  스쳐 지나가 확인이 어렵다는 요청). '확인'/'유지'/새 값 입력 또는 다음 필드 진입 시 해제(null).
    *  changeText = '9.9%'(변동률 트리거) 또는 절대차 '2.2'(증가/감소 트리거).
@@ -117,6 +124,8 @@ interface SessionState {
   setInterimValue: (v: string | null) => void;
   setLastTts: (v: string) => void;
   pushValueBurst: (name: string, value: string) => void;
+  /** v0.37.0 리뷰#1 — 커밋 영수증 발행(seq 자동 증가). 모든 성공 커밋 경로가 커밋 직후 호출한다. */
+  pushCommitReceipt: (row: number, colId: string, name: string, value: string) => void;
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
   setUiModalOpen: (m: SessionState['uiModalOpen']) => void;
   setPersistError: (e: SessionState['persistError']) => void;
@@ -148,6 +157,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   interimValue: null,
   lastTts: '',
   valueBurst: null,
+  commitReceipt: null,
   anomalyAlert: null,
   uiModalOpen: null,
   persistError: null,
@@ -168,6 +178,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setLastTts: (lastTts) => set({ lastTts }),
   pushValueBurst: (name, value) =>
     set((s) => ({ valueBurst: { name, value, seq: (s.valueBurst?.seq ?? 0) + 1 } })),
+  pushCommitReceipt: (row, colId, name, value) =>
+    set((s) => ({ commitReceipt: { row, colId, name, value, seq: (s.commitReceipt?.seq ?? 0) + 1 } })),
   // v0.36.0 리뷰 라운드1(Codex+Flash, 수용) — 알람이 **서는** 순간 미확정 interim 표시를 함께
   //   정리한다(모든 알람 경로의 단일 지점). 알람 대기 중 final이 안 오면 이전 발화 찌꺼기가 재개
   //   화면에 현재 값처럼 남던 경로의 차단축. 표시 전용 필드라 커밋/텔레메트리 계약 무해.
@@ -252,6 +264,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       interimValue: null,
       lastTts: '',
       valueBurst: null,
+      commitReceipt: null,
       anomalyAlert: null,
       // v0.35.0 R3-FIX-2 — persistError는 세션 수명에 속하므로 여기서 지운다. 단 이 경로에 도달하려면
       //   phase가 'ready'여야 하고(start 버튼), 저장 실패 중엔 phase가 'ready'가 되지 않으므로

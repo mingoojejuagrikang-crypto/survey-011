@@ -11,7 +11,7 @@ import { PausedCard } from './PausedCard';
 import { ModifyIndicatorPill } from './ModifyIndicatorPill';
 import { type ReaskReason } from './ReaskCue';
 import { type GlowTone } from './EdgeGlow';
-import { VoiceHero, AlarmInterimStrip } from './VoiceHero';
+import { VoiceHero, AlarmInterimStrip, useReviewCommit } from './VoiceHero';
 import { LiveListenBand } from './LiveListenBand';
 import { ColumnChip } from './ColumnChip';
 import { useChipFlowFit } from './useChipFlowFit';
@@ -84,6 +84,9 @@ export function ActiveState({
     })),
   );
   const row = sess.activeRow;
+  // v0.37.0 리뷰 #1(민구: 커밋 영수증) — 검토 표시값 파생을 **여기(항상 마운트)** 에서 한다. VoiceHero는
+  //   이상치/일시정지 카드가 뜨는 동안 언마운트되므로 그 안에서 파생하면 방금 발행된 영수증을 놓친다.
+  const reviewCommit = useReviewCommit(completing, row);
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
   const [editingColId, setEditingColId] = useState<string | null>(null);
@@ -378,6 +381,7 @@ export function ActiveState({
             row={row}
             tone={tone}
             reaskReason={completing ? null : reaskReason}
+            reviewCommit={reviewCommit}
           />
         ) : null}
       </div>

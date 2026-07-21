@@ -35,7 +35,7 @@ function prefersReducedMotion(): boolean {
 }
 
 export function VoiceHero({
-  col, review, row, tone, reaskReason,
+  col, review, row, tone, reaskReason, reviewCommit,
 }: {
   col: Column;
   /** true면 phase 'complete'의 검토 표시(✓ + 방금 입력한 값). 확인 플래시보다 우선. */
@@ -45,12 +45,13 @@ export function VoiceHero({
   tone: GlowTone;
   /** 대기(listening)일 때만 비-null. 재질문 사유/소수 재질문 프롬프트(TTS 글자 일치). */
   reaskReason: ReaskReason;
+  // v0.37.0 리뷰 #1(Codex High, 민구: 커밋 영수증) — 검토 표시의 '방금 입력한 값'. **부모(ActiveState)가
+  //   useReviewCommit으로 파생해 prop으로 내린다** — 이상치/일시정지 카드가 뜨는 동안 VoiceHero가
+  //   언마운트됐다 재마운트되면 내부 mount-guard가 방금 발행된 영수증을 삼켜(검토가 중립 라벨로 폴백)
+  //   버리기 때문이다. 항상 마운트돼 있는 ActiveState에서 파생하면 remount를 관통해 값이 살아남는다.
+  reviewCommit: { name: string; value: string } | null;
 }) {
   const confirmed = useConfirmFlash(review);
-  // v0.37.0 리뷰 #2(Codex, 민구 Option 1) — 검토 표시의 '방금 입력한 값'을 **실제 방금 커밋된 셀**
-  //   (valueBurst 영수증)에서 파생한다. 종전 voiceCols[last]는 advance가 채워진 뒷 컬럼을 건너뛰고
-  //   완료할 때(부분작성 행) 방금 커밋한 앞 셀이 아니라 뒷 셀의 옛 값을 "방금 입력한 값"으로 오표시했다.
-  const reviewCommit = useReviewCommit(review, row);
   const interim = useSessionStore((st) => st.interimValue);
 
   // 렌더 우선순위(명시적 — 타이머 레이스 무관): review > confirm > listening.
@@ -137,33 +138,37 @@ function useConfirmFlash(review: boolean): { name: string; value: string } | nul
   return confirmed;
 }
 
-/** v0.37.0 리뷰 #2(민구 Option 1) — 검토(complete) 표시가 보여줄 '방금 커밋된 셀'을 valueBurst
- *  영수증에서 파생한다(§10 읽기 전용 — store/음성 로직 무수정, 표시 계층에서 seq/행으로만 판별).
+/** v0.37.0 리뷰 #1(민구: 커밋 영수증) — 검토(complete) 표시가 보여줄 '방금 커밋된 셀'을 store
+ *  commitReceipt에서 파생한다(§10 읽기 전용 — 표시 계층에서 seq/행으로만 판별). 영수증은 음성·수동·
+ *  이상치 정정 **모든** 커밋 경로가 발행하므로, 종전 valueBurst 파생(음성 전용)이 마지막 셀을 수동/
+ *  정정으로 채웠을 때 내던 stale·거부값 오표시가 사라진다.
  *
  *  fresh-commit(값 표시) vs navigation-revisit(중립 라벨) 판별:
- *   - valueBurst.seq가 바뀌면 = 실제 커밋 발생 → 그 시점의 행(row prop = 커밋 셀의 activeRow)과 함께
- *     'fresh'로 보관한다. 커밋 직후 완료(Path A)·마지막 행 완료(Path C)가 이 창으로 들어온다.
- *   - 커밋 행을 벗어나면(row 변경) fresh 창을 닫는다 → 이후 '이전'/점프로 완료행을 재방문한 검토
- *     (enterReviewWait, 새 burst 없음)는 stale 값 대신 null(중립 "N행 완료")을 낸다.
- *  useConfirmFlash와 seq 추적을 **공유하지 않는다**(독립 seenSeqRef) — 확인 플래시가 burst를 소비해도
- *  검토 파생이 같은 burst를 독립적으로 판별한다(커플링 회피, 민구 지시). */
-function useReviewCommit(review: boolean, row: number): { name: string; value: string } | null {
-  const burst = useSessionStore((st) => st.valueBurst);
+ *   - commitReceipt.seq가 바뀌면 = 실제 커밋 발생 → 영수증이 담은 행(receipt.row = 커밋 셀의 행)과 함께
+ *     'fresh'로 보관한다. 커밋 직후 완료·마지막 행 완료가 이 창으로 들어온다.
+ *   - 현재 검토 행(row prop)이 그 커밋 행을 벗어나면 fresh 창을 닫는다 → 이후 '이전'/점프로 완료행을
+ *     재방문한 검토(enterReviewWait, 새 영수증 없음)는 stale 값 대신 null(중립 "N행 완료")을 낸다.
+ *  useConfirmFlash(valueBurst 소비)와 독립 seenSeqRef를 유지한다(커플링 회피).
+ *  ⚠️ **ActiveState에서 호출한다**(VoiceHero가 아니라). 이상치/일시정지 카드가 뜨는 동안 VoiceHero는
+ *     언마운트되므로, 여기에 두면 mount-guard가 방금 발행된 영수증을 삼켜 검토가 중립으로 폴백한다.
+ *     ActiveState는 세션 내내 마운트돼 있어 seenSeqRef/freshRef가 remount를 관통해 살아남는다. */
+export function useReviewCommit(review: boolean, row: number): { name: string; value: string } | null {
+  const receipt = useSessionStore((st) => st.commitReceipt);
   const [reviewVal, setReviewVal] = useState<{ name: string; value: string } | null>(null);
   const seenSeqRef = useRef<number | null>(null);
   const freshRef = useRef<{ value: { name: string; value: string }; row: number } | null>(null);
   useEffect(() => {
-    const seq = burst?.seq ?? 0;
-    if (seenSeqRef.current === null) { seenSeqRef.current = seq; return; } // 마운트: 과거 burst 재생 안 함
-    // 새 커밋(seq 변화) = 방금 커밋 영수증. 커밋 시점의 행과 함께 fresh 창을 연다.
-    if (seq !== seenSeqRef.current && burst) {
+    const seq = receipt?.seq ?? 0;
+    if (seenSeqRef.current === null) { seenSeqRef.current = seq; return; } // 마운트: 과거 영수증 재생 안 함
+    // 새 커밋(seq 변화) = 방금 커밋 영수증. 영수증이 담은 행과 함께 fresh 창을 연다.
+    if (seq !== seenSeqRef.current && receipt) {
       seenSeqRef.current = seq;
-      freshRef.current = { value: { name: burst.name, value: burst.value }, row };
+      freshRef.current = { value: { name: receipt.name, value: receipt.value }, row: receipt.row };
     }
-    // 커밋 행에서 벗어나면(다른 행으로 이동/재방문) fresh 창을 닫는다 → 재방문 검토는 중립.
+    // 검토 행이 커밋 행에서 벗어나면(다른 행으로 이동/재방문) fresh 창을 닫는다 → 재방문 검토는 중립.
     if (freshRef.current && freshRef.current.row !== row) freshRef.current = null;
     setReviewVal(review && freshRef.current ? freshRef.current.value : null);
-  }, [burst, review, row]);
+  }, [receipt, review, row]);
   return reviewVal;
 }
 

@@ -1833,6 +1833,10 @@ export function useVoiceSession() {
     const myEpoch = ++epochRef.current;
     const sess = useSessionStore.getState();
     sess.setRowValue(awaiting.row, awaiting.colId, parsed);
+    // v0.37.0 리뷰#1 — 검토 영수증(모든 커밋 경로 공통). trendConfirm(정정)도 **무조건** 발행한다:
+    //   valueBurst는 아래에서 중복 팝업 억제로 정정 커밋을 건너뛰지만(불변), 검토 화면은 정정된
+    //   실제 커밋값을 보여야 하므로 영수증은 정정 여부와 무관하게 발행한다.
+    sess.pushCommitReceipt(awaiting.row, awaiting.colId, awaiting.name, parsed);
     sess.setRecognized(parsed);
     sess.setReaskReason(null); // v0.23.0 입력탭#2 — 성공 커밋 시 재질문 사유 큐 해제.
     // v0.20.0 Phase 5 #4 — 반응속도: final 진입→값 store 커밋까지 앱 파이프라인 경과ms(파싱·가드·
@@ -2905,6 +2909,9 @@ export function useVoiceSession() {
 
     // 일반값/정보성 이상치는 기존 즉시 영속 계약을 유지한다.
     await persistCellValue(row, colId, value);
+    // v0.37.0 리뷰#1 — 수동 시트 커밋 영수증(검토 화면 파생 SSOT). 보류(manualHold) 분기는 위에서
+    //   return하므로 여기 도달 = 확정 커밋(일반값·정보성 이상치). 보류 정정값은 confirmManualAnomaly가 발행.
+    useSessionStore.getState().pushCommitReceipt(row, colId, col.name, value);
     sess.setRecognized(value);
     sess.setReaskReason(null);
 
@@ -3026,6 +3033,12 @@ export function useVoiceSession() {
       type: 'trend', extra: 'trend_alert_confirmed', parsed: 'confirm',
       row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
     });
+    // v0.37.0 리뷰#1 — 이상치 정정(수동 보류) [확인] 커밋 영수증: 검토 화면은 **정정되어 확정된**
+    //   후보값(candidateValue)을 보여야 한다(거부된 직전값 아님). proceedAfterCommit(advance→검토) 전에 발행.
+    {
+      const pv = staged.pendingValidation;
+      if (pv) useSessionStore.getState().pushCommitReceipt(pv.row, pv.colId, alert.colName, pv.candidateValue);
+    }
     // 보류 시 재무장을 미뤘던 진행 재개 — reviewWait 출신은 검토 대기 재진입, 그 외 advance
     // (commitManualValue와 동일 착지, proceedAfterCommit SSOT).
     await proceedAfterCommit(awaitingFieldRef.current);
