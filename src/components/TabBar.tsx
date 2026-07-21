@@ -24,6 +24,11 @@ export function TabBar({ tab, setTab }: Props) {
   return (
     <div
       style={{
+        // v0.37.0 FB-I(민구) — full-bleed EdgeGlow(fixed z-54)가 하단 나비 위를 씻고 지나가지 않도록
+        //   지속 chrome(나비)를 글로우와 같은 대역(z-54)에 두되 App DOM 순서상 VoiceScreen보다 뒤라
+        //   같은 z에서 나비가 위에 그려진다(나비 '유지'/선명). 모달/시트(55~120)는 여전히 나비를 덮는다.
+        position: 'relative',
+        zIndex: 54,
         // v0.15.0 A1 — 하단 홈인디케이터 safe-area(max(28px, --sab)). minHeight로 inset 초과 시 성장.
         minHeight: 88,
         paddingBottom: 'max(28px, var(--sab))',

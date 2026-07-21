@@ -110,6 +110,30 @@ test('FB-B — 칩 그리드가 2줄 캡 + 초과분 내부 스크롤(전체 그
   expect(scrollH, '2줄 초과 → 내부 스크롤 존재').toBeGreaterThan(clientH + 20);
 });
 
+test('FB-I — full-bleed 글로우 아래에서도 하단 나비 탭 가능 + 수동 입력 시트가 글로우 위에 뜬다', async ({ page }) => {
+  await boot(page);
+  const glow = page.locator('[data-testid="edge-glow"]');
+  await expect(glow).toBeVisible();
+  const glowZ = await glow.evaluate((el) => parseInt(getComputedStyle(el).zIndex || '0', 10));
+
+  // 나비 '유지': full-bleed 글로우(fixed z-54, pointer-events:none)가 하단 나비 위를 덮어도
+  //   나비 버튼은 실제로 히트테스트(탭) 가능해야 한다(trial 클릭 = 실제 클릭 없이 가림 여부만 검증).
+  await page.locator('[data-testid="tab-voice"]').click({ trial: true });
+  await page.locator('[data-testid="tab-data"]').click({ trial: true });
+
+  // 활성 음성 칩 탭 → 수동 입력 시트. 시트 오버레이(ModalBase)는 글로우(54)보다 위에 있어야
+  //   초록 가장자리 링/블룸이 입력 UI를 덮지 않는다(FB-I 오염 차단).
+  const activeChip = page.locator('[data-testid="column-chip"][data-active="true"]');
+  await activeChip.click();
+  const sheet = page.locator('[data-testid="manual-value-sheet"]');
+  await expect(sheet).toBeVisible({ timeout: 3000 });
+  const sheetZ = await sheet.evaluate((el) => parseInt(getComputedStyle(el.parentElement as HTMLElement).zIndex || '0', 10));
+  console.log(`z-index: glow=${glowZ} sheet=${sheetZ}`);
+  expect(sheetZ, '수동 입력 시트가 full-bleed 글로우 위에 있어야').toBeGreaterThan(glowZ);
+  // 시트가 실제로 조작 가능(키패드 키 히트테스트) — 글로우가 위를 막지 않는다.
+  await page.locator('[data-testid="manual-key-1"]').click({ trial: true });
+});
+
 test('FB-B — 뒤쪽 음성 컬럼으로 진행하면 활성 칩이 가시영역으로 자동 스크롤', async ({ page }) => {
   await boot(page);
   const grid = page.locator('[data-testid="voice-chip-grid"]');

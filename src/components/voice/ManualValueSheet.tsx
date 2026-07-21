@@ -57,7 +57,12 @@ export function ManualValueSheet({
   const isKeypad = choices.kind === 'int' || choices.kind === 'float';
 
   return (
-    <ModalBase onClose={onClose} zIndex={50} pad={null} align="end">
+    // v0.37.0 FB-I(민구) — 종전 z-50은 EdgeGlow(54) **아래**라, full-bleed 글로우로 바뀐 뒤 초록
+    //   가장자리 링/블룸이 수동 입력 시트 위를 덮었다(입력 UI 오염). z-55로 올려 글로우(54) 위,
+    //   일반 모달(100) 아래에 둔다(종료 확인 55와 같은 입력탭 오버레이 대역). 시트는 모달로서 하단
+    //   나비를 덮는 기존 계약 유지(입력 집중) — 나비를 '띄운 채' 두는 배치는 시트 버튼이 나비 뒤로
+    //   숨는 상충이 있어 민구 기기 확인 후 결정(KNOWN-ISSUES [REGION-1]).
+    <ModalBase onClose={onClose} zIndex={55} pad={null} align="end">
       <div
         role="dialog"
         aria-modal="true"
