@@ -174,7 +174,10 @@ export function ActiveState({
   //    활성 칩을 ref로 잡아 currentColId/row 변경 시 세로 플로우 안에서 가시영역으로 이동한다.
   const activeChipRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    activeChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    // v0.37.0 FB-B(민구) — 활성 칩을 항상 가시영역에. 종전 behavior:'smooth'는 연속 진행 시 스무스
+    //   스크롤이 서로를 가로채 활성 칩이 캡(2줄) 밖에 남는 지연이 있었다. 즉시 스크롤(기본 'auto')로
+    //   렌더 직후 동기 정착 — 원거리에서 글끗 볼 때 지연 없이 항상 현재 칩이 보인다.
+    activeChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [currentColId, row]);
   // v0.36.0 코덱스 시안 — 칩 플로우 글자 배율(--chip-fit): 칩 수·값 길이가 3줄을 넘기면 단계 축소.
   const chipFitRef = useChipFlowFit<HTMLDivElement>([columns, row, currentColId, JSON.stringify(rowValues)]);
