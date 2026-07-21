@@ -179,7 +179,7 @@ export function ActiveState({
   return (
     // ── v0.19.0 W5 → v0.36.0 코덱스 시안(2026-07-20) — 단일 CSS grid 루트, 4구역:
     //      1) auto          — 상단: 소형 행 스트립(행번호/진행/도움말) + 칩 플로우(전체 ≤30dvh 캡,
-    //                         3줄 초과분은 내부 스크롤 — 민구 확정 칩 스펙)
+    //                         2줄 초과분은 내부 스크롤 — v0.37.0 FB-B 민구 확정 칩 스펙)
     //      2) minmax(0,1fr) — 중앙 흡수영역: hero/일시정지/이상치/수정 카드 중 정확히 하나
     //      3) auto          — 상시 파형 밴드(78~100px — 모든 상태 유지, paused=주황 평선)
     //      4) auto          — 하단 컨트롤바(이전/일시정지·재개/다음 + 접힘 스테퍼)
@@ -240,14 +240,15 @@ export function ActiveState({
             ?
           </button>
         </div>
-        {/* 칩 플로우 — 유동 폭 pill(내용 길이대로), 최대 3줄 + 초과분 내부 스크롤, 영역 전체는 화면
-            높이 30% 상한(스트립 몫 제외). 글자 배율은 useChipFlowFit(--chip-fit). 알람 중에는 활성
-            칩/진행색을 RED로 맞춰 상태 신호를 동기화한다. */}
+        {/* 칩 플로우 — 유동 폭 pill(내용 길이대로), 최대 **2줄** + 초과분 내부 스크롤(v0.37.0 FB-B
+            민구 확정: 3줄→2줄로 축소해 hero가 자라날 세로 공간을 넓힌다). 활성 칩은 currentColId/row
+            변경 시 자동 스크롤(activeChipRef.scrollIntoView)로 항상 가시영역에 둔다. 글자 배율은
+            useChipFlowFit(--chip-fit). 알람 중에는 활성 칩/진행색을 RED로 맞춰 상태 신호를 동기화. */}
         <div
           data-testid="voice-chip-grid"
           ref={chipFitRef}
           style={{
-            maxHeight: 'min(calc(30dvh - 50px), calc((44px * 3) + (8px * 2) + 12px))',
+            maxHeight: 'min(calc(30dvh - 50px), calc((44px * 2) + (8px * 1) + 12px))',
             overflowX: 'hidden',
             overflowY: 'auto',
             WebkitOverflowScrolling: 'touch',
