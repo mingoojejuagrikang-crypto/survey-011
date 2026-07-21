@@ -360,7 +360,7 @@ test('[데이터] 세션 없을 때 빈 상태 안내 표시', async ({ page }) 
   });
   await page.waitForLoadState('networkidle');
 
-  await page.locator('text=데이터').first().click();
+  await page.locator('[data-testid="tab-data"]').first().click();
   await page.waitForTimeout(300);
 
   // Either empty state or existing sessions
