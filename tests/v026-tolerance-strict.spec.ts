@@ -187,8 +187,8 @@ test('T3 — 입력 조절 스탭퍼에 "높을수록 엄격" 명시', async ({ 
   await setupAndStart(page, 0.6);
 
   const toggle = page.locator('[data-testid="input-control-toggle"]');
-  await expect(toggle).toContainText('입력 조절');
-  await expect(toggle).toContainText('인식 60%');
+  // v0.37.0 FB-K(민구) — 라벨 '입력 조절'·'인식' 제거 → '허용 인식률'.
+  await expect(toggle).toContainText('허용 인식률 60%');
   await toggle.click();
 
   const stepper = page.locator('[data-testid="stepper-tolerance"]');

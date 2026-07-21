@@ -42,7 +42,10 @@ export function ActiveControlSteppers() {
     sampleTts(value);
   };
   const tolPct = Math.round(s.recognitionTolerance * 100);
-  const summary = `입력 조절 · 인식 ${tolPct}% · 안내 ${s.ttsRate.toFixed(2)}x`;
+  // v0.37.0 FB-K(민구) — 모호한 "입력 조절"·"인식"·"안내" 라벨을 뜻이 분명한 "허용 인식률"·
+  //   "안내속도"로 교체(원거리·장갑 현장에서 무엇을 조절하는지 즉시 이해). 요약 접힘 버튼도
+  //   포괄 라벨("입력 조절")을 제거하고 두 값만 나열한다.
+  const summary = `허용 인식률 ${tolPct}% · 안내속도 ${s.ttsRate.toFixed(2)}x`;
   return (
     <div
       data-testid="input-control-panel"
@@ -78,7 +81,7 @@ export function ActiveControlSteppers() {
           cursor: 'pointer',
           touchAction: 'manipulation',
         }}
-        title="입력 조절"
+        title="허용 인식률·안내속도"
       >
         <span>{summary}</span>
         <span aria-hidden style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }}>⌄</span>
@@ -87,7 +90,7 @@ export function ActiveControlSteppers() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <StepperControl
             testId="stepper-tolerance"
-            label="인식"
+            label="허용 인식률"
             value={`${tolPct}%`}
             detail="높을수록 엄격"
             accent={T.green}
@@ -100,7 +103,7 @@ export function ActiveControlSteppers() {
           />
           <StepperControl
             testId="stepper-tts-rate"
-            label="안내"
+            label="안내속도"
             value={`${s.ttsRate.toFixed(2)}x`}
             detail="음성 속도"
             accent={T.blue}

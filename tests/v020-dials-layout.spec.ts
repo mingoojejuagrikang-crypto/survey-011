@@ -71,9 +71,9 @@ test.use({
 async function assertStepperPanel(page: Page, vpWidth: number) {
   const toggle = page.locator('[data-testid="input-control-toggle"]');
   await expect(toggle).toBeVisible({ timeout: 5000 });
-  await expect(toggle).toContainText('입력 조절');
-  await expect(toggle).toContainText('인식');
-  await expect(toggle).toContainText('안내');
+  // v0.37.0 FB-K(민구) — 요약 라벨에서 포괄어 '입력 조절' 제거. 두 다이얼은 '허용 인식률'·'안내속도'.
+  await expect(toggle).toContainText('허용 인식률');
+  await expect(toggle).toContainText('안내속도');
   await expect(page.locator('input[type="range"]')).toHaveCount(0);
 
   await toggle.click();
