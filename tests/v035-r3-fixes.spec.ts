@@ -401,15 +401,18 @@ test('P2 — Observer API 둘 다 없어도 입력 화면과 정적 파형이 �
 
   const wave = page.locator('[data-testid="voice-waveform"]');
   await expect(wave).toBeVisible();
-  const pixels = await wave.evaluate((canvas) => {
-    const c = canvas as HTMLCanvasElement;
-    const ctx = c.getContext('2d');
-    if (!ctx) return 0;
-    const data = ctx.getImageData(0, 0, c.width, c.height).data;
-    let nonTransparent = 0;
-    for (let i = 3; i < data.length; i += 4) if (data[i] > 0) nonTransparent++;
-    return nonTransparent;
-  });
-  expect(pixels).toBeGreaterThan(0); // analyser/레벨 0 → 움직임 없는 중앙 정적선(R3-FIX-3)
+  // v0.37.0 리뷰 #5(Codex) — 파형이 canvas 선에서 **막대(span) 파형**으로 바뀌었다(FB-D, 민구 확정).
+  //   종전 getContext('2d') 캐스팅은 <div>에 대해 TypeError를 던졌다. 새 DOM(24개 span + 정적 scaleY)
+  //   을 직접 검사한다. Observer 둘 다 없고 오디오/레벨 0이면 drawStatic이 전 막대를 평막대(FLAT=0.08)
+  //   로 칠한다 — 즉 렌더는 되지만 움직이지 않는다(R3-FIX-3 데이터 무결성 계약). 이 테스트의 실제
+  //   계약은 "Observer 둘 다 undefined여도 입력 화면 + 정적 파형이 pageerror 없이 렌더된다"이다.
+  const bars = wave.locator('span');
+  await expect(bars).toHaveCount(24); // NBARS — 막대 파형이 실제로 렌더됐다
+  const transforms = await bars.evaluateAll((els) =>
+    els.map((el) => (el as HTMLElement).style.transform),
+  );
+  // 정적 평막대: 모든 막대가 scaleY 변환을 갖고(파형이 그려짐), 오디오 없음 → 전부 동일한 정지값.
+  expect(transforms.every((t) => t.includes('scaleY'))).toBe(true);
+  expect(new Set(transforms).size).toBe(1); // 움직임 없는 정적선(모든 막대 동일 높이)
   expect(pageErrors).toEqual([]);
 });
