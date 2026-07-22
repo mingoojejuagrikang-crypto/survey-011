@@ -1,12 +1,11 @@
-import { useEffect, useState } from 'react';
 import { T } from '../../tokens';
 import { VoiceWaveform } from './VoiceWaveform';
 import type { GlowTone } from './EdgeGlow';
 
 /** v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 입력탭 **상시 파형 밴드**(hero 아래 독립 grid row).
  *  파형은 입력 세션 동안 항상 존재한다 — 확인/경고/일시정지/수정 어느 카드가 떠도 사라지지 않는다
- *  (§6.2 "waveform이 곧 '듣는 중' 상태 문구를 대체"). 가시 높이 78~100px(원거리 판독), 375×667급
- *  짧은 화면에서만 축소 허용(민구 확정 — 제거 금지).
+ *  (§6.2 "waveform이 곧 '듣는 중' 상태 문구를 대체"). v0.38.0부터 상태 변화에 관계없이 100px을
+ *  예약하고, 레퍼런스의 13개 세로 막대를 기존 밴드 폭의 70% 안에 배치한다.
  *
  *  상태 연동: 색은 EdgeGlow와 같은 톤(green/red/amber — tone SSOT는 VoiceScreen), paused에선
  *  active=false → rAF 중지 + 주황 평선(§5.3). 미확정 임시값(interim)은 v0.36.0부터 hero가 크게
@@ -23,39 +22,28 @@ export function LiveListenBand({
   getAudioLevel: () => number;
   getTimeDomainData: (out: Uint8Array) => boolean;
 }) {
-  const height = useBandHeight();
   return (
     <div
       data-testid="live-listen-band"
       style={{
         flex: 'none',
         width: '100%',
+        height: 100,
+        minHeight: 100,
         display: 'flex',
+        alignItems: 'center',
         justifyContent: 'center',
-        padding: '2px 20px',
+        padding: '0 20px',
       }}
     >
-      <div style={{ width: '100%', maxWidth: 'min(520px, 92vw)' }}>
+      <div style={{ width: '70%', maxWidth: 315, minWidth: 0 }}>
         <VoiceWaveform
           active={active}
           getLevel={getAudioLevel}
           getTimeDomainData={getTimeDomainData}
-          height={height}
           color={TONE_COLOR[tone]}
         />
       </div>
     </div>
   );
-}
-
-/** 파형 가시 높이 — 기본 78~100px(§6.2), 짧은 화면(<720px)은 비례 축소(하한 60px). */
-function useBandHeight(): number {
-  const calc = () => Math.round(Math.min(96, Math.max(60, window.innerHeight * 0.105)));
-  const [h, setH] = useState(calc);
-  useEffect(() => {
-    const onResize = () => setH(calc());
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-  return h;
 }

@@ -67,6 +67,18 @@ input::placeholder {
   50% { transform: scaleY(1); }
 }
 
+/* v0.38.0 개선요청 #10 — 실제 입력이 감지된 세로 막대만 레퍼런스 cadence로 호흡한다.
+   --level은 기존 rAF 오디오 구독이 직접 갱신하며, idle/paused에서는 animation을 적용하지 않는다. */
+@keyframes inset-wave {
+  0% { transform: scaleY(max(.1, calc(var(--level, .35) * .45))); opacity: .72; }
+  100% { transform: scaleY(var(--level, .35)); opacity: 1; }
+}
+
+.voice-waveform[data-wave-motion='active'] .voice-waveform__bar {
+  animation: inset-wave 940ms ease-in-out infinite alternate;
+  animation-delay: var(--delay, 0ms);
+}
+
 @keyframes flash-green {
   0% { background: rgba(0,200,83,0); }
   30% { background: rgba(0,200,83,0.35); }

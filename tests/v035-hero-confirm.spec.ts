@@ -169,6 +169,9 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
   await expect(page.locator('[data-hero-state="listening"]')).toBeVisible();
   await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('당도');
   await expect(page.locator('[data-testid="voice-waveform"]')).toBeVisible();
+  const listeningBandHeight = await page.locator('[data-testid="live-listen-band"]').evaluate(
+    (el) => el.getBoundingClientRect().height,
+  );
 
   // 행 **중간** 컬럼(당도) 커밋 → 확인 카드. 뒤에 '산도'가 남아 있어 phase는 'active' 유지 =
   //   review가 확인 플래시를 자르지 않는다 → CONFIRM_MS(1500ms) 타이머가 실제로 검증된다.
@@ -180,6 +183,11 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
   // 유지된다(§6.2 "팝업/확인/경고 상태에서도 유지"). 종전 "확인 중 파형 미표시(count 0)" 단언을
   // 상시 유지 단언으로 교체 — 확인 플래시 자체(CONFIRM_MS·review>confirm)는 아래에서 계속 검증한다.
   await expect(page.locator('[data-testid="voice-waveform"]')).toBeVisible();
+  const confirmBandHeight = await page.locator('[data-testid="live-listen-band"]').evaluate(
+    (el) => el.getBoundingClientRect().height,
+  );
+  expect(confirmBandHeight, '확정 전환에도 파형 밴드 높이 고정').toBe(listeningBandHeight);
+  expect(confirmBandHeight).toBeCloseTo(100, 0);
 
   // 핵심(R3-FIX-5): 확인 카드가 **금방 사라지지 않는다**. 1.5초 창의 중간(~700ms)에도 살아 있어야
   //   한다 — 종전 1-음성컬럼 스펙에선 여기서 이미 review로 잘려 있었다(실측 263ms).

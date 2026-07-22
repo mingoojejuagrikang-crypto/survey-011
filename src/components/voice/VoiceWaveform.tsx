@@ -1,30 +1,31 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 import { T } from '../../tokens';
 
-/** v0.37.0 FB-D(민구, Vance) — 코덱스 reference-ui의 **막대 파형**(`.waveform span`). 종전 canvas
- *  선 파형을 굵은 세로 막대 N개로 교체한다(원거리 2~3m 판독성↑, 시안 일치). 각 막대의 `scaleY`를
- *  rAF로 실시간 갱신한다(React 리렌더 0 — ref 배열 직접 스타일 변이).
+/** v0.38.0 개선요청 #10 — reference-ui의 **막대 파형**(`.waveform span`). 10×78px 막대 13개를
+ *  7px 간격으로 배치하고, 각 막대의 `--level`/`scaleY`를 rAF로 실시간 갱신한다
+ *  (React 리렌더 0 — ref 배열 직접 스타일 변이).
  *
  *  ⚠️ 존재 이유 = "지금 내 말을 듣고 있나?"를 원거리에서 확인. 따라서 **듣고 있지 않으면 움직이지
  *  않는다**(R3-FIX-3 데이터 무결성 계약, PRINCIPLES §2). reference-ui의 순수 CSS 타이머 애니메이션
- *  (`inset-wave` infinite — 레벨 0에서도 흔들림)은 **채택하지 않는다**: 죽은 마이크에 움직이는 파형은
- *  기능의 목적을 배신한다. 막대 높이는 오직 실제 오디오(getTimeDomainData) 또는 레벨(getLevel)에서만
- *  파생하고, 레벨이 임계 미만이면 정지(평막대)한다.
+ *  (`inset-wave`)은 실제 오디오가 감지될 때만 켠다: 죽은 마이크에 움직이는 파형은 기능의 목적을
+ *  배신한다. 무입력·저레벨에서도 세로 막대로 읽히도록 기본 높이 35%는 유지한다.
  *
  *  성능·배터리(종전 canvas와 동일 계약 보존):
- *   - `active=false`(듣는 중 아님/일시정지) → rAF 미가동, 평막대.
- *   - `prefers-reduced-motion` → rAF 미가동, 평막대.
+ *   - `active=false`(일시정지) → rAF/애니메이션 미가동, 7% 납작 막대 + 그림자 제거.
+ *   - `prefers-reduced-motion` → rAF/애니메이션 미가동, 기본 높이 세로 막대.
  *   - `visibilityState==='hidden'` → 스케줄 중단, visibilitychange에서 재개.
  *   - display:none(keep-alive) / 스크롤 이탈 → IntersectionObserver가 즉시 백오프(rAF 정지).
  *   - ~30fps 게이트 — 장시간 현장 세션 배터리/열 부담을 낮춘다. cleanup에서 cancel. */
 const FFT = 1024;
 const FRAME_MS = 33;
 
-/** 막대 개수 — reference-ui는 13개(폭 10px). 밴드 폭이 넓으므로 24개로 촘촘히 채운다. */
-const NBARS = 24;
+/** reference-ui 파형 치수. */
+const BAR_COUNT = 13;
+const BAR_HEIGHT = 78;
 
-/** 평막대(정지) scaleY — 죽은 마이크·일시정지·reduced에서 얇은 평선처럼 보이는 최소 높이. */
-const FLAT = 0.08;
+/** 듣는 중 무입력 기본 높이와 일시정지 높이는 서로 다른 상태 표현이다. */
+const BASE_LEVEL = 0.35;
+const PAUSED_LEVEL = 0.07;
 
 /** v0.35.0 R3-FIX-3 계승 — 합성 폴백이 움직이기 시작하는 레벨 하한(정확히 0=죽은 마이크는 정지).
  *  근거: recorder 레벨은 `RMS/LEVEL_REF_RMS`(0.1) 지수평활, 프리롤 미가용·teardown 시 **정확히 0**.
@@ -35,13 +36,11 @@ export function VoiceWaveform({
   getTimeDomainData,
   getLevel,
   active,
-  height = 68,
   color = T.green,
 }: {
   getTimeDomainData: (out: Uint8Array) => boolean;
   getLevel: () => number;
   active: boolean;
-  height?: number;
   color?: string;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -61,16 +60,26 @@ export function VoiceWaveform({
     let lastFrameAt = 0;
     let visible = true;
 
-    /** 모든 막대에 scaleY 배열을 적용(레이아웃 조회 없음 — transform 전용, 합성기). */
-    const paint = (heights: number[]) => {
+    /** 모든 막대에 레벨을 적용(레이아웃 조회 없음 — transform 전용, 합성기). */
+    const paint = (levels: number[], moving: boolean) => {
+      const root = rootRef.current;
+      if (root && root.dataset.waveMotion !== (moving ? 'active' : 'idle')) {
+        root.dataset.waveMotion = moving ? 'active' : 'idle';
+      }
       for (let i = 0; i < bars.length; i++) {
         const el = bars[i];
-        if (el) el.style.transform = `scaleY(${heights[i] ?? FLAT})`;
+        if (!el) continue;
+        const level = levels[i] ?? BASE_LEVEL;
+        el.style.setProperty('--level', String(level));
+        el.style.transform = `scaleY(${level})`;
       }
     };
 
-    /** 평막대(정지) — 안 듣는 중(비활성·reduced·레벨 0/마이크 사망)의 시각 표현. */
-    const drawStatic = () => paint(new Array(NBARS).fill(FLAT));
+    /** 정적 막대 — 일시정지는 7%, 무입력·reduced-motion은 세로 기본 높이 35%. */
+    const drawStatic = () => {
+      const level = active ? BASE_LEVEL : PAUSED_LEVEL;
+      paint(new Array(BAR_COUNT).fill(level), false);
+    };
 
     if (reduced || !active) {
       drawStatic();
@@ -100,30 +109,33 @@ export function VoiceWaveform({
         return;
       }
 
-      const heights = new Array<number>(NBARS);
+      const levels = new Array<number>(BAR_COUNT);
       if (ok) {
         // 시간영역 샘플(0~255, 128=무음). 막대 b는 자기 구간의 피크 편차(원거리 판독용 2.4× 증폭).
-        const stride = Math.floor(FFT / NBARS);
-        for (let b = 0; b < NBARS; b++) {
+        const stride = Math.floor(FFT / BAR_COUNT);
+        for (let b = 0; b < BAR_COUNT; b++) {
           let peak = 0;
           const start = b * stride;
           for (let k = 0; k < stride; k++) {
             const d = Math.abs(buf[start + k] - 128) / 128;
             if (d > peak) peak = d;
           }
-          heights[b] = Math.max(FLAT, Math.min(1, peak * 2.4));
+          levels[b] = Math.max(BASE_LEVEL, Math.min(1, peak * 2.4));
         }
       } else {
         // 폴백: 레벨 스칼라로 합성한 흐름(analyser 미가용 기기). 진폭은 레벨에 **비례**(레벨 0 정지 —
         //   위 게이트가 이미 거른다). 시간 위상으로 막대가 흐르되, 양끝은 envelope로 수렴(밴드 정착).
         const t = performance.now() / 150;
-        for (let b = 0; b < NBARS; b++) {
-          const env = Math.sin((b / (NBARS - 1)) * Math.PI); // 양끝 0
+        for (let b = 0; b < BAR_COUNT; b++) {
+          const env = Math.sin((b / (BAR_COUNT - 1)) * Math.PI); // 양끝 0
           const wave = 0.5 + 0.5 * Math.sin(b * 0.7 + t);
-          heights[b] = Math.max(FLAT, Math.min(1, FLAT + (1 - FLAT) * lv * env * wave));
+          levels[b] = Math.max(
+            BASE_LEVEL,
+            Math.min(1, BASE_LEVEL + (1 - BASE_LEVEL) * lv * env * wave),
+          );
         }
       }
-      paint(heights);
+      paint(levels, levels.some((level) => level > BASE_LEVEL));
       schedule();
     };
 
@@ -149,7 +161,7 @@ export function VoiceWaveform({
       io?.disconnect();
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [active, getTimeDomainData, getLevel, height, color]);
+  }, [active, getTimeDomainData, getLevel]);
 
   return (
     <div
@@ -157,33 +169,38 @@ export function VoiceWaveform({
       data-testid="voice-waveform"
       role="img"
       aria-hidden
+      data-wave-motion="idle"
+      className="voice-waveform"
       style={{
         width: '100%',
-        height,
+        minHeight: 100,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
+        gap: 7,
+        color,
       }}
     >
-      {Array.from({ length: NBARS }, (_, i) => (
+      {Array.from({ length: BAR_COUNT }, (_, i) => (
         <span
           key={i}
+          className="voice-waveform__bar"
           ref={(el) => { barsRef.current[i] = el; }}
           style={{
-            flex: '1 1 0',
-            minWidth: 3,
-            maxWidth: 11,
-            height: '100%',
+            '--level': active ? BASE_LEVEL : PAUSED_LEVEL,
+            '--delay': `${i * -73}ms`,
+            flex: '0 0 10px',
+            width: 10,
+            height: BAR_HEIGHT,
             borderRadius: 999,
-            background: color,
-            boxShadow: `0 0 10px ${color}`,
-            transform: `scaleY(${FLAT})`,
+            background: 'currentColor',
+            boxShadow: active ? '0 0 11px currentColor' : 'none',
+            transform: `scaleY(${active ? BASE_LEVEL : PAUSED_LEVEL})`,
             transformOrigin: 'center',
             // rAF가 transform을 매 프레임 덮으므로 transition은 두지 않는다(정지 상태 잔여 애니메이션
             //   방지 — 평막대는 즉시 평막대). willChange로 합성 레이어 승격.
             willChange: 'transform',
-          }}
+          } as CSSProperties}
         />
       ))}
     </div>

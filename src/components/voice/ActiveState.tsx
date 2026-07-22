@@ -202,7 +202,7 @@ export function ActiveState({
     //      1) auto          — 상단: 소형 행 스트립(행번호/진행/도움말) + 칩 플로우(전체 ≤30dvh 캡,
     //                         2줄 초과분은 내부 스크롤 — v0.37.0 FB-B 민구 확정 칩 스펙)
     //      2) minmax(0,1fr) — 중앙 흡수영역: hero/일시정지/이상치/수정 카드 중 정확히 하나
-    //      3) auto          — 상시 파형 밴드(78~100px — 모든 상태 유지, paused=주황 평선)
+    //      3) 100px         — 상시 파형 밴드(모든 상태에서 높이 고정, paused=주황 평선)
     //      4) auto          — 하단 컨트롤바(이전/일시정지·재개/다음 + 접힘 스테퍼)
     //    한 구역의 높이 변화가 다른 구역을 밀지 않는다(컨트롤바 Y 인변량 — v0.19.0 버그B).
     //    fixed 오버레이(명령어 도움말/수동입력 시트/종료확인)는 grid track을 만들지 않는다.
@@ -210,7 +210,7 @@ export function ActiveState({
       style={{
         flex: 1, minHeight: 0,
         display: 'grid',
-        gridTemplateRows: 'auto minmax(0, 1fr) auto auto',
+        gridTemplateRows: 'auto minmax(0, 1fr) 100px auto',
       }}
       data-testid="voice-active-state"
     >
@@ -408,8 +408,8 @@ export function ActiveState({
         ) : null}
       </div>
 
-      {/* 3) 상시 파형 밴드(§6.2) — 입력 세션 동안 **모든 상태에서 유지**(민구 확정: 이상치 알람
-          중에도 제거하지 않는다 — 375×667은 밴드 높이만 축소). 활성 기준은 실제 청취 상태(리뷰
+      {/* 3) 상시 파형 밴드(§6.2) — 입력 세션 동안 **모든 상태에서 100px 유지**(민구 확정: 이상치
+          알람 중에도 제거하지 않는다). 활성 기준은 실제 청취 상태(리뷰
           라운드1 Codex 수용): complete(검토 대기)에도 STT가 명령을 듣고 있으므로 파형은 살아
           움직인다. paused만 active=false → rAF 중지 + 주황 평선. 색은 tone(엣지글로우 SSOT) 동기화. */}
       <LiveListenBand
