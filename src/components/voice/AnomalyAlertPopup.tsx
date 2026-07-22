@@ -107,6 +107,7 @@ export function AnomalyAlertPopup({
       ref={fitRef}
       data-testid="anomaly-alert"
       data-status={corrected ? 'corrected' : 'pending'}
+      className="anomaly-alert-layout"
       aria-live="assertive"
       style={{
         // v0.38.0 #3·#8 — 카드 chrome 없이 중앙 흡수영역 자체를 상태판으로 사용한다.

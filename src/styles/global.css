@@ -218,5 +218,9 @@ html { -webkit-text-size-adjust: 100%; }
 /* v0.38.0 T2-R1 — 375×667급에서는 활성 칩과 알람 라벨이 이미 제공하는 항목명 맥락을 중복 표시하지
    않는다. GL-005 폰트 하한은 유지하면서 카드 내부 무스크롤 공간을 확보한다. */
 @media (max-height: 700px) {
+  .anomaly-alert-layout {
+    padding-block: 0 !important;
+    gap: 1px !important;
+  }
   .anomaly-field-name { display: none; }
 }
