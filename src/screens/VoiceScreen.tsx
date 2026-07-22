@@ -127,6 +127,7 @@ export function VoiceScreen() {
         getAudioLevel={voiceSession.getAudioLevel}
         getTimeDomainData={voiceSession.getTimeDomainData}
         reaskReason={(sess.reaskReason ?? null) as ReaskReason}
+        uiCommand={voiceSession.uiCommand}
         onEnd={() => voiceSession.stop()}
         onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}

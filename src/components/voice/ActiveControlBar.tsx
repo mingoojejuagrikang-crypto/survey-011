@@ -3,6 +3,7 @@ import { T } from '../../tokens';
 import { I } from '../icons';
 import type { GlowTone } from './EdgeGlow';
 import { ActiveControlSteppers } from './ActiveControlSteppers';
+import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 
 /** v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 입력탭 하단 컨트롤바(표현 전용, §7.1).
  *  중앙 정렬 심볼 버튼: 이전 68×62 / 상태 심볼 88×72(상태색 채움) / 다음 68×62. 듣는 중=마이크,
@@ -20,7 +21,7 @@ const STATUS_FADE_S: Record<GlowTone, number> = { green: 1.75, amber: 2.4, red: 
 type VoiceControlStatus = 'listening' | 'alert' | 'paused';
 
 export function ActiveControlBar({
-  tone, paused, completing, onPrevRow, onNextRow, onTogglePause, onExit,
+  tone, paused, completing, onPrevRow, onNextRow, onTogglePause, onExit, uiCommand,
 }: {
   /** 상태 톤(VoiceScreen SSOT) — 중앙 버튼 채움색이 엣지글로우·파형과 함께 상태를 말한다. */
   tone: GlowTone;
@@ -30,6 +31,7 @@ export function ActiveControlBar({
   onNextRow: () => void;
   onTogglePause: () => void;
   onExit: () => void;
+  uiCommand: VoiceUiCommandSignal | null;
 }) {
   return (
     <div
@@ -74,7 +76,7 @@ export function ActiveControlBar({
         )}
       </div>
 
-      <ActiveControlSteppers />
+      <ActiveControlSteppers uiCommand={uiCommand} />
     </div>
   );
 }

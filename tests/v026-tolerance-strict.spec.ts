@@ -197,9 +197,8 @@ test('T3 — 입력 조절 스탭퍼에 "높을수록 엄격" 명시', async ({ 
   await expect(page.locator('input[type="range"]')).toHaveCount(0);
 });
 
-// ─── T4: ？명령어 팝업 잘림 0 — 375×812에서 전 항목+하단 닫기가 스크롤 없이 보인다 ──
-//  v0.26.0 화면잘림 대응 가드. 종전엔 마지막 항목(종료)이 화면 중간에서 끊겨 "잘림"으로 보였다.
-test('T4 — 명령어 팝업: 마지막 항목(종료)·하단 닫기 버튼이 375px에서 스크롤 없이 전부 보임', async ({ page }) => {
+// ─── T4: ？명령어 팝업 잘림 0 — 명령 추가 후에도 전 항목 접근 + 하단 닫기 고정 ────────────
+test('T4 — 명령어 팝업: 마지막 명령까지 스크롤 접근 가능하고 하단 닫기는 항상 보임', async ({ page }) => {
   await setupAndStart(page, 0.6);
 
   await page.locator('button[title="음성 명령어 도움말"]').first().click();
@@ -207,25 +206,35 @@ test('T4 — 명령어 팝업: 마지막 항목(종료)·하단 닫기 버튼이
   await expect(closeBtn).toBeVisible({ timeout: 3000 });
   await expect(page.locator('[data-testid="command-help-popup"]')).toContainText('도움말 중 입력 정지');
 
-  // 마지막 명령어(종료)의 설명까지 뷰포트 안(하단 닫기 버튼 위)에서 완전히 보인다.
-  const lastDesc = page.locator('text=입력을 끝내고 저장합니다').first();
+  // v0.38.0 #4-③ — 가시 버튼 명령 6개 추가로 목록은 의도적으로 스크롤 가능하다. 마지막 명령도
+  // 잘리지 않고 접근 가능하며, 하단 닫기는 목록 스크롤과 분리돼 항상 화면 안에 남아야 한다.
+  const lastDesc = page.locator('text=음성 안내 속도를 한 단계 높입니다').first();
+  await lastDesc.scrollIntoViewIfNeeded();
   await expect(lastDesc).toBeVisible();
   const box = (await lastDesc.boundingBox())!;
   const closeBox = (await closeBtn.boundingBox())!;
   expect(box.y + box.height).toBeLessThanOrEqual(closeBox.y + 1); // 목록이 닫기 버튼과 안 겹침
   expect(closeBox.y + closeBox.height).toBeLessThanOrEqual(PHONE_375.height + 1); // 닫기 버튼 화면 안
 
-  // 목록 컨테이너에 스크롤 잔여가 없다(= 전 항목이 컨테이너 안에 다 들어옴).
-  const listOverflow = await lastDesc.evaluate((el) => {
-    let p = el.parentElement;
-    while (p && getComputedStyle(p).overflowY !== 'auto') p = p.parentElement;
-    return p ? p.scrollHeight - p.clientHeight : -1;
-  });
-  expect(listOverflow).toBeLessThanOrEqual(1);
-
   // 하단 닫기 버튼으로 닫힌다(상단 ✕가 배너에 가려져도 닫기 경로 확보).
   await closeBtn.click();
   await expect(closeBtn).toBeHidden({ timeout: 2000 });
+});
+
+test('T6 — 음성으로 도움말·입력 조절·인식률·안내속도 버튼을 동일 동작시킨다', async ({ page }) => {
+  await setupAndStart(page, 0.6);
+
+  await fireSttConf(page, '입력 조절', 0.95);
+  await expect(page.locator('[data-testid="input-control-toggle"]')).toHaveAttribute('aria-expanded', 'true');
+
+  await fireSttConf(page, '인식률 낮추기', 0.95);
+  await expect(page.locator('[data-testid="stepper-tolerance"]')).toContainText('55%');
+
+  await fireSttConf(page, '안내속도 빠르게', 0.95, 800);
+  await expect(page.locator('[data-testid="stepper-tts-rate"]')).toContainText('1.10x');
+
+  await fireSttConf(page, '도움말', 0.95);
+  await expect(page.locator('[data-testid="command-help-popup"]')).toBeVisible();
 });
 
 test('T5 — 명령어 도움말이 열린 동안 STT 명령은 실행되지 않고 닫으면 복원된다', async ({ page }) => {

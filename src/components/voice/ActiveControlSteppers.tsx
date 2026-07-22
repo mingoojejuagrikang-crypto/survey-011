@@ -1,9 +1,10 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { T } from '../../tokens';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { logger } from '../../lib/logger';
 import { settingChanged } from '../../lib/logEvents';
 import { speak } from '../../lib/speech';
+import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 
 /** v0.20.0 입력탭#1·#2 — 입력 컨트롤바: [인식 허용범위] · [안내 속도] 두 다이얼을 수평 배치.
  *  허용범위(recognitionTolerance) 0.40~0.90 → %로 표시. 속도(ttsRate) 0.5~2.0 → x로 표시·샘플 음성.
@@ -12,7 +13,7 @@ function clampStep(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value * 100) / 100));
 }
 
-export function ActiveControlSteppers() {
+export function ActiveControlSteppers({ uiCommand }: { uiCommand: VoiceUiCommandSignal | null }) {
   const s = useSettingsStore();
   const ttsDebounceRef = useRef<number | null>(null);
   const sampleTts = (rate: number) => {
@@ -41,6 +42,21 @@ export function ActiveControlSteppers() {
     s.set({ ttsRate: value });
     sampleTts(value);
   };
+  const handledUiCommandSeqRef = useRef(0);
+  useEffect(() => {
+    if (!uiCommand || uiCommand.seq <= handledUiCommandSeqRef.current) return;
+    handledUiCommandSeqRef.current = uiCommand.seq;
+    const current = useSettingsStore.getState();
+    switch (uiCommand.id) {
+      case 'toggleInputControls': setOpen((v) => !v); break;
+      case 'recognitionDown': setTolerance(current.recognitionTolerance - 0.05); break;
+      case 'recognitionUp': setTolerance(current.recognitionTolerance + 0.05); break;
+      case 'guidanceSlower': setTtsRate(current.ttsRate - 0.05); break;
+      case 'guidanceFaster': setTtsRate(current.ttsRate + 0.05); break;
+    }
+    // 이벤트 seq가 유일한 실행 트리거다. 설정/로컬 상태 변경으로 같은 명령을 재실행하지 않는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uiCommand?.seq]);
   const tolPct = Math.round(s.recognitionTolerance * 100);
   // v0.37.0 FB-K(민구) — 모호한 "입력 조절"·"인식"·"안내" 라벨을 뜻이 분명한 "허용 인식률"·
   //   "안내속도"로 교체(원거리·장갑 현장에서 무엇을 조절하는지 즉시 이해). 요약 접힘 버튼도

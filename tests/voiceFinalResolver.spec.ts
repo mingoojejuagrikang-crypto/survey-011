@@ -6,6 +6,8 @@
  */
 import { test, expect } from '@playwright/test';
 import { resolveFinal } from '../src/lib/voiceFinalResolver';
+import { detectCommand } from '../src/lib/koreanNum';
+import { VOICE_COMMANDS } from '../src/lib/voiceCommands';
 
 const base = { confidence: 0.95, paused: false, awaitingKind: 'value' as const };
 
@@ -63,4 +65,25 @@ test('일반 값 대기 — 명령 없으면 값 경로', () => {
   expect(resolveFinal({ ...base, cmd: null })).toEqual({ act: 'value', trendCorrection: false });
   expect(resolveFinal({ ...base, awaitingKind: 'modify', cmd: null }))
     .toEqual({ act: 'value', trendCorrection: false });
+});
+
+test('v0.38.0 #4-③ — 가시 UI 명령은 매핑되고 숫자·단위 발화는 명령으로 오인되지 않는다', () => {
+  const uiCommands = [
+    ['도움말', 'help'],
+    ['입력 조절', 'toggleInputControls'],
+    ['인식률 낮추기', 'recognitionDown'],
+    ['인식률 높이기', 'recognitionUp'],
+    ['안내속도 느리게', 'guidanceSlower'],
+    ['안내속도 빠르게', 'guidanceFaster'],
+  ] as const;
+  for (const [spoken, expected] of uiCommands) expect(detectCommand(spoken)).toBe(expected);
+
+  for (const measurement of ['12', '12.3', '십이 점 삼', '12 밀리미터', '당도 15.2', '영 점 오']) {
+    expect(detectCommand(measurement), `${measurement}는 측정값 발화`).toBeNull();
+  }
+
+  const normalizedWords = VOICE_COMMANDS.map((command) => command.word.replace(/\s+/g, ''));
+  for (const word of normalizedWords) {
+    expect(normalizedWords.filter((candidate) => candidate !== word && candidate.startsWith(word)), `${word} prefix 충돌`).toEqual([]);
+  }
 });

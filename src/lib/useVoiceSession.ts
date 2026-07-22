@@ -5,7 +5,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { recountSynced } from './sessionSync';
 import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, isBareResponseWord, getLastParseFailReason, getLastParseFailWhole } from './koreanNum';
-import { VOICE_COMMANDS, extractModifyColumn } from './voiceCommands';
+import { VOICE_COMMANDS, extractModifyColumn, type VoiceUiCommandSignal } from './voiceCommands';
 import { decimalReaskPrompt } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
@@ -205,6 +205,10 @@ export function useVoiceSession() {
   // 멈추고 이 플래그로 입력탭 "마이크 재연결" 버튼(Vance)을 노출한다. reconnectMic()이 제스처
   // 컨텍스트에서 recoverStream('user_gesture')를 시도해 성공하면 false로 클리어. 무한 실패 폭주 차단.
   const [micLost, setMicLost] = useState(false);
+  // v0.38.0 #4-③ — 파서/세션 액션을 UI 세부 구현과 결합하지 않고, 최종 명령 1건을 표현 계층에
+  // 단조 seq로 전달한다. ActiveState/Steppers가 각자 담당 버튼과 동일 콜백을 정확히 1회 실행한다.
+  const uiCommandSeqRef = useRef(0);
+  const [uiCommand, setUiCommand] = useState<VoiceUiCommandSignal | null>(null);
   // clip_empty 자동 재시도 once 가드(세션당). 스트림이 죽어 micLost로 전환되면 더 이상 자동
   // recoverStream을 부르지 않는다(제스처 밖이라 어차피 실패). start()에서 리셋.
   const micLostLatchedRef = useRef(false);
@@ -1552,6 +1556,14 @@ export function useVoiceSession() {
         case 'confirm': await cmdConfirm(awaiting); return;
         case 'modify': await cmdModify(awaiting, text); return;
         case 'cancel': await cmdCancel(awaiting); return;
+        case 'help':
+        case 'toggleInputControls':
+        case 'recognitionDown':
+        case 'recognitionUp':
+        case 'guidanceSlower':
+        case 'guidanceFaster':
+          setUiCommand({ id: action.cmd, seq: ++uiCommandSeqRef.current });
+          return;
       }
     }
 
@@ -3141,6 +3153,7 @@ export function useVoiceSession() {
     micLost,
     reconnectMic,
     prewarmMic,
+    uiCommand,
   };
 }
 

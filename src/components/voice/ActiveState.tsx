@@ -17,12 +17,13 @@ import { ColumnChip } from './ColumnChip';
 import { useChipFlowFit } from './useChipFlowFit';
 import { ActiveControlBar } from './ActiveControlBar';
 import { ExitConfirmDialog } from './ExitConfirmDialog';
+import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 
 // ─── ACTIVE ───────────────────────────────────────────────────
 export function ActiveState({
   totalRows, columns, voiceCols, currentColId, completing, paused, anomalyPending, tone, getAudioLevel,
   getTimeDomainData,
-  reaskReason,
+  reaskReason, uiCommand,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
   onManualCommit, onManualOpen, onManualClose, onAnomalyConfirm, onAnomalyModify,
   onManualAnomalyConfirm, onManualAnomalyModify,
@@ -45,6 +46,8 @@ export function ActiveState({
   /** v0.35.0 — 시간영역 파형 getter(useVoiceSession). VoiceHero → VoiceWaveform으로 내려간다. */
   getTimeDomainData: (out: Uint8Array) => boolean;
   reaskReason: ReaskReason;
+  /** v0.38.0 #4-③ — useVoiceSession이 최종 판정한 UI 버튼 음성 명령(단조 seq). */
+  uiCommand: VoiceUiCommandSignal | null;
   onEnd: () => void;
   onRestartFromCol: (id: string) => void;
   onJumpToRow: (row: number) => void;
@@ -169,6 +172,13 @@ export function ActiveState({
       onCommandHelpClose();
     }
   }, [onCommandHelpClose]);
+
+  const handledUiCommandSeqRef = useRef(0);
+  useEffect(() => {
+    if (!uiCommand || uiCommand.seq <= handledUiCommandSeqRef.current) return;
+    handledUiCommandSeqRef.current = uiCommand.seq;
+    if (uiCommand.id === 'help') openCommandHelp();
+  }, [uiCommand, openCommandHelp]);
 
   // v0.37.0 리뷰#2(민구: 탭 탭 = 시트 닫고 재개) — App.tsx가 탭 전환 직전 overlayCloseSeq를 증가시키면,
   //   열린 수동 입력 시트/？명령어 도움말을 닫는다(→ onClose→resumeRecognitionForUi로 STT 재개). 시트는
@@ -429,6 +439,7 @@ export function ActiveState({
         onNextRow={onNextRow}
         onTogglePause={onTogglePause}
         onExit={openExitConfirm}
+        uiCommand={uiCommand}
       />
 
       {/* v0.23.0 입력탭#1 — 일시정지/이상치/수정 카드는 더 이상 여기(fixed 오버레이)에서 그리지

@@ -28,7 +28,23 @@ export type VoiceCommand =
   | 'resume'
   | 'end'
   | 'confirm'
+  | 'help'
+  | 'toggleInputControls'
+  | 'recognitionDown'
+  | 'recognitionUp'
+  | 'guidanceSlower'
+  | 'guidanceFaster'
   | null;
+
+export type VoiceUiCommand = Extract<
+  VoiceCommand,
+  'help' | 'toggleInputControls' | 'recognitionDown' | 'recognitionUp' | 'guidanceSlower' | 'guidanceFaster'
+>;
+
+export interface VoiceUiCommandSignal {
+  id: VoiceUiCommand;
+  seq: number;
+}
 
 export interface CommandSpec {
   id: Exclude<VoiceCommand, null>;
@@ -67,6 +83,15 @@ export const VOICE_COMMANDS: CommandSpec[] = [
   { id: 'pause',   word: '일시정지', display: '일시정지', desc: '입력을 잠시 멈춥니다',            primary: true },
   { id: 'resume',  word: '재시작',   display: '재시작',   desc: '멈춘 입력을 다시 시작합니다',      primary: true },
   { id: 'end',     word: '종료',     display: '종료',     desc: '입력을 끝내고 저장합니다',        primary: true },
+  // v0.38.0 #4-③ — 음성입력 중 보이는 비-네비 버튼의 누락 커버리지. 숫자·단위 발화와
+  // 겹치지 않는 명시적 복합어만 허용한다. detectCommand가 공백을 제거하므로 word는 붙여 쓰고,
+  // 사용자가 읽는 display는 자연스러운 띄어쓰기를 유지한다. 서로 완전-prefix 관계는 없다.
+  { id: 'help',                word: '도움말',           display: '도움말',           desc: '음성 명령어 도움말을 엽니다' },
+  { id: 'toggleInputControls', word: '입력조절',         display: '입력 조절',        desc: '허용 인식률과 안내속도 조절판을 열거나 닫습니다' },
+  { id: 'recognitionDown',     word: '인식률낮추기',     display: '인식률 낮추기',    desc: '허용 인식률을 한 단계 낮춥니다' },
+  { id: 'recognitionUp',       word: '인식률높이기',     display: '인식률 높이기',    desc: '허용 인식률을 한 단계 높입니다' },
+  { id: 'guidanceSlower',      word: '안내속도느리게',   display: '안내속도 느리게',  desc: '음성 안내 속도를 한 단계 낮춥니다' },
+  { id: 'guidanceFaster',      word: '안내속도빠르게',   display: '안내속도 빠르게',  desc: '음성 안내 속도를 한 단계 높입니다' },
 ];
 
 /** Commands shown in the compact on-screen hint row. */
