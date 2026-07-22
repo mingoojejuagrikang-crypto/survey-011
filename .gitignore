@@ -37,3 +37,9 @@ CODEX-HANDOFF.md
 
 # UI 검증 스크린샷(로컬 확인용) — 레포 커밋 제외
 fb-screenshots/
+
+# 에이전트 운영 파일(로컬 전용 — 앱과 무관, myPKA Hard rule #11)
+_BRIEF-*.md
+_GL-006.md
+_reference-ui.html
+_codex-tasks/
