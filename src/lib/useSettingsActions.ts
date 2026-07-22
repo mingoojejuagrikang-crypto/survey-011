@@ -185,7 +185,15 @@ export function useSettingsActions() {
           }
         }),
       );
-      if (enriched.length) s.set({ columns: enriched, tableGenerated: false });
+      if (enriched.length) {
+        s.set({ columns: enriched, tableGenerated: false });
+        // v0.38.0 — 컬럼이 바뀌면 과거값 인덱스의 설정 지문이 달라져 기존 캐시·폴백이 함께 무효가
+        // 된다. 특히 로그인 자동 재연결은 과거값 강제 갱신(#1)과 같은 흐름이라, 갱신이 먼저 끝나고
+        // 여기서 컬럼이 바뀌면 화면이 "과거값 미준비"로 고착됐다. 정착된 설정 기준으로 다시 만든다.
+        // ensurePastIndex는 유효 캐시/진행 중이면 no-op이라 불필요한 조회를 만들지 않는다.
+        resetPastIndexRetries();
+        prefetchPastIndex();
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
