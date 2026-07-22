@@ -111,7 +111,6 @@ export default function App() {
   const phoneStyle: React.CSSProperties = isMobile
     ? {
         width: '100vw',
-        height: '100dvh',
         display: 'flex',
         flexDirection: 'column',
         background: T.bg,
@@ -139,7 +138,7 @@ export default function App() {
       };
 
   return (
-    <div style={phoneStyle}>
+    <div className={isMobile ? 'mobile-app-shell' : undefined} style={phoneStyle}>
       {/* v0.18.0 1f — 비강제 "새 버전" 배너(상단 고정, 모든 탭 공통). 새 SW waiting 시에만 노출. */}
       <UpdateBanner />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
