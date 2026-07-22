@@ -696,6 +696,16 @@
 - **🟡 2026-06-30 v0.24.0 실기기 2세션 — 다중세션 업로드 기능적 성공 + partial 4연속:** 2세션 함께 export·**둘 다 Drive 안착**(rclone 수확)=동시선택 업로드 성공. 단 export 시점 `drive_upload:partial:user_drive,admin_drive`×3 또 기록(**06-25/26/29/30 4연속**) — 데이터는 도달하나 라벨이 진짜 실패와 외관 동일. "로그 N/N 세션 백업" 토스트는 미계측(육안 필요). 라벨 정밀화(레그별 성공/실패 분리) 백로그 F2.
 - **🟢 2026-07-02 v0.25.0 — partial 4연속의 사후 입증 + 신규 라벨 검증은 다음 export로:** 07-02 zip의 누적 이력에서 06-30 `partial:user_drive,admin_drive`×3 **뒤 13~21초 내 `drive_upload:ok`×3** 확인 — 4연속 partial은 "재시도 성공이 그 zip 스냅샷 밖"이었던 오해로 종결. v0.25.0 F2 레그 분리 라벨(`drive_upload:ok`/`partial:fail=<legs>:ok=<legs>`, `DataScreen.tsx:289-303`)은 배포됐으나 **export zip은 자기 업로드 결과를 담을 수 없는 구조**(스냅샷이 업로드 완료 전 생성, 07-02 자기 이벤트 0건)라 실기기 검증은 다음 export 로그에서.
 
+### [CLIP-R1] recoverStream 쿨다운이 **첫 회복**을 막는다 — 로드 직후 3초 사각지대 (자동 재연결 무력화)
+
+- **무엇:** `AudioRecorder.recoverStream`의 쿨다운 가드가 `performance.now() - lastRecoverAt < 3000`인데 `lastRecoverAt` 초기값이 **0**이다. `performance.now()`는 **페이지 로드 후 경과 ms**라, 로드 직후 3초 동안은 `now - 0 < 3000`이 성립해 **모든 재획득이 조용히 차단**(false 반환, getUserMedia 호출 자체가 없음)된다.
+- **왜 이제 문제인가:** v0.14.0~v0.37.0에서는 recoverStream 진입점이 **사용자 제스처(수동 재연결 버튼)뿐**이라 잠복해 있었다(사람이 로드 3초 안에 버튼을 누를 일이 드물다). v0.38.0 #5의 **자동 재연결은 사고 시점에 즉시 발화**하므로 이 구간에 정면으로 걸린다. 걸리면 **getUserMedia를 부르지도 못한 채 자동 1회 가드(`micAutoReconnectAttemptedRef`)만 소진**하고 수동 배너로 떨어져, 자동화가 목적인 기능이 조용히 무력화된다.
+- **테스트가 결함을 가리고 있었다(중요):** #5 회귀 2종은 **병렬 전체 실행에서는 통과**한다 — 머신 부하로 3초가 지나가기 때문이다. **격리(`--workers=1`) 단독 실행에서 3/3 실패**했다. 즉 이 건은 "격리하면 통과 = 부하성 flake"의 **정반대 패턴**이며, 전체 스위트 green만 보고 있으면 절대 안 잡힌다.
+- **해결(v0.38.0 `e1dbff0`):** `lastRecoverAt` 초기값을 `-RECOVER_COOLDOWN_MS`로. 쿨다운은 **연속** 재획득 폭주를 막기 위한 것이지 첫 회복을 막으려는 게 아니다. 수정 후 격리 6/6 통과.
+- **실기기 연결점:** v0.37.0 로그(2026-07-22 10:16)에 블루투스 전환 직후 `mic_reconnect_ok` → `clip_empty` → `audio-capture` 연쇄가 실재한다. **연속 실패 구간에서는 쿨다운이 실제로 걸리는 조건**이므로, 자동 재연결의 실기기 효능은 다음 회차 로그에서 `mic_auto_reconnect:result=*`로 확인해야 한다.
+- **출처:** `survey-011 v0.38.0` 2026-07-22 세션(#5 회귀 격리 검증).
+- **현재 상태:** ✅수정됨(브랜치, 미배포). ⚠️실기기 효능 미검증.
+
 ### [SETTINGS-1] 재로그인 자동 재연결이 사용자 컬럼 설정을 덮어써 과거값 인덱스까지 무효화
 
 - **무엇:** 재로그인은 이전 시트를 자동 재연결(v0.13.0 R1 `onGoogleClick` → `onUrlConfirmWithUrl`)하는데, `loadHeaders`가 `inferColumns`로 컬럼을 **처음부터 다시 유추해 통째로 교체**했다. `preserveInferredColumnIds`는 **`id`만** 보존한다(`sheets.ts:306-313`).
