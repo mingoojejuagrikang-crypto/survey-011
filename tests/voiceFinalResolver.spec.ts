@@ -7,7 +7,7 @@
 import { test, expect } from '@playwright/test';
 import { resolveFinal } from '../src/lib/voiceFinalResolver';
 import { detectCommand } from '../src/lib/koreanNum';
-import { VOICE_COMMANDS } from '../src/lib/voiceCommands';
+import { VOICE_COMMANDS, VOICE_UI_COMMAND_IDS } from '../src/lib/voiceCommands';
 
 const base = { confidence: 0.95, paused: false, awaitingKind: 'value' as const };
 
@@ -50,6 +50,33 @@ test('trendConfirm 해소(B4) — 확인/유지=확정, 타 명령=강등 디스
   // 신뢰도 게이트가 trendConfirm 해소보다 먼저다(종전 코드 순서).
   expect(resolveFinal({ ...tc, cmd: 'confirm', confidence: 0.5 }))
     .toEqual({ act: 'rejectLowConfidence', minConfidence: 0.7 });
+});
+
+/**
+ * v0.38.0 리뷰#1(Codex High) — 이상치 대기 중 **화면 표시만 바꾸는 명령**은 알림을 소모하지 않는다.
+ *
+ * 결함: '확인'/'유지'가 아닌 **모든** 명령이 trendDemoted=true로 나가 useVoiceSession이
+ * setAnomalyAlert(null)로 알림을 지웠다. 그래서 "도움말"이라고 말하면 **미확인 이상치 경고가
+ * 사라졌다** — 같은 동작을 화면 버튼으로 누르면 알림이 유지되는데도. 음성/터치 불일치이자,
+ * 사용자가 이상값을 확인·수정하지 않고 넘어갈 수 있는 데이터 무결성 문제다.
+ */
+test('[리뷰#1] trendConfirm 중 UI 전용 명령은 알림을 소모하지 않는다(터치 버튼과 동등)', () => {
+  const tc = { ...base, awaitingKind: 'trendConfirm' as const };
+
+  for (const cmd of VOICE_UI_COMMAND_IDS) {
+    expect(resolveFinal({ ...tc, cmd }), `${cmd}는 알림을 유지해야 한다`)
+      .toEqual({ act: 'dispatch', cmd, trendDemoted: false });
+  }
+
+  // 대조군 — 값·행을 움직이는 명령은 종전대로 알림을 해제하고 강등된다(회귀 방지).
+  for (const cmd of ['nextRow', 'prevRow', 'modify', 'cancel', 'end'] as const) {
+    expect(resolveFinal({ ...tc, cmd }), `${cmd}는 종전대로 강등돼야 한다`)
+      .toEqual({ act: 'dispatch', cmd, trendDemoted: true });
+  }
+
+  // 이상치 대기가 아닐 때는 UI 명령도 종전과 동일(강등 개념 자체가 없다).
+  expect(resolveFinal({ ...base, awaitingKind: 'value', cmd: 'help' }))
+    .toEqual({ act: 'dispatch', cmd: 'help', trendDemoted: false });
 });
 
 test('센티넬 흡수 — atEnd/reviewWait의 일반 값 발화, 명령은 정상 디스패치', () => {

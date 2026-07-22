@@ -11,11 +11,14 @@
  *     confidence 0은 "미보고" 센티널 — 통과.
  *  3. trendConfirm 해소(v0.7.0 B4): '확인'/'유지'=확정·진행, 타 명령=알림 해제 후 명령 디스패치
  *     (수정 의미론 'modify'로 강등), 명령 아님=값 경로 폴스루(정정 재커밋).
+ *     **단 화면 표시만 바꾸는 UI 명령은 알림을 해제하지 않는다**(v0.38.0 리뷰#1) — 같은 동작의
+ *     화면 버튼은 알림을 유지하는데 음성만 해제하면 음성/터치가 어긋나고, 무엇보다 사용자가
+ *     이상치를 **확인하지 않은 채** 다음으로 넘어갈 수 있다(데이터 무결성).
  *  4. 명령 디스패치.
  *  5. atEnd/reviewWait 센티넬은 일반 값 발화를 흡수(안내만).
  *  6. 값 경로.
  */
-import { VOICE_COMMANDS, type VoiceCommand } from './voiceCommands';
+import { VOICE_COMMANDS, isVoiceUiCommand, type VoiceCommand } from './voiceCommands';
 
 export type AwaitingKind = 'value' | 'modify' | 'trendConfirm' | 'atEnd' | 'reviewWait';
 
@@ -51,6 +54,9 @@ export function resolveFinal(input: {
 
   if (awaitingKind === 'trendConfirm') {
     if (cmd === 'confirm' || cmd === 'keep') return { act: 'trendResolve' };
+    // v0.38.0 리뷰#1 — 화면 표시만 바꾸는 명령(도움말·조절판·인식률·안내속도)은 이상치 판단과
+    // 무관하므로 알림을 소모하지 않는다. 같은 동작의 화면 버튼과 동등해야 한다.
+    if (isVoiceUiCommand(cmd)) return { act: 'dispatch', cmd, trendDemoted: false };
     if (cmd) return { act: 'dispatch', cmd, trendDemoted: true };
     return { act: 'value', trendCorrection: true };
   }

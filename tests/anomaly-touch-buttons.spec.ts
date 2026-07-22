@@ -212,6 +212,44 @@ test('[확인] 버튼 — 음성 "확인"과 동일: 값 확정 + 1회 advance +
   expect(events.some((e) => e.type === 'command' && e.parsed === 'confirm' && e.extra === 'touch')).toBe(true);
 });
 
+/**
+ * v0.38.0 리뷰#1(Codex High) — 이상치 대기 중 **UI 전용 음성명령이 알람을 소모하던** 결함 회귀.
+ *
+ * 결함: resolveFinal이 '확인'/'유지'가 아닌 **모든** 명령을 trendDemoted=true로 내보내
+ * setAnomalyAlert(null)이 실행됐다. 그래서 "도움말"이라고 말하면 미확인 이상치 경고가 사라졌다.
+ * 반면 같은 도움말을 **화면 버튼으로 열면 알람이 유지**된다 — 음성/터치 불일치이자, 사용자가
+ * 이상값을 확인·수정하지 않고 넘어갈 수 있는 데이터 무결성 문제(PRINCIPLES 시각·청각 일치).
+ *
+ * 이 파일에 두는 이유: 비교 기준인 **터치 경로의 동등성 계약**이 여기 있다.
+ */
+test('[리뷰#1] 이상치 대기 중 음성 "도움말"은 알람을 지우지 않는다(터치와 동등)', async ({ page }) => {
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+
+  // 직전 100.0 → 120.5 = increase 알람.
+  await fireStt(page, '120.5', 700);
+  const popup = page.locator('[data-testid="anomaly-alert"]');
+  await expect(popup).toBeVisible();
+  await expect(popup).toHaveAttribute('data-status', 'pending');
+
+  // UI 전용 명령 — 도움말이 열려야 하고, 이상치 알람은 **그대로 남아야** 한다.
+  await fireStt(page, '도움말', 700);
+  await expect(page.locator('[data-testid="command-help-popup"]')).toBeVisible();
+  await expect(popup).toBeVisible();
+  await expect(popup).toHaveAttribute('data-status', 'pending');
+
+  // 알람을 소모하지 않았으므로 해제 이벤트도 없어야 한다(로그로도 고정).
+  const events = await loadLogEventsFromIDB(page);
+  expect(events.some((e) => e.type === 'trend' && (e.extra ?? '').startsWith('trend_alert_dismissed'))).toBe(false);
+
+  // 여전히 이상치 대기 상태다 — 음성 '확인'으로 정상 해소되고 다음 항목으로 1회 진행한다.
+  await page.locator('[data-testid="cmd-help-close"]').click();
+  await expect(page.locator('[data-testid="command-help-popup"]')).toHaveCount(0);
+  await fireStt(page, '확인', 700);
+  await waitForActiveChip(page, '종경');
+  await expect(popup).toHaveCount(0);
+});
+
 test('[수정] 버튼 — 음성 "수정"과 동일: 같은 필드 재청취 + 기존값 보존(덮어쓰기 전까지) + dismissed 로그', async ({ page }) => {
   await setupAndStart(page);
   await waitForActiveChip(page, '횡경');

@@ -5,7 +5,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { recountSynced } from './sessionSync';
 import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, isBareResponseWord, getLastParseFailReason, getLastParseFailWhole } from './koreanNum';
-import { VOICE_COMMANDS, extractModifyColumn, type VoiceUiCommandSignal } from './voiceCommands';
+import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiCommandSignal } from './voiceCommands';
 import { decimalReaskPrompt } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
@@ -1572,6 +1572,12 @@ export function useVoiceSession() {
     // trend_alert_corrected 기록.
 
     if (action.act === 'dispatch') {
+      // v0.38.0 리뷰#1 — UI 전용 명령은 목록을 여기 복붙하지 않고 voiceCommands의 SSOT로 판정한다
+      // (같은 목록이 resolveFinal의 이상치 분기에도 필요하다 — 복붙된 판단이 이번 회차 결함의 뿌리).
+      if (isVoiceUiCommand(action.cmd)) {
+        setUiCommand({ id: action.cmd, seq: ++uiCommandSeqRef.current });
+        return;
+      }
       switch (action.cmd) {
         case 'end': await cmdEnd(); return;
         case 'pause':
@@ -1596,14 +1602,6 @@ export function useVoiceSession() {
         case 'confirm': await cmdConfirm(awaiting); return;
         case 'modify': await cmdModify(awaiting, text); return;
         case 'cancel': await cmdCancel(awaiting); return;
-        case 'help':
-        case 'toggleInputControls':
-        case 'recognitionDown':
-        case 'recognitionUp':
-        case 'guidanceSlower':
-        case 'guidanceFaster':
-          setUiCommand({ id: action.cmd, seq: ++uiCommandSeqRef.current });
-          return;
       }
     }
 

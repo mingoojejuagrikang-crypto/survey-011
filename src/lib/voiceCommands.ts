@@ -36,10 +36,27 @@ export type VoiceCommand =
   | 'guidanceFaster'
   | null;
 
-export type VoiceUiCommand = Extract<
-  VoiceCommand,
-  'help' | 'toggleInputControls' | 'recognitionDown' | 'recognitionUp' | 'guidanceSlower' | 'guidanceFaster'
->;
+/** 화면 표시만 바꾸는 명령들 — 값·행·세션 상태를 건드리지 않는다(도움말 열기, 조절판 토글,
+ *  인식률/안내속도 조절). 같은 동작의 화면 버튼과 **완전히 동등**해야 한다.
+ *
+ *  v0.38.0 리뷰#1 — 이 목록이 타입으로만 존재해 런타임 판정이 불가능했고, 결국 dispatch switch에
+ *  같은 6종이 **복붙**돼 있었다. 복붙된 판단이 이번 회차 결함들의 뿌리였으므로([PAST-2]) 배열을
+ *  SSOT로 두고 타입을 여기서 파생시킨다 — 명령이 늘거나 줄면 이 배열 한 곳만 고친다. */
+export const VOICE_UI_COMMAND_IDS = [
+  'help',
+  'toggleInputControls',
+  'recognitionDown',
+  'recognitionUp',
+  'guidanceSlower',
+  'guidanceFaster',
+] as const;
+
+export type VoiceUiCommand = (typeof VOICE_UI_COMMAND_IDS)[number];
+
+/** 이 명령이 화면 표시만 바꾸는가(= 값·이상치 판정에 관여하지 않는가). */
+export function isVoiceUiCommand(cmd: VoiceCommand): cmd is VoiceUiCommand {
+  return cmd != null && (VOICE_UI_COMMAND_IDS as readonly string[]).includes(cmd);
+}
 
 export interface VoiceUiCommandSignal {
   id: VoiceUiCommand;
