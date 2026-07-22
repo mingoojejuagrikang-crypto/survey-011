@@ -454,15 +454,30 @@
 ### [ENV-12] ESLint max-lines(500) 예외 목록 — GL-006 헌장 §5 도입 시점의 기존 초과 파일
 - **배경:** 공통 개발 헌장(GL-006, 민구 채택 2026-07-16) §5 — 파일 크기는 책임 크기의 신호(권장 150~250줄, 300줄 분리 검토, **500줄 리팩토링 대상**). v0.35.1 Stage 1-8에서 ESLint `max-lines`(500, `src/` 한정)를 오류 게이트로 도입(`npm run lint`, predeploy에 포함).
 - **예외(파일 상단 `eslint-disable max-lines`, 해소 시 주석 제거 + 이 목록에서 삭제):**
-  1. `src/lib/useVoiceSession.ts` (~3,125) — **Stage 3(v0.35.3)에서 코어 재설계 완료**(판별 유니온·
-     resolveFinal 결정표·clipPointer/trendEvaluate 모듈·logCell·proceedAfterCommit — 무효 상태 조합은
-     이제 컴파일이 차단). 줄수 해소는 후속 서브 훅 시리즈(클립 캡처 `useClipCapture` → persist →
-     내비게이션 순, ref 공유 없는 인터페이스)로 계속 — v0.34~35 기능 유입으로 플랜 당시 추정
-     (1,200~1,500 잔존)보다 몸집이 커서 한 릴리스에 끝내지 않고 릴리스당 1개 서브 훅씩 검증하며 진행
+  1. `src/lib/useVoiceSession.ts` (**3,112** — v0.38.0에서 3,244→3,112) — **Stage 3(v0.35.3)에서 코어
+     재설계 완료**(판별 유니온·resolveFinal 결정표·clipPointer/trendEvaluate 모듈·logCell·
+     proceedAfterCommit — 무효 상태 조합은 이제 컴파일이 차단). 줄수 해소는 후속 서브 훅 시리즈
+     (클립 캡처 `useClipCapture` → persist → 내비게이션 순, ref 공유 없는 인터페이스)로 계속 —
+     v0.34~35 기능 유입으로 플랜 당시 추정(1,200~1,500 잔존)보다 몸집이 커서 한 릴리스에 끝내지
+     않고 릴리스당 1개 서브 훅씩 검증하며 진행.
+     - ✅ **v0.38.0: `useClipCapture` 분리 완료**(서브 훅 #1 — 셀별 재시도·명령 클립 인덱스,
+       in-flight 저장 장부). 다음은 **persist**(`persistSession`), 그다음 내비게이션.
+     - ⚠️ **분리 시 identity 계약 주의:** 노출 함수를 `useCallback(..., [])`로 고정해야 한다.
+       호출부 `logCell`이 비메모이즈라 의존성에 그대로 넣으면 매 렌더 새 identity가 되고, 그
+       함수들이 `handleFinal`의 의존성 배열에 있어 **매 렌더 handleFinal 재생성 → STT 배선이
+       요동**친다. 주입 deps는 ref로 받아 흡수한다(`useClipCapture`의 `depsRef` 패턴).
   2. ~~`src/screens/SettingsScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/settings 16파일 + useSettingsActions 훅 분리, 3,114→489줄)
   3. ~~`src/screens/DataScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/data 15파일 + useDataActions 훅 분리, 2,420→315줄)
   4. ~~`src/screens/VoiceScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/voice 7파일 추출, 1,342→174줄)
-  5. `src/lib/audioRecorder.ts` (854) — 단일 책임 클래스, 분리 경계 검토 후 해소
+  5. `src/lib/audioRecorder.ts` (**673** — v0.38.0에서 906→673) — 마이크 PCM 캡처 탭을
+     `micPrerollTap.ts`(287줄)로 분리했다(링버퍼·입력 레벨·시간영역 파형). 공개 API는 위임
+     메서드로 유지해 호출부 수정 0.
+     - ⚠️ **남은 673줄의 분리 경계는 자명하지 않다.** 원안이던 "장치·스트림 생명주기 / 클립 녹음"
+       2분할은 **`init`·`recoverStream`·`dispose`가 양쪽을 가로질러** 오케스트레이션이 두 클래스로
+       찢어진다. 프리롤 탭을 먼저 자른 이유가 그것 — 클립 경로와의 접점이 `startClip`의
+       AudioContext 재개 1곳뿐이라 경계가 깨끗했다. 다음 분리는 **별도 설계 필요**.
+     - **순서 계약(불변):** 캡처 그래프 `detach()`는 **항상 `stream.stop()`보다 먼저**다
+       (source가 stream을 참조 — 뒤집히면 그래프 누수).
   6. `src/lib/pastValues.ts` (573) — 과거값 인덱스 도메인, 분리 경계 검토 후 해소
   7. `src/lib/sheets.ts` (545) — Sheets API 도메인, 분리 경계 검토 후 해소
   8. `src/stores/settingsStore.ts` (~521) — persist migrate 이력 포함, 분리 경계 검토 후 해소
