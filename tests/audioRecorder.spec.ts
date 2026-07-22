@@ -59,3 +59,24 @@ test.describe('AudioRecorder.isStreamLost() — micLost 게이트 판정', () =>
     expect(rec.isStreamLost()).toBe(false);
   });
 });
+
+/**
+ * v0.38.0 [CLIP-R1] — 재획득 쿨다운이 **첫 회복**을 막지 않는지 결정론적으로 고정.
+ *
+ * 근인: 쿨다운 비교값이 `performance.now()`(페이지 로드 후 경과 ms)인데 `lastRecoverAt`이 0이면
+ * 로드 직후 3초 동안 `now - 0 < 3000`이 성립해 **모든 recoverStream이 조용히 차단**된다.
+ * #5 자동 재연결은 사고 시점에 즉시 발화하므로 이 구간에 걸리면 getUserMedia를 부르지도 못한 채
+ * 1회 가드만 소진한다.
+ *
+ * 이 테스트가 필요한 이유: 같은 결함의 통합 회귀(v034-wave-glow B8)는 **격리 실행에서만** 실패하고
+ * 병렬 전체 실행에서는 부하 지연으로 3초가 지나가 통과한다. 즉 통합 테스트만으로는 재발을 못 잡는다.
+ * 여기서는 시계에 의존하지 않고 초기값 자체를 검증한다.
+ */
+test('[CLIP-R1] 새로 만든 레코더의 첫 recoverStream은 쿨다운에 걸리지 않는다', () => {
+  const rec = new AudioRecorder();
+  const lastRecoverAt = (rec as unknown as { lastRecoverAt: number }).lastRecoverAt;
+
+  // performance.now()가 0에 가까운 시점(페이지 로드 직후)에도 쿨다운 창 밖이어야 한다.
+  expect(lastRecoverAt).toBeLessThanOrEqual(-3000);
+  expect(performance.now() - lastRecoverAt).toBeGreaterThanOrEqual(3000);
+});
