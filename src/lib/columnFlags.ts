@@ -42,13 +42,26 @@ export function effectiveSampleKey(col: Column): boolean {
  * 나머지는 전부 사용자 설정이라 보존한다. 단 `type`이 달라졌으면 컬럼의 의미가 바뀐 것이므로
  * 재유추값을 그대로 쓴다 — reconcileColumnFlags의 structural-change 규칙과 같은 판단이다.
  */
+/** 숫자 계열은 표본 표현("111" vs "111.0")만으로 갈리므로 의미상 같은 종류로 본다. */
+const NUMERIC_TYPES = new Set<Column['type']>(['int', 'float']);
+
+/** 표본 추론 타입이 사용자 설정을 버릴 만큼 "의미가 달라졌는지". 숫자 계열 안의 흔들림은 아니다. */
+function isSemanticTypeChange(prev: Column, inferred: Column): boolean {
+  if (prev.type === inferred.type) return false;
+  return !(NUMERIC_TYPES.has(prev.type) && NUMERIC_TYPES.has(inferred.type));
+}
+
 export function preserveUserColumnSettings(inferred: Column[], existing: Column[]): Column[] {
   const existingById = new Map(existing.map((c) => [c.id, c]));
   return inferred.map((col) => {
     const prev = existingById.get(col.id);
-    if (!prev || prev.type !== col.type) return col;
+    if (!prev || isSemanticTypeChange(prev, col)) return col;
     return {
       ...col,
+      // v0.38.0 리뷰#1(Codex High) — 표본이 우연히 정수 하나뿐이면 float 컬럼이 int로 추론된다.
+      // 그 표현 차이로 사용자의 타입·소수자리·추세 설정을 버리면 안 되므로, 숫자 계열 안에서는
+      // **사용자 타입이 SSOT**다. 진짜 의미 변경(text↔date 등)일 때만 재유추값을 쓴다.
+      type: prev.type,
       input: prev.input,
       ttsAnnounce: prev.ttsAnnounce,
       auto: prev.auto,
