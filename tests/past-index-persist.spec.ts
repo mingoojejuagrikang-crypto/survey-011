@@ -20,8 +20,9 @@ import {
   deserializePastIndexEntry,
   isFallbackFresh,
   FALLBACK_TTL_MS,
-  withTimeout,
 } from '../src/lib/pastValues';
+// v0.38.0 — withTimeout은 계층 중립 유틸(lib/async)로 이동. 검증 내용은 그대로 여기서 유지한다.
+import { withTimeout } from '../src/lib/async';
 import type { Column } from '../src/types';
 
 const col = (id: string, name: string, over: Partial<Column> = {}): Column => ({

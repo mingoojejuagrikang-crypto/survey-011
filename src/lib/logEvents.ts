@@ -51,3 +51,12 @@ export function micAutoReconnect(stage: 'attempt' | 'ok' | 'failed'): string {
     ? 'mic_auto_reconnect:attempt'
     : `mic_auto_reconnect:${kv({ result: stage })}`;
 }
+
+/** v0.38.0 리뷰#1 — 재획득 `getUserMedia`가 **응답 없이 보류**돼 타임아웃으로 포기한 경우.
+ *
+ *  기존 `clip_recorder_recover_failed:<reason>:<message>`(거부·오류)와 **별도 이벤트**로 둔다.
+ *  거부와 보류는 현장 원인이 다르기 때문 — 거부는 권한/정책, 보류는 OS·브라우저 교착이라
+ *  로그에서 섞이면 실기기 판독이 불가능하다. 기존 문자열은 바이트 계약이라 변경하지 않는다. */
+export function recoverTimeout(reason: string, ms: number): string {
+  return `clip_recorder_recover_timeout:${reason}:${kv({ ms })}`;
+}

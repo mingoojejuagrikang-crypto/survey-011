@@ -105,3 +105,63 @@ test('[리뷰#1] 자동 시도 직후 쿨다운이 남아도 사용자 제스처
   expect(await rec.recoverStream('user_gesture', { bypassCooldown: true })).toBe(true);
   expect(calls).toBe(1);                                    // 제스처는 첫 탭에 실제로 시도된다
 });
+
+/**
+ * v0.38.0 리뷰#1(Codex High) — `getUserMedia`가 **보류**될 때 재획득이 영구 교착되지 않는지.
+ *
+ * 근인: 브라우저가 권한 요청을 resolve도 reject도 하지 않으면 `await acquireStream()`이 영원히
+ * 멈춘다. 그러면 ①`recovering`이 true로 고정돼 이후 모든 재획득이 즉시 false ②호출부
+ * (`useVoiceSession.reconnectMic`)의 in-flight ref도 고정돼 **수동 탭조차 같은 미해결 Promise를
+ * 돌려받고** ③실패 폴백(수동 재연결 배너)이 `.then()` 안이라 **배너조차 뜨지 않는다**.
+ * 게다가 teardown은 이미 끝난 뒤라 레코더가 종전보다 더 해체된 채 남는다 = 세션 내내 녹음 사망.
+ * **거부보다 보류가 위험하다** — 반드시 결말을 만들어야 한다.
+ *
+ * 시계 의존을 피하려고 인스턴스 타임아웃(`acquireTimeoutMs`)을 짧게 주입한다(실제 7초 대기 없음).
+ */
+test('[리뷰#1] getUserMedia가 응답 없이 보류돼도 재획득은 타임아웃으로 결말이 난다', async () => {
+  const rec = new AudioRecorder();
+  const priv = rec as unknown as {
+    acquireTimeoutMs: number;
+    recovering: boolean;
+    acquireStream: () => Promise<MediaStream>;
+  };
+  priv.acquireTimeoutMs = 30;
+  priv.acquireStream = () => new Promise<MediaStream>(() => { /* 영원히 보류 */ });
+
+  // 결말이 난다(무한대기 아님) — 이 await가 끝나는 것 자체가 회귀 방지의 핵심이다.
+  expect(await rec.recoverStream('auto')).toBe(false);
+
+  // 가드가 풀려야 다음 시도(수동 배너 탭)가 실제로 진행된다. 안 풀리면 세션 내내 사망.
+  expect(priv.recovering).toBe(false);
+
+  let secondCall = 0;
+  priv.acquireStream = async () => { secondCall++; return fakeStream([{ readyState: 'live' }]); };
+  expect(await rec.recoverStream('user_gesture', { bypassCooldown: true })).toBe(true);
+  expect(secondCall).toBe(1);
+});
+
+test('[리뷰#1] 타임아웃 후 뒤늦게 열린 스트림은 즉시 닫힌다(핫마이크 방지)', async () => {
+  const rec = new AudioRecorder();
+  const priv = rec as unknown as {
+    acquireTimeoutMs: number;
+    acquireStream: () => Promise<MediaStream>;
+  };
+  priv.acquireTimeoutMs = 30;
+
+  let stopped = 0;
+  let resolveLate: ((s: MediaStream) => void) | null = null;
+  const lateStream = {
+    getAudioTracks: () => [{ readyState: 'live' }],
+    getTracks: () => [{ stop: () => { stopped++; } }],
+  } as unknown as MediaStream;
+  priv.acquireStream = () => new Promise<MediaStream>((res) => { resolveLate = res; });
+
+  expect(await rec.recoverStream('auto')).toBe(false);   // 타임아웃으로 포기
+  expect(stopped).toBe(0);                               // 아직 열리지 않았다
+
+  resolveLate!(lateStream);                              // 포기한 뒤에 늦게 성공
+  await Promise.resolve(); await Promise.resolve();      // 폐기 핸들러 마이크로태스크 소진
+
+  // 아무도 참조하지 않는 마이크가 켜진 채 남으면 안 된다(인디케이터 상시 점등 + 배터리).
+  expect(stopped).toBe(1);
+});

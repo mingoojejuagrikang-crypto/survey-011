@@ -16,6 +16,8 @@
  */
 
 import { logger } from './logger';
+import { TimeoutError, withTimeout } from './async';
+import { recoverTimeout } from './logEvents';
 import { processClip, type PrerollPcm } from './audioTrim';
 import { classifyInputDevice } from './inputDevice';
 
@@ -70,6 +72,24 @@ const PREROLL_MS = 500;
 /** v0.14.0 B-1 — 스트림 재획득(recoverStream) 최소 간격. 연속 빈 클립/잦은 devicechange에 폭주
  *  하지 않도록 쿨다운을 둔다(장치 토글은 초당 수회씩 일어나지 않음). */
 const RECOVER_COOLDOWN_MS = 3000;
+/** v0.38.0 리뷰#1(Codex High) — 재획득 `getUserMedia` 응답 대기 상한.
+ *
+ *  **왜 필요한가:** 브라우저가 권한 요청을 resolve도 reject도 하지 않고 보류하면 `recovering`과
+ *  호출부의 in-flight 가드가 영구히 잠긴다. 그러면 실패 폴백(수동 재연결 배너)이 `.then()` 안에
+ *  있어 **배너조차 뜨지 않고**, teardown은 이미 끝난 뒤라 레코더가 종전보다 더 해체된 채 남는다
+ *  = 세션 내내 조용한 녹음 사망. 거부보다 보류가 위험하다 — 반드시 결말을 만든다.
+ *
+ *  값 근거: 네트워크 왕복이 아니라 **권한 프롬프트 응답 대기**라 길 이유가 없다. 이미 권한이 있으면
+ *  즉시 resolve되고, 사용자가 프롬프트를 보고 있다면 그건 제스처 경로(수동 배너)에서 다시 시도된다. */
+const RECOVER_ACQUIRE_TIMEOUT_MS = 7000;
+
+/** 스트림의 모든 트랙을 멈춘다(마이크 인디케이터 해제). 실패해도 호출부를 막지 않는다. */
+function stopAllTracks(stream: MediaStream | null): void {
+  if (!stream) return;
+  for (const t of stream.getTracks()) {
+    try { t.stop(); } catch { /* 이미 종료된 트랙 */ }
+  }
+}
 
 // ── v0.34.0 B7 — 입력 레벨(음성 반응 파동) 상수. 기존 preroll 캡처 그래프의 push(pcm) 공통
 //    경로에서 chunk RMS를 지수평활한 0~1 레벨을 만든다. **새 AudioContext/AnalyserNode를 만들지
@@ -168,6 +188,9 @@ export class AudioRecorder {
   // 조용히 차단**됐다. #5 자동 재연결은 사고 시점에 즉시 발화하므로 이 구간에 걸리면 getUserMedia를
   // 부르지도 못한 채 1회 가드만 소진하고 수동 배너로 떨어진다.
   private lastRecoverAt = -RECOVER_COOLDOWN_MS;
+  /** v0.38.0 리뷰#1 — 재획득 응답 대기 상한. 인스턴스 필드로 둬서 단위 테스트가 실제 7초를
+   *  기다리지 않고 타임아웃 경로를 결정론적으로 재현할 수 있게 한다(`lastRecoverAt`와 같은 패턴). */
+  private acquireTimeoutMs = RECOVER_ACQUIRE_TIMEOUT_MS;
   /** v0.34.0 B7 — 지수평활된 마이크 입력 레벨(0~1). preroll push(pcm)에서만 갱신되고 UI(rAF)가
    *  getInputLevel()로 읽는다. React state 아님 — 리렌더 0. preroll 미가용이면 0에 머문다. */
   private inputLevel = 0;
@@ -320,6 +343,7 @@ export class AudioRecorder {
     this.lastRecoverAt = now;
     // v0.19.0 W7 — 재획득 전 라벨을 기억해 재획득 후 실제 변화가 있으면 route-change 이벤트를 방출.
     const prevLabel = this.activeInput?.label ?? '';
+    let timedOut = false;
     try {
       // 기존 그래프 정리 — 리스너 먼저(track.stop의 'ended'가 핸들러 재진입 못 하게), 프리롤, 스트림.
       this.detachDeviceListeners();
@@ -334,10 +358,25 @@ export class AudioRecorder {
         stale.resolveStop?.(null);
         stale.resolveStop = null;
       }
-      if (this.stream) { for (const t of this.stream.getTracks()) t.stop(); this.stream = null; }
+      stopAllTracks(this.stream);
+      this.stream = null;
       this.activeInput = null;
-      // 재획득
-      this.stream = await this.acquireStream();
+      // 재획득 — v0.38.0 리뷰#1(Codex High): getUserMedia가 보류되면(권한 프롬프트 무응답)
+      // 여기서 영원히 멈춰 recovering·호출부 in-flight 가드가 잠기고 배너조차 뜨지 않았다.
+      // 타임아웃으로 반드시 결말을 만든다.
+      const pending = this.acquireStream();
+      let acquired: MediaStream;
+      try {
+        acquired = await withTimeout(pending, this.acquireTimeoutMs);
+      } catch (e) {
+        // 이 시도는 결과를 **포기**했다. 원본 Promise는 취소할 수 없으므로, 뒤늦게 열리는 스트림은
+        // 여기서 반드시 닫는다 — 안 그러면 아무도 참조하지 않는 마이크가 켜진 채 남는다(핫마이크).
+        // 폐기 등록은 **포기 경로에서만** 한다(성공 경로에 걸면 쓰려던 스트림을 닫아버린다).
+        void pending.then(stopAllTracks, () => { /* 늦은 실패는 폐기할 자원이 없다 */ });
+        timedOut = e instanceof TimeoutError;
+        throw e;
+      }
+      this.stream = acquired;
       try {
         const track = this.stream.getAudioTracks()[0];
         if (track) {
@@ -353,7 +392,11 @@ export class AudioRecorder {
       return true;
     } catch (e) {
       this.stream = null;
-      logger.log({ type: 'error', extra: `clip_recorder_recover_failed:${reason}:${String((e as Error)?.message ?? e)}` });
+      const message = String((e as Error)?.message ?? e);
+      // v0.38.0 리뷰#1 — 보류(타임아웃)와 거부/오류를 로그에서 분리한다. 현장 원인이 다르다.
+      // 기존 clip_recorder_recover_failed 문자열은 그대로 두고 신규 이벤트만 추가(바이트 계약).
+      if (timedOut) logger.log({ type: 'error', extra: recoverTimeout(reason, this.acquireTimeoutMs) });
+      else logger.log({ type: 'error', extra: `clip_recorder_recover_failed:${reason}:${message}` });
       return false;
     } finally {
       this.recovering = false;

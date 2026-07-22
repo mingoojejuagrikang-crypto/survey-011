@@ -22,6 +22,7 @@
  * 호출자(조회 탭·추세 검증)는 null이면 기능을 조용히 건너뛴다.
  */
 import type { Column } from '../types';
+import { withTimeout } from './async';
 import { effectiveSampleKey } from './columnFlags';
 import { fetchAllRowsUnbounded, parseSpreadsheetId, readonlySheetsAuth } from './sheets';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -305,18 +306,9 @@ export function deserializePastIndexEntry(
   }
 }
 
-/** fetch 무한대기 방지 래퍼(순수 — 단위 테스트 대상). 시간 초과 시 reject —
- *  loadPastIndex의 catch가 `past_index_skip:timeout…`으로 로깅하고 null 해소하므로,
- *  in-flight 가드가 풀려 백오프 재시도·수동 재시도 버튼 경로가 살아난다(07-13 §4 hang 가설 방어). */
-export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
-    p.then(
-      (v) => { clearTimeout(t); resolve(v); },
-      (e) => { clearTimeout(t); reject(e); },
-    );
-  });
-}
+// v0.38.0 — `withTimeout`은 `lib/async.ts`로 이동했다(계층 중립 유틸). 여기서 쓰는 이유는 그대로다:
+// 시간 초과 시 reject → loadPastIndex의 catch가 `past_index_skip:timeout…`으로 로깅하고 null로
+// 해소하므로, in-flight 가드가 풀려 백오프 재시도·수동 재시도 버튼 경로가 살아난다(07-13 §4).
 
 // ─── 브라우저 사이드: fetch + 모듈 캐시 ─────────────────────────────────────
 
