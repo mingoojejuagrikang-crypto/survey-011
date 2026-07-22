@@ -154,12 +154,9 @@ export function VoiceScreen() {
           else voiceSession.pause();
         }}
       />
-      {/* v0.22.0 P0(UI) — 마이크 재연결 배너. 클립 마이크가 죽어 사용자 제스처로 재획득이 필요할 때만
-          (sess.micLost===true) 노출. 장갑·원거리 현장 고려해 화면 상단 가로 폭 전체·큰 터치 타깃의
-          눈에 띄는 RED 배너로 띄운다. 평소(micLost=false)엔 숨김. Mack이 useVoiceSession에 micLost/
-          reconnectMic를 추가하기 전엔 타입 에러가 날 수 있다(통합 전 예상치 — Larry가 최종 tsc 검증). */}
+      {/* v0.38.0 #5 — micLost 전이의 자동 1회 복구가 실패한 뒤에만 수동 재연결 배너를 노출한다. */}
       <MicReconnectBanner
-        micLost={voiceSession.micLost}
+        micLost={voiceSession.micReconnectFallbackVisible}
         reconnecting={reconnecting}
         onReconnect={() => {
           // v0.23.0 입력탭#3 — 쿨다운 동안 UI를 잠가 더블탭 무반응 오인 방지. 실제 재연결 로직은
@@ -168,7 +165,7 @@ export function VoiceScreen() {
           //   언마운트되며 타이머는 effect cleanup이 정리한다(setState-after-unmount 방지).
           if (reconnecting) return;
           setReconnecting(true);
-          voiceSession.reconnectMic();
+          void voiceSession.reconnectMic();
         }}
         onCooldownEnd={() => setReconnecting(false)}
       />

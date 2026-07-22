@@ -200,11 +200,12 @@ export function useVoiceSession() {
     hadController: false,
     reasons: new Set<string>(),
   });
-  // v0.22.0 P0 — 클립 레코더 스트림이 죽어 자동복구 불가(= 사용자 제스처로 재연결 필요)일 때 true.
-  // 근인: iOS Safari가 제스처 밖 getUserMedia를 거부하므로, 스트림이 죽으면 자동 recoverStream을
-  // 멈추고 이 플래그로 입력탭 "마이크 재연결" 버튼(Vance)을 노출한다. reconnectMic()이 제스처
-  // 컨텍스트에서 recoverStream('user_gesture')를 시도해 성공하면 false로 클리어. 무한 실패 폭주 차단.
+  // v0.22.0 P0 — 클립 레코더 스트림이 실제로 죽었을 때만 true. v0.38.0 #5는 이 전이에서 기존
+  // reconnectMic→recoverStream 경로를 자동으로 딱 1회 호출하고, 실패했을 때만 수동 배너를 노출한다.
   const [micLost, setMicLost] = useState(false);
+  const [micReconnectFallbackVisible, setMicReconnectFallbackVisible] = useState(false);
+  const micAutoReconnectAttemptedRef = useRef(false);
+  const micReconnectInFlightRef = useRef<Promise<boolean> | null>(null);
   // v0.38.0 #4-③ — 파서/세션 액션을 UI 세부 구현과 결합하지 않고, 최종 명령 1건을 표현 계층에
   // 단조 seq로 전달한다. ActiveState/Steppers가 각자 담당 버튼과 동일 콜백을 정확히 1회 실행한다.
   const uiCommandSeqRef = useRef(0);
@@ -1219,12 +1220,12 @@ export function useVoiceSession() {
   );
 
   // ── v0.22.0 P0: 클립 레코더 스트림 소실 → micLost 게이트 ──────────────
-  /** 빈/극소 클립이 났을 때의 처리. **자동 재-getUserMedia는 절대 하지 않는다**(수칙 3) —
+  /** 빈/극소 클립이 났을 때의 처리. 이 콜백 자체에서는 **재-getUserMedia를 하지 않는다** —
    *  recoverStream은 destructive-first(살아있던 스트림을 먼저 stop·null 처리)이고 이 콜백은
    *  클립 저장 콜백(사용자 제스처 밖)에서 불리므로, iOS Safari가 getUserMedia를 NotAllowedError로
    *  거부해 멀쩡하던 스트림까지 죽인다 — 그게 바로 이번 P0 근인이다(clip_empty×41 폭주).
-   *   - 스트림이 실제로 죽었으면(isStreamLost) micLost로 래치(once) → 사용자 제스처(reconnectMic)
-   *     로만 복구. 무한 실패 폭주 차단.
+   *   - 스트림이 실제로 죽었으면(isStreamLost) micLost로 래치(once). v0.38.0은 별도 effect가 기존
+   *     reconnectMic을 자동 1회만 호출하고, 실패 후에는 사용자 제스처에 맡긴다.
    *   - 스트림이 멀쩡하면(트랙 살아있음) **no-op**. 복구가 필요 없다 — 다음 startClip()이 살아있는
    *     스트림 위에 새 MediaRecorder를 만들어 자가 치유한다(transient 빈 클립의 자연 회복). */
   const maybeAutoRecoverOrLatch = useCallback((reason: string) => {
@@ -1237,20 +1238,29 @@ export function useVoiceSession() {
         type: 'clip', extra: `mic_lost:${reason}`,
       });
     }
-    // 스트림이 살아있으면 자동 복구 금지(no-op) — 다음 클립이 자가 치유. recoverStream은 오직
-    // reconnectMic(제스처)에서만.
+    // 스트림이 살아있으면 복구 금지(no-op) — 다음 클립이 자가 치유. recoverStream 진입은 오직
+    // reconnectMic 한 곳(자동 1회/수동 공용)이다.
   }, []);
 
-  /** v0.22.0 P0 — 사용자 버튼 탭(제스처)에서 호출. iOS가 getUserMedia를 거부하지 않는 유일한
-   *  컨텍스트라 여기서만 스트림을 재획득한다. 성공 시 micLost를 false로 클리어하고 래치를 푼다. */
-  const reconnectMic = useCallback(() => {
+  /** v0.22.0 P0 → v0.38.0 #5 — 수동 버튼과 자동 1회 시도가 공유하는 유일한 복구 진입점.
+   *  같은 Promise가 진행 중이면 그대로 반환해 recoverStream/getUserMedia 중복 진입을 막는다.
+   *  recoverStream reason의 legacy 문자열은 기존 텔레메트리 바이트 계약 보존을 위해 유지한다. */
+  const reconnectMic = useCallback((): Promise<boolean> => {
+    if (micReconnectInFlightRef.current) return micReconnectInFlightRef.current;
     const rec = recorderRef.current;
     logCell({ type: 'clip', extra: 'mic_reconnect_attempt' });
     if (!rec) {
       logCell({ type: 'clip', extra: 'mic_reconnect_no_recorder' });
-      return;
+      return Promise.resolve(false);
     }
-    void rec.recoverStream('user_gesture').then((ok) => {
+    const attempt = rec.recoverStream('user_gesture').then((ok) => {
+      // 복구 중 pause/stop/resume이 레코더를 폐기·교체했으면 늦게 열린 스트림을 즉시 닫는다.
+      // stale 인스턴스가 micLost를 풀거나 핫마이크로 남지 않게 하되 STT lifecycle에는 관여하지 않는다.
+      if (ok && recorderRef.current !== rec) {
+        rec.dispose();
+        logCell({ type: 'clip', extra: 'mic_reconnect_failed' });
+        return false;
+      }
       if (ok) {
         micLostLatchedRef.current = false;
         setMicLost(false);
@@ -1258,8 +1268,33 @@ export function useVoiceSession() {
       } else {
         logCell({ type: 'clip', extra: 'mic_reconnect_failed' });
       }
+      return ok;
     });
+    micReconnectInFlightRef.current = attempt;
+    void attempt.then(() => {
+      if (micReconnectInFlightRef.current === attempt) micReconnectInFlightRef.current = null;
+    });
+    return attempt;
   }, []);
+
+  // v0.38.0 #5 — micLost 한 번의 연속 구간마다 자동 복구는 정확히 1회뿐이다. 실패 상태가 계속
+  // 유지돼도 attempted ref가 effect 재실행을 차단하며, 성공/세션 리셋으로 micLost가 false가 된 뒤에만
+  // 다음 사고를 위한 가드를 해제한다. STT 컨트롤러 시작/정지/재시작 판단에는 관여하지 않는다.
+  useEffect(() => {
+    if (!micLost) {
+      micAutoReconnectAttemptedRef.current = false;
+      setMicReconnectFallbackVisible(false);
+      return;
+    }
+    if (micAutoReconnectAttemptedRef.current) return;
+    micAutoReconnectAttemptedRef.current = true;
+    setMicReconnectFallbackVisible(false);
+    let active = true;
+    void reconnectMic().then((ok) => {
+      if (active && !ok) setMicReconnectFallbackVisible(true);
+    });
+    return () => { active = false; };
+  }, [micLost, reconnectMic]);
 
   /** v0.35.0 R3-FIX-1(리뷰 라운드3, Codex High·데이터무결성) — **복원 없이** suspend 래치만 해제한다.
    *  세션 경계(stop/start)에서 쓴다. resumeRecognitionForUi와 달리 인식기를 다시 만들지 않는다 —
@@ -2711,7 +2746,7 @@ export function useVoiceSession() {
       if (!rec) return;
       const trackState = rec.getTrackState();
       if (trackState === 'ended') {
-        // 진짜 사망(트랙 종료)만 래치 — 사용자 제스처(reconnectMic)로만 복구(기존 P0 규약).
+        // 진짜 사망(트랙 종료)만 래치 — reconnectMic 자동 1회 후 실패 시 사용자 제스처로 복구.
         if (!micLostLatchedRef.current) {
           micLostLatchedRef.current = true;
           setMicLost(true);
@@ -3151,6 +3186,7 @@ export function useVoiceSession() {
     getAudioLevel,
     getTimeDomainData,
     micLost,
+    micReconnectFallbackVisible,
     reconnectMic,
     prewarmMic,
     uiCommand,
