@@ -316,7 +316,12 @@ test('W2 ② 전용 IDB 레코드에서 savedSheets 복원 (settings persist는 
 
 // ─── v0.38.0 — v11→v12 columns 출처 backfill ─────────────────────────────────
 
-test('v11→v12 migrate — 현재 연결 시트를 columns 출처로 backfill', async ({ page }) => {
+// v0.38.0 리뷰#3(Critical) — v11에는 columns의 출처를 **입증할 정보가 없다.** 종전 구현은
+// 현재 sheetUrl·sheetTab에서 backfill했는데, 그 추측은 오류 경로에서 깨진다: sheetUrl·sheetTab은
+// loadHeaders **전에** 저장되므로 헤더 조회가 실패하면 "URL은 B농가, columns는 A농가" 불일치가
+// 남고, backfill이 A컬럼을 B의 것으로 확정해 **B 시트에 A농가 값이 기록**된다.
+// 그래서 backfill하지 않고 null로 둔다 — 첫 재연결에서 새 유추값을 쓰는 안전한 방향으로 실패한다.
+test('v11→v12 migrate — columns 출처를 추측해 backfill하지 않는다(null)', async ({ page }) => {
   const payload = {
     state: {
       ...V4_PAYLOAD.state,
@@ -329,8 +334,8 @@ test('v11→v12 migrate — 현재 연결 시트를 columns 출처로 backfill',
 
   await expect.poll(async () => (await readStore(page)).version).toBe(12);
   const stored = await readStore(page);
-  expect(stored.state.columnsSheetId).toBe('SHEET_A');
-  expect(stored.state.columnsSheetTab).toBe('농가A');
+  expect(stored.state.columnsSheetId).toBeNull();
+  expect(stored.state.columnsSheetTab).toBeNull();
 });
 
 // ─── v0.35.1 — 같은 버전(v12) 폐기 키 제거: merge-strip (리뷰 라운드1 Codex·Flash 공통 지적) ───

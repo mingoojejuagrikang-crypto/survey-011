@@ -4,7 +4,7 @@
  * 소유한다. 화면(SettingsScreen)은 표현만 담당한다. 로직·계측(extra 문자열)은 이동 전과 바이트 동일
  * (SOP-003 파서 계약).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { makeSettingsDefaults, useSettingsStore } from '../stores/settingsStore';
 import { saveSheetsRecord, deletePastIndexBackup } from './db';
 import { prefetchPastIndex, resetPastIndexRetries, shouldPreparePastIndex } from './pastValues';
@@ -158,7 +158,20 @@ export function useSettingsActions() {
     if (id) await loadHeaders(id, newTab);
   };
 
+  // v0.38.0 리뷰#3(Critical) — 헤더 조회 요청 세대. 시트·탭 선택 컨트롤은 조회 중에도 활성이라
+  // 사용자가 B탭 → C탭을 빠르게 누를 수 있다. C가 먼저 완료된 뒤 느린 B 응답이 도착하면 종전에는
+  // 무조건 게시해 **화면은 C탭인데 columns·출처는 B**가 됐고, 재생성 시 B농가 fixed 값이 C 시트에
+  // 기록됐다. pastValues의 세대 가드(리뷰#2 High)와 같은 방식으로 최신 요청만 게시하게 한다.
+  const headersRequestSeqRef = useRef(0);
+
   const loadHeaders = async (spreadsheetId: string, sheetTitle: string) => {
+    const requestSeq = ++headersRequestSeqRef.current;
+    /** 이 요청이 여전히 최신이고, 스토어의 대상 시트도 그대로인가. 게시 직전에 확인한다. */
+    const isCurrentRequest = () => {
+      if (requestSeq !== headersRequestSeqRef.current) return false;
+      const live = useSettingsStore.getState();
+      return parseSpreadsheetId(live.sheetUrl) === spreadsheetId && live.sheetTab === sheetTitle;
+    };
     try {
       setLoading('컬럼 분석 중...');
       const { headers, sample } = await fetchHeaderAndSample(spreadsheetId, sheetTitle);
@@ -189,7 +202,9 @@ export function useSettingsActions() {
           }
         }),
       );
-      if (enriched.length) {
+      // 게시 직전 검증 — 더 최신 요청이 시작됐거나 대상 시트가 바뀌었으면 이 결과는 낡았다.
+      // 컬럼·출처를 함께 버린다(둘을 따로 쓰면 불일치가 남는다 — 이번 회차 결함들의 공통 원인).
+      if (enriched.length && isCurrentRequest()) {
         s.set({
           columns: enriched,
           columnsSheetId: spreadsheetId,
@@ -369,6 +384,11 @@ export function useSettingsActions() {
     const d = makeSettingsDefaults();
     s.set({
       columns: d.columns, // fresh copy — makeSettingsDefaults가 호출마다 새 객체를 만든다
+      // v0.38.0 리뷰#3 — 컬럼과 **출처는 항상 함께** 움직여야 한다. 초기화가 컬럼만 샘플 기본값
+      // (농가명=이원창 등)으로 되돌리고 출처를 이전 시트로 남겨두면, 그 시트를 다시 불러올 때
+      // 샘플 기본값을 "그 시트의 사용자 설정"으로 오인해 새 표본보다 우선 보존한다.
+      columnsSheetId: d.columnsSheetId,
+      columnsSheetTab: d.columnsSheetTab,
       tableGenerated: false,
       totalRows: d.totalRows,
       ttsRate: d.ttsRate,

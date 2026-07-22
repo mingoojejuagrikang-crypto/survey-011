@@ -537,15 +537,18 @@ export const useSettingsStore = create<SettingsState>()(
         //   당시에는 persist version을 올리지 않았다.)
 
         // ── v12 (v0.38.0) — columns의 시트 출처 기록 ────────────────────────────────
-        // v11 이하의 columns는 현재 연결된 sheetUrl·sheetTab에서 온 값이다. 출처를 backfill해
-        // 업그레이드 직후 같은 시트 재로그인에서는 사용자 설정 보존이 계속 작동하게 한다.
-        // URL/탭이 없거나 손상된 경우 출처를 null로 두어 다른 시트 설정을 잘못 보존하는 것보다
-        // 새 유추값을 쓰는 안전한 방향으로 실패한다.
+        // **출처를 추측해 backfill하지 않는다.** v11 저장본에는 columns가 어느 시트에서 왔는지를
+        // 입증할 정보가 없고, "현재 연결된 sheetUrl·sheetTab에서 왔을 것"이라는 추측은 오류 경로에서
+        // 깨진다: sheetUrl·sheetTab은 loadHeaders **전에** 먼저 저장되므로(useSettingsActions),
+        // 헤더 조회가 오프라인·권한 오류로 실패하면 "URL은 B농가, columns는 A농가" 불일치가 남는다.
+        // 그 상태를 backfill하면 A농가의 fixed 자동값이 B시트 것으로 확정돼 **B 시트에 기록된다**
+        // (리뷰#3 Critical). 잘못 보존하느니 새로 유추하는 쪽이 안전하다.
+        //
+        // 대가: 업그레이드 후 **첫 재연결 한 번은** 사용자 설정이 시트 표본 유추값으로 초기화된다.
+        // 이는 v0.37.0까지의 동작이라 회귀가 아니며, 다음 연결부터는 출처가 기록돼 정상 보존된다.
         if (version < 12) {
-          const columnsSheetId = typeof s.sheetUrl === 'string' ? parseSpreadsheetId(s.sheetUrl) : null;
-          const columnsSheetTab = typeof s.sheetTab === 'string' && s.sheetTab ? s.sheetTab : null;
-          s.columnsSheetId = columnsSheetId && columnsSheetTab ? columnsSheetId : null;
-          s.columnsSheetTab = columnsSheetId && columnsSheetTab ? columnsSheetTab : null;
+          s.columnsSheetId = null;
+          s.columnsSheetTab = null;
         }
 
         return s as SettingsState;
