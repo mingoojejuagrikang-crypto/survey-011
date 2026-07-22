@@ -602,12 +602,17 @@ export function ensurePastIndex(): void {
  * 조건: ①이상치 알람 규칙(방향 또는 변동률)이 한 컬럼이라도 있고 ②시트가 지정돼 있고
  * ③읽기 인증 수단(토큰 또는 API key)이 있다. 하나라도 없으면 소비자가 없거나 조회가 불가능하다.
  */
-export function shouldPreparePastIndex(): boolean {
+export function shouldPreparePastIndex(opts?: { requireAuth?: boolean }): boolean {
   const s = useSettingsStore.getState();
   const anyAnomalyRule = s.columns.some(
     (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
   );
-  return anyAnomalyRule && !!s.sheetUrl && !!s.sheetTab && readonlySheetsAuth() !== null;
+  if (!anyAnomalyRule || !s.sheetUrl || !s.sheetTab) return false;
+  // 인증 검사는 **선택**이다. 부팅 경로는 인증이 없어도 진입시켜 loadPastIndex가
+  // `past_index_skip:not_signed_in`을 남기게 한다 — 그 계측이 "왜 알람이 없었나"를 사후에
+  // 판별하는 유일한 단서이고, SOP-003 파서와의 바이트 계약이다(v0.34.0 C9). 조회 자체는
+  // loadPastIndex가 인증 없으면 즉시 skip하므로 네트워크 낭비는 없다.
+  return opts?.requireAuth ? readonlySheetsAuth() !== null : true;
 }
 
 /** 세션 시작 시 재시도 카운터/타이머 리셋 — 이전 세션이 오프라인으로 소진했어도 새 세션은 다시

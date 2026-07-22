@@ -300,7 +300,7 @@ export function useSettingsActions() {
       // v0.34.0 C9(b) — 시트 연결 확정 직후 프리페치. 이 함수는 Drive Picker 선택·저장목록 선택·
       // URL 확인·재로그인 자동 재연결의 공통 종점이라 여기 1곳 배선으로 전부 커버된다(단일 배선).
       // 컬럼은 위 loadHeaders가 방금 교체했을 수 있으므로 getState()로 최신을 읽는다.
-      if (shouldPreparePastIndex()) { resetPastIndexRetries(); prefetchPastIndex(); }
+      if (shouldPreparePastIndex({ requireAuth: true })) { resetPastIndexRetries(); prefetchPastIndex(); }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -349,7 +349,7 @@ export function useSettingsActions() {
     // v0.34.0 C9(a) — 토큰 조건은 (토큰 || API key)다(readonlySheetsAuth SSOT). 공개 시트면
     // 미로그인 생성 직후에도 과거값이 준비된다(민구: "시트가 연결되면 자동으로 작동해야 함").
     // v0.38.0 리뷰#1 — 판단은 shouldPreparePastIndex 단일 술어로(호출부마다 복붙하지 않는다).
-    if (shouldPreparePastIndex()) { resetPastIndexRetries(); prefetchPastIndex(); }
+    if (shouldPreparePastIndex({ requireAuth: true })) { resetPastIndexRetries(); prefetchPastIndex(); }
     setGenerateGateOpen(false);
   };
 
