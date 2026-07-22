@@ -324,7 +324,8 @@ interface CacheEntry {
 }
 
 let cached: CacheEntry | null = null;
-let inflight: { fp: string; promise: Promise<PastIndex | null> } | null = null;
+let latestLoadGeneration = 0;
+let inflight: { fp: string; generation: number; promise: Promise<PastIndex | null> } | null = null;
 let loginRefreshInflight: { fp: string; promise: Promise<PastIndex | null> } | null = null;
 
 // v0.33.0 항목5 — IDB에서 복원한 영속 폴백(로그인 무관 이상치 알람). 유효성(fp 일치 + 14일 이내)은
@@ -481,6 +482,7 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
     logger.log({ type: 'app', extra: 'past_index_skip:not_signed_in' });
     return null;
   }
+  const generation = ++latestLoadGeneration;
   const promise = (async (): Promise<PastIndex | null> => {
     try {
       // v0.33.0 항목5 — fetch 시작 계측(07-13 §4: 시작 이벤트가 없어 "미완 hang"을 로그로 판별
@@ -496,8 +498,9 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
       // v0.38.0 리뷰#1(Codex Medium) 검토 결과 — "게시 전 지문 재검증"은 **채택하지 않는다.**
       // 재연결(onUrlConfirmWithUrl)이 sheetTab을 잠깐 ''로 선리셋하는 과도 구간이 있어, 그 순간을
       // '낡음'으로 오인해 멀쩡한 조회 결과를 버렸다(실측: 로그인 갱신이 통째로 폐기됨).
-      // 낡은 게시 자체는 무해하다 — getCachedIndex가 읽는 시점에 지문을 검사해 거르고,
-      // 지문 인식 in-flight 가드가 최신 지문으로 다시 만든다(자가복구).
+      // 대신 요청 세대를 비교한다. 더 최신 조회가 시작됐다면 이 결과는 설정 과도 구간과 무관하게
+      // 낡은 요청이므로, 메모리 캐시·폴백·IDB 어느 곳에도 게시하지 않는다.
+      if (generation !== latestLoadGeneration) return null;
       cached = { fp: ctx.fp, builtAt: Date.now(), index };
       // v0.33.0 항목5 — IDB write-through(kv `__past_index__`) + 메모리 폴백 동기화.
       // 캐시 TTL(10분)·토큰 만료·재부팅 후에도 이 스냅샷이 알람 비교선으로 살아남는다.
@@ -524,11 +527,11 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
       logger.log({ type: 'app', extra: `past_index_skip:${msg.slice(0, 120)}` });
       return null;
     } finally {
-      if (inflight && inflight.fp === ctx.fp) inflight = null;
+      if (inflight?.generation === generation) inflight = null;
       notifyStatusChanged();
     }
   })();
-  inflight = { fp: ctx.fp, promise };
+  inflight = { fp: ctx.fp, generation, promise };
   notifyStatusChanged();
   return promise;
 }
@@ -549,9 +552,9 @@ export function refreshPastIndexAfterLogin(): Promise<PastIndex | null> {
     return loadPastIndex({ force: true });
   })();
   loginRefreshInflight = { fp: ctx.fp, promise };
-  void promise.then(() => {
+  void promise.finally(() => {
     if (loginRefreshInflight?.promise === promise) loginRefreshInflight = null;
-  });
+  }).catch(() => {});
   return promise;
 }
 
