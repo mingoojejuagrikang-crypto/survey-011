@@ -30,6 +30,37 @@ export function effectiveSampleKey(col: Column): boolean {
 }
 
 /**
+ * v0.38.0 — 시트 재연결(loadHeaders→inferColumns)이 **사용자 설정을 덮어쓰지 않게** 보존한다.
+ *
+ * 근인: 재로그인은 이전 시트를 자동 재연결(v0.13.0 R1)하는데, `inferColumns`는 시트 표본만 보고
+ * 컬럼을 처음부터 다시 유추한다. 표본이 적으면(예: 시즌 첫 회차라 데이터 행이 1개) 숫자 컬럼의
+ * 고유값이 1개뿐이라 `input='auto'`(고정값)로 판정돼, 사용자가 '음성'으로 둔 측정 컬럼이
+ * 매 로그인마다 되돌아갔다. 파생 효과로 `effectiveSampleKey`가 뒤집혀 과거값 인덱스 지문까지
+ * 무효화됐다(= 로그인 직후 "과거값 미준비").
+ *
+ * 경계: **시트가 결정하는 것은 `name`·`type`뿐**(그리고 preserveInferredColumnIds의 id 매칭),
+ * 나머지는 전부 사용자 설정이라 보존한다. 단 `type`이 달라졌으면 컬럼의 의미가 바뀐 것이므로
+ * 재유추값을 그대로 쓴다 — reconcileColumnFlags의 structural-change 규칙과 같은 판단이다.
+ */
+export function preserveUserColumnSettings(inferred: Column[], existing: Column[]): Column[] {
+  const existingById = new Map(existing.map((c) => [c.id, c]));
+  return inferred.map((col) => {
+    const prev = existingById.get(col.id);
+    if (!prev || prev.type !== col.type) return col;
+    return {
+      ...col,
+      input: prev.input,
+      ttsAnnounce: prev.ttsAnnounce,
+      auto: prev.auto,
+      decimals: prev.decimals,
+      sampleKey: prev.sampleKey,
+      trendRule: prev.trendRule,
+      pctThreshold: prev.pctThreshold,
+    };
+  });
+}
+
+/**
  * 컬럼 변경 시 샘플키·추세 플래그 일관성 유지. settingsStore의 모든 컬럼 쓰기 경로
  * (migrate / addColumn / updateColumn)가 이 함수를 통과한다.
  *

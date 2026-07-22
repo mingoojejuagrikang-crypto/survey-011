@@ -28,6 +28,7 @@ import {
   parseSpreadsheetId,
   readonlySheetsAuth,
 } from './sheets';
+import { preserveUserColumnSettings } from './columnFlags';
 import { computeTotalRows } from './autoValue';
 import { buildSessionLabel, pickSessionLabelValue } from './sessionLabel';
 import { getPickerApiKey, openDrivePicker } from './drivePicker';
@@ -162,9 +163,12 @@ export function useSettingsActions() {
     try {
       setLoading('컬럼 분석 중...');
       const { headers, sample } = await fetchHeaderAndSample(spreadsheetId, sheetTitle);
-      const inferred = preserveInferredColumnIds(
-        inferColumns(headers, sample),
-        useSettingsStore.getState().columns,
+      // v0.38.0 — 재연결은 시트에서 name·type만 가져오고 사용자 설정(입력방식·샘플키·자동값·
+      // 추세)은 보존한다. 표본이 적은 시트에서 재로그인이 '음성' 컬럼을 '자동'으로 되돌리던 결함.
+      const currentColumns = useSettingsStore.getState().columns;
+      const inferred = preserveUserColumnSettings(
+        preserveInferredColumnIds(inferColumns(headers, sample), currentColumns),
+        currentColumns,
       );
       // For 'options' columns, fetch a richer set of unique values
       const enriched = await Promise.all(
