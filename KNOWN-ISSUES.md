@@ -828,6 +828,30 @@
 - **출처:** 2026-07-23 v0.38.0 Phase 2 검증(Larry). 전체 727 passed / 6 failed → 격리에서 이 건만 잔존.
 - **현재 상태:** ⚠️주시 — v0.38.0 릴리스 블로커 아님(기준선 동일 증상). 원인 규명은 별건.
 
+### [TEST-LINT-RACE-1] Playwright와 ESLint 병렬 실행 시 `test-results/` 삭제 경쟁으로 lint가 중단됨
+
+- **증상:** `npm run lint`와 `npx playwright test ...`를 동시에 실행하면 ESLint가
+  `test-results/`를 순회하는 순간 Playwright가 해당 디렉터리를 정리해
+  `ENOENT: no such file or directory, scandir '.../test-results'`로 종료될 수 있다.
+- **원인:** ESLint 대상이 `.` 전체이고, Playwright는 실행 시작/종료 과정에서 `test-results/`를
+  생성·삭제한다. 두 프로세스가 같은 임시 산출물 경로를 동시에 건드리는 환경 경쟁이다.
+- **해결·회피:** Playwright와 `npm run lint`는 직렬 실행한다. 이 오류가 나오면 두 프로세스가 모두
+  끝난 뒤 lint를 단독 재실행해 제품 코드 판정을 확정한다.
+- **출처:** 2026-07-23 태스크 02 검증. **현재 상태:** ✅회피 절차 확립.
+
+### [TEST-HMR-MODULE-1] e2e의 절대 URL 동적 import가 앱과 별도 모듈 인스턴스를 만들어 UI 상태를 갈라놓음
+
+- **증상:** 테스트가 `import('/src/lib/pastValues.ts')`로 직접 시작한 로더는 최종 `ready`이고 IDB도
+  최신 지문인데, 같은 화면의 `ConnectionStatusCard`는 계속 `미준비`였다. 직접 import한
+  `settingsStore` 변경은 카드에 반영돼, 설정은 공유되지만 pastValues 모듈 상태·리스너만 갈렸다.
+- **원인:** 장시간 실행된 Vite dev 서버에서 HMR된 앱 import에는 timestamp 쿼리가 붙을 수 있다.
+  테스트가 쿼리 없는 절대 URL을 다시 import하면 브라우저 ESM은 이를 별도 모듈 identity로 평가해,
+  모듈 전역 캐시·inflight·구독자 Set이 앱 인스턴스와 분리된다.
+- **해결·회피:** 앱 UI와 모듈 전역 상태를 함께 검증하는 e2e는 소스 모듈을 직접 import해 상태를
+  만들지 말고, 실제 사용자 경로(이번 건은 로그인 → 자동 재연결 → 컬럼 교체)로 발화시킨다. 비동기
+  순서는 네트워크 응답 보류·완료 probe처럼 테스트 경계에서 제어한다.
+- **출처:** 2026-07-23 태스크 02b. **현재 상태:** ✅회귀 테스트를 실제 앱 경로로 교체.
+
 ---
 
 ## 확인 필요 (미검증)
