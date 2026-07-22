@@ -19,8 +19,8 @@ const tabs: { id: TabId; label: string; icon: (s?: number, c?: string) => JSX.El
 ];
 
 /** v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 탭바 심볼 중심(§7.3): 아이콘을 키우고 선택 탭은
- *  초고대비 흰색 pill 채움(원거리에서 현재 탭 즉시 판독). 라벨은 소형으로 유지 — 4탭(개선요청 포함)
- *  구분과 기존 텍스트 셀렉터 계약을 지킨다. tab-* testid·최소 56px 타깃·safe-area 불변.
+ *  초고대비 흰색 pill 채움(원거리에서 현재 탭 즉시 판독). v0.38.0 #6에서 가시 라벨은 제거하되
+ *  aria-label·tab-* testid·최소 56px 타깃·safe-area 계약은 유지한다.
  *  v0.38.0 #6 — 불투명 chrome은 유지하되 EdgeGlow(z-54) 아래(z-53)에 놓아, 글로우가 네비를 포함한
  *  물리 화면 4변 끝까지 끊기지 않고 그려진다. 글로우가 pointer-events:none이라 탭 터치는 그대로다. */
 export function TabBar({ tab, setTab }: Props) {
@@ -83,9 +83,8 @@ export function TabBar({ tab, setTab }: Props) {
               border: 'none',
               background: 'transparent',
               display: 'flex',
-              flexDirection: 'column',
               alignItems: 'center',
-              gap: 3,
+              justifyContent: 'center',
               padding: '5px 0',
               cursor: 'pointer',
               color: active ? T.text : T.textDim,
@@ -95,8 +94,8 @@ export function TabBar({ tab, setTab }: Props) {
             <div
               style={{
                 width: 58,
-                height: 34,
-                borderRadius: 17,
+                height: 44,
+                borderRadius: 22,
                 background: active ? T.text : 'transparent',
                 color: active ? T.bg : T.textDim,
                 display: 'flex',
@@ -105,10 +104,7 @@ export function TabBar({ tab, setTab }: Props) {
                 transition: 'background 200ms, color 200ms',
               }}
             >
-              {t.icon(25)}
-            </div>
-            <div style={{ fontSize: 13, fontWeight: active ? 800 : 600, letterSpacing: 0.1 }}>
-              {t.label}
+              {t.icon(28)}
             </div>
           </button>
         );
