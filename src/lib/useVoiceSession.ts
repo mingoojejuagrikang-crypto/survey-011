@@ -17,11 +17,10 @@ import { logger } from './logger';
 import { rowMarked } from './logEvents';
 import { resolveFinal } from './voiceFinalResolver';
 import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
-import { getCachedIndex, hydratePastIndexFallback, prefetchPastIndex, resetPastIndexRetries } from './pastValues';
+import { hydratePastIndexFallback, prefetchPastIndex, resetPastIndexRetries } from './pastValues';
 import { evaluateTrendForRow, anomalyAlertContext } from './trendEvaluate';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { buildAnomalyAlert } from './anomalyAlert';
-import { onTokenSettled } from './googleAuth';
 import { readonlySheetsAuth } from './sheets';
 import { withoutPendingCandidate } from './pendingValidation';
 import { ensureUniqueSessionLabel } from './sessionLabel';
@@ -2672,29 +2671,6 @@ export function useVoiceSession() {
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
   useEffect(() => { resumeRef.current = resume; }, [resume]);
-
-  // v0.22.0 P1 — 토큰 지각 settle 시 과거값 인덱스 재프리페치. 근인: 이상치 알람용 프리페치는
-  // start() 시점에 토큰이 있을 때만 1회 트리거되는데, 토큰이 늦게 도착하면(auth_token_settled
-  // late=true 17~19s) 또는 타임아웃이면 전 세션 알람이 미작동했다. settlePending 성공 경로의
-  // onTokenSettled 구독으로, 세션 도중 토큰이 도착했을 때 — anomalyRule이 있고 아직 인덱스가
-  // 없으면 — 재프리페치해 남은 셀부터 알람을 복구한다(start()의 1회 프리페치는 early 토큰 케이스로
-  // 유지). 정직한 한계: 토큰 도착 '전' 입력 셀, 타임아웃/오프라인은 여전히 알람 없음(회차간 비교는
-  // 시트가 있어야 하므로 불가피).
-  useEffect(() => {
-    const unsubscribe = onTokenSettled(() => {
-      const s = useSettingsStore.getState();
-      const anyAnomalyRule = s.columns.some(
-        (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
-      );
-      // 인덱스가 이미 캐시돼 있으면 재프리페치 불필요(early 토큰 케이스가 채웠음).
-      if (anyAnomalyRule && !getCachedIndex()) {
-        logCell({ type: 'app', extra: 'past_index_reprefetch:token_settled' });
-        resetPastIndexRetries();
-        prefetchPastIndex();
-      }
-    });
-    return unsubscribe;
-  }, []);
 
   // hydrateSessions가 IDB의 pendingValidation을 sessionStore에 복구한 뒤 VoiceScreen이 마운트된다.
   // 팝업만 복원하고 이 내부 포인터를 비워 두면 [확인]이 advance 문맥을 잃으므로 같은 셀/검토대기를

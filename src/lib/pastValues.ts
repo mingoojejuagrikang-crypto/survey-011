@@ -333,6 +333,7 @@ interface CacheEntry {
 
 let cached: CacheEntry | null = null;
 let inflight: { fp: string; promise: Promise<PastIndex | null> } | null = null;
+let loginRefreshInflight: { fp: string; promise: Promise<PastIndex | null> } | null = null;
 
 // v0.33.0 항목5 — IDB에서 복원한 영속 폴백(로그인 무관 이상치 알람). 유효성(fp 일치 + 14일 이내)은
 // 읽기 시점(getFallbackEntry)에 매번 재검증한다 — 하이드레이션 후 설정이 바뀌어도 안전.
@@ -532,6 +533,28 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
   })();
   inflight = { fp: ctx.fp, promise };
   notifyStatusChanged();
+  return promise;
+}
+
+/**
+ * v0.38.0 #1 — Google 로그인 성공 직후의 강제 갱신. 10분 캐시는 의도적으로 우회하되,
+ * 동일 설정 지문의 로그인 갱신이 이미 진행 중이면 같은 Promise를 공유한다. 로그인 직전의 일반
+ * prefetch가 진행 중이었다면 그것을 먼저 정착시킨 다음 한 번 더 강제 조회해, "기존 요청에 합류해서
+ * 실제 로그인 시점 갱신은 생략"되는 경우도 막는다. 인덱스 확정·메모리/IDB 반영은 loadPastIndex의
+ * 기존 성공 경로만 사용한다.
+ */
+export function refreshPastIndexAfterLogin(): Promise<PastIndex | null> {
+  const ctx = loadContext();
+  if (loginRefreshInflight?.fp === ctx.fp) return loginRefreshInflight.promise;
+  const pendingBeforeLogin = inflight?.fp === ctx.fp ? inflight.promise : null;
+  const promise = (async () => {
+    if (pendingBeforeLogin) await pendingBeforeLogin;
+    return loadPastIndex({ force: true });
+  })();
+  loginRefreshInflight = { fp: ctx.fp, promise };
+  void promise.then(() => {
+    if (loginRefreshInflight?.promise === promise) loginRefreshInflight = null;
+  });
   return promise;
 }
 

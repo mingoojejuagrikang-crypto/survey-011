@@ -6,13 +6,21 @@ import { VoiceScreen } from './screens/VoiceScreen';
 import { DataScreen } from './screens/DataScreen';
 import { T, DEVICE } from './tokens';
 import { hydrateSessions } from './lib/hydrate';
-import { hydratePastIndexFallback, getCachedIndex, getFallbackIndex, ensurePastIndex } from './lib/pastValues';
+import {
+  hydratePastIndexFallback,
+  getCachedIndex,
+  getFallbackIndex,
+  ensurePastIndex,
+  refreshPastIndexAfterLogin,
+  resetPastIndexRetries,
+} from './lib/pastValues';
 import { useSettingsStore } from './stores/settingsStore';
 import { initAutoCapture } from './lib/screenshot';
 import { captureForFeedback, initFeedbackQueueFlush, submitFeedback } from './lib/feedback';
 import { FeedbackModal } from './components/FeedbackModal';
 import { logger } from './lib/logger';
 import { useSessionStore } from './stores/sessionStore';
+import { onTokenSettled } from './lib/googleAuth';
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('settings');
@@ -22,7 +30,7 @@ export default function App() {
   // 스크린샷에 모달 자신이 찍히지 않는다.
   const [feedback, setFeedback] = useState<'closed' | 'capturing' | { shot: Blob | null }>('closed');
   // v0.33.0 항목4 [STT-16] — 음성 세션이 살아 있는 동안(활성/일시정지/완료 대기) VoiceScreen을
-  // unmount하지 않기 위한 신호. 조건부 렌더(탭 전환)가 인식기·워치독·onTokenSettled 구독을 통째로
+  // unmount하지 않기 위한 신호. 조건부 렌더(탭 전환)가 인식기·워치독을 통째로
   // teardown해 STT가 죽고 수동 pause/resume로만 회복되던 근인(07-13 로그 2/2 재현)의 해소 축.
   const sessionLive = useSessionStore((s) => s.phase !== 'ready' && s.phase !== 'done');
 
@@ -31,6 +39,21 @@ export default function App() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // v0.38.0 #1 — 어떤 화면(설정 로그인·데이터 재로그인)에서 토큰이 확정돼도 과거값을 즉시 강제
+  // 재조회한다. App 수명에 단 한 번 구독해 화면별 중복 배선을 피하고, pastValues의 single-flight가
+  // 같은 로그인 콜백의 중복 호출도 흡수한다. 실제 소비자가 있는 이상치 규칙 설정에서만 전체 시트를
+  // 읽는다(기존 부팅/세션 프리페치 게이트와 동일). 10분 캐시 우회는 refresh 함수 내부 계약이다.
+  useEffect(() => onTokenSettled(() => {
+    const st = useSettingsStore.getState();
+    const anyAnomalyRule = st.columns.some(
+      (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
+    );
+    if (!anyAnomalyRule || !st.sheetUrl || !st.sheetTab) return;
+    logger.log({ type: 'app', extra: 'past_index_reprefetch:token_settled' });
+    resetPastIndexRetries();
+    void refreshPastIndexAfterLogin();
+  }), []);
 
   // Hydrate data store from IndexedDB once on mount. Errors are logged + recorded as
   // `hydrationError` (D-1) so DataScreen can offer a retry instead of a misleading empty state.
@@ -146,7 +169,7 @@ export default function App() {
             하지 않는다(민구 확정) — 사용자가 버튼으로 명시 이동. */}
         {tab === 'settings' && <SettingsScreen onNavigateToInput={() => changeTab('voice')} />}
         {/* v0.33.0 항목4 [STT-16] — keep-alive 렌더: 세션이 살아 있으면 다른 탭에서도 VoiceScreen을
-            display:none으로 유지(unmount 금지). 인식기·워치독·클립 레코더·onTokenSettled 구독이
+            display:none으로 유지(unmount 금지). 인식기·워치독·클립 레코더가
             탭 전환에 인질로 잡히지 않는다(세션 상태 소유권이 컴포넌트 수명에서 분리). 세션이 없으면
             기존대로 unmount — 입력탭 첫 진입 전 마이크 prewarm(getUserMedia)이 미리 뜨지 않는다. */}
         {(tab === 'voice' || sessionLive) && (
