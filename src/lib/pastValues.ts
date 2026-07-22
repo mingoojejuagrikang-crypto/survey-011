@@ -501,6 +501,11 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
       );
       const roundCol = resolveRoundCol(ctx.columns, ctx.roundDateColId);
       const index = buildPastIndex(headers, rows, ctx.columns, roundCol);
+      // v0.38.0 리뷰#1(Codex Medium) 검토 결과 — "게시 전 지문 재검증"은 **채택하지 않는다.**
+      // 재연결(onUrlConfirmWithUrl)이 sheetTab을 잠깐 ''로 선리셋하는 과도 구간이 있어, 그 순간을
+      // '낡음'으로 오인해 멀쩡한 조회 결과를 버렸다(실측: 로그인 갱신이 통째로 폐기됨).
+      // 낡은 게시 자체는 무해하다 — getCachedIndex가 읽는 시점에 지문을 검사해 거르고,
+      // 지문 인식 in-flight 가드가 최신 지문으로 다시 만든다(자가복구).
       cached = { fp: ctx.fp, builtAt: Date.now(), index };
       // v0.33.0 항목5 — IDB write-through(kv `__past_index__`) + 메모리 폴백 동기화.
       // 캐시 TTL(10분)·토큰 만료·재부팅 후에도 이 스냅샷이 알람 비교선으로 살아남는다.
@@ -573,7 +578,10 @@ function shouldRetryLoad(): boolean {
  */
 export function ensurePastIndex(): void {
   if (getCachedIndex()) return;
-  if (inflight) return;
+  // v0.38.0 리뷰#1(Codex Medium) — in-flight 가드는 **같은 지문**의 중복 조회만 막아야 한다.
+  // 지문 비교 없이 막으면, 로그인 직후 느린 구지문 조회가 진행되는 동안 컬럼이 바뀌었을 때
+  // 새 지문 재조회가 통째로 삼켜져 캐시가 빈 채로 남는다(현장 = 느린 네트워크에서 상시 조건).
+  if (inflight && inflight.fp === loadContext().fp) return;
   if (retryTimer != null) return;
   void loadPastIndex().then((idx) => {
     if (idx) { retryAttempts = 0; return; } // 성공 → 캐시됨

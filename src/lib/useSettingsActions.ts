@@ -190,9 +190,18 @@ export function useSettingsActions() {
         // v0.38.0 — 컬럼이 바뀌면 과거값 인덱스의 설정 지문이 달라져 기존 캐시·폴백이 함께 무효가
         // 된다. 특히 로그인 자동 재연결은 과거값 강제 갱신(#1)과 같은 흐름이라, 갱신이 먼저 끝나고
         // 여기서 컬럼이 바뀌면 화면이 "과거값 미준비"로 고착됐다. 정착된 설정 기준으로 다시 만든다.
-        // ensurePastIndex는 유효 캐시/진행 중이면 no-op이라 불필요한 조회를 만들지 않는다.
-        resetPastIndexRetries();
-        prefetchPastIndex();
+        // ensurePastIndex는 유효 캐시/같은 지문 진행 중이면 no-op이라 불필요한 조회를 만들지 않는다.
+        //
+        // 리뷰#1(Codex Medium) — **이상치 규칙이 하나도 없으면 소비자가 없다.** 그런 시트까지
+        // 헤더를 다시 읽을 때마다 전체 시트를 조회하면 데이터·배터리·쿼터를 태운다(기능 격리
+        // 원칙: 꺼진 기능은 무영향, PRINCIPLES §3). 다른 호출부(App 부팅·로그인)와 같은 게이트를 쓴다.
+        const anyAnomalyRule = enriched.some(
+          (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
+        );
+        if (anyAnomalyRule) {
+          resetPastIndexRetries();
+          prefetchPastIndex();
+        }
       }
     } catch (err) {
       setError((err as Error).message);
