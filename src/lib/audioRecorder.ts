@@ -19,6 +19,8 @@ import { logger } from './logger';
 import { TimeoutError, withTimeout } from './async';
 import { recoverTimeout } from './logEvents';
 import { processClip, type PrerollPcm } from './audioTrim';
+// [ENV-12] 마이크 PCM 캡처(링버퍼·레벨·파형)는 MicPrerollTap이 소유한다 — 이 클래스는 위임만.
+import { MicPrerollTap, PREROLL_MS } from './micPrerollTap';
 import { classifyInputDevice } from './inputDevice';
 
 interface ClipSlot {
@@ -66,9 +68,6 @@ const STOP_TIMEOUT_MS = 2000;
  *  발화 꼬리가 STT final 직후 잘리던 후반 짤림 보강. 음성 플로우는 stopClip을 await하지 않으므로
  *  체감 지연 0. 다음 클립이 0.5s 안에 시작되면 타이머를 클리어하고 즉시 stop(우아한 절단). */
 const POSTROLL_MS = 500;
-/** 링버퍼 보관량 / startClip 시 스냅샷할 프리롤 길이. */
-const RING_BUFFER_MS = 1500;
-const PREROLL_MS = 500;
 /** v0.14.0 B-1 — 스트림 재획득(recoverStream) 최소 간격. 연속 빈 클립/잦은 devicechange에 폭주
  *  하지 않도록 쿨다운을 둔다(장치 토글은 초당 수회씩 일어나지 않음). */
 const RECOVER_COOLDOWN_MS = 3000;
@@ -91,71 +90,10 @@ function stopAllTracks(stream: MediaStream | null): void {
   }
 }
 
-// ── v0.34.0 B7 — 입력 레벨(음성 반응 파동) 상수. 기존 preroll 캡처 그래프의 push(pcm) 공통
-//    경로에서 chunk RMS를 지수평활한 0~1 레벨을 만든다. **새 AudioContext/AnalyserNode를 만들지
-//    않는다**(iOS Safari 제스처/suspended 함정 — 기존 그래프 tap만). preroll 미가용 기기는 push가
-//    아예 안 불려 레벨 0 고정 = 파동 무동작이 자연 폴백(no-op 원칙). ──
-/** RMS→레벨 정규화 기준(대화 발화 RMS ~0.02-0.15, echoCancellation·AGC-off 기준). 이 값에서 1.0. */
-const LEVEL_REF_RMS = 0.1;
-/** 지수평활 계수 — 상승(attack)은 빠르게(발화 반응성), 하강(release)은 느리게(파동 잔향). */
-const LEVEL_ATTACK = 0.55;
-const LEVEL_RELEASE = 0.15;
-/** wave_stats activePct 판정 하한 — 이 레벨 이상인 chunk를 '발화 활성'으로 센다. */
-const LEVEL_ACTIVE_MIN = 0.15;
-
 export interface ActiveInputInfo {
   deviceId: string;
   label: string;
 }
-
-/** 마이크 PCM 상시 캡처 그래프 (worklet 또는 script-processor). */
-interface PrerollCapture {
-  ctx: AudioContext;
-  source: MediaStreamAudioSourceNode;
-  node: AudioWorkletNode | ScriptProcessorNode;
-  /** silent sink — keeps the graph pulled without audible output. */
-  sink: GainNode;
-  /** v0.35.0 (Vance) — 시간영역 파형 탭. VoiceWaveform이 getByteTimeDomainData로 실시간 사람 음성
-   *  파형을 그린다(레벨 스칼라와 별개 — 실제 파형은 시간영역 샘플이 필요). source→analyser→sink로
-   *  연결해 WebKit이 사이드 브랜치를 확실히 pull하게 한다(sink는 gain 0 → 무음). null이면 미가용. */
-  analyser: AnalyserNode | null;
-  kind: 'worklet' | 'script';
-  chunks: Float32Array[];
-  totalSamples: number;
-  sampleRate: number;
-}
-
-/** AudioWorkletProcessor 모듈(블롭 URL 로드) — 2048샘플(~43ms@48k) 단위로 배치 전송해
- *  메시지 빈도를 낮춘다. 메인스레드 링버퍼가 보관량을 관리한다. */
-const WORKLET_SOURCE = `
-class PrerollCaptureProcessor extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this._buf = new Float32Array(2048);
-    this._len = 0;
-  }
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (ch && ch.length) {
-      let i = 0;
-      while (i < ch.length) {
-        const n = Math.min(ch.length - i, this._buf.length - this._len);
-        this._buf.set(ch.subarray(i, i + n), this._len);
-        this._len += n;
-        i += n;
-        if (this._len === this._buf.length) {
-          const out = this._buf;
-          this.port.postMessage(out, [out.buffer]);
-          this._buf = new Float32Array(2048);
-          this._len = 0;
-        }
-      }
-    }
-    return true;
-  }
-}
-registerProcessor('preroll-capture', PrerollCaptureProcessor);
-`;
 
 export class AudioRecorder {
   private stream: MediaStream | null = null;
@@ -172,7 +110,8 @@ export class AudioRecorder {
    *  Lets the session log attribute STT accuracy to the real input device (built-in vs Shokz). */
   private activeInput: ActiveInputInfo | null = null;
   /** W6: 상시 PCM 링버퍼 캡처. null이면 프리롤 미지원(현행 동작). */
-  private preroll: PrerollCapture | null = null;
+  /** [ENV-12] 마이크 PCM 상시 캡처 탭(링버퍼·입력 레벨·시간영역 파형). 스트림 수명에 맞춰 붙이고 뗀다. */
+  private prerollTap = new MicPrerollTap();
   /** v0.13.0 R8 — 입력장치 변경(예: 음성입력 중 블루투스 해제)을 라이브로 배지에 반영하기 위한
    *  구독 핸들/대상 트랙. 라벨은 init()에서 1회만 캡처되던 frozen 값이라(민구 보고: 음성입력 중
    *  OS에서 BT를 끊어도 배지가 안 바뀜), devicechange/track ended·mute 신호 시 비파괴
@@ -347,7 +286,7 @@ export class AudioRecorder {
     try {
       // 기존 그래프 정리 — 리스너 먼저(track.stop의 'ended'가 핸들러 재진입 못 하게), 프리롤, 스트림.
       this.detachDeviceListeners();
-      this.teardownPreroll();
+      this.prerollTap.detach();
       const stale = this.active;
       this.active = null;
       if (stale && !stale.finalized) {
@@ -385,7 +324,7 @@ export class AudioRecorder {
         }
       } catch { /* getSettings 미지원 — activeInput은 다음 refresh에서 채움 */ }
       this.attachDeviceListeners();
-      await this.initPrerollCapture();
+      await this.prerollTap.attach(this.stream);
       logger.log({ type: 'clip', extra: `clip_recorder_recovered:${reason}:${this.activeInput?.label || 'default'}` });
       // v0.19.0 W7 — 재획득으로 입력 경로가 실제로 바뀌었으면 route-change 이벤트 방출(old !== new만).
       this.emitInputDeviceChanged(prevLabel, this.activeInput?.label ?? '', `recover:${reason}`);
@@ -491,7 +430,7 @@ export class AudioRecorder {
         this.attachDeviceListeners();
 
         // W6: 프리롤 캡처는 best-effort — 어떤 실패도 init 성공(현행 녹음 동작)을 막지 않는다.
-        await this.initPrerollCapture();
+        await this.prerollTap.attach(this.stream);
         this.lastInitError = null;
         return true;
       } catch (e) {
@@ -510,176 +449,24 @@ export class AudioRecorder {
     return this.lastInitError;
   }
 
-  /** AudioContext + Worklet(폴백 ScriptProcessor)으로 PCM 링버퍼를 구성. 실패 시 프리롤 없이 진행. */
-  private async initPrerollCapture(): Promise<void> {
-    if (this.preroll || !this.stream) return;
-    let ctx: AudioContext | null = null;
-    try {
-      const Ctor =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!Ctor) {
-        logger.log({ type: 'clip', extra: 'clip_preroll_unavailable:no_audiocontext' });
-        return;
-      }
-      ctx = new Ctor();
-      // iOS: AudioContext는 사용자 제스처 밖에서 'suspended'로 생성될 수 있다. init()는 세션
-      // 시작 버튼 탭의 콜스택에서 불리지만 getUserMedia await 뒤라 제스처가 소실됐을 수 있어
-      // 명시적으로 resume한다(실패해도 startClip에서 재시도).
-      try { await ctx.resume(); } catch { /* startClip()에서 재시도 */ }
+  // ── 마이크 캡처 탭 위임(공개 API는 종전 그대로 — 호출부 무수정) ──────────────
+  /** v0.34.0 B7 — 현재 마이크 입력 레벨(0~1, 지수평활). 캡처 미가용이면 항상 0. */
+  getInputLevel(): number { return this.prerollTap.getLevel(); }
 
-      const source = ctx.createMediaStreamSource(this.stream);
-      const sink = ctx.createGain();
-      sink.gain.value = 0; // 그래프를 destination까지 연결하되 무음 출력(에코 방지)
-      sink.connect(ctx.destination);
+  /** v0.35.0 (Vance) — 시간영역 파형 샘플을 `out`에 채운다. 채웠으면 true, analyser 미가용이면
+   *  false(소비자가 레벨 기반 폴백으로 전환). */
+  getTimeDomainData(out: Uint8Array): boolean { return this.prerollTap.getTimeDomainData(out); }
 
-      // v0.35.0 (Vance) — 시간영역 파형 탭. source→analyser→sink(무음)로 연결해 브랜치가
-      //   pull되게 한다(연결만으론 WebKit이 사이드 브랜치를 안 돌릴 수 있음). fftSize 1024로
-      //   한 프레임 1024 샘플(≈21ms@48k) — 캔버스 폭에 충분. 실패해도 파형만 폴백(레벨 기반).
-      let analyser: AnalyserNode | null = null;
-      try {
-        analyser = ctx.createAnalyser();
-        analyser.fftSize = 1024;
-        source.connect(analyser);
-        analyser.connect(sink);
-      } catch { analyser = null; }
+  /** v0.34.0 D11b — 프리롤 캡처 종류(계측용). null = 미가용. */
+  getPrerollKind(): 'worklet' | 'script' | null { return this.prerollTap.getKind(); }
 
-      const capture: PrerollCapture = {
-        ctx, source, sink, analyser,
-        node: null as unknown as AudioWorkletNode, // 아래에서 채움
-        kind: 'worklet',
-        chunks: [],
-        totalSamples: 0,
-        sampleRate: ctx.sampleRate,
-      };
-      const push = (pcm: Float32Array) => {
-        capture.chunks.push(pcm);
-        capture.totalSamples += pcm.length;
-        const cap = Math.ceil((capture.sampleRate * RING_BUFFER_MS) / 1000);
-        while (
-          capture.chunks.length > 1 &&
-          capture.totalSamples - capture.chunks[0].length >= cap
-        ) {
-          capture.totalSamples -= capture.chunks[0].length;
-          capture.chunks.shift();
-        }
-        // v0.34.0 B7 — 파동 레벨 tap: chunk(2048샘플 ≈43ms@48k) RMS → 지수평활 레벨(0~1).
-        // worklet/script 공통 경로라 어느 폴백이든 동일 동작. 여기서는 절대 로깅하지 않는다.
-        let sq = 0;
-        for (let i = 0; i < pcm.length; i++) { const v = pcm[i]; sq += v * v; }
-        const target = Math.min(1, Math.sqrt(sq / pcm.length) / LEVEL_REF_RMS);
-        this.inputLevel += (target - this.inputLevel) *
-          (target > this.inputLevel ? LEVEL_ATTACK : LEVEL_RELEASE);
-        const st = this.waveStats;
-        st.count++;
-        st.sum += this.inputLevel;
-        if (this.inputLevel > st.peak) st.peak = this.inputLevel;
-        if (this.inputLevel >= LEVEL_ACTIVE_MIN) st.active++;
-      };
-
-      try {
-        // 1순위: AudioWorklet (렌더 스레드 캡처 — 메인스레드 지터 없음)
-        const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
-        try {
-          await ctx.audioWorklet.addModule(url);
-        } finally {
-          URL.revokeObjectURL(url);
-        }
-        const node = new AudioWorkletNode(ctx, 'preroll-capture', {
-          numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1,
-        });
-        node.port.onmessage = (e: MessageEvent) => {
-          const data = e.data as Float32Array;
-          if (data && data.length) push(data);
-        };
-        source.connect(node);
-        node.connect(sink);
-        capture.node = node;
-        capture.kind = 'worklet';
-      } catch {
-        // 2순위: ScriptProcessor (deprecated지만 iOS 구형 Safari 포함 광범위 지원)
-        const node = ctx.createScriptProcessor(2048, 1, 1);
-        node.onaudioprocess = (e: AudioProcessingEvent) => {
-          push(new Float32Array(e.inputBuffer.getChannelData(0)));
-        };
-        source.connect(node);
-        node.connect(sink);
-        capture.node = node;
-        capture.kind = 'script';
-      }
-
-      this.preroll = capture;
-      logger.log({ type: 'clip', extra: `clip_preroll_ready:${capture.kind}:${capture.sampleRate}` });
-    } catch (e) {
-      // 둘 다 실패 — 프리롤 없이 현행 동작으로 폴백(안전선). 진단만 남긴다.
-      logger.log({ type: 'clip', extra: `clip_preroll_unavailable:${String((e as Error)?.message ?? e)}` });
-      try { ctx?.close().catch(() => {}); } catch { /* ignore */ }
-      this.preroll = null;
-    }
-  }
-
-  /** v0.34.0 B7 — 현재 마이크 입력 레벨(0~1, 지수평활). rAF 소비자(useAudioLevelVar)가 매 프레임
-   *  읽는다 — 읽기 전용 스칼라라 비용 0. preroll 미가용(`clip_preroll_unavailable`)이면 항상 0. */
-  getInputLevel(): number {
-    return this.inputLevel;
-  }
-
-  /** v0.35.0 (Vance) — 시간영역 파형 샘플을 `out`(길이=fftSize=1024)에 채운다. 채웠으면 true.
-   *  analyser 미가용(preroll 미지원 기기)이면 false → 소비자(VoiceWaveform)가 레벨 기반 폴백으로
-   *  전환한다. 읽기 전용(getByteTimeDomainData)이라 rAF마다 불러도 비용 낮음. */
-  getTimeDomainData(out: Uint8Array): boolean {
-    const a = this.preroll?.analyser;
-    if (!a) return false;
-    try {
-      // TS 5.7+ DOM 타입은 Uint8Array<ArrayBuffer>로 좁아졌다 — 공개 API는 plain Uint8Array 유지,
-      // 여기서만 캐스트(런타임 동작 동일).
-      a.getByteTimeDomainData(out as Parameters<AnalyserNode['getByteTimeDomainData']>[0]);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /** v0.34.0 D11b — 프리롤 캡처 종류(계측용). null = 미가용(ui_fx에서 'unavailable'로 표기). */
-  getPrerollKind(): 'worklet' | 'script' | null {
-    return this.preroll?.kind ?? null;
-  }
-
-  /** v0.34.0 D11b — 세션 파동 통계 요약. push가 한 번도 안 불렸으면(프리롤 미가용) null. */
+  /** v0.34.0 D11b — 세션 파동 통계 요약. 캡처가 한 번도 안 돌았으면 null. */
   getWaveStats(): { peak: number; avg: number; activePct: number } | null {
-    const st = this.waveStats;
-    if (st.count === 0) return null;
-    return {
-      peak: st.peak,
-      avg: st.sum / st.count,
-      activePct: Math.round((st.active / st.count) * 100),
-    };
+    return this.prerollTap.getWaveStats();
   }
 
-  /** v0.34.0 D11b — 통계 리셋(세션 시작 시). prewarm(입력탭 마운트)이 세션 전부터 캡처를 돌리므로
-   *  세션 밖 구간이 통계에 섞이지 않게 start()가 호출한다. */
-  resetWaveStats(): void {
-    this.waveStats = { peak: 0, sum: 0, count: 0, active: 0 };
-  }
-
-  /** 링버퍼의 마지막 `ms` 구간을 mono PCM으로 스냅샷 (startClip 시점 = 마크). */
-  private snapshotPreroll(ms: number): PrerollPcm | null {
-    const cap = this.preroll;
-    if (!cap || cap.totalSamples === 0) return null;
-    const want = Math.min(cap.totalSamples, Math.floor((cap.sampleRate * ms) / 1000));
-    if (want <= 0) return null;
-    const out = new Float32Array(want);
-    let remaining = want;
-    let writePos = want;
-    for (let i = cap.chunks.length - 1; i >= 0 && remaining > 0; i--) {
-      const chunk = cap.chunks[i];
-      const take = Math.min(chunk.length, remaining);
-      writePos -= take;
-      out.set(chunk.subarray(chunk.length - take), writePos);
-      remaining -= take;
-    }
-    return { pcm: remaining > 0 ? out.subarray(writePos) : out, sampleRate: cap.sampleRate };
-  }
+  /** v0.34.0 D11b — 통계 리셋(세션 시작 시). */
+  resetWaveStats(): void { this.prerollTap.resetWaveStats(); }
 
   startClip(): void {
     if (!this.stream) {
@@ -687,9 +474,7 @@ export class AudioRecorder {
       return;
     }
     // iOS: 백그라운드 전환 등으로 suspended가 되었으면 재개 시도(fire-and-forget).
-    if (this.preroll && this.preroll.ctx.state === 'suspended') {
-      void this.preroll.ctx.resume().catch(() => {});
-    }
+    this.prerollTap.resumeIfSuspended();
 
     // Detach the previous active slot first — its callbacks will continue to read
     // ONLY its own captured `slot` reference, so they cannot pollute the new slot.
@@ -747,7 +532,7 @@ export class AudioRecorder {
         stopTimer: null,
         startedAt: performance.now(),
         // W6 마크: 이 클립 시작 직전 0.5s — barge-in으로 잘린 첫 음절이 이 안에 있다.
-        preroll: this.snapshotPreroll(PREROLL_MS),
+        preroll: this.prerollTap.snapshot(PREROLL_MS),
         delayedStopTimer: null,
         stopRequestedAt: null,
       };
@@ -858,24 +643,6 @@ export class AudioRecorder {
     });
   }
 
-  /** 프리롤 캡처 그래프 해제(stream stop 전에 — source가 stream을 참조). dispose()에서 호출. */
-  private teardownPreroll(): void {
-    const cap = this.preroll;
-    this.preroll = null;
-    // v0.34.0 B7 — 캡처 그래프가 내려가면 push가 멈추므로 레벨을 0으로 되돌린다(파동 정지).
-    this.inputLevel = 0;
-    if (!cap) return;
-    try {
-      if (cap.kind === 'worklet') (cap.node as AudioWorkletNode).port.onmessage = null;
-      else (cap.node as ScriptProcessorNode).onaudioprocess = null;
-      cap.source.disconnect();
-      cap.node.disconnect();
-      cap.analyser?.disconnect(); // v0.35.0 (Vance) — 파형 탭 해제.
-      cap.sink.disconnect();
-    } catch { /* ignore */ }
-    void cap.ctx.close().catch(() => {});
-  }
-
   dispose(): void {
     // v0.13.0 R8 — 입력장치 구독 먼저 해제(아래 track.stop()의 'ended'가 핸들러를 깨우지 않도록).
     this.detachDeviceListeners();
@@ -897,7 +664,7 @@ export class AudioRecorder {
       }
     }
     // W6: 프리롤 캡처 그래프 해제 (stream stop 전에 — source가 stream을 참조).
-    this.teardownPreroll();
+    this.prerollTap.detach();
     if (this.stream) {
       for (const track of this.stream.getTracks()) track.stop();
       this.stream = null;
