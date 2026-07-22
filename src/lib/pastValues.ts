@@ -591,8 +591,11 @@ export function ensurePastIndex(): void {
  * 모양이 조금씩 달라(`anyRule`만 보는 곳 vs 인증까지 보는 곳) 신규 호출부가 게이트를 통째로
  * 빠뜨리는 결함으로 이어졌다. 호출부는 이 함수만 쓴다 — 조건이 바뀌면 여기 한 곳만 고친다.
  *
- * 조건: ①이상치 알람 규칙(방향 또는 변동률)이 한 컬럼이라도 있고 ②시트가 지정돼 있고
- * ③읽기 인증 수단(토큰 또는 API key)이 있다. 하나라도 없으면 소비자가 없거나 조회가 불가능하다.
+ * 항상 보는 조건: ①이상치 알람 규칙(방향 또는 변동률)이 한 컬럼이라도 있고 ②시트가 지정돼 있다.
+ * 둘 중 하나라도 없으면 만들어도 **소비자가 없다**.
+ *
+ * `requireAuth: true`일 때만 추가로 ③읽기 인증 수단(토큰 또는 API key)을 본다. 기본값이 아닌
+ * 이유는 아래 본문 주석 참조 — 부팅 경로는 인증이 없어도 진입시켜야 스킵 사유가 로그에 남는다.
  */
 export function shouldPreparePastIndex(opts?: { requireAuth?: boolean }): boolean {
   const s = useSettingsStore.getState();

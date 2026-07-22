@@ -20,7 +20,8 @@ const FRAME_MS = 33;
 
 /** reference-ui 파형 치수. */
 const BAR_COUNT = 13;
-const BAR_HEIGHT = 78;
+/** 레퍼런스 막대 높이 — 밴드가 이보다 낮으면 밴드에 맞춘다(아래 barHeight 파생 참조). */
+const REFERENCE_BAR_HEIGHT = 78;
 
 /** 듣는 중 무입력 기본 높이와 일시정지 높이는 서로 다른 상태 표현이다. */
 const BASE_LEVEL = 0.35;
@@ -46,6 +47,12 @@ export function VoiceWaveform({
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const barsRef = useRef<Array<HTMLSpanElement | null>>([]);
+
+  // v0.38.0 리뷰#1(agy Flash) — 막대 높이는 **밴드에서 파생**한다. 레퍼런스 78px을 상수로 굳히면
+  // 밴드가 그보다 낮은 뷰포트(`clamp(60, vh×0.105, 100)` → innerHeight<743px)에서 rAF가 scaleY를
+  // 1.0까지 올릴 때 막대가 밴드 위아래로 삐져나와 hero·컨트롤바와 겹친다. 밴드가 레퍼런스를
+  // 수용하면 종전 그대로 78px이고, 좁으면 밴드에 맞춘다(파생 가능한 값을 상수로 두지 않는다).
+  const barHeight = Math.min(REFERENCE_BAR_HEIGHT, height);
 
   useEffect(() => {
     const bars = barsRef.current;
@@ -182,7 +189,7 @@ export function VoiceWaveform({
           style={{
             flex: '0 0 10px',
             width: 10,
-            height: BAR_HEIGHT,
+            height: barHeight,
             borderRadius: 999,
             background: 'currentColor',
             boxShadow: active ? '0 0 11px currentColor' : 'none',
