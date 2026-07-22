@@ -163,7 +163,11 @@ export class AudioRecorder {
   private trackChangeHandler: (() => void) | null = null;
   /** v0.14.0 B-1/D — 스트림 재획득(recoverStream) 동시성/쿨다운 가드. */
   private recovering = false;
-  private lastRecoverAt = 0;
+  // v0.38.0 — 쿨다운은 **연속** 재획득을 막기 위한 것이지 첫 회복을 막으면 안 된다. 0으로 두면
+  // 비교값이 performance.now()(페이지 로드 후 경과 ms)라 **로드 직후 3초간 모든 recoverStream이
+  // 조용히 차단**됐다. #5 자동 재연결은 사고 시점에 즉시 발화하므로 이 구간에 걸리면 getUserMedia를
+  // 부르지도 못한 채 1회 가드만 소진하고 수동 배너로 떨어진다.
+  private lastRecoverAt = -RECOVER_COOLDOWN_MS;
   /** v0.34.0 B7 — 지수평활된 마이크 입력 레벨(0~1). preroll push(pcm)에서만 갱신되고 UI(rAF)가
    *  getInputLevel()로 읽는다. React state 아님 — 리렌더 0. preroll 미가용이면 0에 머문다. */
   private inputLevel = 0;
