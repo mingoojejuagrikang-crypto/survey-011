@@ -196,7 +196,6 @@ function HeroNameLine({
 }) {
   return (
     <span
-      data-testid={primary ? 'hero-primary' : undefined}
       style={{ ...HERO_NAME_STYLE, display: 'inline-flex', alignItems: 'baseline', justifyContent: 'center', gap: '0.22em' }}
     >
       {checked && (
@@ -207,7 +206,7 @@ function HeroNameLine({
           ✓
         </span>
       )}
-      <span>{children}</span>
+      <span data-testid={primary ? 'hero-primary' : undefined}>{children}</span>
     </span>
   );
 }
