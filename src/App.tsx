@@ -13,6 +13,7 @@ import {
   ensurePastIndex,
   refreshPastIndexAfterLogin,
   resetPastIndexRetries,
+  shouldPreparePastIndex,
 } from './lib/pastValues';
 import { useSettingsStore } from './stores/settingsStore';
 import { initAutoCapture } from './lib/screenshot';
@@ -45,11 +46,7 @@ export default function App() {
   // 같은 로그인 콜백의 중복 호출도 흡수한다. 실제 소비자가 있는 이상치 규칙 설정에서만 전체 시트를
   // 읽는다(기존 부팅/세션 프리페치 게이트와 동일). 10분 캐시 우회는 refresh 함수 내부 계약이다.
   useEffect(() => onTokenSettled(() => {
-    const st = useSettingsStore.getState();
-    const anyAnomalyRule = st.columns.some(
-      (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
-    );
-    if (!anyAnomalyRule || !st.sheetUrl || !st.sheetTab) return;
+    if (!shouldPreparePastIndex()) return;
     logger.log({ type: 'app', extra: 'past_index_reprefetch:token_settled' });
     resetPastIndexRetries();
     void refreshPastIndexAfterLogin();
@@ -71,15 +68,12 @@ export default function App() {
     // 걸지 않으므로(shouldRetryLoad) 미로그인 부팅에 무해. 세션 시작·설정 저장 트리거와 중복돼도
     // 캐시/in-flight 가드가 흡수한다.
     void hydratePastIndexFallback().then(() => {
-      const st = useSettingsStore.getState();
       // v0.34.0 리뷰(Codex+agy 공통 지적) — 부팅 프리페치도 다른 3개 호출부(세션시작 useVoiceSession
       // :2185·설정저장 SettingsScreen:1309·테이블생성 :1304)와 동일하게 anyAnomalyRule로 게이트한다.
       // 이상치 규칙이 없으면 과거값 인덱스는 애초에 쓰이지 않으므로 전체 시트 다운로드가 낭비이고
       // (Codex), 비공개 시트+API key 조합에서 무의미한 403 재시도가 도는 표면도 함께 줄어든다(agy).
-      const anyAnomalyRule = st.columns.some(
-        (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
-      );
-      if (anyAnomalyRule && st.sheetUrl && st.sheetTab && !getCachedIndex() && !getFallbackIndex()) ensurePastIndex();
+      // v0.38.0 리뷰#1 — 조건은 shouldPreparePastIndex 단일 술어(호출부 복붙 금지).
+      if (shouldPreparePastIndex() && !getCachedIndex() && !getFallbackIndex()) ensurePastIndex();
     });
     // v0.33.0 항목10-B — 입력화면 자동 캡처 배선(logger tap 단일 지점, idempotent).
     // 토글 off면 tap은 남되 캡처가 스킵된다(스위치는 settingsStore.autoScreenCapture).

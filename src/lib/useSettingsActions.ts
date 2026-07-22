@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { makeSettingsDefaults, useSettingsStore } from '../stores/settingsStore';
 import { saveSheetsRecord, deletePastIndexBackup } from './db';
-import { prefetchPastIndex, resetPastIndexRetries } from './pastValues';
+import { prefetchPastIndex, resetPastIndexRetries, shouldPreparePastIndex } from './pastValues';
 import type { DataType } from '../types';
 import {
   getAccessToken,
@@ -195,10 +195,7 @@ export function useSettingsActions() {
         // 리뷰#1(Codex Medium) — **이상치 규칙이 하나도 없으면 소비자가 없다.** 그런 시트까지
         // 헤더를 다시 읽을 때마다 전체 시트를 조회하면 데이터·배터리·쿼터를 태운다(기능 격리
         // 원칙: 꺼진 기능은 무영향, PRINCIPLES §3). 다른 호출부(App 부팅·로그인)와 같은 게이트를 쓴다.
-        const anyAnomalyRule = enriched.some(
-          (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
-        );
-        if (anyAnomalyRule) {
+        if (shouldPreparePastIndex()) {
           resetPastIndexRetries();
           prefetchPastIndex();
         }
@@ -303,11 +300,7 @@ export function useSettingsActions() {
       // v0.34.0 C9(b) — 시트 연결 확정 직후 프리페치. 이 함수는 Drive Picker 선택·저장목록 선택·
       // URL 확인·재로그인 자동 재연결의 공통 종점이라 여기 1곳 배선으로 전부 커버된다(단일 배선).
       // 컬럼은 위 loadHeaders가 방금 교체했을 수 있으므로 getState()로 최신을 읽는다.
-      const st = useSettingsStore.getState();
-      const anyRule = st.columns.some(
-        (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
-      );
-      if (anyRule && readonlySheetsAuth()) { resetPastIndexRetries(); prefetchPastIndex(); }
+      if (shouldPreparePastIndex()) { resetPastIndexRetries(); prefetchPastIndex(); }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -353,12 +346,10 @@ export function useSettingsActions() {
     // v0.33.0 항목5 — 테이블 생성 시점 프리페치(세션 시작 start()와 동일 조건). 생성 직후엔 대개
     // 토큰이 살아 있으므로 여기서 미리 당겨 두면, 세션 시작이 늦어져 토큰이 만료돼도 IDB
     // write-through 스냅샷이 폴백으로 남는다(07-13 §4 침묵 창 축소).
-    const anyAnomalyRule = s.columns.some(
-      (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
-    );
-    // v0.34.0 C9(a) — 토큰 조건을 (토큰 || API key)로 완화(readonlySheetsAuth SSOT). 공개 시트면
+    // v0.34.0 C9(a) — 토큰 조건은 (토큰 || API key)다(readonlySheetsAuth SSOT). 공개 시트면
     // 미로그인 생성 직후에도 과거값이 준비된다(민구: "시트가 연결되면 자동으로 작동해야 함").
-    if (anyAnomalyRule && readonlySheetsAuth()) { resetPastIndexRetries(); prefetchPastIndex(); }
+    // v0.38.0 리뷰#1 — 판단은 shouldPreparePastIndex 단일 술어로(호출부마다 복붙하지 않는다).
+    if (shouldPreparePastIndex()) { resetPastIndexRetries(); prefetchPastIndex(); }
     setGenerateGateOpen(false);
   };
 

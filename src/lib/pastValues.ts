@@ -592,6 +592,24 @@ export function ensurePastIndex(): void {
   });
 }
 
+/**
+ * v0.38.0 리뷰#1 — "과거값 인덱스를 지금 만들 가치가 있는가"의 **단일 술어(SSOT)**.
+ *
+ * 이 판단이 App 부팅·로그인·설정 저장·테이블 생성·시트 재연결 등 호출부마다 복붙돼 있었고,
+ * 모양이 조금씩 달라(`anyRule`만 보는 곳 vs 인증까지 보는 곳) 신규 호출부가 게이트를 통째로
+ * 빠뜨리는 결함으로 이어졌다. 호출부는 이 함수만 쓴다 — 조건이 바뀌면 여기 한 곳만 고친다.
+ *
+ * 조건: ①이상치 알람 규칙(방향 또는 변동률)이 한 컬럼이라도 있고 ②시트가 지정돼 있고
+ * ③읽기 인증 수단(토큰 또는 API key)이 있다. 하나라도 없으면 소비자가 없거나 조회가 불가능하다.
+ */
+export function shouldPreparePastIndex(): boolean {
+  const s = useSettingsStore.getState();
+  const anyAnomalyRule = s.columns.some(
+    (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
+  );
+  return anyAnomalyRule && !!s.sheetUrl && !!s.sheetTab && readonlySheetsAuth() !== null;
+}
+
 /** 세션 시작 시 재시도 카운터/타이머 리셋 — 이전 세션이 오프라인으로 소진했어도 새 세션은 다시
  *  시도한다. 유효 캐시는 보존(무효화는 TTL/지문으로 getCachedIndex가 담당). */
 export function resetPastIndexRetries(): void {
