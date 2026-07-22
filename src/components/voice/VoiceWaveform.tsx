@@ -36,11 +36,13 @@ export function VoiceWaveform({
   getTimeDomainData,
   getLevel,
   active,
+  height,
   color = T.green,
 }: {
   getTimeDomainData: (out: Uint8Array) => boolean;
   getLevel: () => number;
   active: boolean;
+  height: number;
   color?: string;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -173,7 +175,7 @@ export function VoiceWaveform({
       className="voice-waveform"
       style={{
         width: '100%',
-        minHeight: 100,
+        height,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',

@@ -187,7 +187,6 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
     (el) => el.getBoundingClientRect().height,
   );
   expect(confirmBandHeight, '확정 전환에도 파형 밴드 높이 고정').toBe(listeningBandHeight);
-  expect(confirmBandHeight).toBeCloseTo(100, 0);
 
   // 핵심(R3-FIX-5): 확인 카드가 **금방 사라지지 않는다**. 1.5초 창의 중간(~700ms)에도 살아 있어야
   //   한다 — 종전 1-음성컬럼 스펙에선 여기서 이미 review로 잘려 있었다(실측 263ms).

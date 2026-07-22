@@ -75,7 +75,11 @@ input::placeholder {
 }
 
 .voice-waveform[data-wave-motion='active'] .voice-waveform__bar {
-  animation: inset-wave 940ms ease-in-out infinite alternate;
+  animation-name: inset-wave;
+  animation-duration: 940ms;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
   animation-delay: var(--delay, 0ms);
 }
 
