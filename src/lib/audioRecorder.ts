@@ -308,10 +308,14 @@ export class AudioRecorder {
    *  빈/극소 클립 감지(useVoiceSession) 또는 유휴 중 장치 변경 시 호출. 진행 중 active 슬롯은
    *  이미 실패(빈 클립)했거나 유휴이므로 정리 후 새 스트림으로 교체한다. 쿨다운/동시성 가드로
    *  연속 호출에 폭주하지 않는다. 성공/실패 모두 텔레메트리를 남긴다([REVIEW-1] 관측 대칭성). */
-  async recoverStream(reason: string): Promise<boolean> {
+  async recoverStream(reason: string, opts?: { bypassCooldown?: boolean }): Promise<boolean> {
     if (this.recovering) return false;
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-    if (now - this.lastRecoverAt < RECOVER_COOLDOWN_MS) return false;
+    // v0.38.0 리뷰#1(Codex Medium) — 쿨다운은 **자동 폭주**를 막는 장치지, 사용자의 명시적
+    // 재연결 탭을 삼키라는 게 아니다. 자동 시도가 즉시 실패한 직후(쿨다운 3초가 남은 상태)
+    // 사용자가 배너를 바로 누르면, 실제 getUserMedia 호출 없이 실패하고 두 번 눌러야 했다.
+    // 제스처 경로는 iOS가 getUserMedia를 허용하는 유일한 창이라 소모하면 안 된다.
+    if (!opts?.bypassCooldown && now - this.lastRecoverAt < RECOVER_COOLDOWN_MS) return false;
     this.recovering = true;
     this.lastRecoverAt = now;
     // v0.19.0 W7 — 재획득 전 라벨을 기억해 재획득 후 실제 변화가 있으면 route-change 이벤트를 방출.

@@ -80,3 +80,28 @@ test('[CLIP-R1] 새로 만든 레코더의 첫 recoverStream은 쿨다운에 걸
   expect(lastRecoverAt).toBeLessThanOrEqual(-3000);
   expect(performance.now() - lastRecoverAt).toBeGreaterThanOrEqual(3000);
 });
+
+/**
+ * v0.38.0 리뷰#1(Codex Medium) — 자동 복구가 즉시 실패해 쿨다운이 남은 상태에서, 사용자가 배너를
+ * **바로 한 번 탭하면** 실제 재획득이 시도돼야 한다. 쿨다운은 자동 폭주를 막는 장치지 사용자
+ * 제스처를 삼키는 장치가 아니다(iOS에선 제스처가 getUserMedia를 허용하는 유일한 창이라 더 중요).
+ * 통합 테스트는 3.5초를 기다린 뒤 클릭해 이 경계를 가린다 — 여기서 시계 비의존으로 고정한다.
+ */
+test('[리뷰#1] 자동 시도 직후 쿨다운이 남아도 사용자 제스처 복구는 차단되지 않는다', async () => {
+  const rec = new AudioRecorder();
+  const priv = rec as unknown as { lastRecoverAt: number; recovering: boolean };
+  let calls = 0;
+  (rec as unknown as { acquireStream: () => Promise<MediaStream> }).acquireStream = async () => {
+    calls++;
+    return fakeStream([{ readyState: 'live' }]);
+  };
+
+  // 자동 시도가 방금 일어난 상태(쿨다운 창 한복판)를 만든다.
+  priv.lastRecoverAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+  expect(await rec.recoverStream('auto')).toBe(false);      // 자동 경로는 종전대로 쿨다운 준수
+  expect(calls).toBe(0);
+
+  expect(await rec.recoverStream('user_gesture', { bypassCooldown: true })).toBe(true);
+  expect(calls).toBe(1);                                    // 제스처는 첫 탭에 실제로 시도된다
+});

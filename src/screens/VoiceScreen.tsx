@@ -165,7 +165,7 @@ export function VoiceScreen() {
           //   언마운트되며 타이머는 effect cleanup이 정리한다(setState-after-unmount 방지).
           if (reconnecting) return;
           setReconnecting(true);
-          void voiceSession.reconnectMic();
+          void voiceSession.reconnectMic({ userGesture: true });
         }}
         onCooldownEnd={() => setReconnecting(false)}
       />
