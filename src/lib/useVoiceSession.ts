@@ -1244,7 +1244,7 @@ export function useVoiceSession() {
   /** v0.22.0 P0 → v0.38.0 #5 — 수동 버튼과 자동 1회 시도가 공유하는 유일한 복구 진입점.
    *  같은 Promise가 진행 중이면 그대로 반환해 recoverStream/getUserMedia 중복 진입을 막는다.
    *  recoverStream reason의 legacy 문자열은 기존 텔레메트리 바이트 계약 보존을 위해 유지한다. */
-  const reconnectMic = useCallback((): Promise<boolean> => {
+  const reconnectMic = useCallback((opts?: { userGesture?: boolean }): Promise<boolean> => {
     if (micReconnectInFlightRef.current) return micReconnectInFlightRef.current;
     const rec = recorderRef.current;
     logCell({ type: 'clip', extra: 'mic_reconnect_attempt' });
@@ -1252,7 +1252,9 @@ export function useVoiceSession() {
       logCell({ type: 'clip', extra: 'mic_reconnect_no_recorder' });
       return Promise.resolve(false);
     }
-    const attempt = rec.recoverStream('user_gesture').then((ok) => {
+    // 리뷰#1(Codex Medium) — 사용자 제스처는 iOS가 getUserMedia를 허용하는 유일한 창이라
+    // 자동 시도가 남긴 쿨다운에 삼켜지면 안 된다. 자동 경로(opts 없음)는 종전대로 쿨다운을 지킨다.
+    const attempt = rec.recoverStream('user_gesture', { bypassCooldown: opts?.userGesture === true }).then((ok) => {
       // 복구 중 pause/stop/resume이 레코더를 폐기·교체했으면 늦게 열린 스트림을 즉시 닫는다.
       // stale 인스턴스가 micLost를 풀거나 핫마이크로 남지 않게 하되 STT lifecycle에는 관여하지 않는다.
       if (ok && recorderRef.current !== rec) {
@@ -2407,6 +2409,11 @@ export function useVoiceSession() {
     // 스트림으로 시작한다(start()가 새 AudioRecorder.init()로 재획득).
     micLostLatchedRef.current = false;
     setMicLost(false);
+    // v0.38.0 리뷰#1(Codex High) — 이전 세션의 마지막 UI 음성명령(도움말·인식률 등)이 남아 있으면,
+    // 새 세션에서 ActiveState가 마운트될 때 소비 시퀀스가 0으로 초기화돼 **그 명령이 자동 재실행**된다
+    // (세션 B 시작하자마자 도움말이 열리고, 인식률 설정이 한 번 더 바뀐다). 세션 경계에서 비운다.
+    uiCommandSeqRef.current = 0;
+    setUiCommand(null);
     sessionTodayRef.current = localTodayISO();
     // v0.8.0: 과거값 인덱스 프리페치(fire-and-forget) — 마스터 토글 제거 → 이상치 알람 규칙
     // (방향 trendRule 또는 변동률 pctThreshold)이 한 컬럼이라도 있고 Google 연결 시에만.

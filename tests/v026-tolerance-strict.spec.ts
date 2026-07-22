@@ -257,3 +257,35 @@ test('T5 — 명령어 도움말이 열린 동안 STT 명령은 실행되지 않
   expect(events.some((e) => e.type === 'command' && e.parsed === 'ui_resume' && e.extra === 'command_help')).toBe(true);
   expect(events.some((e) => e.type === 'command' && e.parsed === 'nextRow' && e.text === '다음')).toBe(true);
 });
+
+/**
+ * v0.38.0 리뷰#1(Codex High) — UI 음성명령이 **세션 경계를 넘어 재실행**되던 결함 회귀.
+ *
+ * 세션 A의 마지막 명령이 "도움말"인 채로 종료하면 uiCommand 신호가 남는다. 세션 B에서
+ * ActiveState가 새로 마운트될 때 소비 시퀀스가 0으로 초기화돼, 사용자가 말하지도 않은 도움말이
+ * 즉시 다시 열렸다(인식률 명령이면 설정이 한 번 더 바뀐다). 세션 시작 시 신호를 비워야 한다.
+ */
+test('[리뷰#1] 세션 A의 UI 음성명령이 세션 B 시작 시 재실행되지 않는다', async ({ page }) => {
+  await setupAndStart(page, 0.6);
+
+  // 세션 A: 도움말을 음성으로 연 뒤 그 상태로 세션을 끝낸다.
+  await fireSttConf(page, '도움말', 0.95);
+  await expect(page.locator('[data-testid="command-help-popup"]')).toBeVisible();
+  await page.locator('[data-testid="cmd-help-close"]').click();
+  await expect(page.locator('[data-testid="command-help-popup"]')).toHaveCount(0);
+  // 일시정지 → 입력 종료 → 종료 확인 (v035-r3-fixes의 exitViaConfirmDialog와 동일 경로)
+  await page.locator('button[title="일시정지"]').click();
+  await page.waitForTimeout(300);
+  await page.locator('button[title="입력 종료"]').click();
+  await page.waitForTimeout(300);
+  await page.locator('button[title="종료 확인"]').click();
+  await page.waitForTimeout(1200);
+
+  // 세션 B 시작 — 아무 명령도 말하지 않았으므로 도움말이 저절로 열리면 안 된다.
+  const startBtn = page.locator('text=음성 입력 시작').first();
+  await expect(startBtn).toBeVisible({ timeout: 5000 });
+  await startBtn.click();
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
+  await page.waitForTimeout(800);
+  await expect(page.locator('[data-testid="command-help-popup"]')).toHaveCount(0);
+});
