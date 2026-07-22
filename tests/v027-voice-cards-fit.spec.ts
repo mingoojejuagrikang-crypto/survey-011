@@ -160,13 +160,11 @@ for (const vp of VIEWPORTS) {
     expect(m.scrollH).toBeLessThanOrEqual(m.clientH + 1);
     expect(m.scrollW).toBeLessThanOrEqual(m.clientW + 1);
 
-    // ② 새 3줄 구조의 핵심 정보가 visible + 뷰포트 안(현재값 > 알람 라벨 > 직전값 > 행동).
-    //   v0.33.0 항목7 — "확인 또는 수정" 텍스트 힌트는 실제 터치 버튼([확인][수정])으로 대체됐다.
+    // ② 핵심 정보가 visible + 뷰포트 안(현재값 > 알람 라벨 > 직전값 > 행동).
     const infoTexts = [
       '-355.5',                 // P1 현재값
       '추세 알람 감소',           // P2 변화(알람 라벨)
       '100',                    // P3 직전값(카드는 원본 표기 "100"으로 표시 — trend-alert.spec 동일)
-      '말로도 가능',              // P4 음성 병행 보조문(버튼 아래)
     ];
     const cardBox = (await card.boundingBox())!;
     for (const t of infoTexts) {

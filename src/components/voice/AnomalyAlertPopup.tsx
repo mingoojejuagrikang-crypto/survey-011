@@ -1,5 +1,6 @@
 import { T } from '../../tokens';
 import { useFitScale } from './useFitScale';
+import { HERO_TYPE } from './heroLayout';
 
 /** v0.28.0 — 이 카드 전용 확장 축소 단계(useFitScale 공용 FIT_STEPS 하위 참고). 다른 카드
  *  (PausedCard/ModifyIndicatorPill/VoiceHero)는 375/412/430 전부 기존 PASS라 그 카드들의
@@ -7,7 +8,7 @@ import { useFitScale } from './useFitScale';
  *  절대 하한(`max(px, calc(... * var(--fit-lo)))`)을 같이 걸어, 이 배열이 아무리 낮은 단계까지
  *  가도 텍스트가 읽을 수 없는 크기로 무한 축소되지 않는다(2026-07-06 Sonar 재현 QA 수정). */
 const ANOMALY_FIT_STEPS = [
-  1, 0.94, 0.88, 0.82, 0.76, 0.7, 0.64, 0.58,
+  1.12, 1.06, 1, 0.94, 0.88, 0.82, 0.76, 0.7, 0.64, 0.58,
   // v0.28.0 — 0.58 밑은 더 촘촘한 간격(0.03)으로: useFitScale의 fits() 판정에 +1px 허용오차가
   // 있어(부동소수 rAF 스래싱 방지용, 공용 로직 불변), 성긴 간격에서는 "거의 맞지만 1px 초과"
   // 단계에서 조기 정지해버릴 수 있다(375×667 실측에서 관측). 더 촘촘한 단계로 그 확률을 줄인다.
@@ -92,6 +93,7 @@ export function AnomalyAlertPopup({
       `추세 알람 ${up ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
   // R2 — corrected(정정 후 정상)면 GREEN, 그 외(이상치 대기)는 RED 통일(V3).
   const accent = corrected ? T.green : T.red;
+  const previousLabel = a.prevDate ? `직전(${a.prevDate})` : '직전';
   // v0.27.0 — 무스크롤 가드: 콘텐츠가 흡수영역 높이를 넘으면 폰트를 실측 기반으로 줄인다.
   // v0.28.0 — 이상치 카드는 콘텐츠가 더 많아 확장 단계(ANOMALY_FIT_STEPS)를 전달한다. --fit-hi
   // 계산식(hiWeight)은 기본값 그대로 둔다 — 현재값(P1)은 기존 GL-005 가독 하한(≥26px,
@@ -107,111 +109,59 @@ export function AnomalyAlertPopup({
       data-status={corrected ? 'corrected' : 'pending'}
       aria-live="assertive"
       style={{
-        // v0.23.0 입력탭#1 — 중앙 흡수: 흡수영역(1fr, overflow:hidden) 가용 높이에 맞춘다.
-        //   v0.27.0 — 무스크롤: 패딩·간격도 vh 비례. overflowY:auto는 훅 폴백으로만 잔존.
-        width: '100%', maxWidth: 'min(620px, 96vw)',
-        maxHeight: '100%', minHeight: 0, overflowY: 'auto',
-        // v0.28.0 — 패딩·행간격도 --fit-lo에 연동(하한 有)해 극단 압축 시 여백까지 함께 줄어든다.
-        // 이전엔 폰트만 줄고 여백은 vh 고정이라, 375×667처럼 진짜 여유가 없는 화면에서 텍스트를
-        // 아무리 줄여도 고정 여백(패딩+행간격 합 약 50px)이 남아 무스크롤을 못 채웠다.
-        padding: 'max(3px, calc(clamp(12px, 2.6vh, 24px) * var(--fit-lo, 1))) max(8px, calc(clamp(16px, 5vw, 30px) * var(--fit-lo, 1)))',
-        borderRadius: 18,
-        background: corrected ? 'rgba(18,34,22,0.96)' : 'rgba(34,18,18,0.96)',
-        border: `2px solid ${accent}`,
-        boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
+        // v0.38.0 #3·#8 — 카드 chrome 없이 중앙 흡수영역 자체를 상태판으로 사용한다.
+        width: '100%', maxWidth: 'min(720px, 96vw)',
+        height: '100%', maxHeight: '100%', minHeight: 0, overflowY: 'auto',
+        padding: 'max(2px, calc(clamp(4px, 1vh, 10px) * var(--fit-lo, 1))) 0',
         display: 'flex', flexDirection: 'column',
-        gap: 'max(1px, calc(clamp(4px, 0.8vh, 8px) * var(--fit-lo, 1)))', alignItems: 'center',
-        animation: corrected ? 'card-breathe-green 2.4s ease-in-out infinite' : 'card-breathe-red 2.2s ease-in-out infinite',
+        justifyContent: 'center', alignItems: 'center',
+        gap: 'max(3px, calc(clamp(6px, 1.2vh, 14px) * var(--fit-lo, 1)))',
+        textAlign: 'center',
       }}
     >
-      {/* 구조(v0.34.0 A6): ① 알람라벨 ② [직전값] → [현재값] 값 그리드(+직전 조사일). 확인류
-          안내문구는 비프음+배경 호흡으로 대체해 카드 전체를 현장 거리에서 읽히는 정보만 남긴다. */}
+      <span style={{
+        maxWidth: '100%', color: accent,
+        fontSize: 'max(18px, calc(clamp(24px, min(8vw, 4.8vh), 42px) * var(--fit-lo, 1)))',
+        fontWeight: 900, lineHeight: 1.08,
+        wordBreak: 'keep-all', overflowWrap: 'anywhere',
+      }}>
+        {alarmLabel}
+      </span>
+      <span style={{
+        maxWidth: '100%', color: T.textDim,
+        fontSize: HERO_TYPE.name, fontWeight: 900, lineHeight: 1.04,
+        letterSpacing: -0.6, wordBreak: 'keep-all', overflowWrap: 'anywhere',
+      }}>
+        {a.colName}
+      </span>
+      <span style={{
+        maxWidth: '100%', color: T.text,
+        fontSize: HERO_TYPE.value, fontWeight: 900, lineHeight: 1,
+        letterSpacing: -2, fontVariantNumeric: 'tabular-nums',
+        wordBreak: 'keep-all', overflowWrap: 'anywhere',
+      }}>
+        {a.next}
+      </span>
       <div
+        data-testid="anomaly-comparison"
         style={{
-          maxWidth: '100%',
-          fontSize: 'max(16px, calc(clamp(20px, 3.2vh, 30px) * var(--fit-hi, 1)))',
-          color: T.text, fontWeight: 850, textAlign: 'center', lineHeight: 1.16,
-          wordBreak: 'keep-all', overflowWrap: 'anywhere',
+          maxWidth: '100%', color: T.textDim,
+          fontSize: 'max(14px, calc(clamp(18px, min(5.3vw, 3.2vh), 28px) * var(--fit-lo, 1)))',
+          fontWeight: 850, lineHeight: 1.1, letterSpacing: -0.5,
+          whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
         }}
       >
-        <span style={{ color: accent }}>{alarmLabel}</span>
+        {previousLabel} {a.prev} →
       </div>
-      {/* v0.34.0 A6(실기기 피드백) — "직전값 글자가 너무 작다 · 직전/현재가 다른 행 · 직전 조사일
-          위치". 직전값을 현재값과 같은 급 폰트로 승격해 [직전값] → [현재값]을 **같은 행**(grid
-          row 2, baseline 정렬)에 두고, 각 값 위에 소형 라벨('직전'/'현재'), 직전 조사일은 직전값
-          **아래** 별도 소형 줄(row 3, col 1). fit 계약 유지 — 현재값 26px 하한(기존 단언) 불변,
-          직전값 승격의 fit 예산은 직전값 하한을 한 단계 낮게(22px) 둬서 확보한다. */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, auto) auto minmax(0, auto)',
-          columnGap: 'max(6px, calc(clamp(8px, 2vw, 14px) * var(--fit-lo, 1)))',
-          rowGap: 'max(1px, calc(clamp(2px, 0.4vh, 4px) * var(--fit-lo, 1)))',
-          justifyContent: 'center', justifyItems: 'center', alignItems: 'baseline',
-          maxWidth: '100%', lineHeight: 1.05,
-          fontWeight: 900, letterSpacing: -0.3,
-          wordBreak: 'keep-all', overflowWrap: 'anywhere',
-        }}
-      >
-        {/* row 1 — 소형 라벨(값 위) */}
-        <span style={{
-          fontSize: 'max(10px, calc(clamp(11px, 1.7vh, 13px) * var(--fit-lo, 1)))',
-          color: T.textDim, fontWeight: 800, lineHeight: 1.2,
-        }}>
-          직전
-        </span>
-        <span aria-hidden />
-        <span style={{
-          fontSize: 'max(10px, calc(clamp(11px, 1.7vh, 13px) * var(--fit-lo, 1)))',
-          color: T.textDim, fontWeight: 800, lineHeight: 1.2,
-        }}>
-          현재
-        </span>
-        {/* row 2 — 직전값(현재값과 같은 급) → 현재값, baseline 정렬로 같은 행 */}
-        <span style={{
-          color: T.textDim, maxWidth: '100%',
-          fontSize: 'max(22px, calc(clamp(32px, min(9vw, 6vh), 52px) * var(--fit-hi, 1)))',
-          letterSpacing: -0.8,
-        }}>
-          {a.prev}
-        </span>
-        <span style={{
-          color: T.textDim,
-          fontSize: 'max(15px, calc(clamp(18px, min(4.8vw, 3.4vh), 24px) * var(--fit-hi, 1)))',
-        }}>
-          →
-        </span>
-        <span style={{
-          color: T.text, maxWidth: '100%',
-          fontSize: 'max(26px, calc(clamp(32px, min(9vw, 6vh), 52px) * var(--fit-hi, 1)))',
-          letterSpacing: -0.8,
-        }}>
-          {a.next}
-        </span>
-        {/* row 3 — 직전 조사일(직전값 아래, prevDate 있을 때만) */}
-        {a.prevDate && (
-          <span style={{
-            gridColumn: 1,
-            fontSize: 'max(10px, calc(clamp(11px, 1.7vh, 13px) * var(--fit-lo, 1)))',
-            color: T.textDim, fontWeight: 700, lineHeight: 1.2, whiteSpace: 'nowrap',
-          }}>
-            조사일 {a.prevDate}
-          </span>
-        )}
-      </div>
-      {/* v0.33.0 항목7(07-10 QA P1 #2) — 응답 대기 알람은 "확인 또는 수정" 텍스트 힌트 대신 실제
-          터치 버튼을 그린다: 음성 명령과 동일 콜백·동일 로그, 각 ≥44px(minHeight 고정 — fit 축소
-          비대상: 장갑 터치 하한 보존). 음성도 가능하다는 보조문을 아래 작게 유지한다.
-          awaitingResponse가 없는 정보성 팝업(수동 입력 이상치)은 버튼·힌트 없이 값만 보여준다. */}
+      {/* 응답 대기 알람의 실제 터치 액션은 유지한다. 음성 명령 기능도 그대로이며 안내문만 제거한다. */}
       {!corrected && a.awaitingResponse && onConfirm && onModify && (
-        <>
-          <div
-            style={{
-              width: '100%',
-              display: 'grid', gridTemplateColumns: '1fr 1fr',
-              gap: 'max(6px, calc(clamp(8px, 1.4vh, 12px) * var(--fit-lo, 1)))',
-            }}
-          >
+        <div
+          style={{
+            width: 'min(480px, 100%)',
+            display: 'grid', gridTemplateColumns: '1fr 1fr',
+            gap: 'max(6px, calc(clamp(8px, 1.4vh, 12px) * var(--fit-lo, 1)))',
+          }}
+        >
             <button
               type="button"
               data-testid="anomaly-confirm-btn"
@@ -240,23 +190,7 @@ export function AnomalyAlertPopup({
             >
               수정
             </button>
-          </div>
-          {/* v0.34.0 리뷰(민구 결정 2026-07-14) — 수동입력 보류(manualHold)는 **터치 전용**이라
-              이 힌트를 띄우지 않는다. 그 상태에선 handleFinal이 STT를 전부 무시하므로(소음이
-              수동값을 덮어쓰는 경로 차단) 음성 안내는 거짓 어포던스가 된다. 음성 확인 루프
-              (trendConfirm)로 무장된 음성 경로 알람에서만 노출. */}
-          {!a.manualHold && (
-            <div
-              style={{
-                fontSize: 'max(11px, calc(clamp(12px, 1.8vh, 14px) * var(--fit-lo, 1)))',
-                color: T.textDim, fontWeight: 800, lineHeight: 1.2,
-                wordBreak: 'keep-all', textAlign: 'center',
-              }}
-            >
-              말로도 가능: "확인" / "수정"
-            </div>
-          )}
-        </>
+        </div>
       )}
     </div>
   );

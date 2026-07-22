@@ -17,6 +17,10 @@ import { useLayoutEffect, useRef, type DependencyList } from 'react';
  *  안(페인트 전)이라 플래시 없음. ResizeObserver/resize로 뷰포트·텍스트 확대 변화에 재수렴한다. */
 const FIT_STEPS = [1, 0.94, 0.88, 0.82, 0.76, 0.7, 0.64, 0.58] as const;
 
+/** 중앙 hero는 남는 흡수영역을 원거리 가독성에 사용한다. 큰 단계부터 실제 영역 적합 여부를
+ *  확인하므로, 짧은 화면에서는 기존 1 이하 단계로 자동 복귀한다. 일반 카드 기본값에는 영향 없다. */
+export const HERO_FIT_STEPS = [1.18, 1.1, ...FIT_STEPS] as const;
+
 /** v0.28.0 — 이상치 카드 375×667 무스크롤 실패(2026-07-06 Sonar 데스크탑 재현 QA) 수정: 이상치
  *  카드는 일반 카드보다 콘텐츠가 많아(샘플키+추세라벨+직전→현재+안내문) 공용 FIT_STEPS 최저(0.58)
  *  로도 375px급 최소 지원 화면에서 다 안 들어간다(실측 scrollHeight 131 vs clientHeight 77).

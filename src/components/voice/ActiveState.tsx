@@ -345,7 +345,7 @@ export function ActiveState({
           minHeight: 0, overflow: 'hidden', width: '100%',
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          padding: '8px 20px', gap: 10,
+          padding: 'clamp(4px, 1vh, 10px) clamp(12px, 3vw, 24px)',
         }}
       >
         {paused ? (
@@ -364,7 +364,14 @@ export function ActiveState({
           //   또는 [확인]뿐.
           // v0.37.0 FB-F(민구) — 알람 카드 아래·파형 위에 미확정 인식값 스트립(정정 발화 확인).
           //   AlarmInterimStrip이 interimValue를 자체 구독(§10 실제 인식 원문만, lastTts 금지).
-          <>
+          <div
+            data-central-state="alarm"
+            style={{
+              width: '100%', height: '100%', minHeight: 0,
+              display: 'grid', gridTemplateRows: 'minmax(0, 1fr) auto',
+              justifyItems: 'center', overflow: 'hidden',
+            }}
+          >
             <AnomalyAlertPopup
               a={sess.anomalyAlert}
               onConfirm={sess.anomalyAlert.manualHold ? onManualAnomalyConfirm : onAnomalyConfirm}
@@ -379,7 +386,7 @@ export function ActiveState({
               }
             />
             <AlarmInterimStrip />
-          </>
+          </div>
         ) : sess.modifyIndicator ? (
           // 수정 재안내 카드 — 직전값(취소선)→새값.
           <ModifyIndicatorPill

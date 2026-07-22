@@ -1,23 +1,23 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { T } from '../../tokens';
 import { useSessionStore } from '../../stores/sessionStore';
-import { useFitScale } from './useFitScale';
+import { HERO_FIT_STEPS, useFitScale } from './useFitScale';
 import { HERO_TYPE } from './heroLayout';
 import { ReaskCue, type ReaskReason } from './ReaskCue';
 import type { GlowTone } from './EdgeGlow';
 import type { Column } from '../../types';
 
-/** v0.35.0 → v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 입력 탭의 시각 중심(hero).
- *  카드 chrome(테두리 박스·패널 배경) 완전 제거 — 화면 전체와 안쪽 엣지글로우가 하나의 상태판으로
- *  읽힌다. 구성: [상태 심볼 원(76~82px)] + [항목명(38~44px, textDim)] + [값].
+/** 입력 탭의 시각 중심(hero). 카드 chrome 없이 화면 전체가 하나의 상태판으로 읽힌다.
+ *  v0.38.0 #2·#8·#9·#10: 상태 아이콘을 없애고 [항목명 슬롯] + [값 슬롯]을 모든 상태가 공유한다.
+ *  확인 표시는 항목명 왼쪽에 인라인으로 붙고, interim→확정 전환에도 값의 중심은 움직이지 않는다.
  *
- *  1) 대기(listening): ◯mic + 항목명. **인식 중이면 STT 원문 문자열(interimValue)을 크게**(56~72px,
+ *  1) 대기(listening): 항목명. **인식 중이면 STT 원문 문자열(interimValue)을 크게**(56~72px,
  *     "사십이 점…" 스타일 — FB#2). "듣는 중" 같은 중복 문구 없음(파형 밴드가 생존 신호).
- *  2) 커밋 직후(~1.5s): ◯✓ + 항목명 + **확정값(80~100px, tabular)**. store `valueBurst`의 seq
+ *  2) 커밋 직후(~1.5s): ✓ 항목명 + **확정값(80~100px, tabular)**. store `valueBurst`의 seq
  *     변화로 진입, CONFIRM_MS 뒤 대기 복귀.
  *     ⚠️ 반드시 valueBurst.name/value에서만 읽는다 — advance()가 TTS 전에 포인터를 다음 항목으로
  *     옮기므로 currentCol을 쓰면 "다음 항목 값"으로 오해된다(v0.34.0 A4가 값 표시를 없앤 이유).
- *  3) 검토(phase 'complete'): ◯✓ + **방금 입력한 값**(대형, v0.37.0 FB-E — 종전의 대형 행 번호를
+ *  3) 검토(phase 'complete'): ✓ 항목명 + **방금 입력한 값**(대형, v0.37.0 FB-E — 종전의 대형 행 번호를
  *     제거). 값 출처는 행의 마지막 음성 컬럼 실제 커밋값(ActiveState 파생). 행 번호 의미는
  *     aria-label("N행 완료, 명령 대기")로 보존. completing이 확인 플래시보다 우선(렌더 순서로 강제).
  *
@@ -56,8 +56,22 @@ export function VoiceHero({
 
   // 렌더 우선순위(명시적 — 타이머 레이스 무관): review > confirm > listening.
   const showConfirm = !review && confirmed !== null;
-  const fitRef = useFitScale<HTMLDivElement>([review, showConfirm, col.name, row, reaskReason, confirmed?.value, reviewCommit?.value, interim]);
+  const fitRef = useFitScale<HTMLDivElement>(
+    [review, showConfirm, col.name, row, reaskReason, confirmed?.value, reviewCommit?.value, interim],
+    HERO_FIT_STEPS,
+    0,
+  );
   const reduced = prefersReducedMotion();
+  const checked = review || showConfirm;
+  const label = review
+    ? reviewCommit?.name ?? `${row}행 완료`
+    : showConfirm && confirmed
+      ? confirmed.name
+      : col.name;
+  const value = review ? reviewCommit?.value : showConfirm ? confirmed?.value : interim;
+  const interimValue = !review && !showConfirm;
+  const labelIsPrimary = interimValue || !value;
+  const accent = tone === 'red' ? T.red : tone === 'amber' ? T.amber : T.green;
 
   return (
     // 리뷰 라운드1(Codex, 수용) — 루트 aria-live 제거: interim이 매 인식 결과마다 바뀌어 스크린리더
@@ -66,6 +80,11 @@ export function VoiceHero({
     <div
       ref={fitRef}
       data-hero-state={review ? 'review' : showConfirm ? 'confirm' : 'listening'}
+      data-testid={review ? 'hero-review-status' : undefined}
+      role={review ? 'status' : undefined}
+      aria-live={review ? 'polite' : undefined}
+      aria-atomic={review ? 'true' : undefined}
+      aria-label={review ? `${row}행 완료, 명령 대기` : undefined}
       style={{
         // 카드 chrome 없음 — 배경·테두리·그림자 없이 화면 자체가 상태판(코덱스 §6.1).
         // height:100% — 흡수영역 트랙을 꽉 채운다(콘텐츠는 justifyContent로 중앙). 콘텐츠 높이에
@@ -74,47 +93,26 @@ export function VoiceHero({
         width: '100%', maxWidth: 'min(560px, 94vw)',
         height: '100%', maxHeight: '100%', minHeight: 0, overflowY: 'auto',
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        gap: 'clamp(8px, 1.6vh, 16px)',
+        gap: 'max(4px, calc(clamp(8px, 1.6vh, 18px) * var(--fit-lo, 1)))',
         textAlign: 'center', minWidth: 0,
       }}
     >
-      {review ? (
-        // v0.37.0 FB-E(민구) + 리뷰 #2(민구 Option 1) — 검토 표시. 방금 커밋된 셀(reviewCommit)이 있으면
-        //   [항목명 + 값]을 크게 보인다(§6.1 확정 숫자). '이전'으로 완료행을 재방문(새 커밋 없음)했거나
-        //   커밋 행에서 벗어난 검토는 stale 값 대신 중립 라벨 "N행 완료"로 폴백한다(값 오표시/오해 방지).
-        //   행 번호 의미는 aria-label로 보존(스크린리더).
-        <div
-          data-testid="hero-review-status"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          aria-label={`${row}행 완료, 명령 대기`}
-          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'clamp(8px, 1.6vh, 16px)', minWidth: 0, maxWidth: '100%' }}
-        >
-          <StateBadge kind="check" tone={tone} reduced={reduced} />
-          {reviewCommit ? (
-            <>
-              <HeroNameLine>{reviewCommit.name}</HeroNameLine>
-              <HeroPrimaryLine value={reviewCommit.value} kind="value" reduced={reduced} live={false} />
-            </>
-          ) : (
-            <HeroPrimaryLine value={`${row}행 완료`} kind="name" reduced={reduced} live={false} />
-          )}
-        </div>
-      ) : showConfirm && confirmed ? (
-        <>
-          <StateBadge kind="check" tone={tone} reduced={reduced} />
-          <HeroNameLine>{confirmed.name}</HeroNameLine>
-          <HeroPrimaryLine value={confirmed.value} kind="value" reduced={reduced} />
-        </>
-      ) : (
-        <>
-          <StateBadge kind="mic" tone={tone} reduced={reduced} />
-          <HeroPrimaryLine value={col.name} kind="name" reduced={reduced} />
-          {interim && <InterimLine value={interim} />}
-          <ReaskCue reason={reaskReason} />
-        </>
-      )}
+      <HeroNameLine
+        checked={checked}
+        accent={accent}
+        reduced={reduced}
+        primary={labelIsPrimary}
+      >
+        {label}
+      </HeroNameLine>
+      <HeroValueSlot>
+        {value && (
+          interimValue
+            ? <InterimLine value={value} />
+            : <HeroPrimaryLine value={value} reduced={reduced} live={!review} />
+        )}
+      </HeroValueSlot>
+      {interimValue && <ReaskCue reason={reaskReason} />}
     </div>
   );
 }
@@ -172,47 +170,6 @@ export function useReviewCommit(review: boolean, row: number): { name: string; v
   return reviewVal;
 }
 
-/** 상태 심볼 원(76~82px, 5px stroke — 코덱스 §6.1). mic=듣는 중, check=확인/검토. 원거리(2~3m)
- *  주변시에서 상태를 즉시 판독하는 1차 신호. 색은 상태 의미색(초록) 토큰만 사용. */
-function StateBadge({ kind, tone, reduced }: { kind: 'mic' | 'check'; tone: GlowTone; reduced?: boolean }) {
-  const size = 'clamp(60px, min(19vw, 10vh), 82px)';
-  const color = tone === 'red' ? T.red : tone === 'amber' ? T.amber : T.green;
-  const glow = tone === 'red' ? T.redGlow : tone === 'amber' ? T.amberGlow : T.greenGlow;
-  const fill = tone === 'red'
-    ? 'rgba(255,82,82,0.14)'
-    : tone === 'amber'
-      ? 'rgba(255,183,77,0.14)'
-      : 'rgba(0,200,83,0.14)';
-  return (
-    <span
-      aria-hidden
-      data-testid="voice-state-badge"
-      data-tone={tone}
-      style={{
-        flexShrink: 0,
-        width: size, height: size, minWidth: size, borderRadius: '50%',
-        border: `5px solid ${color}`,
-        background: kind === 'check' ? fill : 'transparent',
-        boxShadow: `0 0 18px ${glow}`,
-        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        animation: reduced ? undefined : kind === 'check' ? 'check-pop 320ms ease-out' : 'breathe 1.75s ease-in-out infinite',
-      }}
-    >
-      {kind === 'mic' ? (
-        <svg viewBox="0 0 24 24" width="52%" height="52%" fill="none" stroke={color} strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-          <rect x="9" y="2" width="6" height="12" rx="3" />
-          <path d="M19 10v2a7 7 0 01-14 0v-2" />
-          <line x1="12" y1="19" x2="12" y2="22" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 24 24" width="56%" height="56%" fill="none" stroke={color} strokeWidth={3.4} strokeLinecap="round" strokeLinejoin="round">
-          <path d="M4 12.5l5 5L20 6" />
-        </svg>
-      )}
-    </span>
-  );
-}
-
 /** 항목명 공용 타이포(HERO_TYPE.name SSOT) — listening의 hero-primary(name)와 confirm의 보조선이
  *  **동일 크기·동일 스타일**을 공유한다(민구 확정: 상태가 바뀌어도 항목명 크기는 불변). */
 const HERO_NAME_STYLE: React.CSSProperties = {
@@ -227,45 +184,72 @@ const HERO_NAME_STYLE: React.CSSProperties = {
   textAlign: 'center',
 };
 
-/** 항목명 보조선(확인 상태 전용 — 값이 주인공일 때 위에 붙는 이름). 크기는 listening과 동일. */
-function HeroNameLine({ children }: { children: ReactNode }) {
-  return <span style={HERO_NAME_STYLE}>{children}</span>;
+/** 모든 상태가 공유하는 항목명 슬롯. 확인 표시는 항목명과 같은 행에 둔다. */
+function HeroNameLine({
+  children, checked, accent, reduced, primary,
+}: {
+  children: ReactNode;
+  checked: boolean;
+  accent: string;
+  reduced: boolean;
+  primary: boolean;
+}) {
+  return (
+    <span
+      data-testid={primary ? 'hero-primary' : undefined}
+      style={{ ...HERO_NAME_STYLE, display: 'inline-flex', alignItems: 'baseline', justifyContent: 'center', gap: '0.22em' }}
+    >
+      {checked && (
+        <span
+          aria-hidden
+          style={{ color: accent, flexShrink: 0, animation: reduced ? undefined : 'check-pop 320ms ease-out' }}
+        >
+          ✓
+        </span>
+      )}
+      <span>{children}</span>
+    </span>
+  );
 }
 
-/** hero 대표 라인(data-testid="hero-primary" — 항상 이 노드가 계약 대상).
- *  kind='name': 대기 상태의 항목명(38~44px, textDim — 코덱스 §6.1).
- *  kind='value': 확정값/행번호(80~100px, tabular). */
+/** interim과 확정값이 공유하는 고정 높이 슬롯. 빈 listening 상태에도 공간을 예약해 점프를 막는다. */
+function HeroValueSlot({ children }: { children?: ReactNode }) {
+  return (
+    <div style={{
+      width: '100%',
+      height: 'max(72px, calc(clamp(104px, min(34vw, 18vh), 184px) * var(--fit-hi, 1)))',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      minWidth: 0, flexShrink: 0,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+/** 확정값 대표 라인(data-testid="hero-primary", tabular hero). */
 function HeroPrimaryLine({
-  value, kind, reduced, live = true,
+  value, reduced, live = true,
 }: {
   value: string;
-  kind: 'name' | 'value';
   reduced?: boolean;
   live?: boolean;
 }) {
-  const isName = kind === 'name';
   return (
     <span
       key={value}
       data-testid="hero-primary"
       aria-live={live ? 'polite' : undefined}
       style={{
-        // 타이포 SSOT(HERO_TYPE) — name은 HERO_NAME_STYLE과 동일 크기(상태 간 불변, 민구 확정).
-        ...(isName ? HERO_NAME_STYLE : {}),
-        fontSize: isName ? HERO_TYPE.name : HERO_TYPE.value,
-        ...(isName
-          ? {}
-          : {
-              fontWeight: 900,
-              lineHeight: 1.04,
-              color: T.text,
-              letterSpacing: -2,
-              fontVariantNumeric: 'tabular-nums' as const,
-              wordBreak: 'keep-all' as const,
-              overflowWrap: 'anywhere' as const,
-              maxWidth: '100%',
-              textAlign: 'center' as const,
-            }),
+        fontSize: HERO_TYPE.value,
+        fontWeight: 900,
+        lineHeight: 1.04,
+        color: T.text,
+        letterSpacing: -2,
+        fontVariantNumeric: 'tabular-nums',
+        wordBreak: 'keep-all',
+        overflowWrap: 'anywhere',
+        maxWidth: '100%',
+        textAlign: 'center',
         animation: reduced ? undefined : 'chip-pop 320ms ease-out',
       }}
     >
@@ -283,27 +267,25 @@ function HeroPrimaryLine({
  *  interimValue를 **자체 구독**한다(칩·컨트롤 리렌더 회피). */
 export function AlarmInterimStrip() {
   const interim = useSessionStore((st) => st.interimValue);
-  if (!interim) return null;
   return (
     <div
-      data-testid="interim-value"
-      aria-label={`인식 중: ${interim}`}
+      data-testid={interim ? 'interim-value' : undefined}
+      aria-label={interim ? `인식 중: ${interim}` : undefined}
+      aria-hidden={interim ? undefined : true}
       style={{
         flexShrink: 0,
-        marginTop: 8,
-        maxWidth: '100%',
-        padding: '4px 14px',
-        borderRadius: 999,
-        border: `1px solid ${T.lineStrong}`,
-        background: T.cardAlt,
+        width: '100%', height: 'clamp(46px, 6.5vh, 68px)',
+        padding: '2px 8px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: T.text,
-        fontSize: 22,
+        fontSize: 'clamp(24px, min(8vw, 4.8vh), 42px)',
         fontWeight: 900,
         lineHeight: 1.15,
-        letterSpacing: -0.5,
+        letterSpacing: -0.8,
         textAlign: 'center',
         wordBreak: 'keep-all',
         overflowWrap: 'anywhere',
+        visibility: interim ? 'visible' : 'hidden',
       }}
     >
       {interim}

@@ -19,12 +19,12 @@ export function heroFontSize(value: string): string {
  *  "상태에 따라 식별이 불가할 만큼 작아지는 경우가 존재". 상태별 인라인 정의 금지, 여기 상수만 소비.
  *  `--fit-lo/--fit-hi`(useFitScale)는 오버플로 시에만 개입 — 상태 간 기본 크기 차이는 없다. */
 export const HERO_TYPE = {
-  /** 항목명(38~44px @402×874 목표) — 모든 hero 상태 공용. */
-  name: 'max(20px, calc(clamp(30px, min(11vw, 5.2vh), 44px) * var(--fit-lo, 1)))',
-  /** 확정값·행번호(80~100px 목표, tabular). */
-  value: 'calc(clamp(56px, min(23vw, 12.5vh), 100px) * var(--fit-hi, 1))',
-  /** 인식 중 원문 문자열(56~72px 목표). */
-  interim: 'calc(clamp(38px, min(15vw, 8.6vh), 72px) * var(--fit-hi, 1))',
+  /** 항목명 — 중앙에 남는 높이를 쓰되 긴 이름은 useFitScale이 실제 영역에 맞춘다. */
+  name: 'max(22px, calc(clamp(34px, min(13vw, 6.8vh), 58px) * var(--fit-lo, 1)))',
+  /** 확정값(원거리 판독용 tabular hero) — GL-005 가독 하한 26px. */
+  value: 'max(26px, calc(clamp(64px, min(28vw, 16vh), 132px) * var(--fit-hi, 1)))',
+  /** 인식 중 원문 문자열 — 확정값과 같은 슬롯에서 긴 발화를 수용한다. */
+  interim: 'max(24px, calc(clamp(44px, min(19vw, 11vh), 96px) * var(--fit-hi, 1)))',
 } as const;
 
 /** v0.23.0 입력탭#1 — 흡수영역(grid row3, 1fr, overflow:hidden) 안에서 카드가 부모에 잘리지 않게
