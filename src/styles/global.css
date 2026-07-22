@@ -13,14 +13,14 @@
   --nav-h: 100px;
 }
 
-/* v0.38.0 #6 — iOS standalone의 WebView별 viewport-unit 편차를 흡수한다. 각 선언은 지원되는
-   단위까지만 승격하고, 마지막 max()는 오해석된 100dvh가 legacy 100vh보다 짧아져 셸 아래에
-   #root가 드러나는 것을 막는다. 하단 safe-area는 계속 TabBar만 담당한다. */
+/* v0.38.0 #6 — iOS WebView별 viewport-unit 지원 편차를 흡수한다. 미지원 선언은 무시되므로
+   legacy 100vh 폴백이 남고, 지원 환경은 현재 가시 뷰포트인 100dvh까지 승격한다. 100vh와의
+   max()는 일반 Safari의 큰 뷰포트를 골라 네비를 화면 밖으로 밀므로 사용하지 않는다.
+   하단 safe-area는 계속 TabBar만 담당한다. */
 .mobile-app-shell {
   height: 100vh;
   height: 100svh;
   height: 100dvh;
-  height: max(100vh, 100dvh);
 }
 
 html, body {
