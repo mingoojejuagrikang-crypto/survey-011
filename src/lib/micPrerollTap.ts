@@ -81,6 +81,8 @@ registerProcessor('preroll-capture', PrerollCaptureProcessor);
 
 export class MicPrerollTap {
   private capture: PrerollCapture | null = null;
+  /** `detach()`가 진행 중인 비동기 attach를 무효화한다. 다음 attach는 새 세대로 정상 시작한다. */
+  private attachGeneration = 0;
   /** v0.34.0 B7 — 지수평활된 마이크 입력 레벨(0~1). push(pcm)에서만 갱신되고 UI(rAF)가
    *  getLevel()로 읽는다. React state 아님 — 리렌더 0. 캡처 미가용이면 0에 머문다. */
   private inputLevel = 0;
@@ -92,7 +94,20 @@ export class MicPrerollTap {
    *  이미 붙어 있으면 no-op(원본 `if (this.preroll || !this.stream) return` 계약 그대로). */
   async attach(stream: MediaStream | null): Promise<void> {
     if (this.capture || !stream) return;
+    const generation = ++this.attachGeneration;
     let ctx: AudioContext | null = null;
+    let source: MediaStreamAudioSourceNode | null = null;
+    let sink: GainNode | null = null;
+    let analyser: AnalyserNode | null = null;
+    const cancelled = () => generation !== this.attachGeneration;
+    const closePending = () => {
+      try {
+        source?.disconnect();
+        analyser?.disconnect();
+        sink?.disconnect();
+      } catch { /* ignore */ }
+      try { void ctx?.close().catch(() => {}); } catch { /* ignore */ }
+    };
     try {
       const Ctor =
         window.AudioContext ||
@@ -106,16 +121,19 @@ export class MicPrerollTap {
       // 시작 버튼 탭의 콜스택에서 불리지만 getUserMedia await 뒤라 제스처가 소실됐을 수 있어
       // 명시적으로 resume한다(실패해도 startClip에서 재시도).
       try { await ctx.resume(); } catch { /* startClip()에서 재시도 */ }
+      if (cancelled()) {
+        closePending();
+        return;
+      }
 
-      const source = ctx.createMediaStreamSource(stream);
-      const sink = ctx.createGain();
+      source = ctx.createMediaStreamSource(stream);
+      sink = ctx.createGain();
       sink.gain.value = 0; // 그래프를 destination까지 연결하되 무음 출력(에코 방지)
       sink.connect(ctx.destination);
 
       // v0.35.0 (Vance) — 시간영역 파형 탭. source→analyser→sink(무음)로 연결해 브랜치가
       //   pull되게 한다(연결만으론 WebKit이 사이드 브랜치를 안 돌릴 수 있음). fftSize 1024로
       //   한 프레임 1024 샘플(≈21ms@48k) — 캔버스 폭에 충분. 실패해도 파형만 폴백(레벨 기반).
-      let analyser: AnalyserNode | null = null;
       try {
         analyser = ctx.createAnalyser();
         analyser.fftSize = 1024;
@@ -164,6 +182,10 @@ export class MicPrerollTap {
         } finally {
           URL.revokeObjectURL(url);
         }
+        if (cancelled()) {
+          closePending();
+          return;
+        }
         const node = new AudioWorkletNode(ctx, 'preroll-capture', {
           numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1,
         });
@@ -176,6 +198,10 @@ export class MicPrerollTap {
         capture.node = node;
         capture.kind = 'worklet';
       } catch {
+        if (cancelled()) {
+          closePending();
+          return;
+        }
         // 2순위: ScriptProcessor (deprecated지만 iOS 구형 Safari 포함 광범위 지원)
         const node = ctx.createScriptProcessor(2048, 1, 1);
         node.onaudioprocess = (e: AudioProcessingEvent) => {
@@ -199,6 +225,7 @@ export class MicPrerollTap {
 
   /** 캡처 그래프 해제(stream stop 전에 — source가 stream을 참조). dispose·재획득에서 호출. */
   detach(): void {
+    this.attachGeneration++;
     const cap = this.capture;
     this.capture = null;
     // v0.34.0 B7 — 캡처 그래프가 내려가면 push가 멈추므로 레벨을 0으로 되돌린다(파동 정지).

@@ -16,6 +16,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { AudioRecorder } from '../src/lib/audioRecorder';
+import { MicPrerollTap } from '../src/lib/micPrerollTap';
 
 /** 최소 MediaStream stub — isStreamLost는 getAudioTracks()[0].readyState만 본다. */
 function fakeStream(tracks: Array<{ readyState: 'live' | 'ended' }>): MediaStream {
@@ -164,4 +165,133 @@ test('[리뷰#1] 타임아웃 후 뒤늦게 열린 스트림은 즉시 닫힌다
 
   // 아무도 참조하지 않는 마이크가 켜진 채 남으면 안 된다(인디케이터 상시 점등 + 배터리).
   expect(stopped).toBe(1);
+});
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: Deferred<T>['resolve'];
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+class StubAudioNode {
+  disconnectCalls = 0;
+  connect(target: unknown): unknown { return target; }
+  disconnect(): void { this.disconnectCalls++; }
+}
+
+class StubWorkletNode extends StubAudioNode {
+  readonly port = { onmessage: null as ((event: MessageEvent) => void) | null };
+}
+
+class StubAudioContext {
+  readonly source = new StubAudioNode();
+  readonly sink = Object.assign(new StubAudioNode(), { gain: { value: 1 } });
+  readonly analyser = Object.assign(new StubAudioNode(), { fftSize: 0 });
+  readonly destination = new StubAudioNode();
+  readonly sampleRate = 48_000;
+  readonly audioWorklet: { addModule: () => Promise<void> };
+  closeCalls = 0;
+
+  constructor(addModule: () => Promise<void>) {
+    this.audioWorklet = { addModule };
+  }
+
+  async resume(): Promise<void> {}
+  createMediaStreamSource(): MediaStreamAudioSourceNode {
+    return this.source as unknown as MediaStreamAudioSourceNode;
+  }
+  createGain(): GainNode { return this.sink as unknown as GainNode; }
+  createAnalyser(): AnalyserNode { return this.analyser as unknown as AnalyserNode; }
+  createScriptProcessor(): ScriptProcessorNode {
+    return new StubAudioNode() as unknown as ScriptProcessorNode;
+  }
+  close(): Promise<void> { this.closeCalls++; return Promise.resolve(); }
+}
+
+type MicTapPrivate = { capture: { ctx: AudioContext } | null };
+type TestAudioGlobals = typeof globalThis & { window?: unknown; AudioWorkletNode?: unknown };
+
+function installAudioContextStub(
+  addModules: Array<() => Promise<void>>,
+): { contexts: StubAudioContext[]; restore: () => void } {
+  const globals = globalThis as TestAudioGlobals;
+  const previousWindow = globals.window;
+  const previousWorkletNode = globals.AudioWorkletNode;
+  const contexts: StubAudioContext[] = [];
+  class AudioContextStub extends StubAudioContext {
+    constructor() {
+      const addModule = addModules.shift();
+      if (!addModule) throw new Error('AudioContext stub plan exhausted');
+      super(addModule);
+      contexts.push(this);
+    }
+  }
+  globals.window = { AudioContext: AudioContextStub };
+  globals.AudioWorkletNode = StubWorkletNode;
+  return {
+    contexts,
+    restore: () => {
+      if (previousWindow === undefined) delete globals.window;
+      else globals.window = previousWindow;
+      if (previousWorkletNode === undefined) delete globals.AudioWorkletNode;
+      else globals.AudioWorkletNode = previousWorkletNode;
+    },
+  };
+}
+
+test.describe('MicPrerollTap attach/detach 수명주기', () => {
+  test('attach가 addModule 대기 중 detach되면 뒤늦은 그래프를 닫는다', async () => {
+    const moduleGate = deferred<void>();
+    const moduleStarted = deferred<void>();
+    const env = installAudioContextStub([
+      () => { moduleStarted.resolve(); return moduleGate.promise; },
+    ]);
+    const tap = new MicPrerollTap();
+    try {
+      const attaching = tap.attach({} as MediaStream);
+      await moduleStarted.promise;
+
+      tap.detach();
+      moduleGate.resolve();
+      await attaching;
+
+      expect(env.contexts[0].closeCalls).toBe(1);
+      expect((tap as unknown as MicTapPrivate).capture).toBeNull();
+    } finally {
+      tap.detach();
+      env.restore();
+    }
+  });
+
+  test('attach 취소를 위한 detach 후 다시 attach하면 정상 연결한다', async () => {
+    const firstModuleGate = deferred<void>();
+    const firstModuleStarted = deferred<void>();
+    const env = installAudioContextStub([
+      () => { firstModuleStarted.resolve(); return firstModuleGate.promise; },
+      () => Promise.resolve(),
+    ]);
+    const tap = new MicPrerollTap();
+    try {
+      const firstAttach = tap.attach({} as MediaStream);
+      await firstModuleStarted.promise;
+      tap.detach();
+      firstModuleGate.resolve();
+      await firstAttach;
+
+      await tap.attach({} as MediaStream);
+
+      expect(env.contexts).toHaveLength(2);
+      expect(env.contexts[0].closeCalls).toBe(1);
+      expect((tap as unknown as MicTapPrivate).capture?.ctx).toBe(env.contexts[1]);
+      expect(tap.getKind()).toBe('worklet');
+    } finally {
+      tap.detach();
+      env.restore();
+    }
+  });
 });
