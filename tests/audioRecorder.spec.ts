@@ -17,6 +17,7 @@
 import { test, expect } from '@playwright/test';
 import { AudioRecorder } from '../src/lib/audioRecorder';
 import { MicPrerollTap } from '../src/lib/micPrerollTap';
+import { logger } from '../src/lib/logger';
 
 /** 최소 MediaStream stub — isStreamLost는 getAudioTracks()[0].readyState만 본다. */
 function fakeStream(tracks: Array<{ readyState: 'live' | 'ended' }>): MediaStream {
@@ -139,6 +140,45 @@ test('[리뷰#1] getUserMedia가 응답 없이 보류돼도 재획득은 타임�
   priv.acquireStream = async () => { secondCall++; return fakeStream([{ readyState: 'live' }]); };
   expect(await rec.recoverStream('user_gesture', { bypassCooldown: true })).toBe(true);
   expect(secondCall).toBe(1);
+});
+
+test.describe('AudioRecorder.recoverStream() — 실패 텔레메트리 상호배타 분기', () => {
+  test.beforeEach(() => logger.clear());
+  test.afterEach(() => logger.clear());
+
+  test('getUserMedia 보류는 recover_timeout만 남긴다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireTimeoutMs: number;
+      acquireStream: () => Promise<MediaStream>;
+    };
+    priv.acquireTimeoutMs = 30;
+    priv.acquireStream = () => new Promise<MediaStream>(() => { /* 영원히 보류 */ });
+
+    expect(await rec.recoverStream('auto')).toBe(false);
+
+    const extras = logger.getAll().map((entry) => entry.extra ?? '');
+    expect(extras.filter((extra) => extra.startsWith('clip_recorder_recover_timeout:'))).toEqual([
+      'clip_recorder_recover_timeout:auto:ms=30',
+    ]);
+    expect(extras.filter((extra) => extra.startsWith('clip_recorder_recover_failed:'))).toEqual([]);
+  });
+
+  test('getUserMedia NotAllowedError reject는 recover_failed만 남긴다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+    };
+    priv.acquireStream = () => Promise.reject(new DOMException('Permission denied', 'NotAllowedError'));
+
+    expect(await rec.recoverStream('auto')).toBe(false);
+
+    const extras = logger.getAll().map((entry) => entry.extra ?? '');
+    expect(extras.filter((extra) => extra.startsWith('clip_recorder_recover_failed:'))).toEqual([
+      'clip_recorder_recover_failed:auto:Permission denied',
+    ]);
+    expect(extras.filter((extra) => extra.startsWith('clip_recorder_recover_timeout:'))).toEqual([]);
+  });
 });
 
 test('[리뷰#1] 타임아웃 후 뒤늦게 열린 스트림은 즉시 닫힌다(핫마이크 방지)', async () => {
