@@ -113,6 +113,13 @@ input::placeholder {
   50% { opacity: 1; }
 }
 
+/* v0.38.0 #9 — 하단 토글의 glyph는 pause/play 명령이 아니라 현재 음성 상태를 나타낸다.
+   톤 cadence는 EdgeGlow와 맞추고 opacity만 바꿔 원거리에서도 상태가 살아 있음을 알린다. */
+@keyframes voice-status-fade {
+  0%, 100% { opacity: 0.52; }
+  50% { opacity: 1; }
+}
+
 /* v0.36.0 코덱스 시안 — 화면 안쪽 가장자리를 따라 흐르는 스윕 바(transform 전용, 합성기 컴포지팅).
    가로 바는 화면폭의 42%, 세로 바는 높이의 29%로, 시계방향 순환처럼 읽히게 상/하·좌/우가 역방향. */
 @keyframes edge-sweep-x {
@@ -206,7 +213,8 @@ input::placeholder {
   }
   [data-testid="anomaly-alert"],
   [data-testid="modify-indicator"],
-  [data-testid="paused-card"] {
+  [data-testid="paused-card"],
+  [data-testid="voice-status-control"] [data-status-symbol] {
     animation: none !important;
     filter: none !important;
   }

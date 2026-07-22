@@ -20,7 +20,9 @@ const tabs: { id: TabId; label: string; icon: (s?: number, c?: string) => JSX.El
 
 /** v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 탭바 심볼 중심(§7.3): 아이콘을 키우고 선택 탭은
  *  초고대비 흰색 pill 채움(원거리에서 현재 탭 즉시 판독). 라벨은 소형으로 유지 — 4탭(개선요청 포함)
- *  구분과 기존 텍스트 셀렉터 계약을 지킨다. tab-* testid·최소 56px 타깃·safe-area 불변. */
+ *  구분과 기존 텍스트 셀렉터 계약을 지킨다. tab-* testid·최소 56px 타깃·safe-area 불변.
+ *  v0.38.0 #6 — 불투명 chrome은 유지하되 EdgeGlow(z-54) 아래(z-53)에 놓아, 글로우가 네비를 포함한
+ *  물리 화면 4변 끝까지 끊기지 않고 그려진다. 글로우가 pointer-events:none이라 탭 터치는 그대로다. */
 export function TabBar({ tab, setTab }: Props) {
   // v0.37.0 FB-I(민구, "네비는 항상 보여야 함) — 나비의 **실측 높이**를 --nav-h로 발행(SSOT).
   //   수동 입력 시트(ModalBase bottomInset)가 이 값만큼 위로 올라앉아 나비를 덮지 않는다. 손계산은
@@ -49,12 +51,12 @@ export function TabBar({ tab, setTab }: Props) {
   return (
     <div
       ref={barRef}
+      data-testid="tab-bar"
       style={{
-        // v0.37.0 FB-I(민구) — full-bleed EdgeGlow(fixed z-54)가 하단 나비 위를 씻고 지나가지 않도록
-        //   지속 chrome(나비)를 글로우와 같은 대역(z-54)에 두되 App DOM 순서상 VoiceScreen보다 뒤라
-        //   같은 z에서 나비가 위에 그려진다(나비 '유지'/선명). 모달/시트(55~120)는 여전히 나비를 덮는다.
+        // v0.38.0 #6 — EdgeGlow(fixed z-54)가 하단 물리 가장자리까지 네비 위로 통과한다. 불투명 배경과
+        //   blur는 그대로라 네비 가독성을 잃지 않고, 모달/시트(55~120)는 계속 둘 다 덮는다.
         position: 'relative',
-        zIndex: 54,
+        zIndex: 53,
         // v0.15.0 A1 — 하단 홈인디케이터 safe-area(max(28px, --sab)). minHeight로 inset 초과 시 성장.
         minHeight: 88,
         paddingBottom: 'max(28px, var(--sab))',

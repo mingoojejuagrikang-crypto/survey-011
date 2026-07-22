@@ -11,7 +11,7 @@ import { useAudioLevelVar } from './useAudioLevelVar';
  *
  *  배치(v0.37.0 FB-A+H): **position:fixed inset:0**으로 뷰포트 full-bleed(물리 화면 가장자리까지).
  *  마운트는 VoiceScreen에 그대로 둔다(레벨 getter가 useVoiceSession 인스턴스에 묶여 있어 상향 불가).
- *  pointer-events:none, zIndex 54(팝업/시트 55-60 아래).
+ *  pointer-events:none, zIndex 54(탭바 53 위·팝업/시트 55-60 아래).
  *
  *  성능 규칙(§5.3): 큰 box-shadow는 톤별 정적 레이어로 1회 페인트하고 opacity 크로스페이드로만
  *  전환한다. 매 프레임 갱신은 wrapper opacity(--voice-level, rAF)와 keyframe의 opacity/transform뿐.
@@ -156,10 +156,10 @@ function SweepBars({ color, durationS }: { color: string; durationS: number }) {
   const y: React.CSSProperties = { width: 7, height: '29%', top: 0 };
   return (
     <>
-      <div style={{ ...base, ...x, top: 0, animation: `edge-sweep-x ${durationS}s linear infinite` }} />
-      <div style={{ ...base, ...x, bottom: 0, top: undefined, animation: `edge-sweep-x-reverse ${durationS}s linear infinite` }} />
-      <div style={{ ...base, ...y, right: 0, animation: `edge-sweep-y ${durationS}s linear infinite` }} />
-      <div style={{ ...base, ...y, left: 0, animation: `edge-sweep-y-reverse ${durationS}s linear infinite` }} />
+      <div data-glow-sweep="top" style={{ ...base, ...x, top: 0, animation: `edge-sweep-x ${durationS}s linear infinite` }} />
+      <div data-glow-sweep="bottom" style={{ ...base, ...x, bottom: 0, top: undefined, animation: `edge-sweep-x-reverse ${durationS}s linear infinite` }} />
+      <div data-glow-sweep="right" style={{ ...base, ...y, right: 0, animation: `edge-sweep-y ${durationS}s linear infinite` }} />
+      <div data-glow-sweep="left" style={{ ...base, ...y, left: 0, animation: `edge-sweep-y-reverse ${durationS}s linear infinite` }} />
     </>
   );
 }
