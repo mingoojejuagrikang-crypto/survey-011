@@ -18,6 +18,7 @@ import {
   loadSheetsRecord,
 } from '../lib/db';
 import { logger } from '../lib/logger';
+import { parseSpreadsheetId } from '../lib/sheets';
 
 /**
  * v0.14.0 C — localStorage + IDB 내구 미러 스토리지. iOS Safari는 일정시간 경과(ITP)나 강제종료
@@ -76,7 +77,7 @@ const mirroredStorage: StateStorage = {
 // 이력: 종전(v0.24.0까지) 다이얼 값 = 최소 신뢰도(높을수록 엄격) → v0.25.0에서 "높일수록 관대"로
 // 게이트 반전 → v0.25.0 실기기 후 민구 최종 결정으로 **원래 방향(높을수록 엄격) 복귀**. 이번에는
 // 다이얼 캡션·aria로 방향을 화면에 명시해 의미 오해가 재발하지 않게 한다(VoiceScreen hint 참조).
-// 저장값·다이얼 위치·persist(version 11)·기본값(0.60)·대역[0.40~0.90]은 전 과정 내내 불변 —
+// 저장값·다이얼 위치·기본값(0.60)·대역[0.40~0.90]은 전 과정 내내 불변 —
 // 방향 결정은 이 함수 한 곳에만 살고, 값 게이트(useVoiceSession)와 신뢰도 색 임계(VoiceScreen)가
 // 공유한다 → 시각·게이트 항상 일치. 또 방향을 바꾸게 되면 이 함수와 hint/aria 문구만 손대면 된다.
 export const RECOGNITION_TOLERANCE_MIN = 0.4;
@@ -93,6 +94,9 @@ interface SettingsState {
   sheet: SheetConfig | null;
   sheetUrl: string;
   sheetTab: string;
+  /** 현재 columns를 유추한 시트 출처. 두 값이 다음 로드 대상과 모두 같을 때만 사용자 설정을 보존한다. */
+  columnsSheetId: string | null;
+  columnsSheetTab: string | null;
   availableSheets: string[];
   /** v0.13.0 R1 — 저장된 스프레드시트 목록(파일명 기반, 최근 사용 순). localStorage에 영속(같은
    *  persist 키). 토큰 만료로 연결이 풀려도 목록은 남아, 재로그인 후 한 번에 다시 선택할 수 있다. */
@@ -241,6 +245,8 @@ export function makeSettingsDefaults(): SettingsDefaults {
     sheet: null,
     sheetUrl: '',
     sheetTab: '',
+    columnsSheetId: null,
+    columnsSheetTab: null,
     availableSheets: [],
     savedSheets: [],
     manualMode: false,
@@ -336,11 +342,11 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'survey-011-settings-v3',
-      version: 11,
+      version: 12,
       // v0.14.0 C — localStorage + IDB 내구 미러(eviction 방어).
       storage: createJSONStorage(() => mirroredStorage),
-      // v0.35.1 — 폐기된 영속 키 제거의 SSOT. migrate가 아닌 merge에 두는 이유: version 11
-      // 동결([ENV-9]) 상태에선 저장본도 11이라 zustand가 migrate를 호출하지 않는다 — merge는
+      // v0.35.1 — 폐기된 영속 키 제거의 SSOT. migrate가 아닌 merge에 두는 이유: 같은 persist
+      // version의 저장본은 zustand가 migrate를 호출하지 않는다 — merge는
       // 모든 하이드레이션에서 돌므로 같은 버전의 기존 기기에서도 잔존 키가 확실히 제거된다
       // (리뷰 라운드1 Codex·Flash 공통 지적). 제거 후 첫 저장부터 직렬화에도 안 남는다.
       merge: (persisted, current) => {
@@ -425,9 +431,8 @@ export const useSettingsStore = create<SettingsState>()(
         // v0.22.0 — 자유입력 세션명. 구버전 영속본엔 없으므로 null로 치유(미사용=자동 라벨).
         if (typeof s.sessionCustomLabel !== 'string' && s.sessionCustomLabel !== null) s.sessionCustomLabel = null;
         if (typeof s.fastRecognition !== 'boolean') s.fastRecognition = false;
-        // v0.33.0 10-B/10-C — 자동 캡처·비프음 선택 신설. persist version은 11 유지(bump 금지 —
-        // sessionCustomLabel과 같은 무조건 coercion 패턴: 구버전 누락/손상은 안전 기본값으로 치유,
-        // version을 올리면 settings-migration.spec의 version===11 단정이 깨진다).
+        // v0.33.0 10-B/10-C — 자동 캡처·비프음 선택 신설. sessionCustomLabel과 같은 무조건
+        // coercion 패턴으로 구버전 누락/손상을 안전 기본값으로 치유한다.
         if (typeof s.autoScreenCapture !== 'boolean') s.autoScreenCapture = true;
         if (!isBeepVariantId(s.beepPositiveId, 'positive')) s.beepPositiveId = DEFAULT_POSITIVE_BEEP_ID;
         if (!isBeepVariantId(s.beepNegativeId, 'negative')) s.beepNegativeId = DEFAULT_NEGATIVE_BEEP_ID;
@@ -446,9 +451,9 @@ export const useSettingsStore = create<SettingsState>()(
 
         // v0.35.1 Stage 0 — 비교탭 영속 6필드 제거는 migrate가 아니라 **merge 단계의
         // DEPRECATED_PERSIST_KEYS strip**이 담당한다(아래 persist 옵션). 이유(리뷰 라운드1
-        // Codex·Flash 공통 지적): persist version이 11로 동결돼 있어(저장본도 11) zustand는
-        // 버전이 같으면 migrate를 아예 호출하지 않는다 — migrate 안의 delete는 구버전(<11)
-        // 업그레이드에만 돌고, 이미 v11인 기존 기기의 잔존 키는 영원히 남는다. merge는 모든
+        // Codex·Flash 공통 지적): 저장본과 앱의 persist version이 같으면 zustand는 migrate를
+        // 아예 호출하지 않는다 — migrate 안의 delete는 구버전 업그레이드에만 돌고,
+        // 이미 현재 버전이던 기존 기기의 잔존 키는 영원히 남는다. merge는 모든
         // 하이드레이션에서 돌므로 같은 버전이어도 확실히 걷어낸다.
 
         // ── v6 (v0.8.0) — "추세 검증" → "이상치 알람" 전환 ──────────────────────────
@@ -529,7 +534,19 @@ export const useSettingsStore = create<SettingsState>()(
         // ── v0.22.0 — 자유입력 세션명(sessionCustomLabel) 신설(기본 null). persist version은
         //   올리지 않는다(불필요): zustand initializer 기본값(null) + 위 sessionAutoLabel 인접
         //   coercion이 누락/손상 영속본을 null로 치유하므로 version bump 없이 안전하다. (version을
-        //   12로 올리면 settings-migration.spec의 version===11 단정 5건이 깨지는 것도 회피.)
+        //   당시에는 persist version을 올리지 않았다.)
+
+        // ── v12 (v0.38.0) — columns의 시트 출처 기록 ────────────────────────────────
+        // v11 이하의 columns는 현재 연결된 sheetUrl·sheetTab에서 온 값이다. 출처를 backfill해
+        // 업그레이드 직후 같은 시트 재로그인에서는 사용자 설정 보존이 계속 작동하게 한다.
+        // URL/탭이 없거나 손상된 경우 출처를 null로 두어 다른 시트 설정을 잘못 보존하는 것보다
+        // 새 유추값을 쓰는 안전한 방향으로 실패한다.
+        if (version < 12) {
+          const columnsSheetId = typeof s.sheetUrl === 'string' ? parseSpreadsheetId(s.sheetUrl) : null;
+          const columnsSheetTab = typeof s.sheetTab === 'string' && s.sheetTab ? s.sheetTab : null;
+          s.columnsSheetId = columnsSheetId && columnsSheetTab ? columnsSheetId : null;
+          s.columnsSheetTab = columnsSheetId && columnsSheetTab ? columnsSheetTab : null;
+        }
 
         return s as SettingsState;
       },

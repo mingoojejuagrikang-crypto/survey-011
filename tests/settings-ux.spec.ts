@@ -7,7 +7,7 @@
  *   B3 — 초기화: 기본값 복귀 + Google 로그인·시트 URL은 기본 보존, 체크박스로 opt-in 삭제.
  *   B4 — 생성 완료 후 "입력탭으로 이동 →" 버튼(자동 탭 전환 없음 — 민구 확정).
  *
- * 375×812 시뮬레이션(GL-005). localStorage 시드는 persist version 11(현재) 그대로.
+ * 375×812 시뮬레이션(GL-005). localStorage 시드는 persist version 11 — v12 migrate를 타고 승격된다.
  */
 import { test, expect, type Page } from '@playwright/test';
 
@@ -53,7 +53,7 @@ async function freshSettings(page: Page) {
   await page.waitForTimeout(300);
 }
 
-/** persist version 11(현재) 페이로드로 부분 상태를 시드하고 설정탭 진입. */
+/** persist version 11 페이로드로 부분 상태를 시드하고 설정탭 진입(migrate가 v12로 승격). */
 async function seedSettings(page: Page, state: Record<string, unknown>) {
   await page.setViewportSize(PHONE_375);
   await page.goto(BASE);

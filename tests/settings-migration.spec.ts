@@ -7,7 +7,7 @@
  * v0.13.0 R1: v7→v8 — savedSheets(저장 시트 목록) 도입. 구버전 누락/손상은 []로 치유(순수 추가).
  * v0.15.0 A6: v8→v9 — speakerphoneMode(스피커폰 모드) 폐기. 잔존 영속값 삭제만(순수 추가).
  * v0.19.0 W4: v9→v10 — noisyMode(소음 환경 모드) 폐기. 잔존 영속값 삭제만(순수 추가).
- *   따라서 마이그레이션 후 최신 버전은 10 — 아래 version 단언은 10을 기대한다.
+ * v0.38.0: v11→v12 — columns를 유추한 스프레드시트·탭 출처를 현재 연결값으로 backfill.
  * v0.19.0 W2: 업데이트/evict로 savedSheets가 소실되지 않음 — ① 구버전(version<10) 유효 savedSheets는
  *   migrate 후 보존 ② 전용 IDB 레코드(__saved_sheets__)에 savedSheets가 있고 settings persist가
  *   비었으면 하이드레이션 후 복원.
@@ -80,7 +80,7 @@ async function bootWith(page: Page, payload: unknown) {
 test('v4→v6 migrate — 샘플키 자동 유추 + junk 정규화 + 최신 버전', async ({ page }) => {
   await bootWith(page, V4_PAYLOAD);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(11);
+  await expect.poll(async () => (await readStore(page)).version).toBe(12);
   const stored = await readStore(page);
 
   // 샘플키 유추 규칙: auto && !date → true. junk 'yes'(c3)는 boolean 아니라 유추 적용.
@@ -130,7 +130,7 @@ const V5_PAYLOAD = {
 test('v5→v6 migrate — trendAlertEnabled 삭제 + trendRule 초기화 + pctThreshold 정규화', async ({ page }) => {
   await bootWith(page, V5_PAYLOAD);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(11);
+  await expect.poll(async () => (await readStore(page)).version).toBe(12);
   const stored = await readStore(page);
 
   // 전역 마스터 토글 제거.
@@ -161,7 +161,7 @@ test('v5→v6 migrate idempotent — 이미 v6면 사용자가 새 의미로 설
   };
   await bootWith(page, v6Payload);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(11);
+  await expect.poll(async () => (await readStore(page)).version).toBe(12);
   const stored = await readStore(page);
   // v6 이상은 새 의미 — trendRule/pctThreshold 보존.
   expect(colById(stored, 'c8').trendRule).toBe('increase');
@@ -183,7 +183,7 @@ test('다운그레이드 라운드트립 방어 — v5로 재기록돼도 마커
   };
   await bootWith(page, downgradedPayload);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(11);
+  await expect.poll(async () => (await readStore(page)).version).toBe(12);
   const stored = await readStore(page);
   // 마커가 있으므로 재클리어하지 않고 사용자가 v6에서 설정한 값 보존.
   expect(colById(stored, 'c8').trendRule).toBe('increase');
@@ -257,7 +257,7 @@ test('W2 ① v8→v10 migrate — 유효 savedSheets 보존', async ({ page }) =
   };
   await bootWith(page, payload);
 
-  await expect.poll(async () => (await readStore(page)).version).toBe(11);
+  await expect.poll(async () => (await readStore(page)).version).toBe(12);
   const stored = await readStore(page);
   const saved = stored.state.savedSheets as Array<{ sheetId: string }>;
   expect(saved.map((s) => s.sheetId)).toEqual(['SHEET_A', 'SHEET_B']);
@@ -314,13 +314,32 @@ test('W2 ② 전용 IDB 레코드에서 savedSheets 복원 (settings persist는 
   expect(saved.map((s) => s.sheetId).sort()).toEqual(['SHEET_A', 'SHEET_B']);
 });
 
-// ─── v0.35.1 — 같은 버전(v11) 폐기 키 제거: merge-strip (리뷰 라운드1 Codex·Flash 공통 지적) ───
-// persist version이 11로 동결돼 있어(저장본도 11) zustand는 migrate를 호출하지 않는다.
+// ─── v0.38.0 — v11→v12 columns 출처 backfill ─────────────────────────────────
+
+test('v11→v12 migrate — 현재 연결 시트를 columns 출처로 backfill', async ({ page }) => {
+  const payload = {
+    state: {
+      ...V4_PAYLOAD.state,
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_A/edit',
+      sheetTab: '농가A',
+    },
+    version: 11,
+  };
+  await bootWith(page, payload);
+
+  await expect.poll(async () => (await readStore(page)).version).toBe(12);
+  const stored = await readStore(page);
+  expect(stored.state.columnsSheetId).toBe('SHEET_A');
+  expect(stored.state.columnsSheetTab).toBe('농가A');
+});
+
+// ─── v0.35.1 — 같은 버전(v12) 폐기 키 제거: merge-strip (리뷰 라운드1 Codex·Flash 공통 지적) ───
+// 저장본도 현재 version이면 zustand는 migrate를 호출하지 않는다.
 // 폐기 키 제거는 merge 단계(DEPRECATED_PERSIST_KEYS strip)가 담당해야 하고, 이 테스트가 그 계약을
-// 고정한다: 이미 v11인 기기에 남은 review* 6키 + legacy 폴더 캐시 2키가 하이드레이션에서 제거되고
+// 고정한다: 이미 v12인 기기에 남은 review* 6키 + legacy 폴더 캐시 2키가 하이드레이션에서 제거되고
 // 다음 저장(설정 조작)에 다시 직렬화되지 않는다.
-test('v11 동일 버전: 폐기 키(review* 6종 + legacy 폴더 캐시)가 merge에서 제거되어 다음 저장에 안 남는다', async ({ page }) => {
-  const V11_LEFTOVER_PAYLOAD = {
+test('v12 동일 버전: 폐기 키(review* 6종 + legacy 폴더 캐시)가 merge에서 제거되어 다음 저장에 안 남는다', async ({ page }) => {
+  const V12_LEFTOVER_PAYLOAD = {
     state: {
       googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
       availableSheets: [], savedSheets: [], manualMode: false, columns: [], tableGenerated: false,
@@ -331,9 +350,9 @@ test('v11 동일 버전: 폐기 키(review* 6종 + legacy 폴더 캐시)가 merg
       reviewBaselineBack: 2, reviewGroupCols: ['c3'], reviewMeasureCols: null, reviewSelectedRows: null,
       teamFolderId: 'stale-team-folder', userLogFolderId: 'stale-log-folder',
     },
-    version: 11,
+    version: 12,
   };
-  await bootWith(page, V11_LEFTOVER_PAYLOAD);
+  await bootWith(page, V12_LEFTOVER_PAYLOAD);
   await page.waitForTimeout(400);
 
   // 설정 하나를 조작해 재직렬화를 트리거(자동 캡처 토글 off→on — 순수 쓰기 트리거).
@@ -346,7 +365,7 @@ test('v11 동일 버전: 폐기 키(review* 6종 + legacy 폴더 캐시)가 merg
   await page.waitForTimeout(200);
 
   const stored = await readStore(page);
-  expect(stored.version).toBe(11); // [ENV-9] 동결 유지
+  expect(stored.version).toBe(12);
   for (const k of [
     'reviewFilters', 'reviewTargetRound', 'reviewBaselineBack',
     'reviewGroupCols', 'reviewMeasureCols', 'reviewSelectedRows',

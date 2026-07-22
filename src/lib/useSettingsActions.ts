@@ -24,11 +24,10 @@ import {
   fetchSpreadsheetMeta,
   fetchColumnUniqueValues,
   inferColumns,
-  preserveInferredColumnIds,
   parseSpreadsheetId,
   readonlySheetsAuth,
 } from './sheets';
-import { preserveUserColumnSettings } from './columnFlags';
+import { mergeInferredColumnsForSheet } from './columnFlags';
 import { computeTotalRows } from './autoValue';
 import { buildSessionLabel, pickSessionLabelValue } from './sessionLabel';
 import { getPickerApiKey, openDrivePicker } from './drivePicker';
@@ -59,7 +58,7 @@ export function useSettingsActions() {
   // v0.14.0 F — 저장된 시트 목록을 기본 접힌 드롭다운으로(세로 풀리스트가 시트 多 시 화면 점유 과다).
   const [savedSheetsOpen, setSavedSheetsOpen] = useState(false);
   // v0.23.0 설정탭#4 — 첫 진입 안내 배너(1회 dismissible). "본 적 있는지"는 localStorage에 영속
-  //   (settingsStore version bump 회피 — settings-migration.spec의 version===11 단정 보호). 초기값은
+  //   (UI 전용 상태라 persist 스키마 확장 불필요). 초기값은
   //   lazy로 읽어, 이미 본 적 있으면 처음부터 숨긴다. 테스트는 fresh context라 매번 뜨므로, 이 배너는
   //   fixed 오버레이가 아니라 스크롤 영역 내부 인라인 배너 → 기존 Playwright 클릭 흐름을 막지 않는다.
   const [tipDismissed, setTipDismissed] = useState<boolean>(() => {
@@ -163,12 +162,17 @@ export function useSettingsActions() {
     try {
       setLoading('컬럼 분석 중...');
       const { headers, sample } = await fetchHeaderAndSample(spreadsheetId, sheetTitle);
-      // v0.38.0 — 재연결은 시트에서 name·type만 가져오고 사용자 설정(입력방식·샘플키·자동값·
-      // 추세)은 보존한다. 표본이 적은 시트에서 재로그인이 '음성' 컬럼을 '자동'으로 되돌리던 결함.
-      const currentColumns = useSettingsStore.getState().columns;
-      const inferred = preserveUserColumnSettings(
-        preserveInferredColumnIds(inferColumns(headers, sample), currentColumns),
-        currentColumns,
+      // v0.38.0 — 사용자 설정과 기존 id는 정확히 같은 스프레드시트·탭의 재연결에서만 보존한다.
+      // 다른 농가 시트가 같은 헤더를 써도 id가 같아지는 탓에 이전 fixed 자동값이 새 시트에
+      // 복사되던 침묵 오염을 차단한다. 출처는 sheetUrl/sheetTab보다 늦게 바뀌는 columns와 함께
+      // 저장하므로, 호출부가 대상 시트 상태를 먼저 써도 비교 기준이 흔들리지 않는다.
+      const current = useSettingsStore.getState();
+      const freshlyInferred = inferColumns(headers, sample);
+      const inferred = mergeInferredColumnsForSheet(
+        freshlyInferred,
+        current.columns,
+        { spreadsheetId: current.columnsSheetId, sheetTab: current.columnsSheetTab },
+        { spreadsheetId, sheetTab: sheetTitle },
       );
       // For 'options' columns, fetch a richer set of unique values
       const enriched = await Promise.all(
@@ -186,7 +190,12 @@ export function useSettingsActions() {
         }),
       );
       if (enriched.length) {
-        s.set({ columns: enriched, tableGenerated: false });
+        s.set({
+          columns: enriched,
+          columnsSheetId: spreadsheetId,
+          columnsSheetTab: sheetTitle,
+          tableGenerated: false,
+        });
         // v0.38.0 — 컬럼이 바뀌면 과거값 인덱스의 설정 지문이 달라져 기존 캐시·폴백이 함께 무효가
         // 된다. 특히 로그인 자동 재연결은 과거값 강제 갱신(#1)과 같은 흐름이라, 갱신이 먼저 끝나고
         // 여기서 컬럼이 바뀌면 화면이 "과거값 미준비"로 고착됐다. 정착된 설정 기준으로 다시 만든다.

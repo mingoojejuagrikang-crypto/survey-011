@@ -13,6 +13,7 @@
  * 브라우저 의존이 없어 Node 단위 테스트에서 직접 import 가능(audioTrim.ts 패턴).
  */
 import type { Column } from '../types';
+import { preserveInferredColumnIds } from './sheets';
 
 /** 샘플키 자동 유추: 자동 입력이면서 날짜가 아닌 컬럼. */
 export function inferSampleKey(col: Pick<Column, 'input' | 'type'>): boolean {
@@ -71,6 +72,25 @@ export function preserveUserColumnSettings(inferred: Column[], existing: Column[
       pctThreshold: prev.pctThreshold,
     };
   });
+}
+
+interface ColumnSheetIdentity {
+  spreadsheetId: string | null;
+  sheetTab: string | null;
+}
+
+/** 시트 출처가 완전히 같을 때만 기존 id와 사용자 컬럼 설정을 승계한다. */
+export function mergeInferredColumnsForSheet(
+  inferred: Column[],
+  existing: Column[],
+  currentSource: ColumnSheetIdentity,
+  nextSource: ColumnSheetIdentity,
+): Column[] {
+  const sameSheet =
+    currentSource.spreadsheetId === nextSource.spreadsheetId &&
+    currentSource.sheetTab === nextSource.sheetTab;
+  if (!sameSheet) return inferred;
+  return preserveUserColumnSettings(preserveInferredColumnIds(inferred, existing), existing);
 }
 
 /**
