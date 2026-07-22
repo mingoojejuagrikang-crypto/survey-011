@@ -24,22 +24,9 @@ import { buildAnomalyAlert } from './anomalyAlert';
 import { readonlySheetsAuth } from './sheets';
 import { withoutPendingCandidate } from './pendingValidation';
 import { ensureUniqueSessionLabel } from './sessionLabel';
+// [ENV-12] Stage 3 — 클립 캡처·보존 장부는 useClipCapture가 소유한다(이 파일은 호출만).
+import { useClipCapture, EMPTY_CLIP_BYTES, type PendingCommandClip } from './useClipCapture';
 
-
-/** v0.6.0 CLIP-CMD — a captured '수정'/'정정' utterance whose save is deferred until the modify
- *  target cell is known, so a direct "수정 <값>" clip is keyed to the cell it corrects. */
-interface PendingCommandClip {
-  /** Save the utterance under (targetRow:targetColId):cmd<n> and return that cmdKey (or null if
-   *  empty/already saved). Used by the direct-modify path to re-link the corrected cell's pointer. */
-  saveFor: (targetRow: number, targetColId: string) => string | null;
-  /** Save against the cell that was awaiting when '수정' was said. Correct ONLY when that awaiting
-   *  cell IS the correction target — true for "redo current field" (no previous field to go back
-   *  to) and for a repeated '수정' while already in modify mode (awaiting was already re-pointed to
-   *  the target by the earlier enterModifyMode call). The plain cascade path (bare "수정" with the
-   *  target being a DIFFERENT, previous field) must use `saveFor(targetRow, target.id)` instead —
-   *  see [CLIP-CORRECTION-1]. */
-  saveDefault: () => void;
-}
 
 /** 대기 셀 공통 좌표. */
 interface AwaitingBase {
@@ -111,24 +98,9 @@ const EARLY_COMMIT_STABLE_MS = 400;
 
 /** 빈/극소 클립 판정 임계(바이트) — webm/opus 컨테이너 헤더만 담긴 캡처가 이 이하로 온다.
  *  이하이면 저장하지 않고 clip_empty/clip_cmd_empty로 계측한다([CLIP-3] 가드). */
-const EMPTY_CLIP_BYTES = 200;
-
 /** pause()가 recorder dispose 전에 in-flight 클립 저장을 기다리는 상한(ms). 경로별 유예는
  *  의도적 차등 — stop() 5초(세션 종료, 최대 보존), 아카이브 flush 1.5초(백그라운드, UX 무영향). */
 const PAUSE_FLUSH_GRACE_MS = 3000;
-
-/** in-flight 클립 저장을 유예 상한까지 기다린다(아카이브/stop/pause 3경로 공용).
- *  타임아웃 타이머는 저장이 먼저 끝나면 clearTimeout으로 해제한다 — no-op이지만 세션 시작·정지를
- *  반복할 때 고아 타이머가 누적되지 않게(리뷰 라운드1 Pro·라운드2 Flash 반복 지적). */
-async function flushPendingSaves(pending: Set<Promise<unknown>>, graceMs: number): Promise<void> {
-  if (pending.size === 0) return;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    Promise.allSettled(Array.from(pending)),
-    new Promise<void>((resolve) => { timer = setTimeout(resolve, graceMs); }),
-  ]);
-  clearTimeout(timer);
-}
 
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
@@ -153,15 +125,6 @@ export function useVoiceSession() {
   const activeClipRef = useRef<{ row: number; colId: string } | null>(null);
   // rowIndex → colId → IDB key; accumulated in-memory until persistSession writes to dataStore
   const pendingClipsRef = useRef<Record<number, Record<string, string>>>({});
-  // Clip-preservation: monotonic per-cell attempt counter (`row:colId` → next attempt index) used
-  // to mint distinct archive keys (`sessionId:row:colId:a<n>`) so every correction's prior clip
-  // survives in IDB instead of being deleted. Reset in start() alongside pendingClipsRef.
-  const clipAttemptRef = useRef<Record<string, number>>({});
-  // Monotonic command-clip counter (`row:colId` → next index) for the '수정'/'정정' utterance
-  // clips, keyed `sessionId:row:colId:cmd<n>` with kind:'command' in the event log.
-  const cmdClipRef = useRef<Record<string, number>>({});
-  // Codex 재검증 MEDIUM: in-flight clip save promises; stop()/pause()가 끝나기 전 flush
-  const pendingClipSavesRef = useRef<Set<Promise<unknown>>>(new Set());
   // Snapshot of a persisted row being cascade-corrected; included in persistSession if stop()
   // fires before re-completion so original measurements are not lost.
   const correctionBackupRef = useRef<SessionRow | null>(null);
@@ -262,102 +225,15 @@ export function useVoiceSession() {
   };
 
   // ── clip preservation ──────────────────────────────────────
-  /** Archive the clip currently stored at the bare cell key (`sessionId:row:colId`) under a fresh
-   *  attempt key (`sessionId:row:colId:a<n>`) BEFORE a correction overwrites/clears it, so the
-   *  misrecognised original audio survives in IDB. Background (not awaited) — never blocks the
-   *  voice flow. Emits a `clip_preserved` event carrying the attempt index + archive key so the
-   *  next analyst can re-join attempts in order. Returns the archive key (or null if nothing to
-   *  archive). The bare key is left intact for the next attempt's save to overwrite. */
-  const archiveCellClip = useCallback((row: number, colId: string): string | null => {
-    const bareKey = `${sessionIdRef.current}:${row}:${colId}`;
-    const cellKey = `${row}:${colId}`;
-    const attempt = (clipAttemptRef.current[cellKey] ?? 0) + 1;
-    clipAttemptRef.current[cellKey] = attempt;
-    const archiveKey = `${bareKey}:a${attempt}`;
-    void (async () => {
-      try {
-        // The prior attempt's clip save may still be in-flight (savePromise resolves after the
-        // echo TTS, but a fast correction can race it). Flush pending saves before reading the
-        // bare key so we archive the real blob rather than null. Background — no UX impact.
-        await flushPendingSaves(pendingClipSavesRef.current, 1500);
-        const blob = await loadAudioClip(bareKey);
-        if (!blob) return; // nothing recorded yet (e.g. direct-modify before any clip) — skip
-        await saveAudioClip(archiveKey, blob);
-        logCell({
-          type: 'clip', extra: 'clip_preserved', kind: 'value', attempt, clipKey: archiveKey,
-          row, colId,
-        });
-      } catch (e) {
-        logCell({ type: 'error', extra: `clip_preserve_failed:${String((e as Error)?.message ?? e)}`, row, colId });
-      }
-    })();
-    return archiveKey;
-  }, []);
-
-  /** Preserve the '수정'/'정정' command utterance itself as an audio clip. The command is spoken
-   *  into the clip the last announceField started for `awaiting`, but that clip was previously
-   *  dropped (enterModifyMode starts a new clip without stopping/saving the old one). We stop it
-   *  here and persist it under `sessionId:row:colId:cmd<n>` (kind:'command') so analysis can hear
-   *  the exact utterance that declared the correction alongside the surrounding value attempts.
-   *  Fully background — the save promise is tracked but NEVER awaited before announcing, so the
-   *  voice flow is not delayed (top-priority constraint). */
-  const preserveCommandClip = useCallback((row: number, colId: string): PendingCommandClip | null => {
-    const rec = recorderRef.current;
-    if (!rec) return null;
-    // Detach the active clip's stop now, before enterModifyMode's announceField starts a new one.
-    // We CAPTURE the stop here (the '수정' utterance is spoken into the AWAITING cell's clip) but
-    // DEFER the save until the modify TARGET cell is resolved — for a direct "수정 <값>" the clip
-    // is the new value's audio and must be keyed to the cell it corrects, not the awaiting cell
-    // (CLIP-CMD: keying it to the awaiting colId left the corrected cell's pointer orphaned).
-    const stopPromise = rec.stopClip();
-    activeClipRef.current = null;
-
-    let saved = false;
-    /** Persist the captured utterance under the given cell's :cmd<n> key. Returns the cmdKey on
-     *  success (clip non-empty), or null if empty/failed. Idempotent — saves at most once. */
-    const saveFor = (targetRow: number, targetColId: string): string | null => {
-      if (saved) return null;
-      saved = true;
-      const cellKey = `${targetRow}:${targetColId}`;
-      const idx = (cmdClipRef.current[cellKey] ?? 0) + 1;
-      cmdClipRef.current[cellKey] = idx;
-      const cmdKey = `${sessionIdRef.current}:${targetRow}:${targetColId}:cmd${idx}`;
-      const savePromise = (async () => {
-        try {
-          const { blob, raw } = await stopPromise;
-          if (!blob || blob.size <= EMPTY_CLIP_BYTES) {
-            logCell({ type: 'clip', extra: `clip_cmd_empty:${blob ? blob.size : 'null'}`, kind: 'command', row: targetRow, colId: targetColId });
-            return;
-          }
-          await saveAudioClip(cmdKey, blob);
-          logCell({ type: 'clip', extra: 'clip_preserved', kind: 'command', attempt: idx, clipKey: cmdKey, row: targetRow, colId: targetColId });
-          // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
-          // deleteSession의 prefix cascade와 exportLog의 `key.split(':')[0]` 세션 필터가 모두
-          // `sessionId:` prefix 기준이라 추가 배선 없이 zip clips/ 포함·삭제가 따라온다.
-          if (raw) {
-            await saveAudioClip(`${cmdKey}:raw`, raw);
-            logCell({ type: 'clip', extra: `clip_raw_saved:${raw.size}`, kind: 'command', clipKey: `${cmdKey}:raw`, row: targetRow, colId: targetColId });
-          }
-        } catch (e) {
-          logCell({ type: 'error', extra: `clip_cmd_save_failed:${String((e as Error)?.message ?? e)}`, row: targetRow, colId: targetColId });
-        }
-      })();
-      pendingClipSavesRef.current.add(savePromise);
-      void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
-      // Return the cmdKey synchronously so the caller can re-link the cell pointer; the actual
-      // bytes land asynchronously (background save, never awaited — voice flow not delayed).
-      return cmdKey;
-    };
-
-    return {
-      // Key the saved clip + return the cmdKey for the cell being corrected.
-      saveFor,
-      // Save against the (row, colId) this closure captured — the awaiting cell at preserve-time.
-      // Callers only use this when awaiting === target (see PendingCommandClip.saveDefault doc);
-      // the plain-cascade path uses `saveFor(targetRow, target.id)` directly instead.
-      saveDefault: () => { saveFor(row, colId); },
-    };
-  }, []);
+  // [ENV-12] Stage 3 — 캡처 장부(재시도·명령 인덱스, in-flight 저장 집합)는 useClipCapture가
+  // 소유한다. 세션 컨텍스트만 getter/callback으로 넘긴다(훅이 이 파일의 ref를 직접 보지 않게).
+  const clipCapture = useClipCapture({
+    getSessionId: () => sessionIdRef.current,
+    getRecorder: () => recorderRef.current,
+    logCell,
+    onCommandClipDetached: () => { activeClipRef.current = null; },
+  });
+  const { archiveCellClip, preserveCommandClip } = clipCapture;
 
   const isRowVoiceComplete = (row: number, vCols: Column[]): boolean => {
     if (useSessionStore.getState().isRowComplete(row)) return true;
@@ -2009,7 +1885,7 @@ export function useVoiceSession() {
     // cmdKey를 라이브 sessionIdRef(새 세션)로 조립하면 옛 세션 행이 새 세션 클립 키를 참조하는
     // provenance 오염이 생긴다. 캡처 고정으로 지연 콜백은 이 커밋의 문맥만 본다.
     const sessionIdAtCommit = sessionIdRef.current;
-    const cmdIdxAtCommit = cmdClipRef.current[`${clipAwaitingRow}:${clipAwaitingColId}`];
+    const cmdIdxAtCommit = clipCapture.commandClipIndex(clipAwaitingRow, clipAwaitingColId);
     // [CLIP-VAL-1]②③ — a capture under the canonical key failed. Tombstone the key FIRST (so an
     // in-flight persistSession can never re-persist it), then: if this was a modify re-record and
     // its command clip (`…:cmd<n>` — for "수정 <값>" it carries the NEW value's utterance) actually
@@ -2023,13 +1899,7 @@ export function useVoiceSession() {
           const cmdKey = `${sessionIdAtCommit}:${clipAwaitingRow}:${clipAwaitingColId}:cmd${n}`;
           // The cmd-clip save may still be in flight — flush other pending saves (not ourselves)
           // before the existence check (archiveCellClip's flush pattern, bounded).
-          const others = Array.from(pendingClipSavesRef.current).filter((p) => p !== savePromiseSelf);
-          if (others.length > 0) {
-            await Promise.race([
-              Promise.allSettled(others),
-              new Promise<void>((resolve) => setTimeout(resolve, 1500)),
-            ]);
-          }
+          await clipCapture.flushSaves(1500, { exclude: savePromiseSelf });
           const cmdBlob = await loadAudioClip(cmdKey).catch(() => null);
           if (cmdBlob && relinkClipPointer(pointerArgs, cmdKey)) {
             // 지연 재개 시 라이브 sessionId(다음 세션)로 오귀속되지 않게 캡처된 세션으로 기록.
@@ -2111,8 +1981,7 @@ export function useVoiceSession() {
       }
     })();
     savePromiseSelf = savePromise;
-    pendingClipSavesRef.current.add(savePromise);
-    void savePromise.finally(() => pendingClipSavesRef.current.delete(savePromise));
+    clipCapture.trackSave(savePromise);
 
     // ── v0.7.0 B4: 추세 검증 — 값 커밋 직후 · echo/advance 전 ──
     // 값↔클립 매핑은 위에서 이미 확정됐고 커밋된 값은 위반이어도 그대로 선다(롤백 없음 — 민구
@@ -2398,8 +2267,7 @@ export function useVoiceSession() {
     refreshVoices();
     epochRef.current = 0;
     pendingClipsRef.current = {};
-    clipAttemptRef.current = {};
-    cmdClipRef.current = {};
+    clipCapture.resetCounters();
     brokenClipKeysRef.current = new Set();
     correctionBackupRef.current = null;
     trendSkipLoggedRef.current = new Set();
@@ -2556,7 +2424,7 @@ export function useVoiceSession() {
     // dispose는 in-flight stopClip의 resolveStop을 null로 해소하지만(zombie 방지),
     // 가능하면 자연 onstop으로 실제 blob을 저장하는 것이 우선.
     // 5초 안전 타임아웃: dispose가 즉시 해소하므로 일반적으로 즉시 끝나지만 race 대비.
-    await flushPendingSaves(pendingClipSavesRef.current, 5000);
+    await clipCapture.flushSaves(5000);
     recorderRef.current?.dispose();
     recorderRef.current = null;
     // v0.10: await로 변경 — audioClips 키가 IDB session에 확실히 저장된 후 종료
@@ -2631,7 +2499,7 @@ export function useVoiceSession() {
     cancelTts();
     // dispose가 in-flight stopClip을 null로 해소해 정상 클립이 clip_empty로 떨어지는 것을 방지:
     // stop()과 동일하게 pending save를 먼저 flush.
-    await flushPendingSaves(pendingClipSavesRef.current, PAUSE_FLUSH_GRACE_MS);
+    await clipCapture.flushSaves(PAUSE_FLUSH_GRACE_MS);
     recorderRef.current?.dispose();
     recorderRef.current = null;
     useSessionStore.getState().setPhase('paused');
