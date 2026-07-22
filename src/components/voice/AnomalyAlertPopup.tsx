@@ -127,7 +127,7 @@ export function AnomalyAlertPopup({
       }}>
         {alarmLabel}
       </span>
-      <span style={{
+      <span className="anomaly-field-name" style={{
         maxWidth: '100%', color: T.textDim,
         fontSize: HERO_TYPE.name, fontWeight: 900, lineHeight: 1.04,
         letterSpacing: -0.6, wordBreak: 'keep-all', overflowWrap: 'anywhere',

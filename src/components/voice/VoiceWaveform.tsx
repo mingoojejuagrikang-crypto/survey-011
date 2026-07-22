@@ -1,18 +1,17 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useRef } from 'react';
 import { T } from '../../tokens';
 
 /** v0.38.0 개선요청 #10 — reference-ui의 **막대 파형**(`.waveform span`). 10×78px 막대 13개를
- *  7px 간격으로 배치하고, 각 막대의 `--level`/`scaleY`를 rAF로 실시간 갱신한다
+ *  7px 간격으로 배치하고, 각 막대의 `scaleY`를 rAF로 실시간 갱신한다
  *  (React 리렌더 0 — ref 배열 직접 스타일 변이).
  *
  *  ⚠️ 존재 이유 = "지금 내 말을 듣고 있나?"를 원거리에서 확인. 따라서 **듣고 있지 않으면 움직이지
- *  않는다**(R3-FIX-3 데이터 무결성 계약, PRINCIPLES §2). reference-ui의 순수 CSS 타이머 애니메이션
- *  (`inset-wave`)은 실제 오디오가 감지될 때만 켠다: 죽은 마이크에 움직이는 파형은 기능의 목적을
- *  배신한다. 무입력·저레벨에서도 세로 막대로 읽히도록 기본 높이 35%는 유지한다.
+ *  않는다**(R3-FIX-3 데이터 무결성 계약, PRINCIPLES §2). 모션 소스는 기존 오디오 rAF 하나뿐이며,
+ *  무입력·저레벨에서도 세로 막대로 읽히도록 기본 높이 35%는 유지한다.
  *
  *  성능·배터리(종전 canvas와 동일 계약 보존):
- *   - `active=false`(일시정지) → rAF/애니메이션 미가동, 7% 납작 막대 + 그림자 제거.
- *   - `prefers-reduced-motion` → rAF/애니메이션 미가동, 기본 높이 세로 막대.
+ *   - `active=false`(일시정지) → rAF 미가동, 7% 납작 막대 + 그림자 제거.
+ *   - `prefers-reduced-motion` → rAF 미가동, 기본 높이 세로 막대.
  *   - `visibilityState==='hidden'` → 스케줄 중단, visibilitychange에서 재개.
  *   - display:none(keep-alive) / 스크롤 이탈 → IntersectionObserver가 즉시 백오프(rAF 정지).
  *   - ~30fps 게이트 — 장시간 현장 세션 배터리/열 부담을 낮춘다. cleanup에서 cancel. */
@@ -63,16 +62,11 @@ export function VoiceWaveform({
     let visible = true;
 
     /** 모든 막대에 레벨을 적용(레이아웃 조회 없음 — transform 전용, 합성기). */
-    const paint = (levels: number[], moving: boolean) => {
-      const root = rootRef.current;
-      if (root && root.dataset.waveMotion !== (moving ? 'active' : 'idle')) {
-        root.dataset.waveMotion = moving ? 'active' : 'idle';
-      }
+    const paint = (levels: number[]) => {
       for (let i = 0; i < bars.length; i++) {
         const el = bars[i];
         if (!el) continue;
         const level = levels[i] ?? BASE_LEVEL;
-        el.style.setProperty('--level', String(level));
         el.style.transform = `scaleY(${level})`;
       }
     };
@@ -80,7 +74,7 @@ export function VoiceWaveform({
     /** 정적 막대 — 일시정지는 7%, 무입력·reduced-motion은 세로 기본 높이 35%. */
     const drawStatic = () => {
       const level = active ? BASE_LEVEL : PAUSED_LEVEL;
-      paint(new Array(BAR_COUNT).fill(level), false);
+      paint(new Array(BAR_COUNT).fill(level));
     };
 
     if (reduced || !active) {
@@ -137,7 +131,7 @@ export function VoiceWaveform({
           );
         }
       }
-      paint(levels, levels.some((level) => level > BASE_LEVEL));
+      paint(levels);
       schedule();
     };
 
@@ -171,8 +165,6 @@ export function VoiceWaveform({
       data-testid="voice-waveform"
       role="img"
       aria-hidden
-      data-wave-motion="idle"
-      className="voice-waveform"
       style={{
         width: '100%',
         height,
@@ -186,11 +178,8 @@ export function VoiceWaveform({
       {Array.from({ length: BAR_COUNT }, (_, i) => (
         <span
           key={i}
-          className="voice-waveform__bar"
           ref={(el) => { barsRef.current[i] = el; }}
           style={{
-            '--level': active ? BASE_LEVEL : PAUSED_LEVEL,
-            '--delay': `${i * -73}ms`,
             flex: '0 0 10px',
             width: 10,
             height: BAR_HEIGHT,
@@ -202,7 +191,7 @@ export function VoiceWaveform({
             // rAF가 transform을 매 프레임 덮으므로 transition은 두지 않는다(정지 상태 잔여 애니메이션
             //   방지 — 평막대는 즉시 평막대). willChange로 합성 레이어 승격.
             willChange: 'transform',
-          } as CSSProperties}
+          }}
         />
       ))}
     </div>

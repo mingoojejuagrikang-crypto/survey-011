@@ -67,22 +67,6 @@ input::placeholder {
   50% { transform: scaleY(1); }
 }
 
-/* v0.38.0 개선요청 #10 — 실제 입력이 감지된 세로 막대만 레퍼런스 cadence로 호흡한다.
-   --level은 기존 rAF 오디오 구독이 직접 갱신하며, idle/paused에서는 animation을 적용하지 않는다. */
-@keyframes inset-wave {
-  0% { transform: scaleY(max(.1, calc(var(--level, .35) * .45))); opacity: .72; }
-  100% { transform: scaleY(var(--level, .35)); opacity: 1; }
-}
-
-.voice-waveform[data-wave-motion='active'] .voice-waveform__bar {
-  animation-name: inset-wave;
-  animation-duration: 940ms;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-  animation-direction: alternate;
-  animation-delay: var(--delay, 0ms);
-}
-
 @keyframes flash-green {
   0% { background: rgba(0,200,83,0); }
   30% { background: rgba(0,200,83,0.35); }
@@ -231,13 +215,8 @@ input::placeholder {
 /* prevent iOS bounce, keep PWA feel */
 html { -webkit-text-size-adjust: 100%; }
 
-/* v0.28.0 [이상치 카드 375×667 무스크롤 수정, 2026-07-06 Sonar 재현 QA] — AnomalyAlertPopup의
-   현재값 라벨(.aa-hero-dup-label)은 헤더 줄의 colName과 100% 중복이다(R3: 시선이 현재값에 있을 때
-   항목명을 재확인시키려는 의도적 중복). 375×667급 최소 높이 화면에서는 폰트 하한을 건 뒤에도
-   남는 잔여 초과분을 해소하기 위해 이 중복 줄만 숨긴다(정보 손실 없음 — 항목명은 헤더에 유지).
-   순수 뷰포트 높이 조건(측정된 overflow 아님)이라 되튐(oscillation) 없음. */
+/* v0.38.0 T2-R1 — 375×667급에서는 활성 칩과 알람 라벨이 이미 제공하는 항목명 맥락을 중복 표시하지
+   않는다. GL-005 폰트 하한은 유지하면서 카드 내부 무스크롤 공간을 확보한다. */
 @media (max-height: 700px) {
-  .aa-hero-dup-label { display: none; }
-  /* "직전 (날짜)" 라벨 — 아래 숫자(비교값 자체)는 유지, 부가 설명 문구만 숨긴다. */
-  .aa-prev-label { display: none; }
+  .anomaly-field-name { display: none; }
 }
