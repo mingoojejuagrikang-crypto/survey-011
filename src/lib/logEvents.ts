@@ -43,3 +43,11 @@ export function rowMarked(kind: 'row_complete' | 'row_skipped', row: number, sou
 export function zombieRestart(staleMs: number, streak: number): string {
   return `lifecycle:zombie_restart:${kv({ stale_ms: staleMs, n: streak })}`;
 }
+
+/** v0.38.0 #5 — 사용자 제스처 밖 자동 마이크 재연결의 시도/결과.
+ *  기존 mic_reconnect_* 이벤트는 수동 경로와 공유하므로, 이 이벤트만으로 자동 경로를 식별한다. */
+export function micAutoReconnect(stage: 'attempt' | 'ok' | 'failed'): string {
+  return stage === 'attempt'
+    ? 'mic_auto_reconnect:attempt'
+    : `mic_auto_reconnect:${kv({ result: stage })}`;
+}

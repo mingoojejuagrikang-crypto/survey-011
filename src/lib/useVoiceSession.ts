@@ -14,7 +14,7 @@ import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
-import { rowMarked } from './logEvents';
+import { micAutoReconnect, rowMarked } from './logEvents';
 import { resolveFinal } from './voiceFinalResolver';
 import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
 import { hydratePastIndexFallback, prefetchPastIndex, resetPastIndexRetries } from './pastValues';
@@ -1279,6 +1279,8 @@ export function useVoiceSession() {
   // v0.38.0 #5 — micLost 한 번의 연속 구간마다 자동 복구는 정확히 1회뿐이다. 실패 상태가 계속
   // 유지돼도 attempted ref가 effect 재실행을 차단하며, 성공/세션 리셋으로 micLost가 false가 된 뒤에만
   // 다음 사고를 위한 가드를 해제한다. STT 컨트롤러 시작/정지/재시작 판단에는 관여하지 않는다.
+  // ⚠️ 이 effect는 사용자 제스처 밖이므로 iOS Safari가 getUserMedia를 거부할 수 있다. 그 경우
+  // 자동 결과를 failed로 계측하고 수동 재연결 배너 폴백으로 수렴한다.
   useEffect(() => {
     if (!micLost) {
       micAutoReconnectAttemptedRef.current = false;
@@ -1288,8 +1290,10 @@ export function useVoiceSession() {
     if (micAutoReconnectAttemptedRef.current) return;
     micAutoReconnectAttemptedRef.current = true;
     setMicReconnectFallbackVisible(false);
+    logCell({ type: 'clip', extra: micAutoReconnect('attempt') });
     let active = true;
     void reconnectMic().then((ok) => {
+      logCell({ type: 'clip', extra: micAutoReconnect(ok ? 'ok' : 'failed') });
       if (active && !ok) setMicReconnectFallbackVisible(true);
     });
     return () => { active = false; };

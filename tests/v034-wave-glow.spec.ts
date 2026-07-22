@@ -142,6 +142,23 @@ async function injectLevel(page: Page, level: number) {
   await page.waitForTimeout(150); // rAF 수 프레임
 }
 
+async function loadLogExtras(page: Page): Promise<string[]> {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((res, rej) => {
+      const req = indexedDB.open('survey-011');
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    });
+    const all = await new Promise<Array<{ extra?: string }>>((res, rej) => {
+      const req = db.transaction('logEvents', 'readonly').objectStore('logEvents').getAll();
+      req.onsuccess = () => res(req.result as Array<{ extra?: string }>);
+      req.onerror = () => rej(req.error);
+    });
+    db.close();
+    return all.flatMap((event) => typeof event.extra === 'string' ? [event.extra] : []);
+  });
+}
+
 // v0.35.0 — 레벨 rAF 시임(__voiceLevelOverride)은 이제 파형 canvas가 아니라 EdgeGlow(useAudioLevelVar)
 //   에서 소비된다. rAF 정지/재개 검증은 edge-glow 루트의 --voice-level로 관측한다.
 async function glowVar(page: Page): Promise<string> {
@@ -479,7 +496,7 @@ test('B8/#5 — micLost 자동 1회 성공: 수동 배너는 한 번도 노출�
   await expect(statusControl).toHaveAttribute('data-status', 'listening');
 });
 
-test('B8/#5 — micLost 자동 1회 실패: 배너 노출 + 쿨다운 이후에도 중복/반복 getUserMedia 없음', async ({ page }) => {
+test('B8/#5 — 자동 실패 계측·배너·1회 가드, 이후 수동 탭에는 자동 이벤트 없음', async ({ page }) => {
   await boot(page);
   await startSession(page);
   const callsBefore = await page.evaluate(() => (window as unknown as { __getUserMediaCallCount: number }).__getUserMediaCallCount);
@@ -500,6 +517,18 @@ test('B8/#5 — micLost 자동 1회 실패: 배너 노출 + 쿨다운 이후에�
   await page.waitForTimeout(3500); // recoverStream 쿨다운이 끝나도 자동 반복 금지
   expect(await page.evaluate(() => (window as unknown as { __getUserMediaCallCount: number }).__getUserMediaCallCount))
     .toBe(callsBefore + 1);
+
+  const autoBeforeManual = (await loadLogExtras(page)).filter((extra) => extra.startsWith('mic_auto_reconnect:'));
+  expect(autoBeforeManual).toEqual([
+    'mic_auto_reconnect:attempt',
+    'mic_auto_reconnect:result=failed',
+  ]);
+
+  await page.locator('[data-testid="mic-reconnect-btn"]').click();
+  await expect(page.locator('[data-testid="mic-reconnect-btn"]')).toHaveCount(0);
+  await page.waitForTimeout(300); // logger IDB fire-and-forget 정착
+  const autoAfterManual = (await loadLogExtras(page)).filter((extra) => extra.startsWith('mic_auto_reconnect:'));
+  expect(autoAfterManual).toEqual(autoBeforeManual);
 });
 
 test('B8 — --voice-level로 글로우 강도 변조(레벨 0이어도 톤 표시 유지)', async ({ page }) => {
