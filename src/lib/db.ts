@@ -27,7 +27,9 @@ interface SchemaTarget {
  *  - logEvents(v3): Logger events 영속화 — autoIncrement + sessionId 인덱스로 reload 후 조회.
  *  - kv(v4, v0.14.0 C): 설정 내구 미러 — iOS Safari localStorage evict 방어선.
  *  - screenshots(v5, v0.33.0 10-B): 자동 캡처 JPEG. 키 `${sessionId}:...` 접두 규약(cascade).
- *  - feedbackQueue(v6, v0.33.0 항목11): 개선요청 오프라인/미로그인 재전송 큐. */
+ *  - feedbackQueue(v6, v0.33.0 항목11): 개선요청 오프라인/미로그인 재전송 큐.
+ *  sessions 레코드의 optional additive 필드(Session.target 등)는 object-store 구조를 바꾸지 않으므로
+ *  DB version을 올리지 않는다. 구 레코드는 필드가 없는 채 그대로 로드하고 소비자가 fail-closed 처리한다. */
 export function applyAppSchema(db: SchemaTarget): void {
   if (!db.objectStoreNames.contains('sessions')) {
     const store = db.createObjectStore('sessions', { keyPath: 'id' });

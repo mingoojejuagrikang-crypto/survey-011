@@ -10,7 +10,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { syncSelected, type SyncReport } from './sync';
 import { downloadCsv, csvToBlob, sessionsToCsv, sessionsToCsvZip } from './csv';
 import { deleteSession as dbDeleteSession, saveSession, resetDb } from './db';
-import type { Session } from '../types';
+import type { Session, SessionTarget } from '../types';
 import { exportLogZip, exportLogZipsPerSession, downloadZip } from './exportLog';
 import { uploadLogToBothDrives } from './driveUpload';
 import { hydrateSessions } from './hydrate';
@@ -18,12 +18,21 @@ import { getAccessToken, signIn } from './googleAuth';
 import { restoreSelectedSessions, type ZipCache } from './recoverFromDrive';
 import { logger } from './logger';
 import { clipPlayer } from './clipPlayer';
+import { sessionTargetFromSettings } from './sheetConnection';
 
 /** 내보내기 결과 — 완료 팝업(ExportDoneModal)이 보관해 클릭 시 공유/재다운로드에 재사용한다. */
 export interface ExportResult {
   blob: Blob;
   filename: string;
   kind: 'csv' | 'zip';
+}
+
+interface LegacySyncPrompt {
+  ids: string[];
+  autoDelete: boolean;
+  legacyCount: number;
+  target: SessionTarget;
+  targetLabel: string;
 }
 
 
@@ -49,6 +58,7 @@ export function useDataActions() {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [failureReport, setFailureReport] = useState<SyncReport | null>(null);
+  const [legacySyncPrompt, setLegacySyncPrompt] = useState<LegacySyncPrompt | null>(null);
   // 다중 세션 로그 ZIP 내보내기 확인 대상 (v0.12 Codex MEDIUM): 여러 세션의 클립을 한 번에 압축하면
   // 용량/지연이 커질 수 있어 2개 이상일 때 확인 단계를 거친다. CSV는 가벼우니 확인 없이 즉시 진행.
   const [pendingZipIds, setPendingZipIds] = useState<string[] | null>(null);
@@ -284,8 +294,7 @@ export function useDataActions() {
     }
   };
 
-  const handleSyncConfirm = async (ids: string[], autoDelete: boolean) => {
-    setSyncModalOpen(false);
+  const runConfirmedSync = async (ids: string[], autoDelete: boolean) => {
     const result = await runSyncInner(ids);
     if (!result) return;
     const { report, backupOk } = result;
@@ -295,7 +304,7 @@ export function useDataActions() {
     if (report.needsLogin) {
       setLoginPrompt({
         reason: '시트 동기화에 로그인이 필요합니다. 로그인하면 이어서 업로드합니다.',
-        resume: () => { void handleSyncConfirm(ids, autoDelete); },
+        resume: () => { void runConfirmedSync(ids, autoDelete); },
       });
       return;
     }
@@ -318,10 +327,57 @@ export function useDataActions() {
     }
   };
 
+  const handleSyncConfirm = async (ids: string[], autoDelete: boolean) => {
+    setSyncModalOpen(false);
+    const sessions = useDataStore.getState().sessions.filter((s) => ids.includes(s.id));
+    const legacyCount = sessions.filter((s) => !s.target).length;
+    if (legacyCount > 0) {
+      const settings = useSettingsStore.getState();
+      const target = sessionTargetFromSettings(settings);
+      if (!target) {
+        setMsg('시트 연결을 다시 확인한 뒤 이전 세션의 대상을 선택해 주세요.');
+        return;
+      }
+      const savedName = settings.savedSheets.find((s) => s.sheetId === target.spreadsheetId)?.name;
+      setLegacySyncPrompt({
+        ids,
+        autoDelete,
+        legacyCount,
+        target,
+        targetLabel: `${savedName ?? '시트'}의 “${target.sheetTab}” 탭`,
+      });
+      return;
+    }
+    await runConfirmedSync(ids, autoDelete);
+  };
+
+  const confirmLegacySync = async () => {
+    const prompt = legacySyncPrompt;
+    if (!prompt) return;
+    setLegacySyncPrompt(null);
+    setBusy('대상 시트 저장 중...');
+    setMsg(null);
+    try {
+      for (const id of prompt.ids) {
+        const latest = useDataStore.getState().sessions.find((s) => s.id === id);
+        if (!latest || latest.target) continue;
+        const updated: Session = { ...latest, target: prompt.target };
+        await saveSession(updated);
+        useDataStore.getState().upsertSession(updated);
+      }
+    } catch (err) {
+      setMsg('대상 시트 저장 실패: ' + ((err as Error).message || '다시 시도해 주세요.'));
+      return;
+    } finally {
+      setBusy(null);
+    }
+    await runConfirmedSync(prompt.ids, prompt.autoDelete);
+  };
+
   const handleRetry = async () => {
     setFailureReport(null);
     const ids = failureReport?.failures.map((f) => f.sessionId) ?? lastSelectedIdsRef.current;
-    if (ids.length) await runSyncInner(ids);
+    if (ids.length) await handleSyncConfirm(ids, false);
   };
 
   const handleDeleteConfirm = async () => {
@@ -403,13 +459,14 @@ export function useDataActions() {
     exportModalOpen, setExportModalOpen,
     deleteTarget, setDeleteTarget,
     failureReport, setFailureReport,
+    legacySyncPrompt, setLegacySyncPrompt,
     pendingZipIds, setPendingZipIds,
     recoverModalOpen, setRecoverModalOpen,
     exportResult, setExportResult,
     loginPrompt, setLoginPrompt,
     handleLoginPromptLogin,
     runZipExport, handleExport, handleCellSave,
-    handleSyncConfirm, handleRetry, handleDeleteConfirm,
+    handleSyncConfirm, confirmLegacySync, handleRetry, handleDeleteConfirm,
     handleRecoverClick, handleRecoverRestore,
   };
 }

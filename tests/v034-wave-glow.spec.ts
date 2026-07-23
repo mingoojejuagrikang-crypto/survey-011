@@ -38,6 +38,8 @@ const SETTINGS = {
     userEmail: 'tester@example.com',
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_V034_WG/edit',
     sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_V034_WG',
+    columnsSheetTab: 'Sheet1',
     columns: COLUMNS,
     tableGenerated: true,
     totalRows: 2,
@@ -48,7 +50,7 @@ const SETTINGS = {
     preferredVoiceName: '',
     roundDateColId: null,
   },
-  version: 11,
+  version: 12,
 };
 
 const HEADERS = ['조사일자', '농가명', '조사나무', '횡경'];

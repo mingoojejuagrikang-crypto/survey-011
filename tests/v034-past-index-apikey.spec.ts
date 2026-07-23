@@ -71,12 +71,14 @@ const SETTINGS = {
     userEmail: 'tester@example.com',
     sheetUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`,
     sheetTab: 'Sheet1',
+    columnsSheetId: SHEET_ID,
+    columnsSheetTab: 'Sheet1',
     columns: COLUMNS,
     tableGenerated: true,
     totalRows: 2,
     roundDateColId: null,
   },
-  version: 6,
+  version: 12,
 };
 
 function localISO(d: Date): string {

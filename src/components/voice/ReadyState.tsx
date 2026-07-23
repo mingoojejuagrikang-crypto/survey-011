@@ -3,14 +3,18 @@ import { I } from '../icons';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { isSpeechSupported } from '../../lib/speech';
 import { ConnectionStatusCard } from '../ConnectionStatusCard';
+import { hasMatchingSheetSource } from '../../lib/sheetConnection';
 
 export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => void }) {
   const s = useSettingsStore();
-  const ready = s.tableGenerated && totalRows > 0 && isSpeechSupported();
+  const sourceMatches = hasMatchingSheetSource(s);
+  const ready = s.tableGenerated && sourceMatches && totalRows > 0 && isSpeechSupported();
   const autoCount = s.columns.filter((c) => c.input === 'auto').length;
   const voiceCount = s.columns.filter((c) => c.input === 'voice').length;
   const ttsHint = !isSpeechSupported()
     ? '이 브라우저는 음성 인식을 지원하지 않습니다 (Chrome 권장)'
+    : !sourceMatches
+    ? '시트 연결을 다시 확인해 주세요'
     : !s.tableGenerated
     ? '먼저 설정 탭에서 테이블을 생성하세요'
     : '';

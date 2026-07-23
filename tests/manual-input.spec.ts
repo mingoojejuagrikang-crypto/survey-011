@@ -28,8 +28,10 @@ const BASE_SETTINGS = {
     googleConnected: false,
     userEmail: null,
     sheet: null,
-    sheetUrl: '',
-    sheetTab: '',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit',
+    sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_TEST_1',
+    columnsSheetTab: 'Sheet1',
     availableSheets: [],
     manualMode: false,
     columns: [
@@ -45,7 +47,7 @@ const BASE_SETTINGS = {
     noisyMode: false,
     preferredVoiceName: '',
   },
-  version: 3,
+  version: 12,
 };
 
 /** options 음성 컬럼 fixture — 선택지 버튼 그리드 검증용. */
@@ -411,6 +413,8 @@ async function setupTrendAndStart(page: Page) {
       userEmail: 'tester@example.com',
       sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_A1_MANUAL/edit',
       sheetTab: 'Sheet1',
+      columnsSheetId: 'SHEET_A1_MANUAL',
+      columnsSheetTab: 'Sheet1',
       columns: [
         { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
         { id: 'c3', name: '농가명', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' }, sampleKey: true },
@@ -426,7 +430,7 @@ async function setupTrendAndStart(page: Page) {
       preferredVoiceName: '',
       roundDateColId: null,
     },
-    version: 6,
+    version: 12,
   };
   await page.route('**://sheets.googleapis.com/**', async (route) => {
     if (route.request().method() === 'GET') {

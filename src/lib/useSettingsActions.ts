@@ -13,7 +13,7 @@ import {
   resetPastIndexRetries,
   shouldPreparePastIndex,
 } from './pastValues';
-import type { DataType } from '../types';
+import type { Column, DataType } from '../types';
 import {
   getAccessToken,
   getCurrentEmail,
@@ -38,6 +38,7 @@ import { buildSessionLabel, pickSessionLabelValue } from './sessionLabel';
 import { getPickerApiKey, openDrivePicker } from './drivePicker';
 import { setPreferredVoiceName } from './speech';
 import { logger } from './logger';
+import { hasMatchingSheetSource } from './sheetConnection';
 
 /** localStorage 키 — 첫 진입 안내를 본 적 있는지(스토리지 네임스페이스 survey-011 준수).
  *  종전 components/settings/helpCopy.ts 소유였으나 유일 소비자가 이 훅이라 여기로 이동
@@ -52,6 +53,9 @@ export function useSettingsActions() {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmedUrl, setConfirmedUrl] = useState<string>(s.sheetUrl);
+  // URL 입력값은 연결이 검증된 활성 sheetUrl과 분리한다. 메타/헤더 조회가 실패한 URL을 활성 대상으로
+  // 먼저 영속하면 이전 columns와 새 URL이 섞이므로, 최신 요청 성공 때만 둘을 함께 게시한다.
+  const [sheetUrlDraft, setSheetUrlDraft] = useState<string>(s.sheetUrl);
   // v0.32.0 설정탭 UX(Vance) B3 — 초기화 확인 모달(설정탭 전용; B2 요약 팝업 상태는 화면이 소유).
   const [resetOpen, setResetOpen] = useState(false);
   // S-2: result of "타입 검토" (null = not run; checked = columns compared).
@@ -144,42 +148,71 @@ export function useSettingsActions() {
 
   /** URL 입력은 상태만 갱신, 적용은 confirm 버튼에서 */
   const onUrlTyping = (url: string) => {
-    s.set({ sheetUrl: url });
+    setSheetUrlDraft(url);
+    ++sheetRequestSeqRef.current;
+    s.set({ tableGenerated: false });
+    setLoading(null);
     setError(null);
   };
 
   /** "확인" 버튼: 현재 URL로 시트 정보 조회 시도 */
   const onUrlConfirm = async () => {
     setError(null);
-    const url = s.sheetUrl.trim();
+    const url = sheetUrlDraft.trim();
     if (!url) { setError('URL을 입력하세요.'); return; }
     if (!s.googleConnected) { setError('먼저 Google 로그인 후 다시 확인하세요.'); return; }
     await onUrlConfirmWithUrl(url);
   };
 
   const onSheetTabChange = async (newTab: string) => {
-    s.set({ sheetTab: newTab });
-    const id = parseSpreadsheetId(s.sheetUrl);
-    if (id) await loadHeaders(id, newTab);
-  };
-
-  // v0.38.0 리뷰#3(Critical) — 헤더 조회 요청 세대. 시트·탭 선택 컨트롤은 조회 중에도 활성이라
-  // 사용자가 B탭 → C탭을 빠르게 누를 수 있다. C가 먼저 완료된 뒤 느린 B 응답이 도착하면 종전에는
-  // 무조건 게시해 **화면은 C탭인데 columns·출처는 B**가 됐고, 재생성 시 B농가 fixed 값이 C 시트에
-  // 기록됐다. pastValues의 세대 가드(리뷰#2 High)와 같은 방식으로 최신 요청만 게시하게 한다.
-  const headersRequestSeqRef = useRef(0);
-
-  const loadHeaders = async (spreadsheetId: string, sheetTitle: string) => {
-    const requestSeq = ++headersRequestSeqRef.current;
-    /** 이 요청이 여전히 최신이고, 스토어의 대상 시트도 그대로인가. 게시 직전에 확인한다. */
-    const isCurrentRequest = () => {
-      if (requestSeq !== headersRequestSeqRef.current) return false;
-      const live = useSettingsStore.getState();
-      return parseSpreadsheetId(live.sheetUrl) === spreadsheetId && live.sheetTab === sheetTitle;
-    };
+    const requestSeq = beginSheetRequest();
+    const current = useSettingsStore.getState();
+    const id = parseSpreadsheetId(current.sheetUrl);
+    if (!id) {
+      if (isCurrentSheetRequest(requestSeq)) setError('시트 연결을 다시 확인해 주세요.');
+      return;
+    }
     try {
       setLoading('컬럼 분석 중...');
+      const columns = await loadHeaders(id, newTab, requestSeq);
+      if (!columns || !isCurrentSheetRequest(requestSeq)) return;
+      useSettingsStore.getState().set({
+        sheetUrl: current.sheetUrl,
+        sheetTab: newTab,
+        columns,
+        columnsSheetId: id,
+        columnsSheetTab: newTab,
+        tableGenerated: false,
+      });
+      if (shouldPreparePastIndex()) {
+        resetPastIndexRetries();
+        prefetchPastIndex();
+      }
+    } catch (err) {
+      if (isCurrentSheetRequest(requestSeq)) setError((err as Error).message);
+    } finally {
+      if (isCurrentSheetRequest(requestSeq)) setLoading(null);
+    }
+  };
+
+  // 대상 전환의 메타→헤더 전체 요청 세대. 메타가 늦게 끝난 이전 요청도 최신 sheetTab/columns를
+  // 덮지 못해야 하므로 헤더 단계만이 아니라 연결 파이프라인의 시작점에서 발급한다.
+  const sheetRequestSeqRef = useRef(0);
+  const isCurrentSheetRequest = (requestSeq: number) => requestSeq === sheetRequestSeqRef.current;
+  const beginSheetRequest = () => {
+    const requestSeq = ++sheetRequestSeqRef.current;
+    useSettingsStore.getState().set({ tableGenerated: false });
+    setError(null);
+    return requestSeq;
+  };
+
+  const loadHeaders = async (
+    spreadsheetId: string,
+    sheetTitle: string,
+    requestSeq: number,
+  ): Promise<Column[] | null> => {
       const { headers, sample } = await fetchHeaderAndSample(spreadsheetId, sheetTitle);
+      if (!isCurrentSheetRequest(requestSeq)) return null;
       // v0.38.0 — 사용자 설정과 기존 id는 정확히 같은 스프레드시트·탭의 재연결에서만 보존한다.
       // 다른 농가 시트가 같은 헤더를 써도 id가 같아지는 탓에 이전 fixed 자동값이 새 시트에
       // 복사되던 침묵 오염을 차단한다. 출처는 sheetUrl/sheetTab보다 늦게 바뀌는 columns와 함께
@@ -207,33 +240,7 @@ export function useSettingsActions() {
           }
         }),
       );
-      // 게시 직전 검증 — 더 최신 요청이 시작됐거나 대상 시트가 바뀌었으면 이 결과는 낡았다.
-      // 컬럼·출처를 함께 버린다(둘을 따로 쓰면 불일치가 남는다 — 이번 회차 결함들의 공통 원인).
-      if (enriched.length && isCurrentRequest()) {
-        s.set({
-          columns: enriched,
-          columnsSheetId: spreadsheetId,
-          columnsSheetTab: sheetTitle,
-          tableGenerated: false,
-        });
-        // v0.38.0 — 컬럼이 바뀌면 과거값 인덱스의 설정 지문이 달라져 기존 캐시·폴백이 함께 무효가
-        // 된다. 특히 로그인 자동 재연결은 과거값 강제 갱신(#1)과 같은 흐름이라, 갱신이 먼저 끝나고
-        // 여기서 컬럼이 바뀌면 화면이 "과거값 미준비"로 고착됐다. 정착된 설정 기준으로 다시 만든다.
-        // ensurePastIndex는 유효 캐시/같은 지문 진행 중이면 no-op이라 불필요한 조회를 만들지 않는다.
-        //
-        // 리뷰#1(Codex Medium) — **이상치 규칙이 하나도 없으면 소비자가 없다.** 그런 시트까지
-        // 헤더를 다시 읽을 때마다 전체 시트를 조회하면 데이터·배터리·쿼터를 태운다(기능 격리
-        // 원칙: 꺼진 기능은 무영향, PRINCIPLES §3). 다른 호출부(App 부팅·로그인)와 같은 게이트를 쓴다.
-        if (shouldPreparePastIndex()) {
-          resetPastIndexRetries();
-          prefetchPastIndex();
-        }
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(null);
-    }
+      return enriched.length && isCurrentSheetRequest(requestSeq) ? enriched : null;
   };
 
   // S-2: re-sample the connected sheet and compare each saved column type against the sheet's
@@ -282,7 +289,7 @@ export function useSettingsActions() {
       setLoading('Drive 파일 선택 중...');
       const result = await openDrivePicker(token);
       if (result) {
-        s.set({ sheetUrl: result.url });
+        setSheetUrlDraft(result.url);
         setConfirmedUrl('');
         setError(null);
         await onUrlConfirmWithUrl(result.url);
@@ -302,26 +309,45 @@ export function useSettingsActions() {
       // 연결이 풀린(토큰 만료) 상태 — URL만 세팅해 두고 재로그인을 유도한다(재로그인 후 자동 재연결).
       // availableSheets/sheetTab도 함께 비워, 저장목록의 'active 배지'(새 시트)와 아래 탭 셀렉터(직전
       // 시트의 탭 목록)가 어긋나지 않게 한다 — onUrlConfirmWithUrl의 선(先)리셋과 동일 처리.
-      s.set({ sheetUrl: entry.url, availableSheets: [], sheetTab: '' });
+      ++sheetRequestSeqRef.current;
+      setSheetUrlDraft(entry.url);
+      s.set({ sheetUrl: entry.url, availableSheets: [], sheetTab: '', tableGenerated: false });
       setConfirmedUrl('');
       setError('연결이 만료되었습니다. Google 로그인을 다시 하면 이 시트로 자동 연결됩니다.');
       return;
     }
-    s.set({ sheetUrl: entry.url });
+    setSheetUrlDraft(entry.url);
     setConfirmedUrl('');
     await onUrlConfirmWithUrl(entry.url);
   };
 
   const onUrlConfirmWithUrl = async (url: string) => {
+    const requestSeq = beginSheetRequest();
     const id = parseSpreadsheetId(url);
-    if (!id) { setError('스프레드시트 URL 형식이 올바르지 않습니다.'); return; }
-    s.set({ availableSheets: [], sheetTab: '' });
+    if (!id) {
+      if (isCurrentSheetRequest(requestSeq)) setError('스프레드시트 URL 형식이 올바르지 않습니다.');
+      return;
+    }
     try {
       setLoading('시트 정보 조회 중...');
       const meta = await fetchSpreadsheetMeta(id);
+      if (!isCurrentSheetRequest(requestSeq)) return;
       const tabs = meta.sheets.map((sh) => sh.title);
-      s.set({ availableSheets: tabs, sheetTab: tabs[0] || '' });
-      if (tabs[0]) await loadHeaders(id, tabs[0]);
+      const sheetTab = tabs[0] || '';
+      if (!sheetTab) throw new Error('사용할 수 있는 시트 탭이 없습니다.');
+      setLoading('컬럼 분석 중...');
+      const columns = await loadHeaders(id, sheetTab, requestSeq);
+      if (!columns || !isCurrentSheetRequest(requestSeq)) return;
+      useSettingsStore.getState().set({
+        sheetUrl: url,
+        availableSheets: tabs,
+        sheetTab,
+        columns,
+        columnsSheetId: id,
+        columnsSheetTab: sheetTab,
+        tableGenerated: false,
+      });
+      setSheetUrlDraft(url);
       setConfirmedUrl(url);
       // v0.13.0 R1 — 연결에 성공한 시트를 '파일명'(meta.title)으로 저장 목록에 자동 등록한다(민구
       // 요청). sheetId 기준 dedupe(saveSheet) — 같은 시트 재연결 시 최근 사용으로 갱신만 된다.
@@ -331,9 +357,9 @@ export function useSettingsActions() {
       // 컬럼은 위 loadHeaders가 방금 교체했을 수 있으므로 getState()로 최신을 읽는다.
       if (shouldPreparePastIndex({ requireAuth: true })) { resetPastIndexRetries(); prefetchPastIndex(); }
     } catch (err) {
-      setError((err as Error).message);
+      if (isCurrentSheetRequest(requestSeq)) setError((err as Error).message);
     } finally {
-      setLoading(null);
+      if (isCurrentSheetRequest(requestSeq)) setLoading(null);
     }
   };
 
@@ -362,6 +388,10 @@ export function useSettingsActions() {
 
   // 게이트 열기 — 생성/재생성 모두 동일 경로. 부수효과는 onGenerateConfirm까지 미룬다.
   const onGenerate = () => {
+    if (!hasMatchingSheetSource(useSettingsStore.getState())) {
+      setError('시트 연결을 다시 확인해 주세요.');
+      return;
+    }
     // v0.33.0 B-10 — 생성 게이트 열림 계측(생성 퍼널 가시화 — 이전엔 무로깅).
     logger.log({ type: 'command', parsed: 'ui_open', extra: 'generate_gate' });
     setGenerateGateOpen(true);
@@ -369,6 +399,11 @@ export function useSettingsActions() {
 
   // "확인(생성)" — 여기서만 실제 생성 부수효과 실행.
   const onGenerateConfirm = () => {
+    if (!hasMatchingSheetSource(useSettingsStore.getState())) {
+      setGenerateGateOpen(false);
+      setError('시트 연결을 다시 확인해 주세요.');
+      return;
+    }
     const total = computeTotalRows(s.columns);
     const sessionAutoLabel = prospectiveSessionLabel();
     s.set({ tableGenerated: true, totalRows: total, sessionAutoLabel });
@@ -438,7 +473,7 @@ export function useSettingsActions() {
 
   return {
     loading, error,
-    confirmedUrl,
+    confirmedUrl, sheetUrlDraft,
     typeReview, setTypeReview,
     tablePreviewOpen, setTablePreviewOpen,
     generateGateOpen, setGenerateGateOpen,

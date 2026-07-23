@@ -9,7 +9,7 @@ import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiComm
 import { decimalReaskPrompt } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
-import type { Column, Session, SessionRow } from '../types';
+import type { Column, Session, SessionRow, SessionTarget } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
@@ -23,6 +23,7 @@ import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { buildAnomalyAlert } from './anomalyAlert';
 import { readonlySheetsAuth } from './sheets';
 import { withoutPendingCandidate } from './pendingValidation';
+import { sessionTargetFromSettings } from './sheetConnection';
 import { ensureUniqueSessionLabel } from './sessionLabel';
 // [ENV-12] Stage 3 — 클립 캡처·보존 장부는 useClipCapture가 소유한다(이 파일은 호출만).
 import { useClipCapture, EMPTY_CLIP_BYTES, type PendingCommandClip } from './useClipCapture';
@@ -106,6 +107,11 @@ export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
   const sessionIdRef = useRef<string>('');
   const sessionLabelRef = useRef<string | undefined>(undefined);
+  // 설정탭은 활성 세션 중에도 바뀔 수 있다. 목적지와 컬럼은 start()에서 함께 고정해 한 세션의
+  // 자동값·음성값·sheetRow가 서로 다른 농가 설정과 섞이지 않게 한다.
+  const sessionTargetRef = useRef<SessionTarget | null>(null);
+  const sessionColumnsRef = useRef<Column[] | null>(null);
+  const [sessionColumns, setSessionColumns] = useState<Column[] | null>(null);
   const awaitingFieldRef = useRef<AwaitingField | null>(null);
   const epochRef = useRef(0);
   const lastConfidenceRef = useRef<number>(1);
@@ -178,6 +184,8 @@ export function useVoiceSession() {
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
+  const getSessionColumns = (): Column[] =>
+    sessionColumnsRef.current ?? useSettingsStore.getState().columns;
   /** v0.35.3 Stage 3-4 — 세션 컨텍스트 로거. 이 훅의 모든 계측은 현재 세션 id를 동봉하므로
    *  sessionId 고정 인자를 여기서 1회 주입한다. 나머지 필드(extra 문자열 포함)는 호출부 그대로
    *  전개 — SOP-003 파서 계약 불변. */
@@ -203,10 +211,10 @@ export function useVoiceSession() {
   }, []);
 
   const getColById = (id: string): Column | null =>
-    useSettingsStore.getState().columns.find((c) => c.id === id) || null;
+    getSessionColumns().find((c) => c.id === id) || null;
 
   const voiceColsList = (): Column[] =>
-    useSettingsStore.getState().columns.filter((c) => c.input === 'voice');
+    getSessionColumns().filter((c) => c.input === 'voice');
 
   /** v0.34.0 리뷰(민구 결정 2026-07-14 = 수동입력 이상치 보류는 **터치 [확인]/[수정] 전용**) —
    *  manualHold 팝업이 떠 있는 동안 **보류를 해소하지 않는 모든 동작을 중앙에서 거부**하는 단일
@@ -270,7 +278,7 @@ export function useVoiceSession() {
   ): Promise<boolean> => {
     // v0.24.0 데이터-3 — 이 호출의 단조 순번(호출 순서=스냅샷 신선도 순서, setRowValue가 호출 전 실행됨).
     const mySeq = ++persistSeqRef.current;
-    const settings = useSettingsStore.getState();
+    const columns = getSessionColumns();
     const sess = useSessionStore.getState();
     const completed = [...sess.completedRows].sort((a, b) => a - b);
     // Check backup BEFORE early return: if cascade correction is in progress and the correcting row
@@ -306,14 +314,14 @@ export function useVoiceSession() {
       for (const k of Object.keys(mergedClips)) {
         if (brokenClipKeysRef.current.has(mergedClips[k])) delete mergedClips[k];
       }
-      const values = composeRowValues(settings.columns, r);
+      const values = composeRowValues(columns, r);
       // F1: preserve the row's sheetRow/syncState across re-persists. If a previously-synced row's
       // value changed in this persist, demote synced→dirty so the next sync UPDATEs it in place
       // (no duplicate append). Unchanged synced rows keep 'synced'.
       let sheetRow = existingRow?.sheetRow;
       let syncState = existingRow?.syncState;
       if (existingRow && syncState === 'synced') {
-        const colIds = settings.columns.map((c) => c.id);
+        const colIds = columns.map((c) => c.id);
         const changed = colIds.some((c) => (existingRow.values[c] ?? '') !== (values[c] ?? ''));
         if (changed) syncState = 'dirty';
       }
@@ -345,6 +353,7 @@ export function useVoiceSession() {
     const resolvedId = sessionIdRef.current || sess.sessionId;
     const resolvedStartedAt =
       sess.startedAt || parseInt(resolvedId.replace('sess_', ''), 10) || Date.now();
+    const target = sessionTargetRef.current ?? existingSession?.target;
     const session: Session = {
       id: resolvedId,
       // v0.7.0: LOCAL date, not UTC — toISOString() stamped KST 00:00~08:59 sessions with
@@ -352,7 +361,8 @@ export function useVoiceSession() {
       // 코드베이스 지배 규약도 로컬(autoValue.ts 날짜 컬럼).
       date: localTodayISO(),
       label: sessionLabelRef.current || sess.sessionLabel,
-      columns: settings.columns,
+      columns,
+      ...(target ? { target } : {}),
       rows,
       completedRows: rows.filter((r) => r.complete).length,
       // F1: derive syncedRows from per-row syncState (recountSynced) instead of hardcoding 0,
@@ -443,7 +453,7 @@ export function useVoiceSession() {
   /** Announce only auto+ttsAnnounce columns whose value differs between rows. */
   const announceRowDiff = useCallback(
     async (fromRow: number | null, toRow: number) => {
-      const cols = useSettingsStore.getState().columns;
+      const cols = getSessionColumns();
       const toAuto = buildCyclingValues(cols, toRow);
       const fromAuto = fromRow != null ? buildCyclingValues(cols, fromRow) : null;
       const parts: string[] = [];
@@ -462,7 +472,7 @@ export function useVoiceSession() {
   /** Announce row completion: only auto+ttsAnnounce columns that differ from the previous row. */
   const announceRowComplete = useCallback(
     async (row: number) => {
-      const cols = useSettingsStore.getState().columns;
+      const cols = getSessionColumns();
       const curAuto = buildCyclingValues(cols, row);
       const prevAuto = row > 1 ? buildCyclingValues(cols, row - 1) : null;
       const parts: string[] = [];
@@ -544,7 +554,7 @@ export function useVoiceSession() {
   const announceEndReached = useCallback(async () => {
     const sess = useSessionStore.getState();
     const vc = voiceColsList();
-    const total = computeTotalRows(useSettingsStore.getState().columns);
+    const total = computeTotalRows(getSessionColumns());
     const empties = listEmptyRows(total, vc);
     const lastCol = vc[vc.length - 1] ?? null;
     // 명령 컨텍스트 유지용 atEnd 센티넬(마지막 음성 필드). 값 커밋은 handleFinal의 atEnd 가드가 차단.
@@ -609,13 +619,12 @@ export function useVoiceSession() {
   /** Move to next voice col in current row, or finalize row + jump to next target. */
   const advance = useCallback(async () => {
     const startEpoch = epochRef.current;
-    const settings = useSettingsStore.getState();
     const sess = useSessionStore.getState();
     // 리뷰 라운드1(Codex+Flash, 수용) — 필드/행 이동 시 미확정 interim 표시 정리(표시 전용).
     sess.setInterimValue(null);
     const vc = voiceColsList();
     const row = sess.activeRow;
-    const total = computeTotalRows(settings.columns);
+    const total = computeTotalRows(getSessionColumns());
 
     // Still voice cols in this row?
     // (v0.33.0 백로그 A — v0.4.5 I3 "이전" 재입력 모드(isReentry) 폐지: 채워진 필드 스킵이 유일 경로.)
@@ -845,9 +854,9 @@ export function useVoiceSession() {
       if (persistedRow) {
         correctionBackupRef.current = persistedRow;
       } else if (sess.isRowComplete(targetRow)) {
-        const bSettings = useSettingsStore.getState();
-        const bAuto = buildCyclingValues(bSettings.columns, targetRow);
-        const bFixed = autoNonCyclingValues(bSettings.columns, targetRow);
+        const columns = getSessionColumns();
+        const bAuto = buildCyclingValues(columns, targetRow);
+        const bFixed = autoNonCyclingValues(columns, targetRow);
         correctionBackupRef.current = {
           index: targetRow,
           values: { ...bFixed, ...bAuto, ...sess.getRowValues(targetRow) },
@@ -921,10 +930,9 @@ export function useVoiceSession() {
   // ── public: jump to a specific row (auto-chip change / 행 이동 공용) ──────
   const jumpToRow = useCallback(
     async (targetRow: number, options?: { setReturn?: boolean; source?: 'voice' | 'touch' }) => {
-      const settings = useSettingsStore.getState();
       const sess = useSessionStore.getState();
       const vc = voiceColsList();
-      const total = computeTotalRows(settings.columns);
+      const total = computeTotalRows(getSessionColumns());
       if (targetRow < 1 || targetRow > total) return;
       const cur = sess.activeRow;
       if (targetRow === cur) return;
@@ -1006,9 +1014,8 @@ export function useVoiceSession() {
     // [다음]으로 미확인 이상치를 남긴 채 다음 행으로 새어나가던 경로).
     if (isManualHoldBlocked('next')) return;
     const sess = useSessionStore.getState();
-    const settings = useSettingsStore.getState();
     const vc = voiceColsList();
-    const total = computeTotalRows(settings.columns);
+    const total = computeTotalRows(getSessionColumns());
     cancelTts();
     epochRef.current++; // in-flight advance/안내 체인 무효화 (RACE-1 패턴 유지)
     sess.setReturn(null, null);
@@ -1053,13 +1060,13 @@ export function useVoiceSession() {
    *  (행 단위 재fetch 금지, B2 설계). */
   const evaluateTrend = useCallback(
     (col: Column | null, row: number, colId: string, nextRaw: string): TrendViolation | null => {
-      const s = useSettingsStore.getState();
+      const columns = getSessionColumns();
       return evaluateTrendForRow({
         col,
-        columns: s.columns,
+        columns,
         // 현재 행의 전체 값(자동·고정·음성) — persistSession과 같은 composeRowValues 합성.
         // thunk로 넘겨 인덱스/키 검사 통과 시에만 계산(종전 순서 보존).
-        composeRow: () => composeRowValues(s.columns, row),
+        composeRow: () => composeRowValues(columns, row),
         // 로컬 날짜(UTC 아님) — start()에서 세션당 1회 계산(핫패스 호이스팅), ref 빈 경우만 지연 계산.
         today: sessionTodayRef.current || localTodayISO(),
         nextRaw,
@@ -1084,10 +1091,10 @@ export function useVoiceSession() {
    *  해당 필드를 undefined로 둔다(팝업이 '행 N' 폴백 + 날짜 라벨 생략으로 안전 처리). */
   const getAnomalyAlertData = useCallback(
     (row: number): { sampleKey?: string; prevDate?: string } => {
-      const s = useSettingsStore.getState();
+      const columns = getSessionColumns();
       return anomalyAlertContext({
-        columns: s.columns,
-        composeRow: () => composeRowValues(s.columns, row),
+        columns,
+        composeRow: () => composeRowValues(columns, row),
         today: sessionTodayRef.current || localTodayISO(),
       });
     },
@@ -1544,7 +1551,7 @@ export function useVoiceSession() {
     }
 
     // Item 12: 컬럼명 완전 일치 STT 거부 — 숫자/날짜 컬럼에만 적용 (text/options 컬럼은 컬럼명이 유효한 값일 수 있음)
-    const allColumns = useSettingsStore.getState().columns;
+    const allColumns = getSessionColumns();
     const currentCol = allColumns.find((c) => c.id === awaiting.colId);
     if (currentCol && currentCol.type !== 'text' && currentCol.type !== 'options') {
       const colNames = allColumns.map((c) => c.name.trim());
@@ -2150,7 +2157,7 @@ export function useVoiceSession() {
     }
     const t = text.trim();
     if (!t || detectCommand(t)) return; // 명령어는 반드시 final로
-    const col = useSettingsStore.getState().columns.find((c) => c.id === awaiting.colId) || null;
+    const col = getSessionColumns().find((c) => c.id === awaiting.colId) || null;
     if (!col || (col.type !== 'int' && col.type !== 'float')) return; // 숫자 컬럼만 조기확정
     const parsed = parseValueForCol(col, t);
     if (parsed === null) {
@@ -2228,11 +2235,21 @@ export function useVoiceSession() {
     setPreferredVoiceName(s.preferredVoiceName);
     const sess = useSessionStore.getState();
     if (sess.phase === 'stopping') return false;
+    const target = sessionTargetFromSettings(s);
+    if (!target) {
+      sess.setLastTts('시트 연결을 다시 확인해 주세요.');
+      return false;
+    }
     if (!s.tableGenerated) return false;
-    const vc = s.columns.filter((c) => c.input === 'voice');
+    const columns = structuredClone(s.columns);
+    const vc = columns.filter((c) => c.input === 'voice');
     if (vc.length === 0) return false;
-    const total = computeTotalRows(s.columns);
+    const total = computeTotalRows(columns);
     if (total === 0) return false;
+
+    sessionTargetRef.current = target;
+    sessionColumnsRef.current = columns;
+    setSessionColumns(columns);
 
     // v0.35.0 R3-FIX-1 — 방어적 초기화. stop()이 이미 풀지만, stop을 거치지 않은 경로(크래시 후
     //   재개·언마운트/리마운트 등)로 래치가 남아 들어와도 새 세션은 항상 깨끗한 상태에서 시작한다.
@@ -2286,7 +2303,7 @@ export function useVoiceSession() {
     // loadPastIndex는 모든 실패를 null로 해소하고 past_index_skip 텔레메트리만 남기므로
     // 세션 시작 흐름을 절대 막지 않는다. 셀 단위 검사(evaluateTrend)는 이 캐시만 읽는다.
     // v0.34.0 D11a — 규칙 '개수'를 세션 스냅샷 meta에도 박제(개수만 — 컬럼명 등 내용 제외).
-    const anomalyRuleCount = s.columns.filter(
+    const anomalyRuleCount = columns.filter(
       (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
     ).length;
     const anyAnomalyRule = anomalyRuleCount > 0;
@@ -2389,7 +2406,6 @@ export function useVoiceSession() {
     // completedRows here is the denominator-complement for reach/completion-rate aggregation.
     {
       const sessNow = useSessionStore.getState();
-      const settingsNow = useSettingsStore.getState();
       const input = recorderRef.current?.getActiveInput();
       logCell({
         type: 'session',
@@ -2398,7 +2414,7 @@ export function useVoiceSession() {
           appVersion: logger.device().appVersion,
           startedAt: parseInt(sessionIdRef.current.replace('sess_', ''), 10) || undefined,
           finishedAt: Date.now(),
-          totalRows: computeTotalRows(settingsNow.columns),
+          totalRows: computeTotalRows(getSessionColumns()),
           completedRows: sessNow.completedRows.length,
           // label intentionally omitted (PII — grower name); see start-event note.
           inputDeviceId: input?.deviceId,
@@ -2457,6 +2473,9 @@ export function useVoiceSession() {
     });
     useSessionStore.getState().setPhase('ready');
     logger.setSessionId(undefined);
+    sessionTargetRef.current = null;
+    sessionColumnsRef.current = null;
+    setSessionColumns(null);
     return true;
   }, [persistSession, say, clearUiSuspendLatch]);
 
@@ -2480,6 +2499,9 @@ export function useVoiceSession() {
     useSessionStore.getState().setPersistError(null);
     useSessionStore.getState().setPhase('ready');
     logger.setSessionId(undefined);
+    sessionTargetRef.current = null;
+    sessionColumnsRef.current = null;
+    setSessionColumns(null);
     return true;
   }, [persistSession]);
 
@@ -2554,11 +2576,14 @@ export function useVoiceSession() {
   // 재구성한다. manualHold 게이트가 살아 있어 복구 중 STT가 후보를 우회 커밋할 수는 없다.
   useEffect(() => {
     const live = useSessionStore.getState();
-    const pending = useDataStore.getState().sessions
-      .find((s) => s.id === live.sessionId)?.pendingValidation;
+    const restoredSession = useDataStore.getState().sessions.find((s) => s.id === live.sessionId);
+    const pending = restoredSession?.pendingValidation;
     if (!pending || !live.anomalyAlert?.manualHold) return;
     sessionIdRef.current = live.sessionId;
     sessionLabelRef.current = live.sessionLabel;
+    sessionTargetRef.current = restoredSession.target ?? null;
+    sessionColumnsRef.current = restoredSession.columns;
+    setSessionColumns(restoredSession.columns);
     logger.setSessionId(live.sessionId);
     const col = getColById(pending.colId);
     if (!col) return;
@@ -2655,6 +2680,12 @@ export function useVoiceSession() {
     if (s.sessionId && s.phase !== 'ready' && s.phase !== 'done') {
       sessionIdRef.current = s.sessionId;
       sessionLabelRef.current = s.sessionLabel;
+      const restoredSession = useDataStore.getState().sessions.find((x) => x.id === s.sessionId);
+      if (restoredSession) {
+        sessionTargetRef.current = restoredSession.target ?? null;
+        sessionColumnsRef.current = restoredSession.columns;
+        setSessionColumns(restoredSession.columns);
+      }
       logger.setSessionId(s.sessionId);
     }
   }, []);
@@ -3043,6 +3074,7 @@ export function useVoiceSession() {
     reconnectMic,
     prewarmMic,
     uiCommand,
+    sessionColumns,
   };
 }
 

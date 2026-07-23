@@ -44,6 +44,8 @@ const SETTINGS = {
     userEmail: 'tester@example.com',
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_V027_1/edit',
     sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_V027_1',
+    columnsSheetTab: 'Sheet1',
     columns: COLUMNS,
     tableGenerated: true,
     totalRows: 2,
@@ -54,7 +56,7 @@ const SETTINGS = {
     preferredVoiceName: '',
     roundDateColId: null,
   },
-  version: 11,
+  version: 12,
 };
 
 const HEADERS = ['조사일자', '농가명', '조사나무', LONG_NAME];
@@ -246,11 +248,12 @@ test('무스크롤 — 375x812: 일시정지 카드 scrollHeight≤clientHeight'
     state: {
       googleConnected: true, userEmail: 'tester@example.com',
       sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_A1_375/edit',
-      sheetTab: 'Sheet1', columns: REALISTIC_COLUMNS, tableGenerated: true, totalRows: 10,
+      sheetTab: 'Sheet1', columnsSheetId: 'SHEET_A1_375', columnsSheetTab: 'Sheet1',
+      columns: REALISTIC_COLUMNS, tableGenerated: true, totalRows: 10,
       ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: 'a1-375x667-test',
       preferredVoiceName: '', roundDateColId: null,
     },
-    version: 11,
+    version: 12,
   };
   const REALISTIC_HEADERS = ['조사일자', '농가명', '조사나무', '조사과실', '횡경'];
   const REALISTIC_SHEET_ROWS = [[PREV_ROUND, '이원창', '1', '1', '100.0']];

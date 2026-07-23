@@ -75,8 +75,8 @@ export interface SessionRow {
   complete: boolean;
   /** colId → IDB key for audio clip blob */
   audioClips?: Record<string, string>;
-  /** v0.6.0 — Sheets 1-based row number this row was appended to. Set after the row's first
-   *  append so a later re-sync can UPDATE the same sheet row instead of appending a duplicate.
+  /** v0.6.0 — Sheets 1-based row number this row was appended to. Session.target과 결합된 위치다.
+   *  Set after the row's first append so a later re-sync can UPDATE the same sheet row instead of appending a duplicate.
    *  undefined = never appended yet (or append updatedRange parse failed → retry next sync). */
   sheetRow?: number;
   /** v0.6.0 — per-row sync state for row-level re-sync.
@@ -85,12 +85,20 @@ export interface SessionRow {
   syncState?: 'synced' | 'dirty';
 }
 
+export interface SessionTarget {
+  readonly spreadsheetId: string;
+  readonly sheetTab: string;
+}
+
 export interface Session {
   id: string;
   /** ISO date e.g. 2026-05-13 */
   date: string;
   /** "A구역 정밀측정" 같은 라벨 (선택) */
   label?: string;
+  /** 세션 시작 시 고정되는 Sheets 목적지. optional은 이 필드 도입 전 legacy IDB 세션만을 위한 것 —
+   *  legacy는 현재 설정을 추측하지 않고 업로드 직전 사용자 확인으로 명시 결합한다. */
+  target?: Readonly<SessionTarget>;
   columns: Column[];
   rows: SessionRow[];
   /** rows fully completed */

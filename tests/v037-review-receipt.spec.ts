@@ -126,7 +126,9 @@ async function bootAndStart(page: Page, settings: unknown, route?: { prevRow: st
 function oneRowSettings(extra?: Record<string, unknown>) {
   return {
     state: {
-      googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+      googleConnected: false, userEmail: null, sheet: null,
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit', sheetTab: 'Sheet1',
+      columnsSheetId: 'SHEET_TEST_1', columnsSheetTab: 'Sheet1',
       availableSheets: [], manualMode: false,
       columns: [
         { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 1 } },
@@ -136,7 +138,7 @@ function oneRowSettings(extra?: Record<string, unknown>) {
       tableGenerated: true, totalRows: 1,
       ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: 'review-receipt', noisyMode: false, preferredVoiceName: '',
     },
-    version: 3,
+    version: 12,
   };
 }
 
@@ -168,6 +170,7 @@ test('(b) 마지막 셀 이상치 정정 [확인] → 검토는 확정된 정정
     state: {
       googleConnected: true, userEmail: 'tester@example.com',
       sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_REVIEW_RECEIPT/edit', sheetTab: 'Sheet1',
+      columnsSheetId: 'SHEET_REVIEW_RECEIPT', columnsSheetTab: 'Sheet1',
       columns: [
         { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
         { id: 'c3', name: '농가명', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' }, sampleKey: true },
@@ -178,7 +181,7 @@ test('(b) 마지막 셀 이상치 정정 [확인] → 검토는 확정된 정정
       tableGenerated: true, totalRows: 1, ttsRate: 1.05, sessionLabelColId: null,
       sessionAutoLabel: 'review-receipt-anomaly', preferredVoiceName: '', roundDateColId: null,
     },
-    version: 6,
+    version: 12,
   };
   await bootAndStart(page, settings, { prevRow: [PREV, '이원창', '1', '10.0', '50.0'] });
   await waitForActiveChip(page, '횡경');
@@ -212,7 +215,9 @@ test('(b) 마지막 셀 이상치 정정 [확인] → 검토는 확정된 정정
 test('(d) 완료행을 "이전"으로 재방문(새 커밋 없음) → 검토는 값이 아니라 중립 "1행 완료"로 폴백', async ({ page }) => {
   const settings = {
     state: {
-      googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+      googleConnected: false, userEmail: null, sheet: null,
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit', sheetTab: 'Sheet1',
+      columnsSheetId: 'SHEET_TEST_1', columnsSheetTab: 'Sheet1',
       availableSheets: [], manualMode: false,
       columns: [
         { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 2 } },
@@ -221,7 +226,7 @@ test('(d) 완료행을 "이전"으로 재방문(새 커밋 없음) → 검토는
       tableGenerated: true, totalRows: 2,
       ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: 'review-receipt-prev', noisyMode: false, preferredVoiceName: '',
     },
-    version: 3,
+    version: 12,
   };
   await bootAndStart(page, settings);
   await waitForActiveChip(page, '횡경');
@@ -247,7 +252,9 @@ test('(d) 완료행을 "이전"으로 재방문(새 커밋 없음) → 검토는
 test('(e) 검토 중 터치 컬럼 인라인 편집 → 검토는 터치값(88)을 보인다(앞 음성값 30.7 오표시 금지)', async ({ page }) => {
   const settings = {
     state: {
-      googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+      googleConnected: false, userEmail: null, sheet: null,
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit', sheetTab: 'Sheet1',
+      columnsSheetId: 'SHEET_TEST_1', columnsSheetTab: 'Sheet1',
       availableSheets: [], manualMode: false,
       columns: [
         { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 1 } },
@@ -257,7 +264,7 @@ test('(e) 검토 중 터치 컬럼 인라인 편집 → 검토는 터치값(88)�
       tableGenerated: true, totalRows: 1,
       ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: 'review-receipt-touch', noisyMode: false, preferredVoiceName: '',
     },
-    version: 3,
+    version: 12,
   };
   await bootAndStart(page, settings);
   await waitForActiveChip(page, '횡경');

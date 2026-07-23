@@ -52,6 +52,8 @@ const SETTINGS = {
     userEmail: 'tester@example.com',
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_V035_HC/edit',
     sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_V035_HC',
+    columnsSheetTab: 'Sheet1',
     columns: COLUMNS,
     tableGenerated: true,
     totalRows: 2,
@@ -62,7 +64,7 @@ const SETTINGS = {
     preferredVoiceName: '',
     roundDateColId: null,
   },
-  version: 11,
+  version: 12,
 };
 
 const HEADERS = ['조사일자', '조사나무', '당도', '산도'];

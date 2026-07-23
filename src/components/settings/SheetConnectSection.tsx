@@ -9,13 +9,14 @@ import { ConnectionStatusCard } from '../ConnectionStatusCard';
  *  연결 3상태 카드. SettingsScreen에서 순수 이동(DOM 불변) — 상태·핸들러는 useSettingsActions가
  *  소유하고 prop으로 받는다(GL-006 §7 표현 전용). */
 export function SheetConnectSection({
-  loading, error, confirmedUrl, showUrlInput, setShowUrlInput,
+  loading, error, confirmedUrl, sheetUrlDraft, showUrlInput, setShowUrlInput,
   savedSheetsOpen, setSavedSheetsOpen, pickerAvailable,
   onGoogleClick, onUrlTyping, onUrlConfirm, onPickerClick, onSelectSavedSheet, onSheetTabChange,
 }: {
   loading: string | null;
   error: string | null;
   confirmedUrl: string;
+  sheetUrlDraft: string;
   showUrlInput: boolean;
   setShowUrlInput: Dispatch<SetStateAction<boolean>>;
   savedSheetsOpen: boolean;
@@ -120,7 +121,7 @@ export function SheetConnectSection({
                     >
                       <div style={{ color: T.textMute }}>{I.link(18)}</div>
                       <input
-                        value={s.sheetUrl}
+                        value={sheetUrlDraft}
                         onChange={(e) => onUrlTyping(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter') onUrlConfirm(); }}
                         placeholder="스프레드시트 URL 붙여넣기"
@@ -131,8 +132,8 @@ export function SheetConnectSection({
                       />
                     </div>
                     {(() => {
-                      const applied = s.sheetUrl.trim() === confirmedUrl.trim() && s.availableSheets.length > 0;
-                      const canConfirm = !!s.sheetUrl.trim() && !applied && !loading;
+                      const applied = sheetUrlDraft.trim() === confirmedUrl.trim() && s.availableSheets.length > 0;
+                      const canConfirm = !!sheetUrlDraft.trim() && !applied && !loading;
                       return (
                         <button
                           onClick={onUrlConfirm}
@@ -168,7 +169,7 @@ export function SheetConnectSection({
                 >
                   <div style={{ color: T.textMute }}>{I.link(18)}</div>
                   <input
-                    value={s.sheetUrl}
+                    value={sheetUrlDraft}
                     onChange={(e) => onUrlTyping(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') onUrlConfirm(); }}
                     placeholder="스프레드시트 URL 붙여넣기"
@@ -179,8 +180,8 @@ export function SheetConnectSection({
                   />
                 </div>
                 {(() => {
-                  const applied = s.sheetUrl.trim() === confirmedUrl.trim() && s.availableSheets.length > 0;
-                  const canConfirm = !!s.sheetUrl.trim() && !applied && !loading;
+                  const applied = sheetUrlDraft.trim() === confirmedUrl.trim() && s.availableSheets.length > 0;
+                  const canConfirm = !!sheetUrlDraft.trim() && !applied && !loading;
                   return (
                     <button
                       onClick={onUrlConfirm}

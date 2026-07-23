@@ -136,8 +136,10 @@ const SMALL_VP_SETTINGS = {
   state: {
     googleConnected: false,
     userEmail: '',
-    sheetUrl: '',
-    sheetTab: '',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit',
+    sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_TEST_1',
+    columnsSheetTab: 'Sheet1',
     columns: [
       { id: 'a1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
       ...Array.from({ length: 11 }, (_, i) => ({
@@ -160,7 +162,7 @@ const SMALL_VP_SETTINGS = {
     preferredVoiceName: '',
     roundDateColId: null,
   },
-  version: 11,
+  version: 12,
 };
 
 test('R1 — 375×667: 칩 캡이 화면 30% 안에서 축소되고 초과 칩은 내부 스크롤로 트리거된다', async ({ page }) => {

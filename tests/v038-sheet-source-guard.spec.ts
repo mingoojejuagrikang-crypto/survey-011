@@ -170,6 +170,7 @@ test('v11 업그레이드 — 출처가 없으므로 첫 연결은 시트 표본
 test('[리뷰#3] 빠른 탭 전환 — 늦게 도착한 이전 탭 응답이 현재 탭 컬럼을 덮지 않는다', async ({ page }) => {
   let releaseSlowTab: (() => void) | null = null;
   const slowTabStarted = { value: false };
+  const slowTabFinished = { value: false };
 
   await page.route('**://sheets.googleapis.com/**', async (route) => {
     const path = decodeURIComponent(new URL(route.request().url()).pathname);
@@ -190,6 +191,7 @@ test('[리뷰#3] 빠른 탭 전환 — 늦게 도착한 이전 탭 응답이 현
       slowTabStarted.value = true;
       await new Promise<void>((resolve) => { releaseSlowTab = resolve; });
       await route.fulfill({ json: { values: [HEADERS, ['2026-07-23', '강남호', '222']] } });
+      slowTabFinished.value = true;
       return;
     }
     await route.fulfill({ json: { values: [HEADERS, ['2026-07-23', '이원창', '111']] } });
@@ -212,7 +214,7 @@ test('[리뷰#3] 빠른 탭 전환 — 늦게 도착한 이전 탭 응답이 현
 
   // 3) 이제 느린 농가B탭 응답을 흘려보낸다 — 현재 탭(농가A)을 덮으면 안 된다.
   releaseSlowTab?.();
-  await page.waitForTimeout(1500);
+  await expect.poll(() => slowTabFinished.value).toBe(true);
 
   const final = await readColumnsState(page);
   expect(final.columnsSheetTab, '늦은 응답이 현재 탭 출처를 덮었다').toBe('농가A');

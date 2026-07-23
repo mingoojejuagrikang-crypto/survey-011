@@ -260,7 +260,9 @@ test('DB v6 마이그레이션 — feedbackQueue 스토어 신설 + 기존 스�
 
 const FEEDBACK_STT_SETTINGS = {
   state: {
-    googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+    googleConnected: false, userEmail: null, sheet: null,
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit', sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_TEST_1', columnsSheetTab: 'Sheet1',
     availableSheets: [], manualMode: false,
     columns: [
       { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 3 } },
@@ -269,7 +271,7 @@ const FEEDBACK_STT_SETTINGS = {
     tableGenerated: true, totalRows: 3, ttsRate: 1.05,
     sessionLabelColId: null, sessionAutoLabel: 'feedback-stt-test', noisyMode: false, preferredVoiceName: '',
   },
-  version: 3,
+  version: 12,
 };
 
 // manual-input.spec.ts와 동일한 instant-TTS + MockSTT 주입(이 스펙의 다른 테스트는 세션 불필요라 미사용).

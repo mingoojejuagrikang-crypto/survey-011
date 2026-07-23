@@ -69,13 +69,14 @@ export function DataScreen() {
     exportModalOpen, setExportModalOpen,
     deleteTarget, setDeleteTarget,
     failureReport, setFailureReport,
+    legacySyncPrompt, setLegacySyncPrompt,
     pendingZipIds, setPendingZipIds,
     recoverModalOpen, setRecoverModalOpen,
     exportResult, setExportResult,
     loginPrompt, setLoginPrompt,
     handleLoginPromptLogin,
     runZipExport, handleExport, handleCellSave,
-    handleSyncConfirm, handleRetry, handleDeleteConfirm,
+    handleSyncConfirm, confirmLegacySync, handleRetry, handleDeleteConfirm,
     handleRecoverClick, handleRecoverRestore,
   } = useDataActions();
 
@@ -239,6 +240,16 @@ export function DataScreen() {
           danger
           onCancel={() => setDeleteTarget(null)}
           onConfirm={handleDeleteConfirm}
+        />
+      )}
+
+      {legacySyncPrompt && (
+        <ConfirmModal
+          title="이전 세션 대상 확인"
+          body={`${legacySyncPrompt.legacyCount === 1 ? '이 세션' : `대상 없는 ${legacySyncPrompt.legacyCount}개 세션`}의 대상 시트를 알 수 없습니다.\n현재 연결된 ${legacySyncPrompt.targetLabel}에 올릴까요?`}
+          confirmLabel="이 시트에 올리기"
+          onCancel={() => setLegacySyncPrompt(null)}
+          onConfirm={() => { void confirmLegacySync(); }}
         />
       )}
 

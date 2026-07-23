@@ -36,6 +36,7 @@ function makeSession() {
     id: 'sess-sync-1',
     date: '2026-06-11',
     label: '동기화테스트',
+    target: { spreadsheetId: 'SHEET_ID_123', sheetTab: 'Sheet1' },
     columns: SETTINGS.state.columns,
     rows: [
       { index: 1, values: { c6: '1', c8: '35.1' }, complete: true },

@@ -25,7 +25,9 @@ const STORE_KEY = 'survey-011-settings-v3';
 
 const SETTINGS = {
   state: {
-    googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+    googleConnected: false, userEmail: null, sheet: null,
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit', sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_TEST_1', columnsSheetTab: 'Sheet1',
     availableSheets: [], manualMode: false,
     columns: [
       { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 3 } },
@@ -35,7 +37,7 @@ const SETTINGS = {
     tableGenerated: true, totalRows: 3,
     ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: 'suspend-latch', noisyMode: false, preferredVoiceName: '',
   },
-  version: 3,
+  version: 12,
 };
 
 async function loadLogEvents(page: Page) {

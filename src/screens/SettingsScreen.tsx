@@ -34,7 +34,7 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
   // 인증·시트 연결·타입 검토·생성 게이트·초기화 오케스트레이션 — useSettingsActions(순수 이동)가 소유.
   const {
     loading, error,
-    confirmedUrl,
+    confirmedUrl, sheetUrlDraft,
     typeReview, setTypeReview,
     tablePreviewOpen, setTablePreviewOpen,
     generateGateOpen, setGenerateGateOpen,
@@ -150,6 +150,7 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
           loading={loading}
           error={error}
           confirmedUrl={confirmedUrl}
+          sheetUrlDraft={sheetUrlDraft}
           showUrlInput={showUrlInput}
           setShowUrlInput={setShowUrlInput}
           savedSheetsOpen={savedSheetsOpen}

@@ -41,6 +41,8 @@ const SETTINGS = {
     userEmail: 'tester@example.com',
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TREND_1/edit',
     sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_TREND_1',
+    columnsSheetTab: 'Sheet1',
     columns: COLUMNS,
     tableGenerated: true,
     totalRows: 10,
@@ -52,7 +54,7 @@ const SETTINGS = {
     preferredVoiceName: '',
     roundDateColId: null,
   },
-  version: 6,
+  version: 12,
 };
 
 const HEADERS = ['조사일자', '농가명', '조사나무', '조사과실', '횡경', '종경'];

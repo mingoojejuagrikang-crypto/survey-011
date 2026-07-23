@@ -1,7 +1,6 @@
 import { useDataStore } from '../stores/dataStore';
-import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
-import { appendRows, updateCellsSparse, parseSpreadsheetId, fetchHeaderRow } from './sheets';
+import { appendRows, updateCellsSparse, fetchHeaderRow } from './sheets';
 import { saveSession } from './db';
 import { getAccessToken } from './googleAuth';
 import { logger } from './logger';
@@ -59,7 +58,7 @@ function isAuthFailure(message: string): boolean {
 }
 
 /**
- * Push the listed session IDs to the configured Sheets tab.
+ * Push the listed session IDs to each session's immutable Sheets target.
  *
  * v0.6.0 row-level re-sync (2 passes per session):
  *   Pass 1 (append): rows with syncState !== 'synced' && sheetRow === undefined — including
@@ -73,7 +72,6 @@ function isAuthFailure(message: string): boolean {
  *     row's sheetRow → it appends next sync (fallback) and emits a `sync_row_mismatch` event.
  */
 export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
-  const settings = useSettingsStore.getState();
   const data = useDataStore.getState();
   const report: SyncReport = {
     ok: 0, failed: 0, rows: 0, updatedRows: 0, fallbackAppended: 0, failures: [], successIds: [],
@@ -90,33 +88,18 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     report.message = 'Google 로그인이 필요합니다. 설정 탭에서 로그인 후 다시 시도하세요.';
     return report;
   }
-  const spreadsheetId = parseSpreadsheetId(settings.sheetUrl);
-  if (!spreadsheetId) {
-    report.message = '스프레드시트 URL을 설정하세요.';
-    return report;
-  }
-  if (!settings.sheetTab) {
-    report.message = '시트 탭을 선택하세요.';
-    return report;
-  }
-  const sheetTab = settings.sheetTab;
-
-  // [SYNC-3] fix — fetch the sheet's ACTUAL current header ONCE per syncSelected() batch (not per
-  // session/row — bounds the added API cost to +1 call per "시트에 추가" click regardless of how
-  // many sessions are selected). Every session in this batch maps its local columns against this
-  // SAME header snapshot: correctness > a cross-call cache (a stale cache could reintroduce the
-  // exact silent-misalignment bug this fix removes if the sheet's columns changed since the last
-  // sync). On fetch failure we abort the WHOLE batch rather than falling back to the old blind
-  // positional write — writing without a verified mapping is exactly the bug being fixed.
-  let headers: string[];
-  try {
-    headers = await fetchHeaderRow(spreadsheetId, sheetTab);
-  } catch (err) {
-    const msg = (err as Error).message || '알 수 없는 오류';
-    report.message = `시트 헤더 조회 실패로 동기화를 중단했습니다: ${msg}`;
-    if (isAuthFailure(msg)) report.needsLogin = true;
-    return report;
-  }
+  // 한 번의 선택에 서로 다른 농가 세션이 섞일 수 있다. 헤더는 target별 1회만 읽되, 전역 설정이나
+  // 다른 target의 캐시를 공유하지 않는다(같은 이름 양식이라도 목적지는 별개다).
+  const headerRequests = new Map<string, Promise<string[]>>();
+  const headersFor = (spreadsheetId: string, sheetTab: string): Promise<string[]> => {
+    const key = `${spreadsheetId}\u0000${sheetTab}`;
+    let request = headerRequests.get(key);
+    if (!request) {
+      request = fetchHeaderRow(spreadsheetId, sheetTab);
+      headerRequests.set(key, request);
+    }
+    return request;
+  };
 
   for (const id of sessionIds) {
     // Read fresh each iteration so concurrent edits (voice/touch) to this or other sessions are
@@ -134,6 +117,18 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     // 작업 복사본을 사용하고, 해당 행 자체도 append/update 대상에서 제외해 PUT/POST를 0으로 만든다.
     const pendingRow = storedSession.pendingValidation?.row;
     const session = withoutPendingCandidate(storedSession);
+    const target = session.target;
+    if (!target?.spreadsheetId || !target.sheetTab) {
+      report.failed++;
+      report.failures.push({
+        sessionId: session.id,
+        sessionDate: session.date,
+        sessionLabel: session.label,
+        reason: '이 세션의 대상 시트를 알 수 없습니다. 업로드 전에 대상 시트를 확인해 주세요.',
+      });
+      continue;
+    }
+    const { spreadsheetId, sheetTab } = target;
 
     // C3 — skip a session that a concurrent sync is already pushing (double-append safety net).
     if (inFlightSessionIds.has(id)) {
@@ -146,6 +141,20 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     }
     inFlightSessionIds.add(id);
     try {
+      let headers: string[];
+      try {
+        headers = await headersFor(spreadsheetId, sheetTab);
+      } catch (err) {
+        const msg = (err as Error).message || '알 수 없는 오류';
+        const reason = `시트 헤더 조회 실패로 동기화를 중단했습니다: ${msg}`;
+        report.failed++;
+        report.failures.push({
+          sessionId: session.id, sessionDate: session.date, sessionLabel: session.label, reason,
+        });
+        if (sessionIds.length === 1) report.message = reason;
+        if (isAuthFailure(msg)) report.needsLogin = true;
+        continue;
+      }
 
     // C2 — don't upload an actively-recording session's partial/skip placeholder rows, and never
     // auto-delete it. persistSession sets finishedAt on every (even mid-session) save, so it can't

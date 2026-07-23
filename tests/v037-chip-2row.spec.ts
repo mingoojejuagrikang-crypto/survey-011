@@ -33,7 +33,9 @@ const VOICE_COLS = Array.from({ length: 12 }, (_, i) => ({
 
 const SETTINGS = {
   state: {
-    googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+    googleConnected: false, userEmail: null, sheet: null,
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit', sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_TEST_1', columnsSheetTab: 'Sheet1',
     availableSheets: [], manualMode: false,
     columns: [
       { id: 'c0', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 2 } },
@@ -42,7 +44,7 @@ const SETTINGS = {
     tableGenerated: true, totalRows: 2,
     ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: '칩2줄', noisyMode: false, preferredVoiceName: '',
   },
-  version: 3,
+  version: 12,
 };
 
 const MOCK_INIT_SCRIPT = `

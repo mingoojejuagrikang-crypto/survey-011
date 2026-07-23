@@ -31,8 +31,10 @@ const SETTINGS = {
     googleConnected: false,
     userEmail: null,
     sheet: null,
-    sheetUrl: '',
-    sheetTab: '',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit',
+    sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_TEST_1',
+    columnsSheetTab: 'Sheet1',
     availableSheets: [],
     manualMode: false,
     columns: [
@@ -49,7 +51,7 @@ const SETTINGS = {
     noisyMode: false,
     preferredVoiceName: '',
   },
-  version: 3,
+  version: 12,
 };
 
 /** correction-flow TTS/STT mock — TTS onend를 ttsDelayMs 뒤에 발화시킬 수 있게 확장.

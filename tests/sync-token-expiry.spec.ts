@@ -40,6 +40,7 @@ function makeSession() {
     id: 'sess-expiry-1',
     date: '2026-06-24',
     label: '만료테스트',
+    target: { spreadsheetId: 'SHEET_ID_EXP', sheetTab: 'Sheet1' },
     columns: SETTINGS.state.columns,
     rows: [
       { index: 1, values: { c6: '1', c8: '11.1' }, complete: true },

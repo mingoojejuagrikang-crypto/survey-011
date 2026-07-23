@@ -75,7 +75,9 @@ const MOCK_INIT_SCRIPT = `
 
 const SETTINGS_VOICE = {
   state: {
-    googleConnected: false, userEmail: null, sheet: null, sheetUrl: '', sheetTab: '',
+    googleConnected: false, userEmail: null, sheet: null,
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit', sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_TEST_1', columnsSheetTab: 'Sheet1',
     availableSheets: [], manualMode: false,
     columns: [
       { id: 'c1', name: '번호', type: 'int', input: 'auto', ttsAnnounce: true,
@@ -87,7 +89,7 @@ const SETTINGS_VOICE = {
     ttsRate: 1.05, sessionLabelColId: null, sessionAutoLabel: '테스트세션', noisyMode: false,
     preferredVoiceName: '',
   },
-  version: 3,
+  version: 12,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

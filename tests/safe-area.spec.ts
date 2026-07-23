@@ -168,6 +168,8 @@ const SETTINGS = {
     userEmail: 'tester@example.com',
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_SAFEAREA_1/edit',
     sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_SAFEAREA_1',
+    columnsSheetTab: 'Sheet1',
     columns: COLUMNS,
     tableGenerated: true,
     totalRows: 2,
@@ -178,7 +180,7 @@ const SETTINGS = {
     preferredVoiceName: '',
     roundDateColId: null,
   },
-  version: 11,
+  version: 12,
 };
 
 const MOCK_INIT_SCRIPT = `

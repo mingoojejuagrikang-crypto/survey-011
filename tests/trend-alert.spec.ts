@@ -49,6 +49,8 @@ const SETTINGS = {
     userEmail: 'tester@example.com',
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TREND_1/edit',
     sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_TREND_1',
+    columnsSheetTab: 'Sheet1',
     columns: COLUMNS,
     tableGenerated: true,
     totalRows: 10,
@@ -60,7 +62,7 @@ const SETTINGS = {
     preferredVoiceName: '',
     roundDateColId: null,
   },
-  version: 6,
+  version: 12,
 };
 
 /** 직전 회차 시트 데이터 — 행1(나무1·과실1): 횡경 100.0 / 행2(나무1·과실2): 횡경 110.0. */

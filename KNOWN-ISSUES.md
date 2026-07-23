@@ -784,8 +784,8 @@
   뒤 `preserveUserColumnSettings`로 `auto`를 포함한 사용자 설정을 항상 복사했다. 현재 columns의 출처를
   저장하지 않아 다른 spreadsheetId 또는 같은 파일의 다른 탭인지 판별할 수 없었다. `sheetUrl`·`sheetTab`은
   `loadHeaders` 전에 새 대상으로 바뀌므로 그 값을 비교하는 방식도 항상 같은 시트처럼 보이는 함정이 있다.
-- **해결(v0.38.0):** persist v12에 `columnsSheetId`·`columnsSheetTab`을 추가하고, v11 이하 저장본은 현재
-  `sheetUrl`·`sheetTab`으로 backfill한다. `loadHeaders`는 두 출처가 정확히 같을 때만 id·사용자 설정을
+- **해결(v0.38.0):** persist v12에 `columnsSheetId`·`columnsSheetTab`을 추가하고, v11 이하 저장본은 출처를
+  추측해 backfill하지 않는다. `loadHeaders`는 두 출처가 정확히 같을 때만 id·사용자 설정을
   보존하며, 다른 파일/탭은 새 유추값을 사용한다. 새 columns와 출처는 한 번의 store set으로 함께 갱신한다.
 - **회귀:** `tests/sheets-infer-columns.spec.ts`가 다른 파일·다른 탭·같은 시트 3축을 고정하고,
   `tests/v038-sheet-source-guard.spec.ts`가 저장목록/탭 선택 뒤 store 자동값과 같은 시트 설정 보존을 검증한다.
@@ -793,6 +793,43 @@
 - **출처:** `survey-011 v0.38.0` 태스크 01(2026-07-23, 미배포 브랜치).
 - **현재 상태:** ✅코드 수정·반증 확인. ⚠️5175 포트 bind가 샌드박스에서 `listen EPERM`으로 차단돼
   브라우저 e2e 13건은 수집만 확인했으며, 권한 있는 호스트에서 실행 필요.
+
+### [SETTINGS-3] 시트 전환 실패·늦은 응답 뒤 이전 columns로 입력을 시작할 수 있음
+
+- **증상:** A농가 테이블이 생성된 상태에서 B농가 연결을 시작해 메타/헤더 조회가 실패하면,
+  `tableGenerated=true`와 A columns가 남아 입력을 시작할 수 있었다. 늦은 이전 메타 응답은 최신
+  `sheetTab`까지 덮을 수 있어 화면 대상·컬럼 출처가 다시 갈라졌다.
+- **근인:** URL·탭을 조회 성공 전에 전역 설정에 게시했고, `tableGenerated` 폐기는 전환 시작과 묶이지
+  않았다. 헤더 요청에만 세대 가드가 있어 메타→헤더 전체 파이프라인은 원자적이지 않았다.
+- **v0.37.0에도 있던 기존 결함:** v0.38.0의 컬럼 출처 기능이 만든 회귀가 아니라, 배포본 v0.37.0부터
+  입력 시작 게이트가 `tableGenerated`만 본 구조적 공백이었다.
+- **해결(v0.38.0 태스크 07):** URL draft와 활성 연결을 분리하고 대상 전환 즉시
+  `tableGenerated=false`로 폐기한다. 메타→헤더에 단일 요청 세대를 적용해 최신 성공만 URL·탭·컬럼·
+  출처를 한 번에 게시한다. Ready/start/테이블 생성은 URL id·탭과 컬럼 출처의 정확 일치를 요구한다.
+- **회귀:** `tests/v038-session-sheet-gate.spec.ts`가 기존 `tableGenerated=true`에서 메타 500·헤더 500을
+  재현해 시작 버튼 비활성·세션 0건을 확인하고, 이전 메타 응답을 명시 신호로 늦춰 최신 원자 게시를
+  검증한다. 순수 술어 경계는 `tests/sheetConnection.spec.ts`가 고정한다.
+- **현재 상태:** ✅순수 경계 수정 제거 시 2/2 실패·적용 시 2/2 통과. ⚠️브라우저 3건은 제한
+  샌드박스의 Chromium Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]). 브랜치 미배포.
+
+### [SYNC-5] 세션에 대상 시트가 없어 현재 전역 설정으로 다른 농가를 append/update
+
+- **증상:** A농가에서 만든 미업로드 세션을 남긴 채 B농가로 설정을 전환하고 동기화하면 A 값을 B에
+  append했다. 이미 A에서 받은 `sheetRow`가 있으면 B의 같은 행 번호를 update해 더 조용한 오염이 됐다.
+- **근인:** `Session`에 목적지가 없고 `syncSelected()`가 호출 순간의 `settings.sheetUrl/sheetTab`을
+  사용했다. `persistSession()`도 매번 현재 `settings.columns`를 읽어 활성 세션 중 설정 전환 시 한 세션의
+  자동값·컬럼 스키마가 섞일 수 있었다.
+- **v0.37.0에도 있던 기존 결함:** v0.38.0이 만든 회귀가 아니라, 배포본 v0.37.0의 Session/IDB 스키마와
+  동기화 계층 사이에 대상 결합이 없던 구조적 공백이었다.
+- **해결(v0.38.0 태스크 07):** 새 세션은 시작 시 optional additive `target={spreadsheetId,sheetTab}`과
+  columns를 스냅샷으로 고정한다. sync는 세션별 target의 헤더·append·update만 사용하므로 `sheetRow`도
+  그 target과 결합된다. target 없는 legacy IDB 레코드는 그대로 읽되, 현재 검증된 시트를 사용자에게
+  명시 확인받아 target을 먼저 내구 저장한 뒤에만 업로드한다. IDB/settings version은 올리지 않았다.
+- **회귀:** `tests/v038-session-target-sync.spec.ts`가 A target 세션+B 전역 설정에서 B POST/PUT 0건,
+  legacy 확인 전 Sheets 0건과 확인 target IDB 저장, 활성 A 세션 중 B 전환 뒤 A target·columns 보존을
+  검증한다. 기존 sync e2e fixture에도 명시 target을 추가했다.
+- **현재 상태:** ✅실제 sync 코어를 전역 설정 방식으로 되돌리면 2/2 실패·적용 시 2/2 통과.
+  ⚠️브라우저 3건은 Chromium Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]). 브랜치 미배포.
 
 ---
 

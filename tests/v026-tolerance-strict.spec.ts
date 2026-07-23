@@ -37,6 +37,8 @@ function settingsWithTolerance(tolerance: number) {
       userEmail: 'tester@example.com',
       sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_V026_F1/edit',
       sheetTab: 'Sheet1',
+      columnsSheetId: 'SHEET_V026_F1',
+      columnsSheetTab: 'Sheet1',
       columns: COLUMNS,
       tableGenerated: true,
       totalRows: 2,
@@ -47,7 +49,7 @@ function settingsWithTolerance(tolerance: number) {
       preferredVoiceName: '',
       roundDateColId: null,
     },
-    version: 11,
+    version: 12,
   };
 }
 

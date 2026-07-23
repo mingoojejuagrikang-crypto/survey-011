@@ -42,9 +42,12 @@ export function VoiceScreen() {
   //   useCallback([])라 안정 참조 → 마운트당 정확히 1회 발동(탭 진입=마운트, App.tsx 조건부 렌더).
   useEffect(() => { void voiceSession.prewarmMic(); }, [voiceSession.prewarmMic]);
 
-  const totalRows = s.tableGenerated ? computeTotalRows(s.columns) : 0;
-  const voiceCols = s.columns.filter((c) => c.input === 'voice');
-  const currentCol = voiceCols[sess.activeColIdx] || voiceCols[0] || s.columns[0];
+  const activeColumns = voiceSession.sessionColumns ?? s.columns;
+  const totalRows = sess.phase === 'ready'
+    ? (s.tableGenerated ? computeTotalRows(s.columns) : 0)
+    : computeTotalRows(activeColumns);
+  const voiceCols = activeColumns.filter((c) => c.input === 'voice');
+  const currentCol = voiceCols[sess.activeColIdx] || voiceCols[0] || activeColumns[0];
 
   if (sess.phase === 'ready') {
     return (
@@ -117,7 +120,7 @@ export function VoiceScreen() {
       )}
       <ActiveState
         totalRows={totalRows}
-        columns={s.columns}
+        columns={activeColumns}
         voiceCols={voiceCols}
         currentColId={currentCol?.id}
         completing={sess.phase === 'complete'}
