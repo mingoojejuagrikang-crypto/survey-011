@@ -169,6 +169,24 @@ test('활성·일시정지 세션은 syncSelected를 직접 호출해도 Sheets 
   }
 });
 
+test('[리뷰#10] complete 세션은 syncSelected를 직접 호출해도 Sheets 요청이 0건이다', async () => {
+  const live: Session = {
+    ...plainLegacy('live-sync-complete', '2026-07-23'),
+    target: TARGET_A,
+  };
+  const { syncSelected, calls } = await prepare([live]);
+  const { useSessionStore } = await stores();
+  useSessionStore.setState({ sessionId: live.id, phase: 'complete' });
+
+  const report = await syncSelected([live.id]) as {
+    failed: number;
+    failures: Array<{ reason: string }>;
+  };
+  expect(calls).toHaveLength(0);
+  expect(report.failed).toBe(1);
+  expect(report.failures[0].reason).toBe(ACTIVE_SESSION_SYNC_MESSAGE);
+});
+
 test('활성 가드가 지연 target 저장 경쟁을 없애고, 종료 후에는 최신 행과 target을 함께 저장한다', async () => {
   const live = plainLegacy('live-race', '2026-07-23');
   const { syncSelected, calls } = await prepare([live]);

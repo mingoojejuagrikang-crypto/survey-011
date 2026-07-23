@@ -15,16 +15,50 @@ import {
   legacyDemoteCount,
   assignLegacySessionTarget,
   sessionEverUploaded,
+  isSessionSyncBlocked,
 } from '../src/lib/sessionSync';
 import { applyRowPatch, isRowComplete as isRowCompleteHelper } from '../src/stores/dataStore';
 import { colToA1, quoteSheetTitle } from '../src/lib/sheets';
 import type { Session, SessionRow } from '../src/types';
+import type { VoicePhase } from '../src/stores/sessionStore';
 
 const row = (
   index: number,
   complete: boolean,
   extra: Partial<SessionRow> = {},
 ): SessionRow => ({ index, values: {}, complete, ...extra });
+
+const syncBlockedByPhase = {
+  ready: false,
+  active: true,
+  paused: true,
+  complete: true,
+  stopping: true,
+  done: false,
+} satisfies Record<VoicePhase, boolean>;
+
+const voicePhases = Object.keys(syncBlockedByPhase) as VoicePhase[];
+
+test.describe('isSessionSyncBlocked — 현재 세션이 끝난 상태만 동기화 허용', () => {
+  for (const phase of voicePhases) {
+    test(`${phase} phase는 ${syncBlockedByPhase[phase] ? '막힌다' : '열린다'}`, () => {
+      expect(isSessionSyncBlocked('session-a', 'session-a', phase))
+        .toBe(syncBlockedByPhase[phase]);
+    });
+  }
+
+  test('다른 세션은 어느 phase에서도 막히지 않는다', () => {
+    for (const phase of voicePhases) {
+      expect(isSessionSyncBlocked('session-a', 'session-b', phase)).toBe(false);
+    }
+  });
+
+  test('idle(recordingSessionId 빈 문자열)은 어느 phase에서도 막히지 않는다', () => {
+    for (const phase of voicePhases) {
+      expect(isSessionSyncBlocked('session-a', '', phase)).toBe(false);
+    }
+  });
+});
 
 test.describe('F8 — colToA1 (multi-letter, no A:Z clamp)', () => {
   test('single-letter boundary', () => {

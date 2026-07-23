@@ -747,5 +747,6 @@ export class AudioRecorder {
       for (const track of this.stream.getTracks()) track.stop();
       this.stream = null;
     }
+    this.activeInput = null;
   }
 }

@@ -368,6 +368,21 @@ test.describe('[리뷰#6] dispose()가 진행 중인 획득을 무효화한다 (
     return { stream, stopped: () => stops };
   }
 
+  test('init() 성공 후 dispose()하면 활성 입력장치 정보를 비운다', async () => {
+    const rec = new AudioRecorder();
+    const acquired = countingStream();
+    (rec as unknown as { acquireStream: () => Promise<MediaStream> }).acquireStream =
+      async () => acquired.stream;
+
+    expect(await rec.init()).toBe(true);
+    expect(rec.getActiveInput()).toEqual({ deviceId: 'dev', label: 'mic' });
+
+    rec.dispose();
+
+    expect(rec.getActiveInput()).toBeNull();
+    expect(acquired.stopped()).toBe(1);
+  });
+
   test('init() 대기 중 dispose()되면 뒤늦게 열린 스트림을 즉시 닫는다', async () => {
     const rec = new AudioRecorder();
     const priv = rec as unknown as {

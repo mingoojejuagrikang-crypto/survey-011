@@ -17,7 +17,8 @@ export function isSessionSyncBlocked(
   recordingSessionId: string,
   phase: VoicePhase,
 ): boolean {
-  return recordingSessionId === sessionId && (phase === 'active' || phase === 'paused');
+  const sessionEnded = phase === 'ready' || phase === 'done';
+  return recordingSessionId !== '' && recordingSessionId === sessionId && !sessionEnded;
 }
 
 /** True if any row carries per-row sync state (v0.6.0+ session). Legacy sessions return false
