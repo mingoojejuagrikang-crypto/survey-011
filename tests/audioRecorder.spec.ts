@@ -210,12 +210,14 @@ test('[리뷰#1] 타임아웃 후 뒤늦게 열린 스트림은 즉시 닫힌다
 interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
 }
 
 function deferred<T>(): Deferred<T> {
   let resolve!: Deferred<T>['resolve'];
-  const promise = new Promise<T>((res) => { resolve = res; });
-  return { promise, resolve };
+  let reject!: Deferred<T>['reject'];
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
 }
 
 class StubAudioNode {
@@ -577,6 +579,171 @@ test.describe('[리뷰#6] dispose()가 진행 중인 획득을 무효화한다 (
 
     rec.dispose();
     expect(b.stopped()).toBe(1);
+  });
+
+  test('[리뷰#9] init attach가 밀려도 이긴 recover 스트림을 끊지 않는다', async () => {
+    const firstAttachGate = deferred<void>();
+    const firstAttachStarted = deferred<void>();
+    const env = installAudioContextStub([
+      () => { firstAttachStarted.resolve(); return firstAttachGate.promise; },
+      () => Promise.resolve(),
+    ]);
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as { acquireStream: () => Promise<MediaStream>; stream: MediaStream | null };
+    const stale = countingStream();
+    const winner = countingStream();
+    let calls = 0;
+    priv.acquireStream = async () => {
+      calls += 1;
+      return calls === 1 ? stale.stream : winner.stream;
+    };
+
+    try {
+      const staleInit = rec.init();
+      await firstAttachStarted.promise;
+      const winningRecovery = rec.recoverStream('winner', { bypassCooldown: true });
+      expect(await winningRecovery).toBe(true);
+      expect(priv.stream).toBe(winner.stream);
+
+      firstAttachGate.resolve();
+      expect(await staleInit).toBe(false);
+      expect(stale.stopped()).toBeGreaterThan(0);
+      expect(winner.stopped()).toBe(0);
+      expect(priv.stream).toBe(winner.stream);
+    } finally {
+      rec.dispose();
+      env.restore();
+    }
+  });
+
+  test('[리뷰#9] recover attach가 밀려도 dispose 뒤 이긴 init 스트림을 끊지 않는다', async () => {
+    const firstAttachGate = deferred<void>();
+    const firstAttachStarted = deferred<void>();
+    const env = installAudioContextStub([
+      () => { firstAttachStarted.resolve(); return firstAttachGate.promise; },
+      () => Promise.resolve(),
+    ]);
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as { acquireStream: () => Promise<MediaStream>; stream: MediaStream | null };
+    const stale = countingStream();
+    const winner = countingStream();
+    let calls = 0;
+    priv.acquireStream = async () => {
+      calls += 1;
+      return calls === 1 ? stale.stream : winner.stream;
+    };
+
+    try {
+      const staleRecovery = rec.recoverStream('stale', { bypassCooldown: true });
+      await firstAttachStarted.promise;
+      rec.dispose();
+      const winningInit = rec.init();
+      expect(await winningInit).toBe(true);
+      expect(priv.stream).toBe(winner.stream);
+
+      firstAttachGate.resolve();
+      expect(await staleRecovery).toBe(false);
+      expect(stale.stopped()).toBeGreaterThan(0);
+      expect(winner.stopped()).toBe(0);
+      expect(priv.stream).toBe(winner.stream);
+    } finally {
+      rec.dispose();
+      env.restore();
+    }
+  });
+
+  test('[리뷰#9] init attach 예외는 자기 획득 스트림을 닫고 실제 실패 사유를 남긴다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      prerollTap: MicPrerollTap;
+      stream: MediaStream | null;
+    };
+    const acquired = countingStream();
+    priv.acquireStream = async () => acquired.stream;
+    priv.prerollTap.attach = async () => { throw new Error('attach failed'); };
+
+    expect(await rec.init()).toBe(false);
+    expect(acquired.stopped()).toBe(1);
+    expect(priv.stream).toBeNull();
+    expect(rec.getLastInitError()).toBe('Error');
+  });
+
+  test('[리뷰#9] recover attach 예외는 자기 획득 스트림을 닫는다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      prerollTap: MicPrerollTap;
+      stream: MediaStream | null;
+    };
+    const acquired = countingStream();
+    priv.acquireStream = async () => acquired.stream;
+    priv.prerollTap.attach = async () => { throw new Error('attach failed'); };
+
+    expect(await rec.recoverStream('attach_throw', { bypassCooldown: true })).toBe(false);
+    expect(acquired.stopped()).toBe(1);
+    expect(priv.stream).toBeNull();
+  });
+
+  test('[리뷰#9] 밀린 init attach 예외는 이긴 recover 스트림을 보존한다', async () => {
+    const firstAttach = deferred<void>();
+    const firstAttachStarted = deferred<void>();
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      prerollTap: MicPrerollTap;
+      stream: MediaStream | null;
+    };
+    const stale = countingStream();
+    const winner = countingStream();
+    let acquireCalls = 0;
+    let attachCalls = 0;
+    priv.acquireStream = async () => {
+      acquireCalls += 1;
+      return acquireCalls === 1 ? stale.stream : winner.stream;
+    };
+    priv.prerollTap.attach = async () => {
+      attachCalls += 1;
+      if (attachCalls === 1) {
+        firstAttachStarted.resolve();
+        return firstAttach.promise;
+      }
+    };
+
+    try {
+      const staleInit = rec.init();
+      await firstAttachStarted.promise;
+      const winningRecovery = rec.recoverStream('winner', { bypassCooldown: true });
+      expect(await winningRecovery).toBe(true);
+      expect(priv.stream).toBe(winner.stream);
+
+      firstAttach.reject(new Error('late attach failed'));
+      expect(await staleInit).toBe(false);
+      expect(stale.stopped()).toBeGreaterThan(0);
+      expect(winner.stopped()).toBe(0);
+      expect(priv.stream).toBe(winner.stream);
+    } finally {
+      rec.dispose();
+    }
+  });
+
+  test('[리뷰#9] stale init은 이전 실패 사유를 권한 거부처럼 재사용하지 않는다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      lastInitError: string | null;
+    };
+    const stale = countingStream();
+    const acquire = deferred<MediaStream>();
+    priv.lastInitError = 'NotAllowedError';
+    priv.acquireStream = () => acquire.promise;
+
+    const staleInit = rec.init();
+    rec.dispose();
+    acquire.resolve(stale.stream);
+
+    expect(await staleInit).toBe(false);
+    expect(rec.getLastInitError()).toBeNull();
   });
 
   /**

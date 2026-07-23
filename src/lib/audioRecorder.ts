@@ -308,6 +308,7 @@ export class AudioRecorder {
     // v0.19.0 W7 — 재획득 전 라벨을 기억해 재획득 후 실제 변화가 있으면 route-change 이벤트를 방출.
     const prevLabel = this.activeInput?.label ?? '';
     let timedOut = false;
+    let acquired: MediaStream | null = null;
     try {
       // 기존 그래프 정리 — 리스너 먼저(track.stop의 'ended'가 핸들러 재진입 못 하게), 프리롤, 스트림.
       this.detachDeviceListeners();
@@ -329,7 +330,6 @@ export class AudioRecorder {
       // 여기서 영원히 멈춰 recovering·호출부 in-flight 가드가 잠기고 배너조차 뜨지 않았다.
       // 타임아웃으로 반드시 결말을 만든다.
       const pending = this.acquireStream();
-      let acquired: MediaStream;
       try {
         acquired = await withTimeout(pending, this.acquireTimeoutMs);
       } catch (e) {
@@ -341,7 +341,10 @@ export class AudioRecorder {
         throw e;
       }
       // [리뷰#6] 대기 중 dispose()가 있었으면 주인이 없는 스트림이다 — 꽂기 전에 닫고 실패로 끝낸다.
-      if (this.acquireGen !== gen) { stopAllTracks(acquired); return false; }
+      if (this.acquireGen !== gen) {
+        this.releaseAcquiredStream(acquired);
+        return false;
+      }
       this.stream = acquired;
       try {
         const track = this.stream.getAudioTracks()[0];
@@ -352,12 +355,9 @@ export class AudioRecorder {
       } catch { /* getSettings 미지원 — activeInput은 다음 refresh에서 채움 */ }
       this.attachDeviceListeners();
       await this.prerollTap.attach(this.stream);
-      // [리뷰#6] attach 대기 구간에서도 같은 판정 — dispose()와 같은 순서로 되돌린다.
+      // [리뷰#9] attach 대기 중 다른 획득이 이기면 공유 필드가 아니라 이 작업의 스트림만 닫는다.
       if (this.acquireGen !== gen) {
-        this.detachDeviceListeners();
-        this.prerollTap.detach();
-        stopAllTracks(this.stream);
-        this.stream = null;
+        this.releaseAcquiredStream(acquired);
         return false;
       }
       logger.log({ type: 'clip', extra: `clip_recorder_recovered:${reason}:${this.activeInput?.label || 'default'}` });
@@ -365,7 +365,9 @@ export class AudioRecorder {
       this.emitInputDeviceChanged(prevLabel, this.activeInput?.label ?? '', `recover:${reason}`);
       return true;
     } catch (e) {
-      if (this.acquireGen === gen) this.stream = null;
+      // [리뷰#9] attach 예외도 이 작업이 획득한 스트림을 반드시 닫는다. 더 최신 스트림의
+      // 리스너·프리롤·공유 참조는 `releaseAcquiredStream`의 동일성 가드가 보존한다.
+      this.releaseAcquiredStream(acquired);
       const message = String((e as Error)?.message ?? e);
       // v0.38.0 리뷰#1 — 보류(타임아웃)와 거부/오류를 로그에서 분리한다. 현장 원인이 다르다.
       // 기존 clip_recorder_recover_failed 문자열은 그대로 두고 신규 이벤트만 추가(바이트 계약).
@@ -430,6 +432,20 @@ export class AudioRecorder {
     });
   }
 
+  /** 획득 작업이 소유한 스트림을 닫는다. 공유 자원은 아직 그 스트림을 가리킬 때만 정리한다. */
+  private releaseAcquiredStream(acquired: MediaStream | null): void {
+    if (!acquired) return;
+    if (this.stream === acquired) {
+      this.detachDeviceListeners();
+      this.prerollTap.detach();
+      stopAllTracks(acquired);
+      this.stream = null;
+      this.activeInput = null;
+      return;
+    }
+    stopAllTracks(acquired);
+  }
+
   async init(): Promise<boolean> {
     if (this.stream) return true;
     // v0.25.0 기능2(prewarm) — 동시 init() 직렬화. prewarm(입력탭 마운트)과 start()의 init()이 겹치면
@@ -439,17 +455,24 @@ export class AudioRecorder {
     // v0.38.0 [리뷰#6·#7] 획득 대기 중 dispose()·다른 획득이 끼어드는 핫마이크 레이스는 **세대**로
     // 막는다(하드가드는 StrictMode 이중마운트를 깨므로 쓰지 않는다 — `acquireGen` 주석 참조).
     if (this.initPromise) return this.initPromise;
+    // [리뷰#9] 새 시도의 false가 실제 실패인지 stale 조기반환인지 호출부가 구분하도록 이전 오류를
+    // 비운다. 실제 catch만 현재 세대일 때 사유를 다시 채우며, stale은 null을 유지한다.
+    this.lastInitError = null;
     const gen = ++this.acquireGen;
     const initPromise = (async (): Promise<boolean> => {
+      let acquired: MediaStream | null = null;
       try {
         // 소음 환경(비닐하우스 등) 대응: 브라우저 내장 DSP 활성화 — 추가 지연 없음(1초 제약 무관).
         // echoCancellation은 이제 항상 ON(이어피스 기본) — TTS 에코가 마이크로 되먹임되는 것도 줄여줌.
         // (v0.15.0 A6: 스피커폰 소프트 half-duplex 모드 및 post-TTS 가드는 삭제됨 — 이어폰 barge-in 기본.)
         // autoGainControl은 소음 환경(빗소리 등)에서 무음 구간 게인을 키워 노이즈를 증폭할 수 있어 끔.
-        const acquired = await this.acquireStream();
+        acquired = await this.acquireStream();
         // [리뷰#6] 대기 중 dispose()가 있었으면 이 스트림의 주인은 이미 없다 — 즉시 닫고 실패로 끝낸다.
         // this.stream에 꽂기 **전에** 판정해야 리스너·프리롤이 폐기된 인스턴스에 붙지 않는다.
-        if (this.acquireGen !== gen) { stopAllTracks(acquired); return false; }
+        if (this.acquireGen !== gen) {
+          this.releaseAcquiredStream(acquired);
+          return false;
+        }
         this.stream = acquired;
         // Capture which input device was actually granted (built-in vs external mic like Shokz).
         // Numeric/string metadata only — device.json already enumerates the same deviceId+label set,
@@ -471,18 +494,16 @@ export class AudioRecorder {
         // W6: 프리롤 캡처는 best-effort — 어떤 실패도 init 성공(현행 녹음 동작)을 막지 않는다.
         await this.prerollTap.attach(this.stream);
         // [리뷰#6] attach도 대기 구간이다(AudioContext.resume·worklet 로드가 지연될 수 있다).
-        // 그 사이 dispose()가 있었으면 dispose()와 **같은 순서**로 되돌린다: 리스너 → 프리롤 →
-        // 트랙(프리롤 source가 stream을 참조하므로 detach가 stop보다 먼저여야 한다).
+        // 그 사이 더 최신 획득이 이기면 공유 필드가 아니라 이 작업의 스트림만 정리한다.
         if (this.acquireGen !== gen) {
-          this.detachDeviceListeners();
-          this.prerollTap.detach();
-          stopAllTracks(this.stream);
-          this.stream = null;
+          this.releaseAcquiredStream(acquired);
           return false;
         }
         this.lastInitError = null;
         return true;
       } catch (e) {
+        // attach가 던져도 이 작업의 마이크는 남기지 않는다. 이긴 스트림은 동일성 가드로 보호한다.
+        this.releaseAcquiredStream(acquired);
         // v0.25.0 기능2 — prewarm 텔레메트리 `_denied`가 읽도록 실패 사유(NotAllowedError 등)를 보존.
         if (this.acquireGen === gen) this.lastInitError = (e as Error)?.name || 'unknown';
         return false;
