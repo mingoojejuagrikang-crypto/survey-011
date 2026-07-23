@@ -412,6 +412,73 @@ test.describe('[리뷰#6] dispose()가 진행 중인 획득을 무효화한다 (
     expect(priv.recovering).toBe(false);     // 가드는 풀려야 한다(세션 사망 방지, [리뷰#1] 계약)
   });
 
+  /**
+   * v0.38.0 [리뷰#7 Critical] `init()`과 `recoverStream()`은 서로를 직렬화하지 않는다
+   * (`initPromise`는 init끼리, `recovering`은 recover끼리만). v0.37.0부터 있던 구조다.
+   *
+   * 시나리오: 입력탭 prewarm `init()`이 권한 응답을 기다리는 동안 첫 클립이 빈 채로 끝나
+   * `micLost` 자동복구가 `recoverStream()`을 시작한다. **둘이 각자 스트림을 연다.** 나중에 도착한
+   * 쪽이 `this.stream`을 덮어쓰고, `dispose()`는 마지막 하나만 stop하므로 **다른 하나는 참조 없이
+   * 마이크를 계속 쓴다**(영구 핫마이크). 도착 순서가 뒤바뀌어도 같은 문제라 양방향을 다 고정한다.
+   */
+  test('[리뷰#7] init()과 recoverStream()이 겹치면 진 쪽 스트림이 즉시 닫힌다 (init 먼저 도착)', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as { acquireStream: () => Promise<MediaStream>; stream: MediaStream | null };
+    const a = countingStream();   // init이 여는 스트림
+    const b = countingStream();   // recover가 여는 스트림
+    let releaseA: (() => void) | null = null;
+    let releaseB: (() => void) | null = null;
+
+    priv.acquireStream = () => new Promise<MediaStream>((resolve) => { releaseA = () => resolve(a.stream); });
+    const initing = rec.init();
+    await Promise.resolve();
+
+    priv.acquireStream = () => new Promise<MediaStream>((resolve) => { releaseB = () => resolve(b.stream); });
+    const recovering = rec.recoverStream('mic_lost', { bypassCooldown: true });
+    await Promise.resolve();
+
+    releaseA!();                                  // init이 먼저 도착 — 이미 recover에 밀린 상태다
+    expect(await initing).toBe(false);
+    expect(a.stopped()).toBe(1);                  // 진 쪽은 즉시 닫힌다(누수 없음)
+
+    releaseB!();
+    expect(await recovering).toBe(true);
+    expect(priv.stream).toBe(b.stream);           // 나중에 시작된 획득이 인스턴스를 소유한다
+
+    rec.dispose();
+    expect(b.stopped()).toBe(1);
+    expect(a.stopped()).toBe(1);                  // dispose 후 **두 스트림 모두** 멈춰 있어야 한다
+  });
+
+  test('[리뷰#7] init()과 recoverStream()이 겹치면 진 쪽 스트림이 즉시 닫힌다 (recover 먼저 도착)', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as { acquireStream: () => Promise<MediaStream>; stream: MediaStream | null };
+    const a = countingStream();
+    const b = countingStream();
+    let releaseA: (() => void) | null = null;
+    let releaseB: (() => void) | null = null;
+
+    priv.acquireStream = () => new Promise<MediaStream>((resolve) => { releaseA = () => resolve(a.stream); });
+    const initing = rec.init();
+    await Promise.resolve();
+
+    priv.acquireStream = () => new Promise<MediaStream>((resolve) => { releaseB = () => resolve(b.stream); });
+    const recovering = rec.recoverStream('mic_lost', { bypassCooldown: true });
+    await Promise.resolve();
+
+    releaseB!();                                  // 도착 순서를 뒤집는다
+    expect(await recovering).toBe(true);
+    expect(priv.stream).toBe(b.stream);
+
+    releaseA!();
+    expect(await initing).toBe(false);
+    expect(a.stopped()).toBe(1);                  // 늦게 도착한 진 쪽도 반드시 닫힌다
+    expect(priv.stream).toBe(b.stream);           // 이긴 쪽을 덮어쓰지 않는다
+
+    rec.dispose();
+    expect(b.stopped()).toBe(1);
+  });
+
   test('폐기 뒤 새 init()은 정상 획득한다 — 하드가드가 아니라 세대 비교여야 하는 이유', async () => {
     const rec = new AudioRecorder();
     const priv = rec as unknown as {

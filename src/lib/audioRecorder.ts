@@ -104,16 +104,25 @@ export class AudioRecorder {
   private initPromise: Promise<boolean> | null = null;
   /** v0.25.0 기능2 — 마지막 init() 실패 사유(DOMException.name 등). prewarm 텔레메트리 `_denied`가 읽는다. */
   private lastInitError: string | null = null;
-  /** v0.38.0 [리뷰#6] 생명주기 세대. `dispose()`가 올린다.
+  /** v0.38.0 [리뷰#6·#7] **획득 세대.** `dispose()`와 **모든 스트림 획득 시작**이 올린다.
+   *  획득을 시작한 쪽은 자기 세대를 잡아 두고, 결과가 도착했을 때 세대가 그대로일 때만 그 스트림을
+   *  인스턴스에 꽂는다. 어긋나면(=폐기됐거나 더 나중 획득에 밀렸으면) 트랙을 즉시 stop한다.
+   *  `getUserMedia`는 취소할 수 없으므로, **결과가 온 뒤에 닫는 것**이 유일한 수단이다.
    *
-   *  `getUserMedia` 대기 중 `dispose()`가 끼어들면 그 시점엔 닫을 스트림이 없고, 뒤늦게 획득이
-   *  성공하면 **이미 폐기된 인스턴스에** 스트림·장치 리스너·프리롤 그래프가 다시 붙는다. 그 인스턴스는
-   *  호출부 ref에서 빠진 뒤라 아무도 `dispose()`를 부르지 않아 **마이크가 켜진 채 남는다**(핫마이크).
+   *  막는 것 두 가지:
+   *  1. [리뷰#6] **폐기 후 늦게 열린 스트림.** 대기 중 `dispose()`되면 그 시점엔 닫을 스트림이 없고,
+   *     뒤늦게 획득이 성공하면 이미 폐기된 인스턴스에 스트림·리스너·프리롤이 다시 붙는다. 그 인스턴스는
+   *     호출부 ref에서 빠진 뒤라 아무도 `dispose()`를 부르지 않아 **마이크가 켜진 채 남는다**.
+   *  2. [리뷰#7] **`init()`과 `recoverStream()`의 상호 경합.** `initPromise`는 init끼리만,
+   *     `recovering`은 recover끼리만 직렬화한다(v0.37.0부터). prewarm `init()`이 권한 응답을 기다리는
+   *     동안 `micLost` 자동복구가 `recoverStream()`을 시작하면 **둘이 각자 스트림을 연다.** 나중 것이
+   *     `this.stream`을 덮어쓰고 `dispose()`는 마지막 하나만 stop하므로 **다른 하나가 영구 누수**된다.
+   *     → 나중에 **시작된** 획득이 이긴다(recover는 이미 옛 스트림을 헐어낸 뒤라 그게 옳다).
    *
    *  `isDisposed` 하드가드는 StrictMode 이중마운트에서 같은 인스턴스의 재-init을 **영구** 차단해
    *  클립 녹음을 깨므로 쓸 수 없다. 세대 비교는 그 부작용이 없다 — 폐기 후 새 `init()`은 새 세대를
-   *  잡고 정상 획득하고, 폐기 **이전**에 시작된 획득만 stale로 판정돼 즉시 닫힌다. */
-  private lifecycle = 0;
+   *  잡고 정상 획득한다. */
+  private acquireGen = 0;
   /** Active (recording) slot — only this one can be stopped via stopClip(). */
   private active: ClipSlot | null = null;
   /** Settings of the audio track actually granted by getUserMedia, captured at init().
@@ -290,8 +299,9 @@ export class AudioRecorder {
     if (!opts?.bypassCooldown && now - this.lastRecoverAt < RECOVER_COOLDOWN_MS) return false;
     this.recovering = true;
     this.lastRecoverAt = now;
-    // v0.38.0 [리뷰#6] 재획득 대기 중 dispose()가 끼어드는 핫마이크 레이스 — init()과 같은 세대 비교.
-    const gen = this.lifecycle;
+    // v0.38.0 [리뷰#6·#7] 재획득 대기 중 dispose()·진행 중 init()이 끼어드는 핫마이크 레이스 —
+    // init()과 **같은 카운터**를 쓴다. 여기서 올리는 순간 진행 중이던 init()의 획득은 stale이 된다.
+    const gen = ++this.acquireGen;
     // v0.19.0 W7 — 재획득 전 라벨을 기억해 재획득 후 실제 변화가 있으면 route-change 이벤트를 방출.
     const prevLabel = this.activeInput?.label ?? '';
     let timedOut = false;
@@ -328,7 +338,7 @@ export class AudioRecorder {
         throw e;
       }
       // [리뷰#6] 대기 중 dispose()가 있었으면 주인이 없는 스트림이다 — 꽂기 전에 닫고 실패로 끝낸다.
-      if (this.lifecycle !== gen) { stopAllTracks(acquired); return false; }
+      if (this.acquireGen !== gen) { stopAllTracks(acquired); return false; }
       this.stream = acquired;
       try {
         const track = this.stream.getAudioTracks()[0];
@@ -340,7 +350,7 @@ export class AudioRecorder {
       this.attachDeviceListeners();
       await this.prerollTap.attach(this.stream);
       // [리뷰#6] attach 대기 구간에서도 같은 판정 — dispose()와 같은 순서로 되돌린다.
-      if (this.lifecycle !== gen) {
+      if (this.acquireGen !== gen) {
         this.detachDeviceListeners();
         this.prerollTap.detach();
         stopAllTracks(this.stream);
@@ -423,10 +433,10 @@ export class AudioRecorder {
     // this.stream이 아직 없어 getUserMedia가 두 번 호출된다(스트림 누수·리스너 이중등록·iOS 동시거부).
     // 진행 중 Promise를 공유해 정확히 1회만 획득하고, 정착 시 finally에서 클리어한다(실패 후 재획득
     // 폴백 보존 + dispose 후 재-init(StrictMode 이중마운트·재개) 시 정상 재획득). ⚠️ 핫마이크 주의:
-    // v0.38.0 [리뷰#6] acquireStream 대기 중 dispose()가 끼어드는 핫마이크 레이스는 **세대 비교**로
-    // 막는다(하드가드는 StrictMode 이중마운트를 깨므로 쓰지 않는다 — `lifecycle` 주석 참조).
+    // v0.38.0 [리뷰#6·#7] 획득 대기 중 dispose()·다른 획득이 끼어드는 핫마이크 레이스는 **세대**로
+    // 막는다(하드가드는 StrictMode 이중마운트를 깨므로 쓰지 않는다 — `acquireGen` 주석 참조).
     if (this.initPromise) return this.initPromise;
-    const gen = this.lifecycle;
+    const gen = ++this.acquireGen;
     this.initPromise = (async (): Promise<boolean> => {
       try {
         // 소음 환경(비닐하우스 등) 대응: 브라우저 내장 DSP 활성화 — 추가 지연 없음(1초 제약 무관).
@@ -436,7 +446,7 @@ export class AudioRecorder {
         const acquired = await this.acquireStream();
         // [리뷰#6] 대기 중 dispose()가 있었으면 이 스트림의 주인은 이미 없다 — 즉시 닫고 실패로 끝낸다.
         // this.stream에 꽂기 **전에** 판정해야 리스너·프리롤이 폐기된 인스턴스에 붙지 않는다.
-        if (this.lifecycle !== gen) { stopAllTracks(acquired); return false; }
+        if (this.acquireGen !== gen) { stopAllTracks(acquired); return false; }
         this.stream = acquired;
         // Capture which input device was actually granted (built-in vs external mic like Shokz).
         // Numeric/string metadata only — device.json already enumerates the same deviceId+label set,
@@ -460,7 +470,7 @@ export class AudioRecorder {
         // [리뷰#6] attach도 대기 구간이다(AudioContext.resume·worklet 로드가 지연될 수 있다).
         // 그 사이 dispose()가 있었으면 dispose()와 **같은 순서**로 되돌린다: 리스너 → 프리롤 →
         // 트랙(프리롤 source가 stream을 참조하므로 detach가 stop보다 먼저여야 한다).
-        if (this.lifecycle !== gen) {
+        if (this.acquireGen !== gen) {
           this.detachDeviceListeners();
           this.prerollTap.detach();
           stopAllTracks(this.stream);
@@ -682,7 +692,7 @@ export class AudioRecorder {
   dispose(): void {
     // v0.38.0 [리뷰#6] 진행 중인 획득을 무효화한다 — 뒤늦게 열리는 스트림이 폐기된 인스턴스에
     // 다시 붙지 않도록. 취소할 수 없는 getUserMedia는 결과가 오는 즉시 stop된다(init/recoverStream).
-    this.lifecycle += 1;
+    this.acquireGen += 1;
     // v0.13.0 R8 — 입력장치 구독 먼저 해제(아래 track.stop()의 'ended'가 핸들러를 깨우지 않도록).
     this.detachDeviceListeners();
     // Resolve any pending stopClip first so awaiters don't hang.
