@@ -335,3 +335,101 @@ test.describe('MicPrerollTap attach/detach 수명주기', () => {
     }
   });
 });
+
+/**
+ * v0.38.0 [리뷰#6] 진행 중인 마이크 획득을 `dispose()`가 무효화하는지 — **핫마이크 방지**.
+ *
+ * 근인: `getUserMedia`는 취소할 수 없다. 대기 중 세션 종료·탭 이탈로 `dispose()`가 불리면 그 시점엔
+ * 닫을 스트림이 없고, 뒤늦게 획득이 성공하면 **이미 폐기된 인스턴스에** 스트림·장치 리스너·프리롤
+ * 그래프가 다시 붙는다. 그 인스턴스는 호출부 ref에서 빠진 뒤라 아무도 `dispose()`를 부르지 않아
+ * **마이크가 켜진 채 남는다**. 원거리 현장에서 사용자는 이를 알 방법이 없다(프라이버시).
+ *
+ * `isDisposed` 하드가드는 StrictMode 이중마운트에서 재-init을 영구 차단해 클립 녹음을 깨므로 쓸 수
+ * 없다 — 세대 비교여야 한다. 그래서 "폐기 후 새 init은 정상 동작"까지 함께 고정한다.
+ */
+test.describe('[리뷰#6] dispose()가 진행 중인 획득을 무효화한다 (핫마이크 방지)', () => {
+  /** stop() 호출을 세는 스트림 stub — 실제로 닫혔는지가 이 테스트의 전부다. */
+  function countingStream(): { stream: MediaStream; stopped: () => number } {
+    let stops = 0;
+    const track = {
+      readyState: 'live' as const,
+      stop: () => { stops += 1; },
+      addEventListener: () => { /* noop */ },
+      removeEventListener: () => { /* noop */ },
+      getSettings: () => ({ deviceId: 'dev', label: 'mic' }),
+      label: 'mic',
+    };
+    const stream = {
+      getAudioTracks: () => [track],
+      getTracks: () => [track],
+    } as unknown as MediaStream;
+    return { stream, stopped: () => stops };
+  }
+
+  test('init() 대기 중 dispose()되면 뒤늦게 열린 스트림을 즉시 닫는다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      stream: MediaStream | null;
+    };
+    const late = countingStream();
+    let release: (() => void) | null = null;
+    priv.acquireStream = () => new Promise<MediaStream>((resolve) => {
+      release = () => { resolve(late.stream); };
+    });
+
+    const initing = rec.init();
+    await Promise.resolve();                 // acquireStream이 대기에 들어가게 한다
+    rec.dispose();                           // 이 시점엔 닫을 stream이 없다 — 종전엔 여기서 새는 게 확정
+    release!();                              // 권한이 뒤늦게 승인된다
+
+    expect(await initing).toBe(false);       // 폐기된 인스턴스의 init은 성공으로 끝나면 안 된다
+    expect(late.stopped()).toBe(1);          // 갓 열린 마이크가 즉시 닫혔다
+    expect(priv.stream).toBeNull();          // 폐기된 인스턴스에 스트림이 붙지 않았다
+  });
+
+  test('recoverStream() 대기 중 dispose()되면 뒤늦게 열린 스트림을 즉시 닫는다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      stream: MediaStream | null;
+      recovering: boolean;
+    };
+    const late = countingStream();
+    let release: (() => void) | null = null;
+    priv.acquireStream = () => new Promise<MediaStream>((resolve) => {
+      release = () => { resolve(late.stream); };
+    });
+
+    const recovering = rec.recoverStream('auto');
+    await Promise.resolve();
+    rec.dispose();
+    release!();
+
+    expect(await recovering).toBe(false);
+    expect(late.stopped()).toBe(1);
+    expect(priv.stream).toBeNull();
+    expect(priv.recovering).toBe(false);     // 가드는 풀려야 한다(세션 사망 방지, [리뷰#1] 계약)
+  });
+
+  test('폐기 뒤 새 init()은 정상 획득한다 — 하드가드가 아니라 세대 비교여야 하는 이유', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      stream: MediaStream | null;
+    };
+    const first = countingStream();
+    priv.acquireStream = async () => first.stream;
+
+    expect(await rec.init()).toBe(true);
+    rec.dispose();
+    expect(first.stopped()).toBe(1);
+
+    // StrictMode 이중마운트·세션 재개는 **같은 인스턴스**를 다시 쓴다. 여기서 막히면 녹음이 깨진다.
+    const second = countingStream();
+    priv.acquireStream = async () => second.stream;
+    expect(await rec.init()).toBe(true);
+    expect(priv.stream).toBe(second.stream);
+    expect(second.stopped()).toBe(0);
+  });
+});
