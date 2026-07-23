@@ -13,10 +13,12 @@ import {
   recountSynced,
   legacySyncedIndexSet,
   legacyDemoteCount,
+  assignLegacySessionTarget,
+  sessionEverUploaded,
 } from '../src/lib/sessionSync';
 import { applyRowPatch, isRowComplete as isRowCompleteHelper } from '../src/stores/dataStore';
 import { colToA1, quoteSheetTitle } from '../src/lib/sheets';
-import type { SessionRow } from '../src/types';
+import type { Session, SessionRow } from '../src/types';
 
 const row = (
   index: number,
@@ -132,6 +134,47 @@ test.describe('hasSyncState / recountSynced', () => {
       row(3, true, { syncState: 'dirty' }),
     ];
     expect(recountSynced(rows)).toBe(1);
+  });
+});
+
+test.describe('legacy target 결합 — 기존 좌표 보존과 새 시트 append를 구분', () => {
+  const target = { spreadsheetId: 'SHEET_B', sheetTab: '농가B' };
+  const session: Session = {
+    id: 'legacy-uploaded',
+    date: '2026-07-23',
+    columns: [],
+    rows: [
+      row(1, true, { sheetRow: 42, syncState: 'dirty' }),
+      row(2, true, { sheetRow: 43, syncState: 'synced' }),
+    ],
+    completedRows: 2,
+    syncedRows: 1,
+    startedAt: 1,
+  };
+
+  test('원래 시트면 sheetRow·syncState·syncedRows를 보존한다', () => {
+    const assigned = assignLegacySessionTarget(session, target, 'same-sheet');
+    expect(assigned.target).toEqual(target);
+    expect(assigned.rows).toEqual(session.rows);
+    expect(assigned.syncedRows).toBe(1);
+  });
+
+  test('다른 시트면 모든 동기화 이력을 초기화한다', () => {
+    const assigned = assignLegacySessionTarget(session, target, 'different-sheet');
+    expect(assigned.target).toEqual(target);
+    expect(assigned.rows.every((item) => item.sheetRow === undefined)).toBe(true);
+    expect(assigned.rows.every((item) => item.syncState === undefined)).toBe(true);
+    expect(assigned.syncedRows).toBe(0);
+  });
+
+  test('sheetRow만 남은 legacy도 업로드 이력으로 판정한다', () => {
+    const sheetRowOnly: Session = {
+      ...session,
+      rows: [row(1, true, { sheetRow: 42 })],
+      syncedRows: 0,
+    };
+    expect(sessionEverUploaded(sheetRowOnly)).toBe(true);
+    expect(sessionEverUploaded({ ...sheetRowOnly, rows: [row(1, true)] })).toBe(false);
   });
 });
 

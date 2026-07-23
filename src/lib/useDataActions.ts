@@ -19,6 +19,11 @@ import { restoreSelectedSessions, type ZipCache } from './recoverFromDrive';
 import { logger } from './logger';
 import { clipPlayer } from './clipPlayer';
 import { sessionTargetFromSettings } from './sheetConnection';
+import {
+  assignLegacySessionTarget,
+  sessionEverUploaded,
+  type LegacyTargetDecision,
+} from './sessionSync';
 
 /** 내보내기 결과 — 완료 팝업(ExportDoneModal)이 보관해 클릭 시 공유/재다운로드에 재사용한다. */
 export interface ExportResult {
@@ -31,6 +36,7 @@ interface LegacySyncPrompt {
   ids: string[];
   autoDelete: boolean;
   legacyCount: number;
+  uploadedLegacyCount: number;
   target: SessionTarget;
   targetLabel: string;
 }
@@ -330,7 +336,8 @@ export function useDataActions() {
   const handleSyncConfirm = async (ids: string[], autoDelete: boolean) => {
     setSyncModalOpen(false);
     const sessions = useDataStore.getState().sessions.filter((s) => ids.includes(s.id));
-    const legacyCount = sessions.filter((s) => !s.target).length;
+    const legacySessions = sessions.filter((s) => !s.target);
+    const legacyCount = legacySessions.length;
     if (legacyCount > 0) {
       const settings = useSettingsStore.getState();
       const target = sessionTargetFromSettings(settings);
@@ -343,6 +350,7 @@ export function useDataActions() {
         ids,
         autoDelete,
         legacyCount,
+        uploadedLegacyCount: legacySessions.filter(sessionEverUploaded).length,
         target,
         targetLabel: `${savedName ?? '시트'}의 “${target.sheetTab}” 탭`,
       });
@@ -351,7 +359,7 @@ export function useDataActions() {
     await runConfirmedSync(ids, autoDelete);
   };
 
-  const confirmLegacySync = async () => {
+  const confirmLegacySync = async (decision: LegacyTargetDecision) => {
     const prompt = legacySyncPrompt;
     if (!prompt) return;
     setLegacySyncPrompt(null);
@@ -361,7 +369,7 @@ export function useDataActions() {
       for (const id of prompt.ids) {
         const latest = useDataStore.getState().sessions.find((s) => s.id === id);
         if (!latest || latest.target) continue;
-        const updated: Session = { ...latest, target: prompt.target };
+        const updated = assignLegacySessionTarget(latest, prompt.target, decision);
         await saveSession(updated);
         useDataStore.getState().upsertSession(updated);
       }

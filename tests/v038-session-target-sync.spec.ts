@@ -59,6 +59,22 @@ function makeSession(target: boolean) {
   };
 }
 
+function makeUploadedLegacySession() {
+  return {
+    ...makeSession(false),
+    id: 'sess-legacy-uploaded',
+    rows: [
+      {
+        index: 1,
+        values: { c1: 'A농가', c2: '35.1' },
+        complete: true,
+        sheetRow: 42,
+        syncState: 'dirty',
+      },
+    ],
+  };
+}
+
 interface SheetCall { method: string; url: string; body: unknown }
 
 async function stubNetwork(page: Page): Promise<SheetCall[]> {
@@ -71,6 +87,7 @@ async function stubNetwork(page: Page): Promise<SheetCall[]> {
     try { body = request.postDataJSON(); } catch { /* GET */ }
     calls.push({ method: request.method(), url: request.url(), body });
     if (request.url().includes(':append')) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
       await route.fulfill({ json: { updates: { updatedRange: '농가!A43:B43', updatedRows: 1 } } });
       return;
     }
@@ -172,6 +189,28 @@ test('target 없는 legacy 세션 — 확인 전 Sheets 요청 0건, 확인 targ
     .toBe(1);
   const stored = await readSession(page, 'sess-legacy') as { target?: unknown } | null;
   expect(stored?.target).toEqual({ spreadsheetId: SHEET_B, sheetTab: '농가' });
+});
+
+test('업로드 이력 legacy를 다른 시트로 선택 — B 42행 update 없이 전 행 append', async ({ page }) => {
+  const calls = await stubNetwork(page);
+  await seedSessionAndOpenData(page, makeUploadedLegacySession());
+  await selectAndSync(page);
+
+  await expect(page.getByText('이전 세션 대상 확인', { exact: true })).toBeVisible();
+  await expect(page.getByText(/전에 시트에 올린 행이 있습니다/)).toBeVisible();
+  expect(calls).toHaveLength(0);
+
+  await page.getByRole('button', { name: '다른 시트로 새로 올리기' }).click();
+  await expect.poll(() => calls.filter((call) =>
+    call.url.includes(SHEET_B) && call.url.includes(':append')).length).toBe(1);
+  expect(calls.filter((call) => call.url.includes(SHEET_B) && call.url.includes(':batchUpdate')))
+    .toHaveLength(0);
+  const stored = await readSession(page, 'sess-legacy-uploaded') as {
+    target?: unknown;
+    rows?: Array<{ sheetRow?: number; syncState?: string }>;
+  } | null;
+  expect(stored?.target).toEqual({ spreadsheetId: SHEET_B, sheetTab: '농가' });
+  expect(stored?.rows?.[0]).toMatchObject({ sheetRow: 43, syncState: 'synced' });
 });
 
 test('활성 A 세션 중 B 전환 — persist는 시작 시 target·columns 스냅샷을 유지', async ({ page }) => {

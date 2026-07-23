@@ -42,6 +42,19 @@ test.describe('isSheetSourceBlocked — 차단 경계', () => {
       .toBe(false);
   });
 
+  test('URL만 있고 탭이 빈 반연결 상태는 막는다', () => {
+    expect(isSheetSourceBlocked({
+      ...local,
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_B/edit',
+      columnsSheetId: 'SHEET_A',
+      columnsSheetTab: '농가A',
+    })).toBe(true);
+  });
+
+  test('탭만 남은 반연결 상태도 로컬 모드로 보지 않는다', () => {
+    expect(isSheetSourceBlocked({ ...local, sheetTab: '농가A' })).toBe(true);
+  });
+
   test('연결된 시트와 출처가 같으면 막지 않는다', () => {
     expect(isSheetSourceBlocked({ ...connected, columnsSheetId: 'SHEET_A', columnsSheetTab: '농가A' }))
       .toBe(false);

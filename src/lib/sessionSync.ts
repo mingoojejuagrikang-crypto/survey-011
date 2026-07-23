@@ -5,7 +5,7 @@
  * duplicated (review F5/F6/F10 cleanup). Pure functions, no store/Drive/import.meta deps →
  * unit-testable under Node (tests/sessionSync.spec.ts).
  */
-import type { Session, SessionRow } from '../types';
+import type { Session, SessionRow, SessionTarget } from '../types';
 
 /** True if any row carries per-row sync state (v0.6.0+ session). Legacy sessions return false
  *  and fall back to the syncedRows counter. */
@@ -59,12 +59,38 @@ export function sessionPending(s: Session): number {
  *  session whose uploaded rows were all later edited (now 'dirty') still reads as "uploaded",
  *  not "미업로드". Legacy sessions fall back to the syncedRows counter. */
 export function sessionEverUploaded(s: Session): boolean {
+  if (s.rows.some((r) => r.sheetRow !== undefined)) return true;
   if (hasSyncState(s.rows)) {
-    return s.rows.some(
-      (r) => r.sheetRow !== undefined || r.syncState === 'synced' || r.syncState === 'dirty',
-    );
+    return s.rows.some((r) => r.syncState === 'synced' || r.syncState === 'dirty');
   }
   return s.syncedRows > 0;
+}
+
+export type LegacyTargetDecision = 'same-sheet' | 'different-sheet';
+
+/**
+ * target 도입 전 세션을 사용자가 확인한 시트에 결합한다.
+ * 다른 시트라면 절대 행번호와 동기화 이력을 함께 버려야 새 시트에서 전 행을 append한다.
+ */
+export function assignLegacySessionTarget(
+  session: Session,
+  target: SessionTarget,
+  decision: LegacyTargetDecision,
+): Session {
+  if (decision === 'same-sheet') return { ...session, target };
+
+  const rows = session.rows.map((row) => {
+    const next = { ...row };
+    delete next.sheetRow;
+    delete next.syncState;
+    return next;
+  });
+  const updated: Session = { ...session, target, rows, syncedRows: 0 };
+  if (updated.pendingValidation) {
+    updated.pendingValidation = { ...updated.pendingValidation };
+    delete updated.pendingValidation.previousSyncState;
+  }
+  return updated;
 }
 
 /** F9 — count of rows uploaded earlier but edited since (need an in-place UPDATE next sync). */

@@ -1,6 +1,7 @@
 /** 실제 syncSelected 코어를 브라우저 없이 실행해 Session.target 외 목적지 쓰기를 차단한다. */
 import { test, expect } from '@playwright/test';
 import type { Session } from '../src/types';
+import { assignLegacySessionTarget } from '../src/lib/sessionSync';
 
 const SHEET_A = 'SHEET_SYNC_CORE_A';
 const SHEET_B = 'SHEET_SYNC_CORE_B';
@@ -44,6 +45,13 @@ async function prepare(target: boolean): Promise<{
   syncSelected: (ids: string[]) => Promise<unknown>;
   calls: Array<{ method: string; url: string }>;
 }> {
+  return prepareSession(session(target));
+}
+
+async function prepareSession(storedSession: Session): Promise<{
+  syncSelected: (ids: string[]) => Promise<unknown>;
+  calls: Array<{ method: string; url: string }>;
+}> {
   installStorage();
   const calls: Array<{ method: string; url: string }> = [];
   Object.defineProperty(globalThis, 'fetch', {
@@ -67,7 +75,7 @@ async function prepare(target: boolean): Promise<{
     import('../src/stores/settingsStore'),
     import('../src/lib/sync'),
   ]);
-  useDataStore.getState().setSessions([session(target)]);
+  useDataStore.getState().setSessions([storedSession]);
   useSettingsStore.getState().set({
     sheetUrl: `https://docs.google.com/spreadsheets/d/${SHEET_B}/edit`,
     sheetTab: '농가',
@@ -90,4 +98,41 @@ test('target 없는 legacy 세션은 네트워크 전에 fail-closed한다', asy
   expect(calls).toHaveLength(0);
   expect(report.failed).toBe(1);
   expect(report.failures[0].reason).toContain('대상 시트를 알 수 없습니다');
+});
+
+test('업로드 이력 legacy를 다른 시트로 결합하면 update 없이 append만 요청한다', async () => {
+  const legacy: Session = {
+    ...session(false),
+    id: 'core-legacy-uploaded',
+    rows: [{
+      index: 1,
+      values: { c1: 'A농가', c2: '35.1' },
+      complete: true,
+      sheetRow: 42,
+      syncState: 'dirty',
+    }],
+  };
+  const assigned = assignLegacySessionTarget(
+    legacy,
+    { spreadsheetId: SHEET_B, sheetTab: '농가' },
+    'different-sheet',
+  );
+  const { syncSelected, calls } = await prepareSession(assigned);
+  await syncSelected([assigned.id]);
+
+  expect(calls.filter((call) => call.url.includes(':append'))).toHaveLength(1);
+  expect(calls.filter((call) => call.url.includes(':batchUpdate'))).toHaveLength(0);
+});
+
+test('업로드 이력 없는 legacy는 대상 확인 후 종전처럼 append한다', async () => {
+  const assigned = assignLegacySessionTarget(
+    session(false),
+    { spreadsheetId: SHEET_B, sheetTab: '농가' },
+    'same-sheet',
+  );
+  const { syncSelected, calls } = await prepareSession(assigned);
+  await syncSelected([assigned.id]);
+
+  expect(calls.filter((call) => call.url.includes(':append'))).toHaveLength(1);
+  expect(calls.filter((call) => call.url.includes(':batchUpdate'))).toHaveLength(0);
 });

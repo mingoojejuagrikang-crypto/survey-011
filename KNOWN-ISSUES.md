@@ -812,6 +812,25 @@
 - **현재 상태:** ✅순수 경계 수정 제거 시 2/2 실패·적용 시 2/2 통과. ⚠️브라우저 3건은 제한
   샌드박스의 Chromium Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]). 브랜치 미배포.
 
+### [SETTINGS-4] URL만 있고 탭이 빈 반연결 상태를 로컬 기록 모드로 오인
+
+- **증상:** A columns가 남은 상태에서 토큰 만료 중 저장 목록의 B 시트를 고르면
+  `sheetUrl=B, sheetTab=''`가 저장된다. 기존 입력 게이트는 URL id와 탭이 모두 있어야 “연결됨”으로
+  보고, 탭이 비면 로컬 모드로 허용해 A columns로 targetless 세션을 만들 수 있었다. 재로그인 뒤 B에
+  결합하면 이름이 같은 헤더를 통해 A 값이 B의 정상 행처럼 append될 수 있다.
+- **근인:** [SETTINGS-3]의 fail-closed 게이트를 로컬 기록 복구([PRINCIPLES §5]) 때문에 축소하면서,
+  “연결 완료가 아님”을 “완전 미연결”과 동일시했다. `onSelectSavedSheet`는 재로그인 자동 재연결을 위해
+  만료 상태에서도 새 URL을 의도적으로 저장하므로 URL-only 상태는 실제 도달 가능하다.
+- **해결(v0.38.0 태스크 08):** 로컬 모드는 `sheetUrl`과 `sheetTab`이 모두 빈 경우로만 한정한다.
+  어느 한쪽이라도 있으면 URL id·탭·columns 출처가 모두 일치해야 입력·테이블 생성을 허용한다.
+  완전 미연결과 출처만 남은 로컬 기록 경로는 계속 허용한다.
+- **대안 검토:** 선택 URL을 검증 전 draft/pending으로만 두면 반연결 자체를 없앨 수 있지만, 토큰 만료
+  뒤 재로그인 자동 재연결에 쓸 내구 URL이 필요하다. 새 pending persist 필드는 migrate까지 요구하고
+  범위를 넓히므로 이번 릴리스 블로커에는 단일 게이트 수정을 택했다.
+- **회귀:** `tests/sheetConnection.spec.ts`가 URL-only·탭-only 차단과 완전 미연결 허용을 함께 고정한다.
+- **출처:** `survey-011 v0.38.0` 리뷰 후속 태스크 08(2026-07-23, 미배포 브랜치).
+- **현재 상태:** ✅경계 테스트 통과. 브랜치 미배포.
+
 ### [SYNC-5] 세션에 대상 시트가 없어 현재 전역 설정으로 다른 농가를 append/update
 
 - **증상:** A농가에서 만든 미업로드 세션을 남긴 채 B농가로 설정을 전환하고 동기화하면 A 값을 B에
@@ -830,6 +849,25 @@
   검증한다. 기존 sync e2e fixture에도 명시 target을 추가했다.
 - **현재 상태:** ✅실제 sync 코어를 전역 설정 방식으로 되돌리면 2/2 실패·적용 시 2/2 통과.
   ⚠️브라우저 3건은 Chromium Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]). 브랜치 미배포.
+
+### [SYNC-6] 업로드 이력이 있는 targetless 세션에 새 target만 붙이면 다른 시트의 같은 절대 행을 덮음
+
+- **증상:** v0.37에서 A 시트 42행에 올라간 세션을 수정한 뒤 v0.38에서 현재 B 시트로 legacy 대상 확인하면,
+  기존 `sheetRow:42`가 그대로 남아 B 시트 42행을 sparse batchUpdate했다. 부분 동기화 세션은 이미
+  `synced`인 행을 건너뛰고 나머지만 B에 append해 한 세션이 두 시트로 갈라질 수도 있었다.
+- **근인:** [SYNC-5] 후속 확인 경로가 `{ ...latest, target }`만 저장했다. `sheetRow`는 Session.target과
+  결합된 절대 좌표인데, 대상 확인 UI가 “원래 시트”와 “다른 시트”를 구분하지 않아 좌표의 의미가 바뀐
+  뒤에도 update 경로가 그대로 소비했다.
+- **해결(v0.38.0 태스크 08):** 업로드 이력이 있는 legacy 세션은 현재 시트가 원래 시트인지 명시 선택한다.
+  원래 시트면 좌표를 보존하고, 다른 시트면 행별 `sheetRow`·`syncState`, 세션 `syncedRows`, 보류값의
+  `previousSyncState`까지 초기화한 뒤 target을 내구 저장해 모든 행을 append한다. 이력 없는 legacy는
+  종전의 단순 확인 경로를 유지한다.
+- **회귀:** `tests/sessionSync.spec.ts`가 두 선택의 상태 변환을 고정하고,
+  `tests/sessionSyncTarget.spec.ts`가 실제 sync 코어에서 다른 시트 선택 시 append 1건/update 0건 및
+  이력 없는 legacy append를 검증한다. UI·IDB e2e는 `tests/v038-session-target-sync.spec.ts`에 추가했다.
+- **출처:** `survey-011 v0.38.0` 리뷰 후속 태스크 08(2026-07-23, 미배포 브랜치).
+- **현재 상태:** ✅순수 상태 계약 2/2·sync 코어 2/2 통과. ⚠️브라우저 e2e는 제한 샌드박스의 Chromium
+  Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]); 권한 있는 호스트에서 실행 필요.
 
 ---
 

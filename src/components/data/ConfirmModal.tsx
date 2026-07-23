@@ -3,14 +3,17 @@ import { Backdrop } from './Backdrop';
 
 // ─── confirm modal ────────────────────────────────────────────
 export function ConfirmModal({
-  title, body, confirmLabel = '확인', danger, onCancel, onConfirm,
+  title, body, confirmLabel = '확인', alternativeLabel, danger,
+  onCancel, onConfirm, onAlternative,
 }: {
   title: string;
   body: string;
   confirmLabel?: string;
+  alternativeLabel?: string;
   danger?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  onAlternative?: () => void;
 }) {
   return (
     <Backdrop onClose={onCancel}>
@@ -32,6 +35,18 @@ export function ConfirmModal({
         >
           {body}
         </div>
+        {alternativeLabel && onAlternative && (
+          <button
+            onClick={onAlternative}
+            style={{
+              width: '100%', height: 48, borderRadius: 14,
+              border: `1px solid ${T.lineStrong}`, background: 'transparent',
+              color: T.text, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            {alternativeLabel}
+          </button>
+        )}
         <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
           <button
             onClick={onCancel}
