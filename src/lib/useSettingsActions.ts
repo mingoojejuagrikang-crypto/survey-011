@@ -38,7 +38,7 @@ import { buildSessionLabel, pickSessionLabelValue } from './sessionLabel';
 import { getPickerApiKey, openDrivePicker } from './drivePicker';
 import { setPreferredVoiceName } from './speech';
 import { logger } from './logger';
-import { hasMatchingSheetSource } from './sheetConnection';
+import { isSheetSourceBlocked } from './sheetConnection';
 
 /** localStorage 키 — 첫 진입 안내를 본 적 있는지(스토리지 네임스페이스 survey-011 준수).
  *  종전 components/settings/helpCopy.ts 소유였으나 유일 소비자가 이 훅이라 여기로 이동
@@ -388,7 +388,7 @@ export function useSettingsActions() {
 
   // 게이트 열기 — 생성/재생성 모두 동일 경로. 부수효과는 onGenerateConfirm까지 미룬다.
   const onGenerate = () => {
-    if (!hasMatchingSheetSource(useSettingsStore.getState())) {
+    if (isSheetSourceBlocked(useSettingsStore.getState())) {
       setError('시트 연결을 다시 확인해 주세요.');
       return;
     }
@@ -399,7 +399,7 @@ export function useSettingsActions() {
 
   // "확인(생성)" — 여기서만 실제 생성 부수효과 실행.
   const onGenerateConfirm = () => {
-    if (!hasMatchingSheetSource(useSettingsStore.getState())) {
+    if (isSheetSourceBlocked(useSettingsStore.getState())) {
       setGenerateGateOpen(false);
       setError('시트 연결을 다시 확인해 주세요.');
       return;

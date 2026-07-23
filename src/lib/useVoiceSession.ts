@@ -23,7 +23,7 @@ import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { buildAnomalyAlert } from './anomalyAlert';
 import { readonlySheetsAuth } from './sheets';
 import { withoutPendingCandidate } from './pendingValidation';
-import { sessionTargetFromSettings } from './sheetConnection';
+import { isSheetSourceBlocked, sessionTargetFromSettings } from './sheetConnection';
 import { ensureUniqueSessionLabel } from './sessionLabel';
 // [ENV-12] Stage 3 — 클립 캡처·보존 장부는 useClipCapture가 소유한다(이 파일은 호출만).
 import { useClipCapture, EMPTY_CLIP_BYTES, type PendingCommandClip } from './useClipCapture';
@@ -2235,11 +2235,16 @@ export function useVoiceSession() {
     setPreferredVoiceName(s.preferredVoiceName);
     const sess = useSessionStore.getState();
     if (sess.phase === 'stopping') return false;
-    const target = sessionTargetFromSettings(s);
-    if (!target) {
+    // v0.38.0 리뷰#4 — 세션 대상(target)은 **연결된 시트가 있을 때만** 고정한다.
+    // 시트 미연결(로컬 기록 모드)은 PRINCIPLES §5가 보장하는 정상 사용이라 막지 않는다 —
+    // target 없이 시작하고, 업로드 시점에 대상을 확인받는다(sync의 legacy 세션 경로와 같다).
+    // 반대로 **연결된 시트가 있는데 columns 출처가 그 시트가 아니면** 다른 농가 시트에 기록될
+    // 위험이라 시작을 막는다.
+    if (isSheetSourceBlocked(s)) {
       sess.setLastTts('시트 연결을 다시 확인해 주세요.');
       return false;
     }
+    const target = sessionTargetFromSettings(s);
     if (!s.tableGenerated) return false;
     const columns = structuredClone(s.columns);
     const vc = columns.filter((c) => c.input === 'voice');
