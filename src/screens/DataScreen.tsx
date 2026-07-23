@@ -245,19 +245,21 @@ export function DataScreen() {
 
       {legacySyncPrompt && (
         <ConfirmModal
-          title="이전 세션 대상 확인"
-          body={legacySyncPrompt.uploadedLegacyCount > 0
-            ? `${legacySyncPrompt.legacyCount === 1
-              ? '이 세션은'
-              : `대상 없는 ${legacySyncPrompt.legacyCount}개 세션 중 ${legacySyncPrompt.uploadedLegacyCount}개는`} 전에 시트에 올린 행이 있습니다.\n현재 연결된 ${legacySyncPrompt.targetLabel}이 원래 올린 시트인지 선택해 주세요.\n\n원래 시트: 기존 행 갱신\n다른 시트: 모든 행 새로 추가`
-            : `${legacySyncPrompt.legacyCount === 1 ? '이 세션' : `대상 없는 ${legacySyncPrompt.legacyCount}개 세션`}의 대상 시트를 알 수 없습니다.\n현재 연결된 ${legacySyncPrompt.targetLabel}에 올릴까요?`}
-          confirmLabel={legacySyncPrompt.uploadedLegacyCount > 0 ? '원래 이 시트 맞음' : '이 시트에 올리기'}
-          alternativeLabel={legacySyncPrompt.uploadedLegacyCount > 0
+          title={legacySyncPrompt.pending.length > 0 && legacySyncPrompt.askTotal > 1
+            ? `이전 세션 대상 확인 (${legacySyncPrompt.askedIndex}/${legacySyncPrompt.askTotal})`
+            : '이전 세션 대상 확인'}
+          // 업로드 이력이 있는 세션은 **한 번에 하나씩** 묻는다 — 세션마다 원본 시트가 다를 수 있고,
+          // 묶어서 물으면 다른 시트에 올렸던 세션이 남의 행을 덮어쓴다(리뷰#6 Critical).
+          body={legacySyncPrompt.pending.length > 0
+            ? `${legacySyncPrompt.currentLabel}은 전에 시트에 올린 행이 있습니다.\n현재 연결된 ${legacySyncPrompt.targetLabel}이 이 세션을 원래 올린 시트인지 선택해 주세요.\n\n원래 시트: 기존 행 갱신\n다른 시트: 모든 행 새로 추가`
+            : `${legacySyncPrompt.plain.length === 1 ? '이 세션' : `대상 없는 ${legacySyncPrompt.plain.length}개 세션`}의 대상 시트를 알 수 없습니다.\n현재 연결된 ${legacySyncPrompt.targetLabel}에 올릴까요?`}
+          confirmLabel={legacySyncPrompt.pending.length > 0 ? '원래 이 시트 맞음' : '이 시트에 올리기'}
+          alternativeLabel={legacySyncPrompt.pending.length > 0
             ? '다른 시트로 새로 올리기'
             : undefined}
           onCancel={() => setLegacySyncPrompt(null)}
           onConfirm={() => { void confirmLegacySync('same-sheet'); }}
-          onAlternative={legacySyncPrompt.uploadedLegacyCount > 0
+          onAlternative={legacySyncPrompt.pending.length > 0
             ? () => { void confirmLegacySync('different-sheet'); }
             : undefined}
         />

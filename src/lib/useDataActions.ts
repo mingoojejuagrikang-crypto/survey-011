@@ -21,9 +21,13 @@ import { clipPlayer } from './clipPlayer';
 import { sessionTargetFromSettings } from './sheetConnection';
 import {
   assignLegacySessionTarget,
-  sessionEverUploaded,
   type LegacyTargetDecision,
 } from './sessionSync';
+import {
+  advanceLegacySyncPrompt,
+  buildLegacySyncPrompt,
+  type LegacySyncPrompt,
+} from './legacySyncFlow';
 
 /** 내보내기 결과 — 완료 팝업(ExportDoneModal)이 보관해 클릭 시 공유/재다운로드에 재사용한다. */
 export interface ExportResult {
@@ -32,14 +36,6 @@ export interface ExportResult {
   kind: 'csv' | 'zip';
 }
 
-interface LegacySyncPrompt {
-  ids: string[];
-  autoDelete: boolean;
-  legacyCount: number;
-  uploadedLegacyCount: number;
-  target: SessionTarget;
-  targetLabel: string;
-}
 
 
 /** v0.6.0 — human label for a sync result that may both append and update rows in place.
@@ -336,9 +332,7 @@ export function useDataActions() {
   const handleSyncConfirm = async (ids: string[], autoDelete: boolean) => {
     setSyncModalOpen(false);
     const sessions = useDataStore.getState().sessions.filter((s) => ids.includes(s.id));
-    const legacySessions = sessions.filter((s) => !s.target);
-    const legacyCount = legacySessions.length;
-    if (legacyCount > 0) {
+    if (sessions.some((s) => !s.target)) {
       const settings = useSettingsStore.getState();
       const target = sessionTargetFromSettings(settings);
       if (!target) {
@@ -346,39 +340,54 @@ export function useDataActions() {
         return;
       }
       const savedName = settings.savedSheets.find((s) => s.sheetId === target.spreadsheetId)?.name;
-      setLegacySyncPrompt({
-        ids,
-        autoDelete,
-        legacyCount,
-        uploadedLegacyCount: legacySessions.filter(sessionEverUploaded).length,
-        target,
-        targetLabel: `${savedName ?? '시트'}의 “${target.sheetTab}” 탭`,
-      });
-      return;
+      const prompt = buildLegacySyncPrompt(
+        sessions, ids, autoDelete, target, `${savedName ?? '시트'}의 “${target.sheetTab}” 탭`,
+      );
+      if (prompt) { setLegacySyncPrompt(prompt); return; }
     }
     await runConfirmedSync(ids, autoDelete);
   };
 
+  /** legacy 세션에 target을 붙여 저장한다. 실패 메시지는 호출부가 표면화한다. */
+  const applyLegacyTarget = async (
+    id: string,
+    target: SessionTarget,
+    decision: LegacyTargetDecision,
+  ) => {
+    const latest = useDataStore.getState().sessions.find((s) => s.id === id);
+    if (!latest || latest.target) return;
+    const updated = assignLegacySessionTarget(latest, target, decision);
+    await saveSession(updated);
+    useDataStore.getState().upsertSession(updated);
+  };
+
+  /** 대기열의 **한 세션**에 대한 답을 확정한다. 남은 세션이 있으면 다음 세션을 이어서 묻고,
+   *  대기열이 비면 좌표 없는 나머지(plain)를 일괄 결합한 뒤 동기화를 시작한다.
+   *  중간 취소는 이미 답한 세션의 결정을 그대로 둔다 — 사용자가 명시적으로 고른 값이다. */
   const confirmLegacySync = async (decision: LegacyTargetDecision) => {
     const prompt = legacySyncPrompt;
     if (!prompt) return;
-    setLegacySyncPrompt(null);
+    const [current, ...rest] = prompt.pending;
     setBusy('대상 시트 저장 중...');
     setMsg(null);
     try {
-      for (const id of prompt.ids) {
-        const latest = useDataStore.getState().sessions.find((s) => s.id === id);
-        if (!latest || latest.target) continue;
-        const updated = assignLegacySessionTarget(latest, prompt.target, decision);
-        await saveSession(updated);
-        useDataStore.getState().upsertSession(updated);
+      if (current) {
+        await applyLegacyTarget(current, prompt.target, decision);
+      } else {
+        // 좌표 없는 세션은 어느 답이든 append다 — 묶어서 처리해도 교차 오염이 없다.
+        for (const id of prompt.plain) await applyLegacyTarget(id, prompt.target, decision);
       }
     } catch (err) {
+      setLegacySyncPrompt(null);
       setMsg('대상 시트 저장 실패: ' + ((err as Error).message || '다시 시도해 주세요.'));
       return;
     } finally {
       setBusy(null);
     }
+
+    const next = advanceLegacySyncPrompt(prompt, useDataStore.getState().sessions);
+    if (next) { setLegacySyncPrompt(next); return; }
+    setLegacySyncPrompt(null);
     await runConfirmedSync(prompt.ids, prompt.autoDelete);
   };
 
