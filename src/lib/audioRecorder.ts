@@ -141,6 +141,8 @@ export class AudioRecorder {
   private trackChangeHandler: (() => void) | null = null;
   /** v0.14.0 B-1/D — 스트림 재획득(recoverStream) 동시성/쿨다운 가드. */
   private recovering = false;
+  /** dispose 뒤 새 복구를 허용하되, 폐기 전 복구의 finally가 새 가드를 풀지 못하게 한다. */
+  private recoveryGuardGen = 0;
   // v0.38.0 — 쿨다운은 **연속** 재획득을 막기 위한 것이지 첫 회복을 막으면 안 된다. 0으로 두면
   // 비교값이 performance.now()(페이지 로드 후 경과 ms)라 **로드 직후 3초간 모든 recoverStream이
   // 조용히 차단**됐다. #5 자동 재연결은 사고 시점에 즉시 발화하므로 이 구간에 걸리면 getUserMedia를
@@ -298,6 +300,7 @@ export class AudioRecorder {
     // 제스처 경로는 iOS가 getUserMedia를 허용하는 유일한 창이라 소모하면 안 된다.
     if (!opts?.bypassCooldown && now - this.lastRecoverAt < RECOVER_COOLDOWN_MS) return false;
     this.recovering = true;
+    const recoveryGuardGen = ++this.recoveryGuardGen;
     this.lastRecoverAt = now;
     // v0.38.0 [리뷰#6·#7] 재획득 대기 중 dispose()·진행 중 init()이 끼어드는 핫마이크 레이스 —
     // init()과 **같은 카운터**를 쓴다. 여기서 올리는 순간 진행 중이던 init()의 획득은 stale이 된다.
@@ -362,7 +365,7 @@ export class AudioRecorder {
       this.emitInputDeviceChanged(prevLabel, this.activeInput?.label ?? '', `recover:${reason}`);
       return true;
     } catch (e) {
-      this.stream = null;
+      if (this.acquireGen === gen) this.stream = null;
       const message = String((e as Error)?.message ?? e);
       // v0.38.0 리뷰#1 — 보류(타임아웃)와 거부/오류를 로그에서 분리한다. 현장 원인이 다르다.
       // 기존 clip_recorder_recover_failed 문자열은 그대로 두고 신규 이벤트만 추가(바이트 계약).
@@ -370,7 +373,7 @@ export class AudioRecorder {
       else logger.log({ type: 'error', extra: `clip_recorder_recover_failed:${reason}:${message}` });
       return false;
     } finally {
-      this.recovering = false;
+      if (this.recoveryGuardGen === recoveryGuardGen) this.recovering = false;
     }
   }
 
@@ -437,7 +440,7 @@ export class AudioRecorder {
     // 막는다(하드가드는 StrictMode 이중마운트를 깨므로 쓰지 않는다 — `acquireGen` 주석 참조).
     if (this.initPromise) return this.initPromise;
     const gen = ++this.acquireGen;
-    this.initPromise = (async (): Promise<boolean> => {
+    const initPromise = (async (): Promise<boolean> => {
       try {
         // 소음 환경(비닐하우스 등) 대응: 브라우저 내장 DSP 활성화 — 추가 지연 없음(1초 제약 무관).
         // echoCancellation은 이제 항상 ON(이어피스 기본) — TTS 에코가 마이크로 되먹임되는 것도 줄여줌.
@@ -481,13 +484,14 @@ export class AudioRecorder {
         return true;
       } catch (e) {
         // v0.25.0 기능2 — prewarm 텔레메트리 `_denied`가 읽도록 실패 사유(NotAllowedError 등)를 보존.
-        this.lastInitError = (e as Error)?.name || 'unknown';
+        if (this.acquireGen === gen) this.lastInitError = (e as Error)?.name || 'unknown';
         return false;
-      } finally {
-        this.initPromise = null;
       }
-    })();
-    return this.initPromise;
+    })().finally(() => {
+      if (this.initPromise === initPromise) this.initPromise = null;
+    });
+    this.initPromise = initPromise;
+    return initPromise;
   }
 
   /** v0.25.0 기능2 — 마지막 init() 실패 사유(DOMException.name). 성공 시 null. prewarm이 `_denied`에 싣는다. */
@@ -693,6 +697,10 @@ export class AudioRecorder {
     // v0.38.0 [리뷰#6] 진행 중인 획득을 무효화한다 — 뒤늦게 열리는 스트림이 폐기된 인스턴스에
     // 다시 붙지 않도록. 취소할 수 없는 getUserMedia는 결과가 오는 즉시 stop된다(init/recoverStream).
     this.acquireGen += 1;
+    // 진행 중 작업은 취소할 수 없으므로 참조만 분리한다. 각 finally는 자기 세대/Promise만 정리한다.
+    this.initPromise = null;
+    this.recoveryGuardGen += 1;
+    this.recovering = false;
     // v0.13.0 R8 — 입력장치 구독 먼저 해제(아래 track.stop()의 'ended'가 핸들러를 깨우지 않도록).
     this.detachDeviceListeners();
     // Resolve any pending stopClip first so awaiters don't hang.

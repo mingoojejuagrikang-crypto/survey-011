@@ -388,6 +388,71 @@ test.describe('[리뷰#6] dispose()가 진행 중인 획득을 무효화한다 (
     expect(priv.stream).toBeNull();          // 폐기된 인스턴스에 스트림이 붙지 않았다
   });
 
+  test('[리뷰#8] init() 대기 중 dispose() 후 재호출하면 새 스트림을 획득한다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      stream: MediaStream | null;
+    };
+    const stale = countingStream();
+    const fresh = countingStream();
+    const firstAcquire = deferred<MediaStream>();
+    const secondAcquire = deferred<MediaStream>();
+    let acquireCalls = 0;
+    priv.acquireStream = () => {
+      acquireCalls += 1;
+      return acquireCalls === 1 ? firstAcquire.promise : secondAcquire.promise;
+    };
+
+    const staleInit = rec.init();
+    rec.dispose();
+    const freshInit = rec.init();
+    expect(acquireCalls).toBe(2);             // dispose 뒤 낡은 initPromise를 물려받지 않는다
+
+    secondAcquire.resolve(fresh.stream);
+    expect(await freshInit).toBe(true);
+    expect(priv.stream).toBe(fresh.stream);
+
+    firstAcquire.resolve(stale.stream);       // 폐기 전 획득이 더 늦게 성공해도 새 스트림을 건드리지 않는다
+    expect(await staleInit).toBe(false);
+    expect(stale.stopped()).toBe(1);
+    expect(fresh.stopped()).toBe(0);
+    expect(priv.stream).toBe(fresh.stream);
+  });
+
+  test('[리뷰#8] 낡은 init의 finally가 진행 중인 새 initPromise를 지우지 않는다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      initPromise: Promise<boolean> | null;
+    };
+    const stale = countingStream();
+    const fresh = countingStream();
+    const firstAcquire = deferred<MediaStream>();
+    const secondAcquire = deferred<MediaStream>();
+    let acquireCalls = 0;
+    priv.acquireStream = () => {
+      acquireCalls += 1;
+      return acquireCalls === 1 ? firstAcquire.promise : secondAcquire.promise;
+    };
+
+    const staleInit = rec.init();
+    rec.dispose();
+    const freshInit = rec.init();
+    const registeredFreshInit = priv.initPromise;
+    expect(acquireCalls).toBe(2);
+
+    firstAcquire.resolve(stale.stream);
+    expect(await staleInit).toBe(false);
+    expect(priv.initPromise).toBe(registeredFreshInit);
+
+    const sharedFreshInit = rec.init();
+    expect(acquireCalls).toBe(2);             // 새 획득이 진행 중이므로 세 번째 획득은 시작하지 않는다
+    secondAcquire.resolve(fresh.stream);
+    expect(await freshInit).toBe(true);
+    expect(await sharedFreshInit).toBe(true);
+  });
+
   test('recoverStream() 대기 중 dispose()되면 뒤늦게 열린 스트림을 즉시 닫는다', async () => {
     const rec = new AudioRecorder();
     const priv = rec as unknown as {
@@ -410,6 +475,41 @@ test.describe('[리뷰#6] dispose()가 진행 중인 획득을 무효화한다 (
     expect(late.stopped()).toBe(1);
     expect(priv.stream).toBeNull();
     expect(priv.recovering).toBe(false);     // 가드는 풀려야 한다(세션 사망 방지, [리뷰#1] 계약)
+  });
+
+  test('[리뷰#8] dispose()는 낡은 recovering 가드를 분리하고 새 복구 가드를 보존한다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      stream: MediaStream | null;
+      recovering: boolean;
+    };
+    const stale = countingStream();
+    const fresh = countingStream();
+    const firstAcquire = deferred<MediaStream>();
+    const secondAcquire = deferred<MediaStream>();
+    let acquireCalls = 0;
+    priv.acquireStream = () => {
+      acquireCalls += 1;
+      return acquireCalls === 1 ? firstAcquire.promise : secondAcquire.promise;
+    };
+
+    const staleRecovery = rec.recoverStream('stale', { bypassCooldown: true });
+    rec.dispose();
+    const freshRecovery = rec.recoverStream('fresh', { bypassCooldown: true });
+    expect(acquireCalls).toBe(2);
+
+    firstAcquire.resolve(stale.stream);
+    expect(await staleRecovery).toBe(false);
+    expect(priv.recovering).toBe(true);       // 낡은 finally가 새 복구의 진행 가드를 풀지 않는다
+    expect(await rec.recoverStream('third', { bypassCooldown: true })).toBe(false);
+    expect(acquireCalls).toBe(2);
+
+    secondAcquire.resolve(fresh.stream);
+    expect(await freshRecovery).toBe(true);
+    expect(priv.recovering).toBe(false);
+    expect(priv.stream).toBe(fresh.stream);
+    expect(stale.stopped()).toBe(1);
   });
 
   /**
@@ -477,6 +577,55 @@ test.describe('[리뷰#6] dispose()가 진행 중인 획득을 무효화한다 (
 
     rec.dispose();
     expect(b.stopped()).toBe(1);
+  });
+
+  /**
+   * v0.38.0 [리뷰#8 검수 보완 — Larry] Codex가 태스크 범위 밖에서 추가한 가드 2건에 반증을 붙인다.
+   * 방향은 옳지만 **테스트가 없으면 [ORCH-18] "반증되지 않는 가드"** 라 다음 리팩토링에 조용히 사라진다.
+   *
+   * ①`recoverStream`의 `catch`가 무조건 `this.stream = null`을 하면, 밀린 복구가 뒤늦게 실패할 때
+   *   **이긴 획득이 확보한 스트림 참조를 지워** 마이크가 살아 있는데도 앱은 없다고 믿는다(=녹음 사망 +
+   *   아무도 stop하지 않는 트랙).
+   * ②`lastInitError`도 같다 — 밀린 init의 실패 사유가 현재 상태를 덮으면 prewarm 텔레메트리
+   *   `_denied`가 **엉뚱한 원인**을 싣는다(SOP-003 판독이 틀어진다).
+   */
+  test('[리뷰#8+] 밀린 복구가 뒤늦게 실패해도 이긴 획득의 스트림·실패사유를 덮지 않는다', async () => {
+    const rec = new AudioRecorder();
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      stream: MediaStream | null;
+      lastInitError: string | null;
+    };
+    const fresh = countingStream();
+    // 이 파일의 deferred 헬퍼에는 reject가 없다 — 거부 경로가 필요하므로 여기서 직접 만든다.
+    let rejectStale: ((e: unknown) => void) | null = null;
+    let resolveFresh: ((s: MediaStream) => void) | null = null;
+    const stalePromise = new Promise<MediaStream>((_, rej) => { rejectStale = rej; });
+    const freshPromise = new Promise<MediaStream>((res) => { resolveFresh = res; });
+    stalePromise.catch(() => { /* 아래에서 recoverStream이 처리한다 — 미처리 거부 경고 방지 */ });
+    let calls = 0;
+    priv.acquireStream = () => {
+      calls += 1;
+      return calls === 1 ? stalePromise : freshPromise;
+    };
+
+    const staleRecovery = rec.recoverStream('stale', { bypassCooldown: true });
+    await Promise.resolve();
+    const winningInit = rec.init();          // 나중에 시작 → 이긴다(acquireGen 증가)
+    await Promise.resolve();
+    expect(calls).toBe(2);
+
+    resolveFresh!(fresh.stream);
+    expect(await winningInit).toBe(true);
+    expect(priv.stream).toBe(fresh.stream);
+
+    rejectStale!(new DOMException('denied', 'NotAllowedError'));
+    expect(await staleRecovery).toBe(false);
+
+    // 밀린 쪽의 실패가 이긴 쪽의 상태를 건드리면 안 된다.
+    expect(priv.stream).toBe(fresh.stream);  // ①스트림 참조 보존 — null이면 마이크가 고아가 된다
+    expect(fresh.stopped()).toBe(0);
+    expect(priv.lastInitError).toBeNull();   // ②성공한 init의 "실패 사유 없음"이 유지된다
   });
 
   test('폐기 뒤 새 init()은 정상 획득한다 — 하드가드가 아니라 세대 비교여야 하는 이유', async () => {
