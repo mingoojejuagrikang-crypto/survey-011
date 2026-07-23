@@ -731,6 +731,39 @@
 - **출처:** `survey-011 v0.38.0` SOP-004 리뷰 r1(Codex Medium ×2) → 수정.
 - **현재 상태:** ✅수정됨(브랜치, 미배포).
 
+### [PAST-3] 낡은 과거값 요청의 403이 최신 지문의 재시도 예산을 소진
+
+- **무엇:** 구지문 조회가 느리게 진행되는 동안 신지문 조회가 시작된 뒤 구요청이 403으로 끝나면,
+  catch가 요청 세대와 무관하게 전역 `retryAttempts=MAX_RETRIES`를 썼다. 이어 신요청이 일시적 5xx로
+  실패해도 백오프가 차단돼 최신 지문의 이상치 비교선이 준비되지 않았다.
+- **근인:** `retryAttempts`는 지문별 이력이 아니라 단일 `retryTimer`와 함께 **지금 준비 중인 인덱스**의
+  예산인데, 성공 게시만 generation으로 보호하고 성공 reset·권한 오류 소진은 보호하지 않았다.
+- **해결(v0.38.0 태스크 06):** 성공 예산 reset을 최신 generation 게시 가드 뒤로 옮기고, 권한 오류의
+  예산 소진·`past_index_retry_blocked:permission` 계측도 최신 generation일 때만 적용한다. 최신 요청의
+  정상 403은 종전대로 즉시 차단한다(텔레메트리 문자열 불변).
+- **회귀:** 구요청·신요청을 각각 인위적으로 보류하고 `구 403 → 신 500 → 백오프 성공` 순서를 강제하는
+  `tests/v038-past-index-retry-generation.spec.ts`. 기존 정상 403 차단 계약은
+  `tests/v034-past-index-apikey.spec.ts`가 계속 고정한다.
+- **출처:** `survey-011 v0.38.0` 리뷰#3 태스크 06(2026-07-23, 미배포 브랜치).
+- **현재 상태:** ✅코드 수정·회귀 작성. ⚠️제한 샌드박스의 Chromium Mach rendezvous EPERM으로
+  브라우저 회귀·수정 제거 반증은 실행 미확인([TEST-SANDBOX-1]); 권한 있는 호스트에서 실행 필요.
+
+### [PAST-4] 시트 삭제 중이던 조회가 삭제한 과거값 스냅샷을 다시 게시
+
+- **무엇:** 설정 초기화에서 시트 정보를 지우고 IDB 과거값만 fire-and-forget 삭제했지만, 이미 진행
+  중인 `loadPastIndex` 세대는 그대로였다. 늦은 응답이 게시 가드를 통과해 메모리 캐시·폴백·IDB에
+  방금 삭제한 농가 데이터를 되살렸다.
+- **근인:** 시트 미설정 skip은 새 조회를 시작하지 않아 generation을 올리지 않는다. 호출부가 IDB만
+  개별 삭제해, 진행 요청 무효화와 메모리·재시도 상태 정리가 한 원자적 의도로 묶이지 않았다.
+- **해결(v0.38.0 태스크 06):** `invalidatePastIndex()` 단일 진입점이 generation을 먼저 올린 뒤
+  cached·fallback·inflight·로그인 refresh 참조와 재시도 타이머/예산을 정리하고 IDB를 삭제한다.
+  `clearSheets`는 이를 `await`해, 모달 직후 재연결로 만든 새 스냅샷과 늦은 delete의 경쟁도 닫는다.
+- **회귀:** 진행 조회를 인위적으로 보류한 채 clearSheets를 완료하고 응답을 해제한 뒤 IDB put 0회와
+  레코드 부재를 확인하는 `tests/v038-past-index-invalidate.spec.ts`.
+- **출처:** `survey-011 v0.38.0` 리뷰#3 태스크 06(2026-07-23, 미배포 브랜치).
+- **현재 상태:** ✅코드 수정·회귀 작성. ⚠️제한 샌드박스의 Chromium Mach rendezvous EPERM으로
+  브라우저 회귀·수정 제거 반증은 실행 미확인([TEST-SANDBOX-1]); 권한 있는 호스트에서 실행 필요.
+
 ### [SETTINGS-1] 재로그인 자동 재연결이 사용자 컬럼 설정을 덮어써 과거값 인덱스까지 무효화
 
 - **무엇:** 재로그인은 이전 시트를 자동 재연결(v0.13.0 R1 `onGoogleClick` → `onUrlConfirmWithUrl`)하는데, `loadHeaders`가 `inferColumns`로 컬럼을 **처음부터 다시 유추해 통째로 교체**했다. `preserveInferredColumnIds`는 **`id`만** 보존한다(`sheets.ts:306-313`).
@@ -810,6 +843,17 @@
 - **해결·회피:** 포트 bind와 Chromium launch가 허용된 호스트 세션에서 5175 strictPort 서버를 띄워 전체 스위트를 재실행한다. 이 패턴은 passed/failed 제품 회귀 수치에 포함하지 말고 인프라 차단으로 별도 보고한다.
 - **출처:** `2026-07-15 survey-011 v0.34.0 High 3건 수정 세션`(Vite·Playwright 명령 stdout 직접 확인).
 - **현재 상태:** ⚠️환경 차단 — `npx tsc --noEmit`은 clean, Playwright 제품 검증은 권한 있는 실행 환경으로 이관 필요.
+
+### [TEST-PAST-NODE-1] pastValues 실제 모듈은 브라우저 없는 Playwright worker에서 IDB 삭제가 settle되지 않음
+
+- **증상:** 태스크 06의 generation 상태를 브라우저 없이 검증하려고 실제 `pastValues` 모듈을 import한
+  뒤 테스트 `beforeEach`에서 `invalidatePastIndex()`를 await하자, 3건 모두 본문 진입 전에 30초 timeout.
+- **원인:** `invalidatePastIndex → deletePastIndexBackup → idb.openDB`가 브라우저 IndexedDB가 없는 Node
+  worker에서 완료되지 않았다. 단순 `localStorage` polyfill만으로 실제 모듈 상태 테스트를 만들 수 없다.
+- **해결·회피:** 프로덕션 전용 seam·가짜 IDB 의존성을 추가하지 말고, 실제 Chromium+IDB를 쓰는 e2e로
+  검증한다. 제한 샌드박스에서 Chromium이 [TEST-SANDBOX-1]로 막히면 실행 미확인과 수동 반증 절차를 남긴다.
+- **출처:** `survey-011 v0.38.0` 태스크 06(2026-07-23), 브라우저 비기동 Playwright 3/3 timeout.
+- **현재 상태:** ✅실패한 실험 스펙 제거. 제품 코드 변경 없음.
 
 ### [TEST-PERSIST-SEAM-1] 빈 세션에서는 persist 실패·지연 seam이 호출되지 않아 종료 테스트가 공허해진다
 - **증상:** `tests/v035-r3-fixes.spec.ts`의 P1-1/P1-4가 각각 `__survey011DelaySessionPutMs`/`__survey011FailSessionPut`을 주입했지만, stopping 또는 저장 실패 화면을 관측하지 못했다. P1-3도 같은 빈 세션+지연 seam 구조라 종료 재진입 창이 결정론적으로 유지되지 않았다.

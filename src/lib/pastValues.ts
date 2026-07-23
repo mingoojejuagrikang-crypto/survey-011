@@ -27,7 +27,7 @@ import { effectiveSampleKey } from './columnFlags';
 import { fetchAllRowsUnbounded, parseSpreadsheetId, readonlySheetsAuth } from './sheets';
 import { useSettingsStore } from '../stores/settingsStore';
 import { logger } from './logger';
-import { loadPastIndexBackup, savePastIndexBackup } from './db';
+import { deletePastIndexBackup, loadPastIndexBackup, savePastIndexBackup } from './db';
 
 // ─── 순수 로직 (Node 단위 테스트 대상 — 브라우저 의존 없음) ─────────────────
 
@@ -501,6 +501,9 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
       // 대신 요청 세대를 비교한다. 더 최신 조회가 시작됐다면 이 결과는 설정 과도 구간과 무관하게
       // 낡은 요청이므로, 메모리 캐시·폴백·IDB 어느 곳에도 게시하지 않는다.
       if (generation !== latestLoadGeneration) return null;
+      // retryAttempts는 지문별 이력이 아니라 현재 준비 중인 인덱스의 단일 예산이다. 최신 요청의
+      // 성공만 예산을 복구해야, 게시 직후 새 요청이 시작돼도 이전 세대가 최신 예산을 되감지 않는다.
+      retryAttempts = 0;
       cached = { fp: ctx.fp, builtAt: Date.now(), index };
       // v0.33.0 항목5 — IDB write-through(kv `__past_index__`) + 메모리 폴백 동기화.
       // 캐시 TTL(10분)·토큰 만료·재부팅 후에도 이 스냅샷이 알람 비교선으로 살아남는다.
@@ -520,7 +523,9 @@ export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastInd
       // 시트를 API key로 읽으려는 조합에서 지수 백오프 5회가 무의미한 403을 반복해 쿼터·대역폭을
       // 태우던 표면. 권한 오류로 판정되면 재시도 예산을 소진시켜 즉시 멈춘다(다른 실패는 종전대로
       // 재시도 — 오프라인·5xx·타임아웃은 회복 가능).
-      if (isPermissionError(msg)) {
+      // 낡은 요청의 권한 오류는 그 요청만의 결말이다. 최신 요청이 회복 가능한 오류로 재시도해야 할
+      // 예산까지 소진하면, 현재 지문의 이상치 비교선이 준비되지 않는다.
+      if (generation === latestLoadGeneration && isPermissionError(msg)) {
         retryAttempts = MAX_RETRIES;
         logger.log({ type: 'app', extra: `past_index_retry_blocked:permission:auth=${auth}` });
       }
@@ -578,8 +583,12 @@ export function ensurePastIndex(): void {
   // 새 지문 재조회가 통째로 삼켜져 캐시가 빈 채로 남는다(현장 = 느린 네트워크에서 상시 조건).
   if (inflight && inflight.fp === loadContext().fp) return;
   if (retryTimer != null) return;
-  void loadPastIndex().then((idx) => {
-    if (idx) { retryAttempts = 0; return; } // 성공 → 캐시됨
+  const loadPromise = loadPastIndex();
+  const generation = latestLoadGeneration;
+  void loadPromise.then((idx) => {
+    // 무효화/신규 조회 뒤 끝난 이전 ensure 체인이 새 전역 retryTimer를 다시 만들지 않게 한다.
+    if (generation !== latestLoadGeneration) return;
+    if (idx) return; // 성공 경로가 최신 세대를 확인한 뒤 예산까지 복구한다.
     if (!shouldRetryLoad() || retryAttempts >= MAX_RETRIES) return;
     const delay = Math.min(4000, 600 * 2 ** retryAttempts);
     retryAttempts++;
@@ -611,6 +620,21 @@ export function shouldPreparePastIndex(opts?: { requireAuth?: boolean }): boolea
   // 판별하는 유일한 단서이고, SOP-003 파서와의 바이트 계약이다(v0.34.0 C9). 조회 자체는
   // loadPastIndex가 인증 없으면 즉시 skip하므로 네트워크 낭비는 없다.
   return opts?.requireAuth ? readonlySheetsAuth() !== null : true;
+}
+
+/**
+ * 시트 연결 삭제 시 과거값 상태를 한 번에 무효화한다. 세대를 먼저 올려 이미 응답을 기다리는 조회가
+ * 이후 메모리·IDB를 다시 게시하지 못하게 한 뒤, 현재 시트에만 의미가 있는 전역 상태를 정리한다.
+ */
+export async function invalidatePastIndex(): Promise<void> {
+  latestLoadGeneration++;
+  cached = null;
+  fallback = null;
+  inflight = null;
+  loginRefreshInflight = null;
+  resetPastIndexRetries();
+  notifyStatusChanged();
+  await deletePastIndexBackup();
 }
 
 /** 세션 시작 시 재시도 카운터/타이머 리셋 — 이전 세션이 오프라인으로 소진했어도 새 세션은 다시

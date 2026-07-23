@@ -20,6 +20,11 @@ const SETTINGS = {
     userEmail: 'before@example.com',
     sheetUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`,
     sheetTab: 'Sheet1',
+    // v0.38.0 — persist v12부터 columns의 시트 출처를 함께 저장한다. 시드는 **최신 version**으로
+    // 두어야 migrate를 타지 않는다([ENV-9]). 출처가 없으면(=v11 시드) 첫 재연결이 컬럼을 새로
+    // 유추해 이 파일이 검증하려는 '과거값 갱신' 흐름과 뒤섞인다.
+    columnsSheetId: SHEET_ID,
+    columnsSheetTab: 'Sheet1',
     availableSheets: ['Sheet1'],
     savedSheets: [],
     tableGenerated: true,
@@ -31,7 +36,7 @@ const SETTINGS = {
       { id: 'c3', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, trendRule: 'increase', auto: { kind: 'fixed', value: '' } },
     ],
   },
-  version: 11,
+  version: 12,
 };
 
 async function installGisMock(page: Page) {

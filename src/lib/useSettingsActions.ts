@@ -6,8 +6,13 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { makeSettingsDefaults, useSettingsStore } from '../stores/settingsStore';
-import { saveSheetsRecord, deletePastIndexBackup } from './db';
-import { prefetchPastIndex, resetPastIndexRetries, shouldPreparePastIndex } from './pastValues';
+import { saveSheetsRecord } from './db';
+import {
+  invalidatePastIndex,
+  prefetchPastIndex,
+  resetPastIndexRetries,
+  shouldPreparePastIndex,
+} from './pastValues';
 import type { DataType } from '../types';
 import {
   getAccessToken,
@@ -416,9 +421,9 @@ export function useSettingsActions() {
       s.set({ sheetUrl: '', sheet: null, sheetTab: '', availableSheets: [], savedSheets: [] });
       // 전용 IDB 레코드(onRehydrateStorage 복원 경로)도 함께 비운다 — 안 비우면 다음 부팅에서 되살아남.
       void saveSheetsRecord({ savedSheets: [], sheetUrl: '', updatedAt: Date.now() });
-      // v0.33.0 항목5 — 과거값 인덱스 영속 스냅샷도 함께 삭제(시트를 지웠으면 그 시트의 비교선도
-      // 무의미 — fp 불일치로 어차피 안 쓰이지만 데이터 위생).
-      void deletePastIndexBackup();
+      // 진행 중인 조회까지 낡은 세대로 만든 뒤 메모리·IDB를 함께 비운다. 삭제 완료를 기다려야
+      // 모달이 닫힌 직후 같은 시트를 재연결해 만든 새 스냅샷을 늦은 delete가 지우지 않는다.
+      await invalidatePastIndex();
       setConfirmedUrl('');
     }
     // 첫 진입 안내 배너 재노출(초기화 = 처음부터 다시 시작하는 사용자).
