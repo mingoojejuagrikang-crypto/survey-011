@@ -869,6 +869,23 @@
 - **현재 상태:** ✅순수 상태 계약 2/2·sync 코어 2/2 통과. ⚠️브라우저 e2e는 제한 샌드박스의 Chromium
   Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]); 권한 있는 호스트에서 실행 필요.
 
+### [SYNC-7] 활성 세션에 legacy target을 붙이는 저장이 STT 저장과 경합해 최신 측정값을 덮음
+
+- **증상:** 입력 화면이 keep-alive된 채 데이터 탭에서 target 없는 활성 세션을 동기화하면,
+  `applyLegacyTarget`이 잡은 옛 세션 스냅샷과 그 사이 들어온 STT final 저장이 서로 다른 `put`으로
+  경합했다. target 저장이 나중이면 최신 행이 사라지고, STT 저장이 나중이면 target이 사라졌다.
+- **근인:** 모달이 활성 세션을 기본 선택했고, legacy target 저장은 `persistSession`의 세션 내부 순번
+  가드 밖에서 독립 실행됐다. 기존 sync의 활성 판정도 헤더 GET 뒤에서 미완 행만 거르는 부분 방어라
+  완료행 업로드·Drive 백업·외부 직접 호출을 막지 못했다.
+- **해결(v0.38.0 리뷰#9):** 기존 음성 store 신호(`sessionId` + `phase active|paused`)를
+  `isSessionSyncBlocked`로 단일화했다. 모달 선택·legacy target 결합·`useDataActions`의 재시도/로그인
+  재개·Drive 백업·`syncSelected`의 세션별 Sheets 진입을 모두 같은 신호로 fail-closed한다. 사용자는
+  "입력을 끝낸 뒤 업로드"하라는 이유를 화면에서 본다. 종료 세션은 종전 target 저장·동기화를 유지한다.
+- **회귀:** `tests/v038-legacy-batch-target.spec.ts`가 직접 `applyLegacyTarget`/`syncSelected` 호출의
+  Sheets 요청 0건, 40ms 지연 target 저장이 활성 세션에서 시작되지 않아 최신 행이 store/내구 모사본에
+  남는 것, 종료 뒤 35ms 지연 저장으로 최신 행+target이 함께 남고 append가 진행되는 것을 검증한다.
+- **현재 상태:** ✅수정·반증 확인(제품 가드 제거 시 신규 3/3 실패, 적용 시 3/3 통과). 브랜치 미배포.
+
 ---
 
 ## ⑨ 테스트 / 릴리스 회귀 함정

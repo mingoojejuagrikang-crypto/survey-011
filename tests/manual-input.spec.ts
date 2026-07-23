@@ -617,7 +617,16 @@ test('[리뷰 High] manualHold → reload: 후보·팝업·중앙 게이트를 I
   await waitForRow(page, 2); // 행 완료 → 정상 전진(복구된 흐름이 온전히 살아 있다)
 });
 
-test('[리뷰 High] manualHold → Data sync: 확인 전 후보는 실제 Sheets PUT/POST 0건', async ({ page }) => {
+/**
+ * v0.38.0 [리뷰#9] 민구 결정(2026-07-23): **업로드는 입력을 종료한 뒤에만 가능하다.**
+ * 따라서 "입력 중 데이터탭에서 업로드"라는 종전 시나리오는 제품에서 **의도적으로 차단**됐고
+ * 이 e2e도 그 동작을 검증하도록 바꾼다(단언을 지운 게 아니라 대상이 바뀐 것).
+ *
+ * ⚠️ 원래 이 테스트가 지키던 계약 — **확인 전 후보는 실제 Sheets 요청에 실리지 않는다** — 은
+ * `tests/pendingValidation.spec.ts`의 `[리뷰#9]` 단위 테스트로 **이관했다**(sync 코어를 직접 태워
+ * 요청 본문을 검사한다). 커버리지를 잃지 않기 위한 조치다.
+ */
+test('[리뷰#9] manualHold 세션이 입력 중이면 동기화 모달에 뜨지 않고 이유가 안내된다', async ({ page }) => {
   let writes = 0;
   page.on('request', (req) => {
     if (req.url().includes('sheets.googleapis.com') && req.method() !== 'GET') writes++;
@@ -627,14 +636,13 @@ test('[리뷰 High] manualHold → Data sync: 확인 전 후보는 실제 Sheets
   await openSheetFor(page, '횡경');
   for (const k of ['1', '2', '0', '.', '5']) await page.locator(`[data-testid="manual-key-${k}"]`).click();
   await page.locator('[data-testid="manual-commit"]').click();
-  // ManualValueSheet onCommit은 Promise를 await하지 않는다. 지연 put이 진행 중인 즉시 데이터탭으로
-  // 이동해도 메모리 Session에는 후보+pending 태그가 원자적으로 보여야 한다.
   await page.locator('[data-testid="tab-data"]').click();
   await page.getByRole('button', { name: /시트에 추가/ }).click();
-  // 보류 행은 기본 미선택일 수 있으므로 세션 행을 명시 선택한 뒤 실제 sync 함수를 통과시킨다.
+
   const modal = page.getByText('추가할 세션 선택').locator('..').locator('..');
-  await modal.getByRole('button', { name: /manual-anomaly-hold-test/ }).click();
-  await modal.getByRole('button', { name: /추가 \(1\)/ }).click();
+  // 입력 중인 세션은 선택 목록에서 제외되고, 왜 없는지 사용자에게 보인다(조용히 빠지지 않는다).
+  await expect(modal.getByText(/입력을 끝낸 뒤 업로드/)).toBeVisible();
+  await expect(modal.getByRole('button', { name: /manual-anomaly-hold-test/ })).toHaveCount(0);
   await page.waitForTimeout(800);
   expect(writes).toBe(0);
 });

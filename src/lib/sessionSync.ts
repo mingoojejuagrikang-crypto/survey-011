@@ -6,6 +6,19 @@
  * unit-testable under Node (tests/sessionSync.spec.ts).
  */
 import type { Session, SessionRow, SessionTarget } from '../types';
+import type { VoicePhase } from '../stores/sessionStore';
+
+export const ACTIVE_SESSION_SYNC_MESSAGE =
+  '입력 중이거나 일시정지된 세션은 입력을 끝낸 뒤 업로드해 주세요.';
+
+/** 음성 store가 가리키는 현재 세션 중 Sheets 동기화와 legacy target 결합을 막아야 하는 상태. */
+export function isSessionSyncBlocked(
+  sessionId: string,
+  recordingSessionId: string,
+  phase: VoicePhase,
+): boolean {
+  return recordingSessionId === sessionId && (phase === 'active' || phase === 'paused');
+}
 
 /** True if any row carries per-row sync state (v0.6.0+ session). Legacy sessions return false
  *  and fall back to the syncedRows counter. */

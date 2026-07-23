@@ -7,10 +7,11 @@
 import { useCallback, useRef, useState } from 'react';
 import { useDataStore } from '../stores/dataStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import { useSessionStore } from '../stores/sessionStore';
 import { syncSelected, type SyncReport } from './sync';
 import { downloadCsv, csvToBlob, sessionsToCsv, sessionsToCsvZip } from './csv';
 import { deleteSession as dbDeleteSession, saveSession, resetDb } from './db';
-import type { Session, SessionTarget } from '../types';
+import type { Session } from '../types';
 import { exportLogZip, exportLogZipsPerSession, downloadZip } from './exportLog';
 import { uploadLogToBothDrives } from './driveUpload';
 import { hydrateSessions } from './hydrate';
@@ -20,9 +21,11 @@ import { logger } from './logger';
 import { clipPlayer } from './clipPlayer';
 import { sessionTargetFromSettings } from './sheetConnection';
 import {
-  assignLegacySessionTarget,
+  ACTIVE_SESSION_SYNC_MESSAGE,
+  isSessionSyncBlocked,
   type LegacyTargetDecision,
 } from './sessionSync';
+import { applyLegacyTarget } from './legacyTargetApply';
 import {
   advanceLegacySyncPrompt,
   buildLegacySyncPrompt,
@@ -35,8 +38,6 @@ export interface ExportResult {
   filename: string;
   kind: 'csv' | 'zip';
 }
-
-
 
 /** v0.6.0 — human label for a sync result that may both append and update rows in place.
  *  "N행 추가", "M행 갱신", or "N행 추가, M행 갱신" depending on what happened. */
@@ -75,6 +76,10 @@ export function useDataActions() {
   const [loginPrompt, setLoginPrompt] = useState<{ reason: string; resume: () => void } | null>(null);
 
   const lastSelectedIdsRef = useRef<string[]>([]);
+  const excludeInProgress = (ids: string[]) => {
+    const voice = useSessionStore.getState();
+    return ids.filter((id) => !isSessionSyncBlocked(id, voice.sessionId, voice.phase));
+  };
 
   // v0.20.0 Phase 2 — 재로그인 핸들러. signIn()은 GIS 팝업을 클릭 제스처 안에서 동기적으로 열어야
   // 하므로(googleAuth S-1) 반드시 모달의 onLogin 클릭에서 직접 호출된다. 재로그인 성공 시:
@@ -180,12 +185,18 @@ export function useDataActions() {
 
   const runSyncInner = async (ids: string[]): Promise<{ report: SyncReport; backupOk: boolean } | null> => {
     if (ids.length === 0) return null;
-    lastSelectedIdsRef.current = ids;
+    const syncIds = excludeInProgress(ids);
+    const excludedCount = ids.length - syncIds.length;
+    if (syncIds.length === 0) {
+      setMsg(ACTIVE_SESSION_SYNC_MESSAGE);
+      return null;
+    }
+    lastSelectedIdsRef.current = syncIds;
     setBusy('시트에 추가 중...');
     setMsg(null);
     let backupOk = false;
     try {
-      const report = await syncSelected(ids);
+      const report = await syncSelected(syncIds);
       // 1) 시트 추가 결과 메시지
       if (report.message) {
         setMsg(report.message);
@@ -203,6 +214,9 @@ export function useDataActions() {
       if (report.columnWarnings.length > 0) {
         setMsg((prev) => `${prev ? `${prev} ` : ''}⚠ ${report.columnWarnings.join(' / ')}`);
       }
+      if (excludedCount > 0) {
+        setMsg((prev) => `${prev ? `${prev} · ` : ''}${ACTIVE_SESSION_SYNC_MESSAGE}`);
+      }
 
       // 2) 로그 백업: 사용자 본인 드라이브 + 관리자 폴더 양쪽 업로드 (v0.10 멀티유저).
       // v0.10.1 Codex HIGH 수정: 관리자 폴더 설정 시 admin 업로드도 성공해야 backupOk → autoDelete 차단.
@@ -212,7 +226,7 @@ export function useDataActions() {
       const allSessionsForBackup = useDataStore.getState().sessions;
       const hasRows = (id: string) =>
         (allSessionsForBackup.find((s) => s.id === id)?.rows.length ?? 0) > 0;
-      const uploadIds = ids.filter(hasRows);
+      const uploadIds = excludeInProgress(syncIds).filter(hasRows);
       if (uploadIds.length > 0) {
         try {
           // v0.19.0 W6 — 세션별 개별 zip 업로드. v0.23.0 데이터탭#1 — 대상 = 선택한 모든 세션(행 보유).
@@ -328,10 +342,10 @@ export function useDataActions() {
       setMsg((m) => (m ? m + ` · ${successIds.length}개 세션 삭제됨` : `✓ ${successIds.length}개 세션 삭제됨`));
     }
   };
-
   const handleSyncConfirm = async (ids: string[], autoDelete: boolean) => {
     setSyncModalOpen(false);
-    const sessions = useDataStore.getState().sessions.filter((s) => ids.includes(s.id));
+    const syncIds = excludeInProgress(ids);
+    const sessions = useDataStore.getState().sessions.filter((s) => syncIds.includes(s.id));
     if (sessions.some((s) => !s.target)) {
       const settings = useSettingsStore.getState();
       const target = sessionTargetFromSettings(settings);
@@ -347,20 +361,6 @@ export function useDataActions() {
     }
     await runConfirmedSync(ids, autoDelete);
   };
-
-  /** legacy 세션에 target을 붙여 저장한다. 실패 메시지는 호출부가 표면화한다. */
-  const applyLegacyTarget = async (
-    id: string,
-    target: SessionTarget,
-    decision: LegacyTargetDecision,
-  ) => {
-    const latest = useDataStore.getState().sessions.find((s) => s.id === id);
-    if (!latest || latest.target) return;
-    const updated = assignLegacySessionTarget(latest, target, decision);
-    await saveSession(updated);
-    useDataStore.getState().upsertSession(updated);
-  };
-
   /** 대기열의 **한 세션**에 대한 답을 확정한다. 남은 세션이 있으면 다음 세션을 이어서 묻고,
    *  대기열이 비면 좌표 없는 나머지(plain)를 일괄 결합한 뒤 동기화를 시작한다.
    *  중간 취소는 이미 답한 세션의 결정을 그대로 둔다 — 사용자가 명시적으로 고른 값이다. */
@@ -372,10 +372,22 @@ export function useDataActions() {
     setMsg(null);
     try {
       if (current) {
-        await applyLegacyTarget(current, prompt.target, decision);
+        const result = await applyLegacyTarget(current, prompt.target, decision);
+        if (result === 'active') {
+          setLegacySyncPrompt(null);
+          setMsg(ACTIVE_SESSION_SYNC_MESSAGE);
+          return;
+        }
       } else {
         // 좌표 없는 세션은 어느 답이든 append다 — 묶어서 처리해도 교차 오염이 없다.
-        for (const id of prompt.plain) await applyLegacyTarget(id, prompt.target, decision);
+        for (const id of prompt.plain) {
+          const result = await applyLegacyTarget(id, prompt.target, decision);
+          if (result === 'active') {
+            setLegacySyncPrompt(null);
+            setMsg(ACTIVE_SESSION_SYNC_MESSAGE);
+            return;
+          }
+        }
       }
     } catch (err) {
       setLegacySyncPrompt(null);
@@ -384,13 +396,11 @@ export function useDataActions() {
     } finally {
       setBusy(null);
     }
-
     const next = advanceLegacySyncPrompt(prompt, useDataStore.getState().sessions);
     if (next) { setLegacySyncPrompt(next); return; }
     setLegacySyncPrompt(null);
     await runConfirmedSync(prompt.ids, prompt.autoDelete);
   };
-
   const handleRetry = async () => {
     setFailureReport(null);
     const ids = failureReport?.failures.map((f) => f.sessionId) ?? lastSelectedIdsRef.current;

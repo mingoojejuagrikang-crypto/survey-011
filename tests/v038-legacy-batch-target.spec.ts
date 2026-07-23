@@ -6,7 +6,12 @@
  */
 import { test, expect } from '@playwright/test';
 import type { Session } from '../src/types';
-import { assignLegacySessionTarget } from '../src/lib/sessionSync';
+import {
+  ACTIVE_SESSION_SYNC_MESSAGE,
+  assignLegacySessionTarget,
+  isSessionSyncBlocked,
+} from '../src/lib/sessionSync';
+import { applyLegacyTarget, type LegacyTargetApplyDeps } from '../src/lib/legacyTargetApply';
 import { buildLegacySyncPrompt, advanceLegacySyncPrompt } from '../src/lib/legacySyncFlow';
 
 const SHEET_A = 'SHEET_LEGACY_BATCH_A';
@@ -83,12 +88,14 @@ async function prepare(sessions: Session[]): Promise<{
       return new Response('stop before IDB', { status: 500 });
     },
   });
-  const [{ useDataStore }, { useSettingsStore }, { syncSelected }] = await Promise.all([
+  const [{ useDataStore }, { useSettingsStore }, { useSessionStore }, { syncSelected }] = await Promise.all([
     import('../src/stores/dataStore'),
     import('../src/stores/settingsStore'),
+    import('../src/stores/sessionStore'),
     import('../src/lib/sync'),
   ]);
   useDataStore.getState().setSessions(sessions);
+  useSessionStore.setState({ sessionId: '', phase: 'ready' });
   // 현재 연결은 A. 세션이 target을 갖고 있으면 이 전역 설정은 쓰이지 않아야 한다.
   useSettingsStore.getState().set({
     sheetUrl: `https://docs.google.com/spreadsheets/d/${SHEET_A}/edit`,
@@ -96,6 +103,136 @@ async function prepare(sessions: Session[]): Promise<{
   });
   return { syncSelected, calls };
 }
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function stores() {
+  const [{ useDataStore }, { useSessionStore }] = await Promise.all([
+    import('../src/stores/dataStore'),
+    import('../src/stores/sessionStore'),
+  ]);
+  return { useDataStore, useSessionStore };
+}
+
+async function delayedApplyDeps(
+  delayMs: number,
+  writeDurable: (session: Session) => void,
+  onSave: () => void,
+): Promise<LegacyTargetApplyDeps> {
+  const { useDataStore, useSessionStore } = await stores();
+  return {
+    findSession: (id) => useDataStore.getState().sessions.find((session) => session.id === id),
+    isSyncBlocked: (id) => {
+      const voice = useSessionStore.getState();
+      return isSessionSyncBlocked(id, voice.sessionId, voice.phase);
+    },
+    saveSession: async (session) => {
+      onSave();
+      await wait(delayMs);
+      writeDurable(session);
+    },
+    upsertSession: (session) => useDataStore.getState().upsertSession(session),
+  };
+}
+
+test('활성·일시정지 세션은 legacy 대상 결합을 직접 호출해도 저장하지 않는다', async () => {
+  for (const phase of ['active', 'paused'] as const) {
+    const live = plainLegacy(`live-${phase}`, '2026-07-23');
+    await prepare([live]);
+    const { useDataStore, useSessionStore } = await stores();
+    useSessionStore.setState({ sessionId: live.id, phase });
+
+    const result = await applyLegacyTarget(live.id, TARGET_A, 'same-sheet');
+
+    expect(result).toBe('active');
+    expect(useDataStore.getState().sessions[0].target).toBeUndefined();
+  }
+});
+
+test('활성·일시정지 세션은 syncSelected를 직접 호출해도 Sheets 요청이 0건이다', async () => {
+  for (const phase of ['active', 'paused'] as const) {
+    const live: Session = {
+      ...plainLegacy(`live-sync-${phase}`, '2026-07-23'),
+      target: TARGET_A,
+    };
+    const { syncSelected, calls } = await prepare([live]);
+    const { useSessionStore } = await stores();
+    useSessionStore.setState({ sessionId: live.id, phase });
+
+    const report = await syncSelected([live.id]) as {
+      failed: number;
+      failures: Array<{ reason: string }>;
+    };
+    expect(calls).toHaveLength(0);
+    expect(report.failed).toBe(1);
+    expect(report.failures[0].reason).toBe(ACTIVE_SESSION_SYNC_MESSAGE);
+  }
+});
+
+test('활성 가드가 지연 target 저장 경쟁을 없애고, 종료 후에는 최신 행과 target을 함께 저장한다', async () => {
+  const live = plainLegacy('live-race', '2026-07-23');
+  const { syncSelected, calls } = await prepare([live]);
+  const { useDataStore, useSessionStore } = await stores();
+  useSessionStore.setState({ sessionId: live.id, phase: 'active' });
+
+  let durable = live;
+  let activeSaveCalls = 0;
+  const activeDeps = await delayedApplyDeps(
+    40,
+    (session) => { durable = session; },
+    () => { activeSaveCalls++; },
+  );
+  const blockedAssignment = applyLegacyTarget(live.id, TARGET_A, 'same-sheet', activeDeps);
+
+  // STT final의 store + IDB 저장을 모사한다. 잘못된 구현이면 40ms 뒤 옛 스냅샷이 이를 덮는다.
+  await wait(5);
+  const latest: Session = {
+    ...live,
+    rows: [
+      ...live.rows,
+      { index: 2, values: { c1: 'A농가', c2: '36.2' }, complete: true },
+    ],
+    completedRows: 2,
+  };
+  useDataStore.getState().upsertSession(latest);
+  durable = latest;
+
+  expect(await blockedAssignment).toBe('active');
+  await wait(45);
+  expect(activeSaveCalls).toBe(0);
+  expect(useDataStore.getState().sessions.find((session) => session.id === live.id)?.rows).toHaveLength(2);
+  expect(durable.rows).toHaveLength(2);
+  expect(durable.target).toBeUndefined();
+
+  // 입력 종료 뒤에는 실제 지연 저장을 거쳐, 최신 행 집합에 target이 붙는 기존 흐름을 유지한다.
+  useSessionStore.setState({ phase: 'done' });
+  let endedSaveCalls = 0;
+  let endedSettled = false;
+  const endedDeps = await delayedApplyDeps(
+    35,
+    (session) => { durable = session; },
+    () => { endedSaveCalls++; },
+  );
+  const endedAssignment = applyLegacyTarget(live.id, TARGET_A, 'same-sheet', endedDeps)
+    .then((result) => {
+      endedSettled = true;
+      return result;
+    });
+  await wait(5);
+  expect(endedSaveCalls).toBe(1);
+  expect(endedSettled).toBe(false);
+  expect(await endedAssignment).toBe('applied');
+
+  const stored = useDataStore.getState().sessions.find((session) => session.id === live.id);
+  expect(stored?.rows).toHaveLength(2);
+  expect(stored?.target).toEqual(TARGET_A);
+  expect(durable.rows).toHaveLength(2);
+  expect(durable.target).toEqual(TARGET_A);
+
+  await syncSelected([live.id]);
+  expect(calls.filter((call) => call.url.includes(':append'))).toHaveLength(1);
+  expect(calls.filter((call) => call.url.includes(':batchUpdate'))).toHaveLength(0);
+});
 
 test('서로 다른 시트에서 온 legacy 세션은 하나씩 따로 묻는다', () => {
   const a = uploadedLegacy('legacy-a', '2026-05-13', 42);

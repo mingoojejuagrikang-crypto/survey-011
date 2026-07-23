@@ -4,7 +4,13 @@ import { appendRows, updateCellsSparse, fetchHeaderRow } from './sheets';
 import { saveSession } from './db';
 import { getAccessToken } from './googleAuth';
 import { logger } from './logger';
-import { hasSyncState, recountSynced, legacySyncedIndexSet } from './sessionSync';
+import {
+  hasSyncState,
+  recountSynced,
+  legacySyncedIndexSet,
+  isSessionSyncBlocked,
+  ACTIVE_SESSION_SYNC_MESSAGE,
+} from './sessionSync';
 import { mapColumnsToHeader, buildRowForMapping, buildSparseCellsForMapping, type ColumnMapping } from './columnMapping';
 import type { Session, SessionRow } from '../types';
 import { withoutPendingCandidate } from './pendingValidation';
@@ -113,6 +119,18 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
       });
       continue;
     }
+    const voice = useSessionStore.getState();
+    if (isSessionSyncBlocked(id, voice.sessionId, voice.phase)) {
+      report.failed++;
+      report.failures.push({
+        sessionId: storedSession.id,
+        sessionDate: storedSession.date,
+        sessionLabel: storedSession.label,
+        reason: ACTIVE_SESSION_SYNC_MESSAGE,
+      });
+      if (sessionIds.length === 1) report.message = ACTIVE_SESSION_SYNC_MESSAGE;
+      continue;
+    }
     // 확인 전 수동 이상치 후보는 dirty여도 Sheets에 쓸 수 없다. 원 확정값/원 syncState로 투영한
     // 작업 복사본을 사용하고, 해당 행 자체도 append/update 대상에서 제외해 PUT/POST를 0으로 만든다.
     const pendingRow = storedSession.pendingValidation?.row;
@@ -155,15 +173,6 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
         if (isAuthFailure(msg)) report.needsLogin = true;
         continue;
       }
-
-    // C2 — don't upload an actively-recording session's partial/skip placeholder rows, and never
-    // auto-delete it. persistSession sets finishedAt on every (even mid-session) save, so it can't
-    // tell "in progress" from "done" — but the live sessionStore holds the id currently being
-    // recorded. A session that is NOT the active recording id is treated as finished.
-    const recordingId = useSessionStore.getState().sessionId;
-    const recordingPhase = useSessionStore.getState().phase;
-    const isActivelyRecording =
-      recordingId === id && (recordingPhase === 'active' || recordingPhase === 'paused');
 
     // [SYNC-3] fix — map local columns to the sheet's ACTUAL header by NAME (not by local
     // declaration order/position). A column whose name isn't in the header is "missing in sheet":
@@ -211,7 +220,6 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     const appendTargets = rows
       .filter((r) => r.index !== pendingRow)
       .filter((r) => r.syncState !== 'synced' && r.sheetRow === undefined)
-      .filter((r) => r.complete || !isActivelyRecording)
       .sort((a, b) => a.index - b.index);
 
     let appended = 0;
@@ -370,18 +378,13 @@ export async function syncSelected(sessionIds: string[]): Promise<SyncReport> {
     if (pushedAnything) {
       report.ok++;
       report.rows += appended;
-      // C2 — successIds drives backup+auto-delete. NEVER auto-delete a session that is still being
-      // recorded, even if some of its complete rows uploaded — the user may add more rows. (With
-      // the current UI sync only runs on finished sessions; this guard makes the invariant explicit
-      // and survives any future entry point that syncs a live session.)
-      //
       // v0.34.0 리뷰(Codex 전용 리뷰 하네스, P1) — **보류(pendingValidation) 행이 있는 세션도 제외**.
       // 위 pass 1·2가 보류 행만 건너뛰고 나머지 행을 올리면 pushedAnything=true가 되는데, 여기서
       // 세션 전체를 successIds에 넣으면 DataScreen이 "동기화 완료"로 보고 **자동 삭제**한다. 백업에는
       // withoutPendingCandidate로 위생처리된 **직전 확정값만** 담기므로 확인 대기 중이던 후보값이
       // 영구 소실된다(자동삭제가 꺼져 있어도 UI가 미완 세션을 성공으로 거짓 보고). 보류가 해소된 뒤
       // 다음 sync에서 정상적으로 성공 처리된다.
-      if (!isActivelyRecording && pendingRow === undefined) report.successIds.push(session.id);
+      if (pendingRow === undefined) report.successIds.push(session.id);
     }
 
     } finally {
