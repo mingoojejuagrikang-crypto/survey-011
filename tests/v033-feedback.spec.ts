@@ -17,10 +17,9 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import JSZip from 'jszip';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
-
-const BASE = 'http://localhost:5175';
 
 interface DriveStub {
   uploads: { filename: string; zip: Buffer }[];

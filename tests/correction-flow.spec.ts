@@ -12,10 +12,9 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { extractModifyColumn } from '../src/lib/voiceCommands';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
-
-const BASE = 'http://localhost:5175';
 
 const SETTINGS = {
   state: {

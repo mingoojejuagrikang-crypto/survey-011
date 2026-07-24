@@ -2,11 +2,11 @@
  * v0.13.0 시각 검증 — 데이터탭 신규 모달 2종 402px 스크린샷(비단언, 레이아웃 확인용).
  *  (R5) 세션 상세 모달 — 인라인 확장 대신 넓은 센터 모달
  *  (R6) 내보내기 완료 팝업 — 작은 줄 배너 대신 큰 모달 + 공유/재다운로드
- * 실행: npx playwright test v013-data-screens (dev 서버 5175 기동 상태)
+ * 실행: npx playwright test v013-data-screens (서버는 webServer가 5177로 자동 기동)
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 test.use({ viewport: { width: 402, height: 874 } });
 
 async function injectSession(page: Page) {

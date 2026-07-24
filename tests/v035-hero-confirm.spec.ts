@@ -25,13 +25,13 @@
  *   2) 행 **마지막** 음성 컬럼 커밋 → ✓ 대신 "N행 완료"(review). 민구가 (a)로 확정한 스펙이며
  *      통일하려면 advance/phase 순서 재작업이 필요해 범위 밖이다([TEST-UI-3] 파생 항목).
  *
- *  dev 서버 수동 기동 필요: npm run dev -- --port 5175 --strictPort
+ *  서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 const PHONE_402 = { width: 402, height: 874 };
 

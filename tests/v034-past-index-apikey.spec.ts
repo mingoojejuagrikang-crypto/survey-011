@@ -17,14 +17,14 @@
  *  3) e2e — 토큰 있음 부팅: v0.34.0 C9(c) 부팅 트리거가 세션 시작 **전에**
  *     `past_index_fetch_start:auth=token` → `past_index_ready`를 만든다.
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
 import { planValuesReadonly } from '../src/lib/sheets';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 const SHEET_ID = 'SHEET_V034_APIKEY_1';
 

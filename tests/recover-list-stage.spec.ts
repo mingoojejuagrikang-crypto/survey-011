@@ -10,14 +10,14 @@
  *   2. 기간 필터: "최근 7일"은 7일보다 오래된 zip을 조회 대상에서 제외(다운로드 0).
  *   3. 선택 복구: 체크 해제한 세션은 IDB에 저장되지 않는다.
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
 import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
 import JSZip from 'jszip';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-const BASE = 'http://localhost:5175';
 
 const COLS = [
   { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 2 } },

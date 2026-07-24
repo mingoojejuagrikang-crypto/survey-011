@@ -15,13 +15,13 @@
  *   4. fetch 실패(HTTP 500) → 알림 없이 조용히 진행 + trend_skip:no_index 1회만(원인당 1회)
  *   5. trend_* 이벤트가 IDB logEvents(로그 zip 소스)에 남는다
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 
 /** 직전 회차 = 어제(로컬) — previousRound가 '오늘 미만 strictly'라 당일 날짜는 못 쓴다. */

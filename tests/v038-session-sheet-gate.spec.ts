@@ -3,7 +3,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 const STORE_KEY = 'survey-011-settings-v3';
 const SHEET_A = 'SHEET_GATE_A';
 const SHEET_B = 'SHEET_GATE_B';

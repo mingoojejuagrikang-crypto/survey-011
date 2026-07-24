@@ -8,10 +8,9 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { DB_NAME, DB_VERSION, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-
-const BASE = 'http://localhost:5175';
 
 // ─── Mock STT / TTS init script ──────────────────────────────────────────────
 

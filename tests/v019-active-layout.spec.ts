@@ -13,7 +13,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 const PHONE = { width: 402, height: 874 };
 
 // isSpeechSupported() 통과용 최소 스텁. start() 후 onstart만 부르고 결과는 안 보냄

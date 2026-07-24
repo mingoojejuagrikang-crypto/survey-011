@@ -10,13 +10,13 @@
  *   3. batchUpdate 404 → sheetRow 초기화 후 append 폴백 + sync_row_mismatch 텔레메트리.
  *   4. 구버전 세션(syncState 없음, syncedRows>0): index<=syncedRows는 synced 취급, 이후만 append.
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
 import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-const BASE = 'http://localhost:5175';
 
 const SETTINGS = {
   state: {

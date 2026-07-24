@@ -9,14 +9,14 @@
  *       pointer-events 통과, zIndex 54(팝업 아래), 세션 비활성 미렌더, 레벨로 강도 변조.
  *  D11b — 세션 시작 ui_fx:wave=on,glow=on,preroll=<...> 계측 1건(IDB logEvents로 확인).
  *
- *  dev 서버 수동 기동 필요: npm run dev -- --port 5175 --strictPort
+ *  서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
 import { fireStt, fireSttInterim, installVoiceMocks, waitForTtsIdle } from './fixtures/stt';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 const PHONE_375 = { width: 375, height: 812 };
 

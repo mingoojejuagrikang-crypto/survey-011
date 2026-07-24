@@ -7,11 +7,11 @@
  *     · v0.30.0: 단일 컬럼 기준이라 실제 nested 자동값과 불일치하던 라이브 미리보기는 제거.
  *   데이터탭#4 — 작은 인라인 안내를 제거하고 헤더 `?`로 여는 큰 중앙 팝업으로 이전(on-demand).
  *
- * 375px 시뮬레이션(GL-005). 서버: `npm run dev -- --port 5175 --strictPort`.
+ * 375px 시뮬레이션(GL-005). 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 const PHONE_375 = { width: 375, height: 812 };
 
 async function goToSettings(page: Page) {

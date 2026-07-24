@@ -17,10 +17,10 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 
 const BASE_SETTINGS = {

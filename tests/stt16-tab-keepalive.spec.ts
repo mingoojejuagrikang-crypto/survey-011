@@ -20,10 +20,10 @@ import {
   LONG_BACKGROUND_TEARDOWN_MS,
   reduceForegroundReturn,
 } from '../src/lib/foregroundReturnPolicy';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const TOTAL_ROWS = 3;
 
 test.describe('[MIC-B2] 포그라운드 복귀 순수 정책', () => {

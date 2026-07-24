@@ -11,14 +11,14 @@
  * 각 오버레이가 시뮬레이션된 inset 안(safe bounds)에 완전히 들어오고, 인터랙티브 요소가
  * 잘리지 않고 실제로 탭 가능한지를 단언한다.
  *
- * 실행: dev 서버 5175 수동 기동 후 `npx playwright test safe-area` (CLAUDE.md 참조).
+ * 실행: `npx playwright test safe-area` — 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
 import { type Page, type Locator } from '@playwright/test';
 import { test, expect, safeBounds } from './fixtures/safeArea';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 
 // ── 공용 단언 ────────────────────────────────────────────────

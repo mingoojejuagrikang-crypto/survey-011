@@ -17,12 +17,12 @@
  * without a real 2-minute wait, and a GIS mock whose token callback fires LATE (simulating the
  * slow real 2FA) via a clock-controlled setTimeout.
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-const BASE = 'http://localhost:5175';
 
 /** GIS mock whose requestAccessToken does NOT call back synchronously — it schedules the token
  *  callback `delayMs` later (virtualized by page.clock), simulating a slow real 2FA completion

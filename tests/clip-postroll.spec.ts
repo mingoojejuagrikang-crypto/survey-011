@@ -12,9 +12,10 @@
  *   2. echo TTS 즉시(0ms): 다음 필드 announceField의 startClip이 0.5s 안에 도착 → post-roll
  *      우아한 절단(postrollMs < 500), clip_save_failed 없이 클립 저장
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 test.use({
@@ -23,7 +24,6 @@ test.use({
   },
 });
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 
 const SETTINGS = {

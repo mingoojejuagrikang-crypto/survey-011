@@ -6,15 +6,14 @@
  *  실물 없는 클립 포인터는 재생 시 무해, 미로그인 시 Drive 호출 0회, 목록 조회 실패 graceful.)
  *
  * page.route로 Drive API 전체 stub: 폴더 검색 → zip 목록(최신순) → zip alt=media.
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 
 import { test, expect, type Page } from '@playwright/test';
 import JSZip from 'jszip';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-
-const BASE = 'http://localhost:5175';
 
 const DRIVE_SESSION = {
   id: 'drv-s1',

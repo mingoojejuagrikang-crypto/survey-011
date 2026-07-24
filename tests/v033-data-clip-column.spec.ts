@@ -6,11 +6,11 @@
  *         클립 없는 세션/컬럼엔 클립 컬럼이 아예 안 생긴다.
  *        ② 세션 카드에 미완료 행이 있으면 amber '작성중 N' 배지(완료 배지 패턴 재사용).
  *
- * 402×874(iphone17 대리) 시뮬레이션. 서버: `npm run dev -- --port 5175 --strictPort`.
+ * 402×874(iphone17 대리) 시뮬레이션. 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 test.use({ viewport: { width: 402, height: 874 } });
 
 const COLUMNS = [

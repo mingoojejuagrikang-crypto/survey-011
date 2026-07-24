@@ -10,13 +10,13 @@
  *      그를 초과한다(= 내부 스크롤이 실제로 생긴다). 전체 그리드가 화면을 잠식하지 않는다.
  *   2) 뒤쪽 음성 컬럼으로 진행하면 활성 칩이 그리드의 가시 스크롤 창 안으로 들어온다(자동 스크롤).
  *
- * dev 서버 수동 기동 필요: npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(90_000);
 
-const BASE = 'http://localhost:5175';
 const PHONE_402 = { width: 402, height: 874 };
 const PHONE_375 = { width: 375, height: 667 };
 

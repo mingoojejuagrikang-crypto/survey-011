@@ -17,10 +17,9 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { installVoiceMocks, fireStt, fireSttInterim } from './fixtures/stt';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
-
-const BASE = 'http://localhost:5175';
 
 // fastRecognition을 명시하지 않는다 — 기본값(OFF)이 격리 대상 그 자체다.
 const SETTINGS = {

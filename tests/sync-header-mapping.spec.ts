@@ -13,13 +13,13 @@
  *  (b) sheet has MORE columns than local — values must land at the NAMED column, not column A/B.
  *  (c) column order differs, names match — proves name-based (not positional) placement.
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
 import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-const BASE = 'http://localhost:5175';
 
 interface SheetCall { method: string; url: string; body: unknown }
 

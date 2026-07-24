@@ -10,13 +10,13 @@
  * GIS(google.accounts.oauth2)를 mock해 signIn()이 토큰을 발급하도록 한다(실 네트워크/팝업 없음).
  * Sheets API는 sync-skip-rows 패턴으로 page.route stub.
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
 import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-const BASE = 'http://localhost:5175';
 
 const SETTINGS = {
   state: {

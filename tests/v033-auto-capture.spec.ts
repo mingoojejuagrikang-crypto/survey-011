@@ -7,7 +7,7 @@
  *         토글 off/세션 문맥 없음 스킵, 키 `${sessionId}:${ts}:${trigger}`, capture_saved 계측(ms).
  *  [e2e]  세션 삭제 시 screenshots 스토어 cascade(다른 세션 것은 보존).
  *
- * e2e 서버: `npm run dev -- --port 5175 --strictPort`.
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -18,7 +18,7 @@ import {
 } from '../src/lib/screenshot';
 import type { LogEntry } from '../src/lib/logger';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 
 // ─── [node] 트리거 매핑 ──────────────────────────────────────────────────────
 

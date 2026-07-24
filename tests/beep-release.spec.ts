@@ -6,11 +6,11 @@
  * 세그먼트 3개=osc 3개)을 미리듣기하면: 마스터 1개 + 세그먼트 gain 3개 + osc 3개가 생성되고,
  * **마지막 osc onended 후에만 마스터가 정확히 1회** disconnect돼야 한다(setTimeout 레이스 없음).
  *
- * UI 테스트 서버: `npm run dev -- --port 5175 --strictPort`.
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
 import { test, expect } from '@playwright/test';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 
 // 앱 로드 전에 window.AudioContext를 가짜로 교체(설정탭엔 세션/프리롤이 없어 비프만 이걸 쓴다).
 const FAKE_AUDIO = `

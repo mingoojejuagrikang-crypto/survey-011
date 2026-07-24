@@ -16,14 +16,14 @@
  *    오라클: IDB 쓰기 실패 주입(__survey011FailSessionPut) → 종료해도 ready 미전환 + 오류 노출,
  *    실패 해제 후 [다시 저장] → 저장 성공 + ready 전환.
  *
- * dev 서버 수동 기동 필요: npm run dev -- --port 5175 --strictPort ([ENV-1]/[ENV-2])
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  * Mock/fixture 패턴은 manual-input.spec.ts와 동일.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 
 const BASE_SETTINGS = {

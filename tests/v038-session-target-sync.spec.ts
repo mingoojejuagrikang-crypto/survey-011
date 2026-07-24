@@ -2,9 +2,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
 import { fireStt, installVoiceMocks } from './fixtures/stt';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 const SHEET_A = 'SHEET_TARGET_A';
 const SHEET_B = 'SHEET_TARGET_B';

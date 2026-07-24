@@ -10,14 +10,14 @@
  *   소비한다. 아래 오라클은 "마지막 셀을 어떤 경로로 채웠든 검토는 그 셀의 실제 커밋값을 보인다"이다.
  *   (d) '이전'으로 완료행을 재방문(새 영수증 없음)하면 여전히 중립 "N행 완료"로 폴백한다(값 오표시 금지).
  *
- * dev 서버 수동 기동 필요: npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  * Mock/fixture 패턴은 manual-input.spec.ts와 동일(_aborted 가드 + __ttsLog).
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 
 const MOCK_INIT_SCRIPT = `

@@ -17,13 +17,13 @@
  *     'empty'면 아무것도 내보내지 않는다(빈 캡처 시뮬레이션).
  *   - AudioContext는 제거(undefined) — 프리롤/트림이 결정적으로 비활성(원본 blob 그대로 저장).
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 
 const SETTINGS = {

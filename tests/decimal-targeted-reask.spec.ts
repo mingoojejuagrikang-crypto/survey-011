@@ -12,10 +12,9 @@
  * MockSTT/mockSynth 주입·헬퍼는 correction-flow.spec.ts 패턴을 그대로 따른다.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
-
-const BASE = 'http://localhost:5175';
 
 const SETTINGS = {
   state: {

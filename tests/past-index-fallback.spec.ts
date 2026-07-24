@@ -17,7 +17,7 @@
  *      + 신선 캐시 경로는 stale 로그 없음
  *   4. 3상태 배지(설정탭·입력탭 시작 카드): Google 연결(토큰 실시간)/시트 연결/과거값 준비 + 재시도 버튼
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -29,10 +29,10 @@ import {
 } from '../src/lib/pastValues';
 import { effectiveSampleKey } from '../src/lib/columnFlags';
 import type { Column } from '../src/types';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 const SHEET_ID = 'SHEET_PASTIDX_1';
 

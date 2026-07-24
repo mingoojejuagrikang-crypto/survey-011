@@ -9,13 +9,13 @@
  *  T2 — 다이얼 0.4(관대): conf 0.45 발화 → 수용(값 커밋, 거부 이벤트 0).
  *  T3 — 입력 조절 스탭퍼가 "높을수록 엄격"을 명시(오해 재발 방지 가드).
  *
- *  STT/TTS 목·설정 시드는 v023-voice.spec.ts 패턴 재사용. dev 서버 5175 수동 기동 필요.
+ *  STT/TTS 목·설정 시드는 v023-voice.spec.ts 패턴 재사용. 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 const PHONE_375 = { width: 375, height: 812 };
 

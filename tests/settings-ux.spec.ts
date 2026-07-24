@@ -11,7 +11,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 const STORE_KEY = 'survey-011-settings-v3';
 const PHONE_375 = { width: 375, height: 812 };
 

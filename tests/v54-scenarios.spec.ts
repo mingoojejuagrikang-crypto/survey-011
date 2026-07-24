@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 
 // 앱이 표시하는 버전은 vite define(__APP_VERSION__ = pkg.version)에서 옴.
 // 하드코딩 대신 package.json의 version을 읽어 비교 → 버전 bump에 견딤.

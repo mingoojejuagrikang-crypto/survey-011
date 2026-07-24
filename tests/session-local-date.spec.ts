@@ -11,14 +11,14 @@
  * 세션 한 행을 음성 커밋으로 완료시킨 뒤 IDB sessions의 date가 로컬(2026-01-02)인지 단언.
  * 수정 전 코드는 UTC(2026-01-01)를 기록해 이 테스트가 실패한다.
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
 test.use({ timezoneId: 'Pacific/Kiritimati' }); // UTC+14
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 // UTC 2026-01-01 20:00 = Kiritimati(UTC+14) 2026-01-02 10:00 — 날짜가 결정적으로 어긋난다.
 const FIXED_TIME = '2026-01-01T20:00:00Z';

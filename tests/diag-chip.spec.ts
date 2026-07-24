@@ -2,10 +2,9 @@
  * Minimal diagnostic: does fireStt actually trigger advance() and chip switch?
  */
 import { test, expect } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-
-const BASE = 'http://localhost:5175';
 
 const SETTINGS_2COL = {
   state: {

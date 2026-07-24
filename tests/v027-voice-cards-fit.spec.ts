@@ -9,13 +9,13 @@
  *  v023-voice.spec.ts B1 패턴 확장: 긴 항목명 + 큰 음수소수(-355.5), 402×874(iPhone 16 Pro급)와
  *  375×812 두 뷰포트. 스크린샷은 Larry 육안 검수용으로 scratchpad에 저장.
  *
- *  dev 서버 수동 기동 필요: npm run dev -- --port 5175 --strictPort
+ *  서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 const SHOT_DIR = '/private/tmp/claude-501/-Users-kangmingoo-workspace-AI-PKA/b55dd6fd-e9a1-4776-a982-360ba043adb9/scratchpad/v027-vance';
 

@@ -6,7 +6,7 @@
  *  [UI]   설정 도움말 팝업에 데이터형 6항목(이름=자동 텍스트 전환 실동작 문구), 비프 칩 10개
  *         (탭=선택), persist v11 coercion(누락/손상 → 기본값, version bump 없음).
  *
- * UI 테스트 서버: `npm run dev -- --port 5175 --strictPort`.
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -18,7 +18,7 @@ import {
   isBeepVariantId,
 } from '../src/lib/beepVariants';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 const SETTINGS_KEY = 'survey-011-settings-v3';
 
 // ─── [node] 비프 세그먼트 스펙 ───────────────────────────────────────────────

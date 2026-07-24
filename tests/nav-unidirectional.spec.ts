@@ -23,10 +23,10 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const TOTAL_ROWS = 3;
 
 const SETTINGS_3ROWS = {

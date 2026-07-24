@@ -13,9 +13,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DB_NAME, APP_STORE_NAMES, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
+import { BASE } from './baseUrl';
 
 const TESTS_DIR = dirname(fileURLToPath(import.meta.url));
-const BASE = 'http://localhost:5175';
 
 test('spec에 indexedDB.open 버전 하드코딩이 없다 (fixture 주입만 허용)', () => {
   const offenders: string[] = [];

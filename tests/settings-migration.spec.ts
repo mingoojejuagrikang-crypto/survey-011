@@ -21,13 +21,13 @@
  * 샘플키 토글 UI는 v0.8.0에서 조회탭으로 이전(WS4)되므로 설정탭 UI 검증 대신 store 페이로드로
  * 마이그레이션 결과를 검증한다.
  *
- * dev 서버 수동 기동 필요([ENV-1/2]): npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
 import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
+import { BASE } from './baseUrl';
 
 test.setTimeout(60_000);
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 const BLUE = 'rgb(41, 121, 255)'; // T.blue — SegmentToggle 활성 배경
 

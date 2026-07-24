@@ -9,13 +9,13 @@
  *       머지 전이라, 컴포넌트(ReaskCue) 단위 렌더만 DOM 주입 없이 직접 검증한다(통합은 머지 후).
  *  B3 — 마이크 재연결 버튼: 탭 후 쿨다운(~3s) 동안 비활성+"재연결 중…"로 더블탭 무반응 오인 방지.
  *
- *  STT/TTS 주입 + 설정 시드는 trend-alert.spec.ts 패턴 재사용. dev 서버 5175 수동 기동 필요.
+ *  STT/TTS 주입 + 설정 시드는 trend-alert.spec.ts 패턴 재사용. 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 const PHONE_375 = { width: 375, height: 812 };
 

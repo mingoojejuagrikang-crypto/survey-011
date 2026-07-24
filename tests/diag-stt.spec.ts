@@ -1,4 +1,5 @@
 import { test } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 const MOCK_INIT_SCRIPT = `
 (function() {
@@ -42,7 +43,7 @@ const MOCK_INIT_SCRIPT = `
 
 test('STT registration diagnostics', async ({ page }) => {
   await page.addInitScript(MOCK_INIT_SCRIPT);
-  await page.goto('http://localhost:5175');
+  await page.goto(BASE);
   await page.waitForLoadState('domcontentloaded');
   
   const diag = await page.evaluate(() => {

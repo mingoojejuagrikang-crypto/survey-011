@@ -13,14 +13,14 @@
  *   C(단일: 수동시트만) 열고 닫기 → 종전대로 정상 재개(회귀 없음).
  *
  * STT 목은 tests/fixtures/stt.ts SSOT 사용(Codex Medium #4 — 인라인 목 금지).
- * dev 서버 수동 기동 필요: npm run dev -- --port 5175 --strictPort
+ * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
 import { installVoiceMocks, fireStt } from './fixtures/stt';
+import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
 
-const BASE = 'http://localhost:5175';
 const STORE_KEY = 'survey-011-settings-v3';
 
 const SETTINGS = {

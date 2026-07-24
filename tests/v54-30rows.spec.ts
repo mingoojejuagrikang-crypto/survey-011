@@ -18,10 +18,9 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { BASE } from './baseUrl';
 
 test.setTimeout(180_000);
-
-const BASE = 'http://localhost:5175';
 
 // ─── 설정 localStorage — 30행 컬럼 구성 ─────────────────────────────────────
 

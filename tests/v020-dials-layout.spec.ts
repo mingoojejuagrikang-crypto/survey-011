@@ -12,7 +12,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const BASE = 'http://localhost:5175';
+import { BASE } from './baseUrl';
 const PHONE_402 = { width: 402, height: 874 };
 const PHONE_375 = { width: 375, height: 812 };
 
