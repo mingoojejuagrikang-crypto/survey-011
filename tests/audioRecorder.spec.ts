@@ -32,6 +32,28 @@ function withStream(rec: AudioRecorder, stream: MediaStream | null): AudioRecord
   return rec;
 }
 
+/** teardown/recover 소유권 테스트용 live MediaStream. stop 횟수와 스트림 identity를 함께 본다. */
+function trackedStream(label = 'test mic', muted = false): {
+  stream: MediaStream;
+  stopped: () => number;
+} {
+  let stopCalls = 0;
+  const track = {
+    readyState: 'live' as MediaStreamTrackState,
+    muted,
+    label,
+    getSettings: () => ({ deviceId: label }),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    stop: () => { stopCalls++; },
+  } as unknown as MediaStreamTrack;
+  const stream = {
+    getAudioTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+  return { stream, stopped: () => stopCalls };
+}
+
 test.describe('AudioRecorder.isStreamLost() — micLost 게이트 판정', () => {
   test('스트림 null → lost(true)', () => {
     const rec = withStream(new AudioRecorder(), null);
@@ -238,6 +260,12 @@ class StubAudioContext {
   readonly sampleRate = 48_000;
   readonly audioWorklet: { addModule: () => Promise<void> };
   closeCalls = 0;
+  /** v0.38.1 [MIC-B2] iOS/WebKit이 노출하는 컨텍스트 상태. 기본은 정상 'running'이고, 백그라운드
+   *  인터럽션 재현이 필요한 테스트만 'interrupted'로 바꾼다(계측 바이트 검증용). */
+  state = 'running';
+  /** v0.38.1 [MIC-B2] `close()` 동작 주입 훅 — **물린 세션에서 close 자체가 멈추는** 상황을 재현한다.
+   *  기본은 즉시 resolve라 기존 테스트 동작은 그대로다. */
+  closeImpl: () => Promise<void> = () => Promise.resolve();
 
   constructor(addModule: () => Promise<void>) {
     this.audioWorklet = { addModule };
@@ -252,7 +280,7 @@ class StubAudioContext {
   createScriptProcessor(): ScriptProcessorNode {
     return new StubAudioNode() as unknown as ScriptProcessorNode;
   }
-  close(): Promise<void> { this.closeCalls++; return Promise.resolve(); }
+  close(): Promise<void> { this.closeCalls++; return this.closeImpl(); }
 }
 
 type MicTapPrivate = { capture: { ctx: AudioContext } | null };
@@ -260,6 +288,7 @@ type TestAudioGlobals = typeof globalThis & { window?: unknown; AudioWorkletNode
 
 function installAudioContextStub(
   addModules: Array<() => Promise<void>>,
+  opts: { onWorkletConstruct?: () => void } = {},
 ): { contexts: StubAudioContext[]; restore: () => void } {
   const globals = globalThis as TestAudioGlobals;
   const previousWindow = globals.window;
@@ -273,8 +302,14 @@ function installAudioContextStub(
       contexts.push(this);
     }
   }
+  class WorkletNodeStub extends StubWorkletNode {
+    constructor() {
+      super();
+      opts.onWorkletConstruct?.();
+    }
+  }
   globals.window = { AudioContext: AudioContextStub };
-  globals.AudioWorkletNode = StubWorkletNode;
+  globals.AudioWorkletNode = WorkletNodeStub;
   return {
     contexts,
     restore: () => {
@@ -333,6 +368,36 @@ test.describe('MicPrerollTap attach/detach 수명주기', () => {
       expect(tap.getKind()).toBe('worklet');
     } finally {
       tap.detach();
+      env.restore();
+    }
+  });
+
+  test('노드 생성 중 취소된 옛 attach는 publish 직전 세대 확인으로 새 스트림을 덮지 않는다', async () => {
+    const oldStream = {} as MediaStream;
+    const currentStream = {} as MediaStream;
+    let tap!: MicPrerollTap;
+    let workletConstructions = 0;
+    const env = installAudioContextStub(
+      [() => Promise.resolve(), () => Promise.resolve()],
+      {
+        onWorkletConstruct: () => {
+          workletConstructions++;
+          // 마지막 await(addModule) 뒤, capture 게시 직전 재진입으로 detach를 끼운다.
+          if (workletConstructions === 1) void tap.detach().catch(() => {});
+        },
+      },
+    );
+    tap = new MicPrerollTap();
+    try {
+      await tap.attach(oldStream);
+      expect(tap.isAttachedTo(oldStream)).toBe(false);
+      expect(env.contexts[0].closeCalls).toBe(1);
+
+      await tap.attach(currentStream);
+      expect(tap.isAttachedTo(currentStream)).toBe(true);
+      expect(tap.isAttachedTo(oldStream)).toBe(false);
+    } finally {
+      void tap.detach().catch(() => {});
       env.restore();
     }
   });
@@ -830,4 +895,272 @@ test.describe('[리뷰#6] dispose()가 진행 중인 획득을 무효화한다 (
     expect(priv.stream).toBe(second.stream);
     expect(second.stopped()).toBe(0);
   });
+});
+
+/**
+ * v0.38.1 [MIC-B2] **포그라운드 복귀 선-정리(`teardownAudioGraph`)** — 낡은 오디오 그래프 해제와 계측.
+ *
+ * 근인(2026-07-24 실기기 확증): 앱 50분 백그라운드 + BT→스피커 경로전환 뒤, 권한이 허용 상태인데도
+ * 재연결 `getUserMedia`가 8회 전부 `NotAllowedError`로 ~10ms 내 거부됐다(0클립, STT는 생존).
+ * 유력 원인은 iOS 오디오 세션이 interrupted로 물린 채 낡은 `AudioContext`가 붙들고 있는 것인데,
+ * **첫 재연결 시도가 이미 `detach()`로 그 참조를 버린 뒤라 2회차부터는 닫을 대상조차 없었다.**
+ * 그래서 닫을 수 있는 유일한 창이 "재연결 시도 이전, 포그라운드 복귀 직후"다.
+ *
+ * 이 수정의 원인가설(P1)·효과(P2)는 **미검증**이고 실기기가 최종 판정자다. 그러므로 여기서 고정할
+ * 계약은 "iOS가 고쳐졌다"가 아니라 **판정에 필요한 바이트가 정확히 남는가**이다(#12-bis):
+ *  - `found=none`      → 닫을 게 없었다(수정이 no-op) — 원인은 JS측 컨텍스트가 아니다
+ *  - `closed=timeout`  → close 자체가 물렸다
+ *  - `found=interrupted:closed=ok` 후 획득 성공 → P1·P2 확정
+ * 이 구분이 없으면 "고쳐도 안 풀린 것"과 "애초에 아무것도 안 한 것"을 영원히 못 가른다.
+ */
+test.describe('v0.38.1 [MIC-B2] teardownAudioGraph() — 낡은 그래프 해제 + 판정 바이트', () => {
+  test.beforeEach(() => logger.clear());
+  test.afterEach(() => logger.clear());
+
+  const teardownExtras = (): string[] =>
+    logger.getAll().map((e) => e.extra ?? '').filter((x) => x.startsWith('mic_teardown:'));
+
+  const tapOf = (rec: AudioRecorder): MicPrerollTap =>
+    (rec as unknown as { prerollTap: MicPrerollTap }).prerollTap;
+
+  test('물린 컨텍스트를 실제로 닫고 found=interrupted:closed=ok를 남긴다', async () => {
+    const env = installAudioContextStub([() => Promise.resolve()]);
+    const rec = new AudioRecorder();
+    try {
+      await tapOf(rec).attach({} as MediaStream);
+      env.contexts[0].state = 'interrupted'; // iOS 백그라운드 인터럽션 재현
+
+      await rec.teardownAudioGraph('vis', 3000_000);
+
+      expect(env.contexts[0].closeCalls).toBe(1);
+      expect(teardownExtras()).toEqual([
+        'mic_teardown:found=interrupted,closed=ok,reattach=skipped,evt=vis,bg_s=3000',
+      ]);
+    } finally {
+      env.restore();
+    }
+  });
+
+  /** **반증 테스트(#12-bis).** `teardownAudioGraph`의 `withTimeout` 경계를 제거하면 이 테스트는
+   *  영원히 멈춰 실패해야 한다 — 그래야 "정리 코드가 되레 다음 획득을 막는" 회귀를 테스트가 잡는다. */
+  test('close가 물려 멈춰도 경계 안에서 끝나고 closed=timeout을 남긴다', async () => {
+    const env = installAudioContextStub([() => Promise.resolve()]);
+    const rec = new AudioRecorder();
+    try {
+      (rec as unknown as { teardownTimeoutMs: number }).teardownTimeoutMs = 20;
+      await tapOf(rec).attach({} as MediaStream);
+      env.contexts[0].state = 'interrupted';
+      env.contexts[0].closeImpl = () => new Promise<void>(() => { /* 영원히 멈춘 close */ });
+
+      await rec.teardownAudioGraph('vis', 3000_000);
+
+      expect(teardownExtras()).toEqual([
+        'mic_teardown:found=interrupted,closed=timeout,reattach=skipped,evt=vis,bg_s=3000',
+      ]);
+    } finally {
+      env.restore();
+    }
+  });
+
+  test('닫을 그래프가 없으면 found=none — no-op이 조용한 성공으로 읽히지 않는다', async () => {
+    const rec = new AudioRecorder();
+
+    await rec.teardownAudioGraph('pageshow', 120_000);
+
+    expect(teardownExtras()).toEqual([
+      'mic_teardown:found=none,closed=ok,reattach=skipped,evt=pageshow,bg_s=120',
+    ]);
+  });
+
+  /** 회귀 방지: 정리만 하고 끝내면 "백그라운드 다녀오면 파형·프리롤이 죽는" 새 결함을 만든다 —
+   *  마이크는 멀쩡한데도. 트랙이 살아 있으면 캡처 탭을 다시 붙여 원상 복구한다. */
+  test('정리 후 트랙이 살아 있으면 캡처를 재부착한다(복귀 후 파형 사망 방지)', async () => {
+    const env = installAudioContextStub([() => Promise.resolve(), () => Promise.resolve()]);
+    const current = trackedStream();
+    const rec = withStream(new AudioRecorder(), current.stream);
+    try {
+      await tapOf(rec).attach({} as MediaStream);
+
+      await rec.teardownAudioGraph('vis', 90_000);
+
+      expect(env.contexts[0].closeCalls).toBe(1); // 낡은 컨텍스트는 닫혔고
+      expect(env.contexts).toHaveLength(2);       // 새 그래프로 다시 붙었다
+      expect(tapOf(rec).isAttachedTo(current.stream)).toBe(true);
+      expect(teardownExtras()).toEqual([
+        'mic_teardown:found=running,closed=ok,reattach=ok,evt=vis,bg_s=90',
+      ]);
+    } finally {
+      env.restore();
+    }
+  });
+
+  test('close가 reject하면 closed=error를 기록하고 거짓 성공으로 바꾸지 않는다', async () => {
+    const env = installAudioContextStub([() => Promise.resolve()]);
+    const rec = new AudioRecorder();
+    try {
+      await tapOf(rec).attach({} as MediaStream);
+      env.contexts[0].state = 'interrupted';
+      env.contexts[0].closeImpl = () => Promise.reject(new Error('close rejected'));
+
+      await rec.teardownAudioGraph('vis', 61_000);
+
+      expect(teardownExtras()).toEqual([
+        'mic_teardown:found=interrupted,closed=error,reattach=skipped,evt=vis,bg_s=61',
+      ]);
+    } finally {
+      env.restore();
+    }
+  });
+
+  test('close timeout 뒤에도 소유권과 live 트랙이 같으면 재부착해 프리롤·파형을 되살린다', async () => {
+    const env = installAudioContextStub([() => Promise.resolve(), () => Promise.resolve()]);
+    const current = trackedStream();
+    const rec = withStream(new AudioRecorder(), current.stream);
+    (rec as unknown as { teardownTimeoutMs: number }).teardownTimeoutMs = 20;
+    try {
+      await tapOf(rec).attach(current.stream);
+      env.contexts[0].closeImpl = () => new Promise<void>(() => {});
+
+      await rec.teardownAudioGraph('vis', 62_000);
+
+      expect(env.contexts).toHaveLength(2);
+      expect(tapOf(rec).isAttachedTo(current.stream)).toBe(true);
+      expect(teardownExtras()).toEqual([
+        'mic_teardown:found=running,closed=timeout,reattach=ok,evt=vis,bg_s=62',
+      ]);
+    } finally {
+      void tapOf(rec).detach().catch(() => {});
+      env.restore();
+    }
+  });
+
+  test('readyState가 live인 muted 트랙도 배너 사망이 아니므로 재부착을 시도한다', async () => {
+    const env = installAudioContextStub([() => Promise.resolve(), () => Promise.resolve()]);
+    const current = trackedStream('muted-live', true);
+    const rec = withStream(new AudioRecorder(), current.stream);
+    try {
+      await tapOf(rec).attach(current.stream);
+
+      await rec.teardownAudioGraph('pageshow', 62_000);
+
+      expect(tapOf(rec).isAttachedTo(current.stream)).toBe(true);
+      expect(teardownExtras()).toEqual([
+        'mic_teardown:found=running,closed=ok,reattach=ok,evt=pageshow,bg_s=62',
+      ]);
+    } finally {
+      void tapOf(rec).detach().catch(() => {});
+      env.restore();
+    }
+  });
+
+  test('재부착이 내부 폴백까지 소진해 capture를 못 게시하면 reattach=error를 남긴다', async () => {
+    const env = installAudioContextStub([() => Promise.resolve()]);
+    const current = trackedStream();
+    const rec = withStream(new AudioRecorder(), current.stream);
+    const tap = tapOf(rec);
+    try {
+      await tap.attach(current.stream);
+      tap.attach = async () => { /* 실패를 내부에서 삼킨 attach의 외부 관측 형태 */ };
+
+      await rec.teardownAudioGraph('pageshow', 63_000);
+
+      expect(teardownExtras()).toEqual([
+        'mic_teardown:found=running,closed=ok,reattach=error,evt=pageshow,bg_s=63',
+      ]);
+    } finally {
+      env.restore();
+    }
+  });
+
+  test('재부착 timeout은 늦은 attach를 취소하고 reattach=timeout으로 계측한다', async () => {
+    const attachGate = deferred<void>();
+    const env = installAudioContextStub([
+      () => Promise.resolve(),
+      () => attachGate.promise,
+    ]);
+    const current = trackedStream();
+    const rec = withStream(new AudioRecorder(), current.stream);
+    const tap = tapOf(rec);
+    (rec as unknown as { teardownTimeoutMs: number }).teardownTimeoutMs = 20;
+    try {
+      await tap.attach(current.stream);
+
+      await rec.teardownAudioGraph('vis', 64_000);
+      attachGate.resolve();
+      await Promise.resolve();
+
+      expect(tap.isAttachedTo(current.stream)).toBe(false);
+      expect(env.contexts[1].closeCalls).toBe(1);
+      expect(teardownExtras()).toEqual([
+        'mic_teardown:found=running,closed=ok,reattach=timeout,evt=vis,bg_s=64',
+      ]);
+    } finally {
+      env.restore();
+    }
+  });
+
+  test('close 대기 중 recover가 새 스트림을 차지하면 teardown은 재부착을 건너뛰고 새 capture를 보존한다', async () => {
+    const closeGate = deferred<void>();
+    const env = installAudioContextStub([() => Promise.resolve(), () => Promise.resolve()]);
+    const old = trackedStream('old');
+    const current = trackedStream('current');
+    const rec = withStream(new AudioRecorder(), old.stream);
+    const tap = tapOf(rec);
+    const priv = rec as unknown as {
+      acquireStream: () => Promise<MediaStream>;
+      stream: MediaStream | null;
+    };
+    priv.acquireStream = async () => current.stream;
+    try {
+      await tap.attach(old.stream);
+      env.contexts[0].closeImpl = () => closeGate.promise;
+
+      const teardown = rec.teardownAudioGraph('vis', 65_000);
+      expect(env.contexts[0].closeCalls).toBe(1);
+
+      expect(await rec.recoverStream('race', { bypassCooldown: true })).toBe(true);
+      expect(priv.stream).toBe(current.stream);
+      expect(tap.isAttachedTo(current.stream)).toBe(true);
+
+      closeGate.resolve();
+      await teardown;
+
+      expect(tap.isAttachedTo(current.stream)).toBe(true);
+      expect(tap.isAttachedTo(old.stream)).toBe(false);
+      expect(teardownExtras()).toEqual([
+        'mic_teardown:found=running,closed=ok,reattach=skipped,evt=vis,bg_s=65',
+      ]);
+    } finally {
+      rec.dispose();
+      env.restore();
+    }
+  });
+});
+
+/**
+ * v0.38.1 [MIC-B2] `detach()`를 awaitable로 승격하면서 **깨지면 안 되는 계약**: 동기 구간은 여전히
+ * 호출 즉시 끝난다.
+ *
+ * 왜 중요한가: `recoverStream()`/`releaseAcquiredStream()`/`dispose()`는 이 메서드를 `void`로 부른다.
+ * getUserMedia 직전에 `close()` 완료를 기다리면 제스처 창을 소모하거나 hung close가 획득을 막아
+ * **정상 경로(같은 날 세션A는 78클립 정상)** 까지 깨뜨린다(Pax §6 안티패턴). 그래서 "그래프 해제는
+ * 즉시, close는 뒤로" 라는 분리가 유지되는지 못 박는다.
+ */
+test('[MIC-B2] detach()의 동기 구간은 close를 기다리지 않는다 — gUM 경로 비차단 계약', async () => {
+  const env = installAudioContextStub([() => Promise.resolve()]);
+  const tap = new MicPrerollTap();
+  try {
+    await tap.attach({} as MediaStream);
+    env.contexts[0].closeImpl = () => new Promise<void>(() => { /* close가 멈춰 있어도 */ });
+
+    const pending = tap.detach(); // 획득 경로와 동일하게 await하지 않는다
+
+    // await 한 번도 없이 이미 해제돼 있어야 한다 — 그래야 호출부가 곧바로 gUM으로 진행한다.
+    expect((tap as unknown as MicTapPrivate).capture).toBeNull();
+    expect(tap.getContextState()).toBe('none');
+    expect(env.contexts[0].closeCalls).toBe(1);
+    void pending;
+  } finally {
+    env.restore();
+  }
 });

@@ -9,7 +9,7 @@ import { useEffect, useRef } from 'react';
  *   - `active=false`(listening 아님 등) → 루프 자체를 돌리지 않는다.
  *   - `document.visibilityState==='hidden'` → 스케줄 중단, visibilitychange에서 재개.
  *   - keep-alive display:none(세션 중 탭 이탈 — App.tsx [STT-16] 렌더) → rAF는 돌지만 화면이
- *     없으므로 30프레임마다 offsetParent를 확인해 숨김이면 500ms 폴링으로 후퇴(rAF 정지).
+ *     없으므로 30프레임마다 getClientRects()로 숨김을 확인해 500ms 폴링으로 후퇴(rAF 정지).
  *   - `prefers-reduced-motion: reduce` → 루프를 아예 켜지 않는다(변수 0 고정 = 정적 표시).
  *   - cleanup에서 cancel + 변수 0 복귀.
  *
@@ -44,9 +44,20 @@ export function useAudioLevelVar<T extends HTMLElement>(
       raf = 0;
       const el = ref.current;
       if (el) {
-        // keep-alive display:none 확인은 30프레임(≈0.5s)에 1회만 — offsetParent는 레이아웃 읽기라
-        // 매 프레임 읽으면 스타일 쓰기와 상호작용해 강제 동기 레이아웃을 유발할 수 있다.
-        if (frame++ % 30 === 0 && el.offsetParent === null) {
+        // keep-alive display:none 확인은 30프레임(≈0.5s)에 1회만 — 레이아웃 읽기라 매 프레임 읽으면
+        // 스타일 쓰기와 상호작용해 강제 동기 레이아웃을 유발할 수 있다.
+        //
+        // ⚠️ v0.38.1 — 종전 판정은 `el.offsetParent === null`이었는데, **`position:fixed` 엘리먼트는
+        // 보이는 상태에서도 `offsetParent`가 항상 null이다**(HTML 스펙: fixed면 null 반환).
+        // v0.37.0에서 EdgeGlow가 full-bleed를 위해 `position:fixed`로 바뀌면서 이 판정이 **상시
+        // 오탐**이 됐다 → 30프레임마다 "숨겨졌다"고 오판해 `--voice-level`을 0으로 쓰고 500ms를
+        // 쉬었다. 결과: 글로우가 **0.5초 살고 0.5초 죽는 절반 duty로 끊긴다**(레벨 반응 자체가
+        // 절반의 시간 동안 소실). v034-wave-glow B7·B8 실패의 근인이고, 실기기에서도 육안으로
+        // 드러나는 결함이다.
+        // `getClientRects()`는 이 둘을 정확히 가른다 — display:none(또는 조상 display:none)이면
+        // 박스가 생성되지 않아 0개, 보이는 fixed면 1개 이상. 비용은 offsetParent와 같은 레이아웃
+        // 읽기 1회라 30프레임 1회 정책은 그대로 유효하다.
+        if (frame++ % 30 === 0 && el.getClientRects().length === 0) {
           el.style.setProperty('--voice-level', '0');
           idleTimer = window.setTimeout(() => { idleTimer = null; schedule(); }, 500);
           return;

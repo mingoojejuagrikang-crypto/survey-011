@@ -60,3 +60,33 @@ export function micAutoReconnect(stage: 'attempt' | 'ok' | 'failed'): string {
 export function recoverTimeout(reason: string, ms: number): string {
   return `clip_recorder_recover_timeout:${reason}:${kv({ ms })}`;
 }
+
+/** v0.38.1 [MIC-B2] 포그라운드 복귀 선-정리(`AudioRecorder.teardownAudioGraph`) 결과 —
+ *  **실기기 판정 사다리의 핵심 바이트**.
+ *
+ *  세 필드가 각각 다른 결론을 가른다(#12-bis — 계측 없이는 "고쳐도 안 풀린 것"과 "애초에 아무것도
+ *  안 한 것"을 구분할 수 없다):
+ *   - `found`    닫으려 한 컨텍스트 상태. `none`이면 **닫을 게 없었다** = 이 수정이 no-op이었고
+ *                원인은 JS측 AudioContext가 아니다(세션-레벨 물림) → 폴백(리로드)으로 분기.
+ *   - `closed`   낡은 컨텍스트 close 결과. `timeout`이면 **close 자체가 물렸다**.
+ *   - `reattach` 정리 후 캡처 재부착 결과. `ok`가 아니면 마이크는 멀쩡한데 **프리롤·파형만 죽은** 상태다.
+ *
+ *  ⚠️ 초안(R1)은 필드를 `:`로 잇고 이벤트·경과를 `vis:bg=3000s`로 박아 **세그먼트가 모호**했다
+ *  (`reason` 안에 `:`가 들어가 `split(':')` 파서가 필드를 쪼갠다). 이 파일 헤더의 신규 이벤트
+ *  규약대로 **kv(',')로 통일**한다 — 배포 전이라 지금 바꾸는 것이 무비용이고, 한 번 방출되면
+ *  그 형태가 영원히 정답이 된다. */
+export function micTeardown(fields: {
+  found: string;
+  closed: 'ok' | 'timeout' | 'error';
+  reattach: 'ok' | 'timeout' | 'error' | 'skipped';
+  evt: string;
+  backgroundMs: number;
+}): string {
+  return `mic_teardown:${kv({
+    found: fields.found,
+    closed: fields.closed,
+    reattach: fields.reattach,
+    evt: fields.evt,
+    bg_s: Math.round(fields.backgroundMs / 1000),
+  })}`;
+}

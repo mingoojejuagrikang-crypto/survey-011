@@ -15,11 +15,47 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import {
+  INITIAL_FOREGROUND_RETURN_STATE,
+  LONG_BACKGROUND_TEARDOWN_MS,
+  reduceForegroundReturn,
+} from '../src/lib/foregroundReturnPolicy';
 
 test.setTimeout(120_000);
 
 const BASE = 'http://localhost:5175';
 const TOTAL_ROWS = 3;
+
+test.describe('[MIC-B2] 포그라운드 복귀 순수 정책', () => {
+  test('임계 미만 복귀는 teardown 없이 hiddenAt을 소비한다', () => {
+    const hidden = reduceForegroundReturn(INITIAL_FOREGROUND_RETURN_STATE, 'hidden', 1_000);
+    const visible = reduceForegroundReturn(
+      hidden.state,
+      'visible',
+      1_000 + LONG_BACKGROUND_TEARDOWN_MS - 1,
+    );
+
+    expect(visible.shouldTeardown).toBe(false);
+    expect(visible.state.hiddenAt).toBeNull();
+    // phase 게이트와 무관하게 이미 소비됐으므로 훨씬 늦은 pageshow도 과거 hiddenAt을 재사용하지 않는다.
+    const laterPageShow = reduceForegroundReturn(visible.state, 'pageshow', 999_999);
+    expect(laterPageShow.shouldTeardown).toBe(false);
+  });
+
+  test('임계 이상 복귀는 정확히 1회 teardown 판정을 낸다', () => {
+    const hidden = reduceForegroundReturn(INITIAL_FOREGROUND_RETURN_STATE, 'hidden', 5_000);
+    const visible = reduceForegroundReturn(
+      hidden.state,
+      'visible',
+      5_000 + LONG_BACKGROUND_TEARDOWN_MS,
+    );
+    const pageShow = reduceForegroundReturn(visible.state, 'pageshow', 999_999);
+
+    expect(visible.shouldTeardown).toBe(true);
+    expect(visible.backgroundMs).toBe(LONG_BACKGROUND_TEARDOWN_MS);
+    expect(pageShow.shouldTeardown).toBe(false);
+  });
+});
 
 const SETTINGS_3ROWS = {
   state: {
@@ -348,4 +384,55 @@ test('항목4 — 포그라운드 복귀 훅: pageshow/visibilitychange가 kick_
   await fireStt(page, '35.1', 400);
   await waitForActiveChip(page, '종경');
   await fireStt(page, '종료', 800);
+});
+
+test('[MIC-B2] 실제 복귀 배선은 ready phase에서도 임계 경계와 vis→pageshow 중복 소비를 지킨다', async ({ page }) => {
+  await page.addInitScript(MOCK_INIT_SCRIPT);
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await page.evaluate((s) => {
+    localStorage.clear();
+    localStorage.setItem('survey-011-settings-v3', JSON.stringify(s));
+    indexedDB.deleteDatabase('survey-011');
+  }, SETTINGS_3ROWS);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(500);
+
+  // 세션을 시작하지 않아 phase='ready'인 상태에서 정책 배선을 실제 DOM 이벤트로 발화한다.
+  await page.evaluate((threshold) => {
+    const originalNow = Date.now;
+    let now = 1_000;
+    let visibility: DocumentVisibilityState = 'hidden';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility,
+    });
+    Date.now = () => now;
+    try {
+      document.dispatchEvent(new Event('visibilitychange'));
+      now += threshold - 1;
+      visibility = 'visible';
+      document.dispatchEvent(new Event('visibilitychange')); // 임계 미만: 미발화 + hiddenAt 소비
+      now += threshold * 2;
+      window.dispatchEvent(new Event('pageshow'));            // 소비 확인: 여전히 미발화
+
+      visibility = 'hidden';
+      document.dispatchEvent(new Event('visibilitychange'));
+      now += threshold;
+      visibility = 'visible';
+      document.dispatchEvent(new Event('visibilitychange')); // 임계 이상: 정확히 1회
+      window.dispatchEvent(new Event('pageshow'));            // 연속 복귀: 중복 금지
+    } finally {
+      Date.now = originalNow;
+      delete (document as Document & { visibilityState?: DocumentVisibilityState }).visibilityState;
+    }
+  }, LONG_BACKGROUND_TEARDOWN_MS);
+  await page.waitForTimeout(500);
+
+  const teardown = (await loadLogEventsFromIDB(page))
+    .filter((e) => (e.extra ?? '').startsWith('mic_teardown:found='));
+  expect(teardown).toHaveLength(1);
+  // 바이트는 logEvents SSOT 규약(kv는 ',')을 따른다 — 세그먼트가 ':'로 섞이면 파서가 필드를 쪼갠다.
+  expect(teardown[0].extra).toContain(',reattach=');
+  expect(teardown[0].extra).toContain(',evt=vis,bg_s=60');
 });

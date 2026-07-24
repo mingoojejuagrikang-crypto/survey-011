@@ -17,7 +17,7 @@
 
 import { logger } from './logger';
 import { TimeoutError, withTimeout } from './async';
-import { recoverTimeout } from './logEvents';
+import { micTeardown, recoverTimeout } from './logEvents';
 import { processClip, type PrerollPcm } from './audioTrim';
 // [ENV-12] 마이크 PCM 캡처(링버퍼·레벨·파형)는 MicPrerollTap이 소유한다 — 이 클래스는 위임만.
 import { MicPrerollTap, PREROLL_MS } from './micPrerollTap';
@@ -81,6 +81,13 @@ const RECOVER_COOLDOWN_MS = 3000;
  *  값 근거: 네트워크 왕복이 아니라 **권한 프롬프트 응답 대기**라 길 이유가 없다. 이미 권한이 있으면
  *  즉시 resolve되고, 사용자가 프롬프트를 보고 있다면 그건 제스처 경로(수동 배너)에서 다시 시도된다. */
 const RECOVER_ACQUIRE_TIMEOUT_MS = 7000;
+/** v0.38.1 [MIC-B2] 포그라운드 복귀 선-정리에서 낡은 `AudioContext.close()`를 기다리는 상한.
+ *
+ *  **왜 경계가 필수인가:** 이 정리는 "오디오 세션이 물려 있다"는 가정 위에서 도는데, 물린 컨텍스트는
+ *  `close()` 자체가 늦거나 멈출 수 있다(Pax §4). 경계가 없으면 정리 코드가 되레 다음 제스처 획득을
+ *  막아 — 고치려던 증상과 똑같은 "재연결 불가"를 우리가 만든다. 초과해도 실패로 끝내지 않고
+ *  `closed=timeout`을 남기고 진행한다(정리는 best-effort, 획득이 본체다). */
+const TEARDOWN_CLOSE_TIMEOUT_MS = 1500;
 
 /** 스트림의 모든 트랙을 멈춘다(마이크 인디케이터 해제). 실패해도 호출부를 막지 않는다. */
 function stopAllTracks(stream: MediaStream | null): void {
@@ -151,6 +158,8 @@ export class AudioRecorder {
   /** v0.38.0 리뷰#1 — 재획득 응답 대기 상한. 인스턴스 필드로 둬서 단위 테스트가 실제 7초를
    *  기다리지 않고 타임아웃 경로를 결정론적으로 재현할 수 있게 한다(`lastRecoverAt`와 같은 패턴). */
   private acquireTimeoutMs = RECOVER_ACQUIRE_TIMEOUT_MS;
+  /** teardown close/reattach 경계. 테스트가 실제 1.5초를 기다리지 않도록 인스턴스 필드로 둔다. */
+  private teardownTimeoutMs = TEARDOWN_CLOSE_TIMEOUT_MS;
   /** v0.34.0 B7 — 지수평활된 마이크 입력 레벨(0~1). preroll push(pcm)에서만 갱신되고 UI(rAF)가
    *  getInputLevel()로 읽는다. React state 아님 — 리렌더 0. preroll 미가용이면 0에 머문다. */
   private inputLevel = 0;
@@ -287,6 +296,76 @@ export class AudioRecorder {
     try { track.addEventListener('unmute', () => cb(), { once: true }); } catch { /* best-effort */ }
   }
 
+  /** v0.38.1 [MIC-B2] **장기 백그라운드 복귀 시 낡은 오디오 그래프만 능동 해제한다.** 재획득은 하지
+   *  않는다([IOS-5] — 제스처 밖 getUserMedia 금지는 그대로).
+   *
+   *  **왜 이 시점인가(2026-07-24 실기기 확증):** 앱이 50분 백그라운드에 있다 돌아온 뒤 BT→스피커
+   *  경로가 바뀐 세션에서, 권한이 허용 상태인데도 재연결 getUserMedia가 8회 전부 `NotAllowedError`로
+   *  ~10ms 내 즉시 거부됐다(0클립). 유력 원인은 iOS 오디오 세션이 interrupted로 물린 채 낡은
+   *  `AudioContext`가 그 세션을 붙들고 있는 것이다(Pax P1). 그런데 첫 재연결 시도가 이미
+   *  `prerollTap.detach()`로 참조를 버린 뒤라(fire-and-forget close) **2회차부터는 닫을 대상조차
+   *  없었다.** 즉 낡은 컨텍스트를 실제로 닫을 수 있는 창은 **재연결 시도 이전, 포그라운드 복귀
+   *  직후뿐**이다 — 그때는 prewarm이 붙여둔 캡처가 아직 살아 있다.
+   *
+   *  **왜 gUM 경로가 아닌가:** 획득 직전에 `await close()`를 끼우면 제스처 창을 소모하거나 hung
+   *  close로 획득을 지연시켜, **정상 경로(같은 날 세션A는 78클립 정상)** 까지 깨뜨릴 수 있다
+   *  (Pax §4·§6 명시 안티패턴). 그래서 정리는 획득 콜스택에서 완전히 떼어 여기서만 한다.
+   *
+   *  **계측이 본체다.** 원인 가설(P1)도 이 수정의 효과(P2)도 아직 미검증이라, 실기기 판정이
+   *  "무엇을 확증/반증했는지" 읽히려면 바이트가 필요하다(#12-bis). `mic_teardown:found=…:closed=…`가
+   *  ① `found=none` = 닫을 게 없었음 → JS측 컨텍스트는 원인이 아님(세션-레벨 물림) ② `closed=timeout`
+   *  = close 자체가 물림 ③ `found=interrupted:closed=ok` 후 획득 성공 = P1·P2 확정 을 가른다.
+   *  이 바이트 없이는 "고쳐도 안 풀린 것"과 "애초에 no-op이었던 것"을 구분할 수 없다.
+   *
+   *  ⚠️ `ctx.state`는 **분기 판정이 아니라 기록에만** 쓴다 — 복귀 직후 WebKit이 좀비 `'running'`을
+   *  보고할 수 있어(Pax Q1) 상태를 믿고 정리를 건너뛰면 정작 필요한 경우를 놓친다. 그래서 게이트는
+   *  상태가 아니라 **호출부의 백그라운드 경과시간**이 쥔다. */
+  async teardownAudioGraph(evt: string, backgroundMs: number): Promise<void> {
+    // close 대기 중 recover/init/dispose가 소유권을 바꿀 수 있으므로 시작 시점의 세대+스트림을 함께 잡는다.
+    const gen = this.acquireGen;
+    const stream = this.stream;
+    // found는 **close 전에** 읽어야 한다 — 타임아웃으로 끝나도 무엇을 닫으려 했는지는 남아야 한다.
+    const found = this.prerollTap.getContextState();
+    let closed: 'ok' | 'timeout' | 'error' = 'ok';
+    try {
+      await withTimeout(this.prerollTap.detach(), this.teardownTimeoutMs);
+    } catch (e) {
+      closed = e instanceof TimeoutError ? 'timeout' : 'error';
+    }
+
+    let reattach: 'ok' | 'timeout' | 'error' | 'skipped' = 'skipped';
+    const stillOwnsSnapshot = () => this.acquireGen === gen && this.stream === stream;
+    const track = stream?.getAudioTracks()[0] ?? null;
+    // close 결과와 무관하게 복구를 시도한다. timeout/error 뒤 건너뛰면 live 트랙인데 파형·프리롤만
+    // 세션 끝까지 죽는다. 단 close 대기 중 소유권이 바뀌었거나 트랙이 비생존이면 건드리지 않는다.
+    if (stream && stillOwnsSnapshot() && track?.readyState === 'live') {
+      try {
+        await withTimeout(this.prerollTap.attach(stream), this.teardownTimeoutMs);
+        if (!stillOwnsSnapshot()) {
+          reattach = 'skipped';
+        } else if (this.prerollTap.isAttachedTo(stream)) {
+          reattach = 'ok';
+        } else {
+          reattach = 'error';
+          // attach가 내부 폴백까지 소진하고 정상 반환했어도 게시된 그래프가 없으면 최종 실패다.
+          void this.prerollTap.detach().catch(() => {});
+        }
+      } catch (e) {
+        if (!stillOwnsSnapshot()) {
+          reattach = 'skipped';
+        } else {
+          reattach = e instanceof TimeoutError ? 'timeout' : 'error';
+          // timeout된 attach Promise는 취소할 수 없으므로 세대를 올려 늦은 그래프 게시를 막는다.
+          void this.prerollTap.detach().catch(() => {});
+        }
+      }
+    }
+    // 바이트 조립은 `logEvents.ts` SSOT를 경유한다(신규 extra 규약 — kv는 ','로 잇는다).
+    // 콜사이트에서 템플릿으로 만들면 특성화 테스트가 지키지 못하고, `evt`에 ':'가 섞이면
+    // split(':') 파서가 필드를 쪼갠다(R2 리뷰 Medium).
+    logger.log({ type: 'clip', extra: micTeardown({ found, closed, reattach, evt, backgroundMs }) });
+  }
+
   /** v0.14.0 B-1 — 스트림을 재획득해 죽은 레코더/스테일 입력장치를 되살린다(재-getUserMedia).
    *  빈/극소 클립 감지(useVoiceSession) 또는 유휴 중 장치 변경 시 호출. 진행 중 active 슬롯은
    *  이미 실패(빈 클립)했거나 유휴이므로 정리 후 새 스트림으로 교체한다. 쿨다운/동시성 가드로
@@ -312,7 +391,11 @@ export class AudioRecorder {
     try {
       // 기존 그래프 정리 — 리스너 먼저(track.stop의 'ended'가 핸들러 재진입 못 하게), 프리롤, 스트림.
       this.detachDeviceListeners();
-      this.prerollTap.detach();
+      // [MIC-B2] **의도적으로 await하지 않는다.** 동기 구간(그래프 disconnect·capture 비움)은 즉시
+      // 끝나고 close만 뒤로 흘린다 — 여기서 close를 기다리면 gUM(아래) 앞에 대기가 생겨 제스처 창을
+      // 소모하거나 hung close가 획득을 막는다(Pax §6 안티패턴). 낡은 세션 해제는 포그라운드 복귀의
+      // `teardownAudioGraph()`가 담당한다.
+      void this.prerollTap.detach().catch(() => {});
       const stale = this.active;
       this.active = null;
       if (stale && !stale.finalized) {
@@ -437,7 +520,7 @@ export class AudioRecorder {
     if (!acquired) return;
     if (this.stream === acquired) {
       this.detachDeviceListeners();
-      this.prerollTap.detach();
+      void this.prerollTap.detach().catch(() => {}); // [MIC-B2] close를 기다리지 않되 rejection은 종결.
       stopAllTracks(acquired);
       this.stream = null;
       this.activeInput = null;
@@ -742,7 +825,8 @@ export class AudioRecorder {
       }
     }
     // W6: 프리롤 캡처 그래프 해제 (stream stop 전에 — source가 stream을 참조).
-    this.prerollTap.detach();
+    // [MIC-B2] dispose는 동기 계약이라 close를 기다리지 않는다(호출부가 언마운트 경로).
+    void this.prerollTap.detach().catch(() => {});
     if (this.stream) {
       for (const track of this.stream.getTracks()) track.stop();
       this.stream = null;

@@ -988,6 +988,22 @@
   순서는 네트워크 응답 보류·완료 probe처럼 테스트 경계에서 제어한다.
 - **출처:** 2026-07-23 태스크 02b. **현재 상태:** ✅회귀 테스트를 실제 앱 경로로 교체.
 
+### [MIC-B2] 백그라운드 복귀 + 오디오 경로전환 후 클립 recover가 `NotAllowedError`로 전멸 — 낡은 AudioContext 참조를 첫 시도가 버린다
+- **증상(실기기 확증):** 앱을 50분 백그라운드에 둔 뒤(12:12→13:02) BT이어폰→폰 스피커로 경로가 바뀐 세션에서, 제스처 경로 재연결 `getUserMedia`가 **8시도/0성공/0클립**, 매 시도가 **~10ms 내 즉시 reject**. 권한은 진짜 허용 상태였고(같은 세션에서 마이크 라벨 열거됨) **STT는 생존**, 시트값 18/18 무손실 — 죽은 건 클립 녹음뿐. 같은 날 BT 유지 세션은 78클립 정상.
+- **판정:** 즉시 reject라 **hang이 아니다** — 초기 코드추적 가설(attach withTimeout 누락)은 텔레메트리로 **반증**됐다. `NotAllowedError`지만 실제 권한 거부가 아니라 **오디오세션/컨텍스트 실패**다.
+- **구조적 근인(가설과 무관하게 확실):** `MicPrerollTap.detach()`가 `this.capture = null`을 **먼저** 하고 `ctx.close()`를 fire-and-forget으로 던졌다. 그래서 **첫 재연결 시도가 낡은 컨텍스트의 참조를 버린다** → 2회차부터는 닫을 대상조차 없다(8회 중 7회). 즉 낡은 컨텍스트를 실제로 닫을 수 있는 창은 **재연결 시도 이전 = 포그라운드 복귀 직후**뿐이다(그때는 prewarm 캡처가 살아 있다).
+- **수정(v0.38.1):** `detach()`를 awaitable로 승격(close 실패도 호출부로 전파) + `AudioRecorder.teardownAudioGraph()`가 **장기 백그라운드(≥60s) 복귀 시에만** 낡은 그래프를 `withTimeout` 경계로 정리하고 소유권(`acquireGen`+stream 스냅샷)이 그대로일 때만 재부착. **재획득은 하지 않는다**([IOS-5] 유지). `attach()`는 publish 직전 세대를 최종 확인해 늦은 옛 attach가 새 capture를 덮지 못하게 한다.
+- **⚠️ 이 수정은 미검증 가설이다.** "물린 AudioContext가 gUM을 막는다"(P1)와 "close가 그것을 푼다"(P2) 모두 1차 출처가 없는 추론이다. 그래서 **판정 바이트**를 함께 넣었다: `mic_teardown:found=…,closed=…,reattach=…,evt=…,bg_s=…`. `found=none`=닫을 게 없었음(이 수정이 no-op → 세션-레벨 물림, 폴백 리로드로 분기) · `closed=timeout`=close 자체가 물림 · `reattach≠ok`=마이크는 멀쩡한데 프리롤·파형만 죽음. **이 바이트 없이는 "고쳐도 안 풀린 것"과 "애초에 아무것도 안 한 것"을 구분할 수 없다.**
+- **주의(안티패턴):** gUM **직전에** `await ctx.close()`를 넣지 말 것 — 제스처 창을 소모하거나 hung close가 획득을 지연시켜 **정상 경로(78클립 세션)를 깨뜨린다.** 정리는 획득 콜스택에서 분리해야 한다. 또 `ctx.state`를 분기 근거로 쓰지 말 것(복귀 직후 좀비 `'running'` 보고 사례) — 게이트는 **경과시간**이 쥔다.
+- **출처:** survey-011 v0.38.1, 2026-07-24 실기기 로그(`sess_1784865837431`) + Trace 분석 + Pax iOS gUM 리서치. **현재 상태:** ⚠️계측 배포됨, 실기기 판정 대기.
+
+### [UI-GLOW-1] `position:fixed` 엘리먼트에 `offsetParent === null` 가시성 판정을 쓰면 상시 오탐 — 글로우가 절반 duty로 끊긴다
+- **증상:** 목소리에 반응하는 테두리 글로우(`EdgeGlow`)가 **0.5초 살고 0.5초 죽는** 주기로 끊긴다. e2e `v034-wave-glow` B7(:448)·B8(:385) 2건이 v0.38.0에서 **이미 실패 중이었고 그 상태로 릴리스됐다.**
+- **원인:** `useAudioLevelVar`는 keep-alive `display:none`(탭 이탈)을 감지하려고 30프레임마다 `el.offsetParent === null`을 본다. 그런데 **HTML 스펙상 `position:fixed` 엘리먼트는 보이는 상태에서도 `offsetParent`가 항상 null**이다. v0.37.0에서 `EdgeGlow`를 full-bleed(`position:fixed`)로 바꾸면서 이 판정이 **상시 오탐**이 됐다 → 30프레임마다 `--voice-level`을 0으로 쓰고 500ms 정지.
+- **수정(v0.38.1):** `el.getClientRects().length === 0`으로 교체. `display:none`(또는 조상 display:none)이면 박스가 생성되지 않아 0개, **보이는 fixed면 1개 이상**이라 두 경우를 정확히 가른다. 비용은 동일한 레이아웃 읽기 1회.
+- **일반 규칙:** 가시성 판정에 `offsetParent`를 쓰는 코드는 **대상이 fixed로 바뀌는 순간 조용히 망가진다.** 레이아웃 방식 변경(absolute→fixed)은 이런 원격 판정 로직을 함께 깨뜨릴 수 있다.
+- **출처:** survey-011 v0.38.1, 2026-07-24. **현재 상태:** ✅수정 + `v034-wave-glow` 21/21 통과.
+
 ---
 
 ## 확인 필요 (미검증)

@@ -19,6 +19,10 @@ import type { PrerollPcm } from './audioTrim';
 const RING_BUFFER_MS = 1500;
 export const PREROLL_MS = 500;
 
+/** v0.38.1 [MIC-B2] 캡처 컨텍스트 상태(계측용). 표준 `AudioContextState`에 iOS/WebKit이 실제로
+ *  노출하는 `'interrupted'`와, 캡처 자체가 없는 `'none'`을 더한 것. */
+export type PrerollCtxState = 'none' | 'suspended' | 'running' | 'closed' | 'interrupted';
+
 // ── v0.34.0 B7 — 입력 레벨(음성 반응 파동) 상수. 캡처 그래프의 push(pcm) 공통 경로에서 chunk
 //    RMS를 지수평활한 0~1 레벨을 만든다. 캡처 미가용 기기는 push가 아예 안 불려 레벨 0 고정
 //    = 파동 무동작이 자연 폴백(no-op 원칙). ──
@@ -32,6 +36,8 @@ const LEVEL_ACTIVE_MIN = 0.15;
 
 /** 마이크 PCM 상시 캡처 그래프 (worklet 또는 script-processor). */
 interface PrerollCapture {
+  /** 이 그래프가 읽는 스트림. 늦은 attach가 현재 스트림을 덮지 않았는지 소유권 검증에 쓴다. */
+  stream: MediaStream;
   ctx: AudioContext;
   source: MediaStreamAudioSourceNode;
   node: AudioWorkletNode | ScriptProcessorNode;
@@ -142,7 +148,7 @@ export class MicPrerollTap {
       } catch { analyser = null; }
 
       const capture: PrerollCapture = {
-        ctx, source, sink, analyser,
+        stream, ctx, source, sink, analyser,
         node: null as unknown as AudioWorkletNode, // 아래에서 채움
         kind: 'worklet',
         chunks: [],
@@ -213,6 +219,12 @@ export class MicPrerollTap {
         capture.kind = 'script';
       }
 
+      // addModule 뒤 마지막 cancelled() 확인과 publish 사이에도 생성자/노드 연결의 재진입으로
+      // detach가 끼어들 수 있다. 늦은 옛 attach가 새 capture를 덮지 못하게 게시 직전에 확정한다.
+      if (cancelled()) {
+        closePending();
+        return;
+      }
       this.capture = capture;
       logger.log({ type: 'clip', extra: `clip_preroll_ready:${capture.kind}:${capture.sampleRate}` });
     } catch (e) {
@@ -223,8 +235,23 @@ export class MicPrerollTap {
     }
   }
 
-  /** 캡처 그래프 해제(stream stop 전에 — source가 stream을 참조). dispose·재획득에서 호출. */
-  detach(): void {
+  /** 캡처 그래프 해제(stream stop 전에 — source가 stream을 참조). dispose·재획득에서 호출.
+   *
+   *  v0.38.1 [MIC-B2] **awaitable로 승격.** 종전에는 마지막 `ctx.close()`를 fire-and-forget으로
+   *  던지고 즉시 반환했다. 그 구조의 실제 피해(2026-07-24 실기기 세션B 확증):
+   *   1. 낡은 컨텍스트가 iOS 오디오 세션을 붙든 채 다음 getUserMedia가 돈다 — iOS는 잔존 캡처에
+   *      민감하다(WebKit 179363).
+   *   2. `this.capture`를 **먼저** 비우므로, close가 지연·행업하면 그 컨텍스트를 **다시 참조할
+   *      방법이 사라진다.** 세션B가 재연결을 8회 시도했는데 2회차부터는 닫을 대상 자체가 없었다
+   *      (첫 시도가 이미 참조를 버린 뒤라 `found=none`) — 그래서 "낡은 세션 해제"가 영영 불가능했다.
+   *  → 포그라운드 복귀 선-정리(`AudioRecorder.teardownAudioGraph`)가 close **완료를 기다릴 수
+   *    있도록** Promise를 반환한다.
+   *
+   *  ⚠️ 기존 동기 호출부의 의미는 바뀌지 않는다. 세대 증가·`capture` 비움·노드 disconnect는 모두
+   *  **첫 await 이전**이라 호출 즉시 동기 실행된다. 그래서 getUserMedia 경로의 호출부는 종전대로
+   *  `void detach()`로 두어 close를 기다리지 않는다 — **gUM 직전에 close를 await하면 안 된다**
+   *  (제스처 창 소모·hung close로 정상 경로까지 깨뜨림, Pax §4 경고). */
+  async detach(): Promise<void> {
     this.attachGeneration++;
     const cap = this.capture;
     this.capture = null;
@@ -239,7 +266,25 @@ export class MicPrerollTap {
       cap.analyser?.disconnect(); // v0.35.0 (Vance) — 파형 탭 해제.
       cap.sink.disconnect();
     } catch { /* ignore */ }
-    void cap.ctx.close().catch(() => {});
+    // close 실패는 호출부에 전달한다. teardownAudioGraph가 error/timeout을 구분해 기록하고,
+    // 비대기 정리 호출부는 명시적 catch로 종결한다(여기서 삼키면 closed=ok 거짓 성공이 된다).
+    await cap.ctx.close();
+  }
+
+  /** v0.38.1 [MIC-B2] 캡처 컨텍스트의 현재 상태(**계측 전용**). 캡처가 없으면 `'none'`.
+   *
+   *  iOS/WebKit은 표준에 없는 `'interrupted'`를 실제로 노출한다(TS 타입엔 없어 문자열로 받는다).
+   *  ⚠️ **분기 판정에 쓰지 말 것.** 포그라운드 복귀 직후 WebKit이 좀비 `'running'`(currentTime이
+   *  멈춘 상태)을 보고하는 사례가 보고돼 있어(Pax Q1), 상태값은 "정말 살아있는가"의 근거가 못 된다.
+   *  오직 `mic_teardown:found=…` 계측 바이트로만 쓴다 — 이 바이트가 실기기 사다리에서 "수정이
+   *  no-op이었다(found=none)"와 "닫았는데도 여전히 실패다(found=interrupted:closed=ok)"를 가른다. */
+  getContextState(): PrerollCtxState {
+    return (this.capture?.ctx.state as PrerollCtxState | undefined) ?? 'none';
+  }
+
+  /** 현재 게시된 캡처가 정확히 이 스트림을 읽는지 확인한다(재부착 소유권/성공 계측용). */
+  isAttachedTo(stream: MediaStream): boolean {
+    return this.capture?.stream === stream;
   }
 
   /** iOS: 백그라운드 전환 등으로 suspended가 되었으면 재개 시도(fire-and-forget). */

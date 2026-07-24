@@ -27,6 +27,11 @@ import { isSheetSourceBlocked, sessionTargetFromSettings } from './sheetConnecti
 import { ensureUniqueSessionLabel } from './sessionLabel';
 // [ENV-12] Stage 3 — 클립 캡처·보존 장부는 useClipCapture가 소유한다(이 파일은 호출만).
 import { useClipCapture, EMPTY_CLIP_BYTES, type PendingCommandClip } from './useClipCapture';
+import {
+  INITIAL_FOREGROUND_RETURN_STATE,
+  reduceForegroundReturn,
+  type ForegroundReturnState,
+} from './foregroundReturnPolicy';
 
 
 /** 대기 셀 공통 좌표. */
@@ -181,6 +186,8 @@ export function useVoiceSession() {
   // clip_empty 자동 재시도 once 가드(세션당). 스트림이 죽어 micLost로 전환되면 더 이상 자동
   // recoverStream을 부르지 않는다(제스처 밖이라 어차피 실패). start()에서 리셋.
   const micLostLatchedRef = useRef(false);
+  /** React state가 아닌 순수 정책 상태 — 복귀 이벤트가 phase와 무관하게 hiddenAt을 소비한다. */
+  const foregroundReturnRef = useRef<ForegroundReturnState>(INITIAL_FOREGROUND_RETURN_STATE);
 
   // ── helpers ────────────────────────────────────────────────
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
@@ -2616,10 +2623,31 @@ export function useVoiceSession() {
   // 워치독 1회 즉시 실행(kick — 죽었으면 즉시 부활, 최대 4초 tick 대기 제거) ③ 마이크 트랙
   // 정밀 판정: 'ended'만 micLost 래치(기존 배너/재연결 버튼 재사용), 'muted'는 unmute 대기 +
   // mic_track:* 텔레메트리. **제스처 밖 getUserMedia 재획득은 하지 않는다([IOS-5]).**
+  // v0.38.1 [MIC-B2] ④ **장기 백그라운드(≥LONG_BACKGROUND_TEARDOWN_MS) 복귀면 낡은 오디오 그래프
+  // 선-정리**(teardownAudioGraph) — 이건 phase 게이트보다 앞에서, 재획득 없이 정리만 한다. iOS
+  // 오디오 세션이 물린 채 낡은 AudioContext가 그걸 붙들고 있으면 이후 제스처 재연결의 gUM이
+  // NotAllowedError로 즉시 거부되는데(2026-07-24 실기기 세션B: 8시도/0성공), 첫 재연결 시도가
+  // 그 컨텍스트 참조를 버리므로 **닫을 수 있는 창은 여기뿐**이다.
   // 인앱 탭 전환([STT-16])은 visibility가 안 변하므로 이 경로가 아니라 App.tsx의 keep-alive
   // 렌더(세션 활성 중 VoiceScreen 유지)가 담당한다.
   useEffect(() => {
     const onForegroundReturn = (evt: 'vis' | 'pageshow') => {
+      const decision = reduceForegroundReturn(
+        foregroundReturnRef.current,
+        evt === 'vis' ? 'visible' : 'pageshow',
+        Date.now(),
+      );
+      foregroundReturnRef.current = decision.state;
+      // v0.38.1 [MIC-B2] 낡은 오디오 그래프 선-정리는 **세션 phase보다 먼저, phase와 무관하게** 본다.
+      // prewarm(입력탭 마운트)이 세션 시작 전부터 캡처를 붙여두므로 유휴 상태로 오래 백그라운드에
+      // 있다 돌아온 경우가 오히려 위험하다 — 그 물린 그래프를 진 채 세션을 시작하면 첫 획득부터
+      // 인터럽트된 오디오 세션 위에서 돈다. 재획득은 하지 않는다([IOS-5] 유지) — 정리만.
+      if (decision.shouldTeardown) {
+        const recForTeardown = recorderRef.current;
+        if (recForTeardown) {
+          void recForTeardown.teardownAudioGraph(evt, decision.backgroundMs);
+        }
+      }
       const phase = useSessionStore.getState().phase;
       if (phase !== 'active' && phase !== 'complete' && phase !== 'paused') return;
       resumeTtsEngine();
@@ -2644,7 +2672,14 @@ export function useVoiceSession() {
       }
       // 'live'/'none'(레코더 미초기화·일시정지 해제 상태)은 무로깅 — 복귀마다 링버퍼를 잠식하지 않는다.
     };
-    const onVis = () => { if (document.visibilityState === 'visible') onForegroundReturn('vis'); };
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') {
+        const decision = reduceForegroundReturn(foregroundReturnRef.current, 'hidden', Date.now());
+        foregroundReturnRef.current = decision.state;
+        return;
+      }
+      onForegroundReturn('vis');
+    };
     const onPageShow = () => onForegroundReturn('pageshow');
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('pageshow', onPageShow);
