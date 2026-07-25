@@ -825,8 +825,11 @@ test('[E2E-19] 전체 플로우 — 설정→생성→시작→일시정지→�
     await page.waitForTimeout(500);
     const pausedCard = page.locator('[data-testid="paused-card"]');
     await expect(pausedCard).toBeVisible({ timeout: 3000 });
-    await expect(pausedCard).toContainText('재시작');
-    await expect(pausedCard).toContainText('종료');
+    // 와이어프레임 §[3](2026-07-24 확정) — 일시정지 표시는 상단 배지("일시정지")로 옮겼고,
+    //   재개/종료는 하단 `<` `>`다. 계약(일시정지 상태가 보이고 재개 경로가 있다)은 동일.
+    await expect(pausedCard).toContainText('일시정지');
+    await expect(page.locator('button[title="재시작"]')).toBeVisible();
+    await expect(page.locator('button[title="입력 종료"]')).toBeVisible();
     console.log('④ 일시정지 상태 확인');
 
     // 5. 재시작

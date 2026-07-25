@@ -14,6 +14,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
 
+// ── 와이어프레임 §[2](2026-07-24 확정) 반영 ────────────────────────────────────────────────
+// 이상치 응답 대기의 [확인]/[수정]은 **카드 안이 아니라 하단 `<` `>` 자리**로 이동했다
+// ("하단 `<` `>` → 확인/수정으로 변경(알람 동안만)"). 따라서 종전
+// `popup.locator('[data-testid="anomaly-confirm-btn"]')`(카드 하위 탐색)를 `page.locator(...)`로
+// 스코프만 넓힌다. **버튼의 존재·동작 단언은 그대로다** — 바뀐 것은 화면상 위치뿐이다.
+// 버튼이 하단 바에 있다는 사실 자체는 v039-active-zones.spec.ts가 별도로 고정한다.
+
 test.setTimeout(120_000);
 
 const STORE_KEY = 'survey-011-settings-v3';
@@ -216,8 +223,8 @@ test('B1 — 이상치 카드가 중앙 흡수영역 안에 렌더 + 375px 긴�
   await expect(card).toBeVisible({ timeout: 3000 });
   await expect(card).toContainText('-355.5');
   // v0.33.0 항목7 — "확인 또는 수정" 텍스트 힌트는 [확인][수정] 터치 버튼으로 대체.
-  await expect(card.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
-  await expect(card.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
+  await expect(page.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+  await expect(page.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
   console.log('✓ 이상치 카드 표시 + 음수소수/행동 버튼 포함');
 
   const m = await absorbTrackMetrics(page, 'anomaly-alert');
@@ -242,7 +249,11 @@ test('B1 — 이상치 카드가 중앙 흡수영역 안에 렌더 + 375px 긴�
   console.log('✓ 카드 표시 후에도 컨트롤바 Y 불변');
 });
 
-test('B1 — 일시정지 카드도 중앙 흡수영역 안(컨트롤바 Y 불변)', async ({ page }) => {
+// 와이어프레임 §[3](2026-07-24 확정) — 일시정지는 **중앙 비움**이고 상태 표시는 상단 배지다.
+//   따라서 "일시정지 카드가 중앙 흡수영역 안"이라는 형태 단언은 성립하지 않는다. 이 테스트가
+//   지키던 **계약**(카드가 떠도 컨트롤바 Y가 안 밀린다 — v0.19.0 버그B)은 그대로 유지하고,
+//   중앙이 실제로 비었는지까지 함께 고정한다.
+test('B1 — 일시정지 전환에도 컨트롤바 Y 불변 + 중앙 비움(§[3])', async ({ page }) => {
   await setupAndStart(page);
   const controlAnchor = page.locator('[data-testid="input-control-toggle"]');
   await expect(controlAnchor).toBeVisible({ timeout: 5000 });
@@ -252,16 +263,18 @@ test('B1 — 일시정지 카드도 중앙 흡수영역 안(컨트롤바 Y 불�
   await page.waitForTimeout(400);
   const paused = page.locator('[data-testid="paused-card"]');
   await expect(paused).toBeVisible();
+  await expect(paused, '§[3] 상단 "일시정지" 표시').toHaveText('일시정지');
 
-  const m = await absorbTrackMetrics(page, 'paused-card');
-  expect(m).not.toBeNull();
-  expect(m!.trackOverflowY).toBe('hidden');
-  expect(m!.cardBottom).toBeLessThanOrEqual(m!.trackBottom + 1);
-  expect(m!.cardScrollW).toBeLessThanOrEqual(m!.cardClientW + 1);
+  // §[3] 중앙 비움 — 값도 "일시정지됨" 문구도 없다.
+  expect((await page.locator('[data-testid="voice-center-stage"]').innerText()).trim()).toBe('');
+  // 중앙 트랙은 여전히 흡수형(overflow:hidden)이라 어떤 카드가 떠도 아래를 밀지 않는다.
+  const track = await page.locator('[data-testid="voice-center-stage"]')
+    .evaluate((el) => getComputedStyle(el as HTMLElement).overflowY);
+  expect(track).toBe('hidden');
 
   const yAfter = (await controlAnchor.boundingBox())!.y;
   expect(Math.abs(yBefore - yAfter)).toBeLessThanOrEqual(1);
-  console.log('✓ 일시정지 카드 흡수 + 컨트롤바 Y 불변');
+  console.log('✓ 일시정지: 중앙 비움 + 컨트롤바 Y 불변');
 });
 
 // ─── B2 ─────────────────────────────────────────────────────────
@@ -350,9 +363,12 @@ test('B4 — 마지막 행 완료 후 자동 종료 안 함(대기) · 값 발�
   //    v0.37.0 FB-E(민구 확정) — 검토 표시가 대형 **행 번호**('2')에서 **방금 입력한 값**으로 바뀌었다
   //    (hero-primary = 행의 마지막 음성 컬럼 c8 커밋값 '106'). 행 번호 의미는 aria-label로 보존.
   //    "마지막 행 뒤 자동 종료 없이 대기한다"는 메커니즘 검증은 동일하다.
-  await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 2000 });
-  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('106');
-  await expect(page.getByRole('status', { name: '2행 완료, 명령 대기' })).toBeVisible();
+  // 와이어프레임 §[4](2026-07-24 확정) — 마지막 행까지 끝나면 중앙은 `완료 : X / N` + 종료다.
+  //   방금 커밋한 값(커밋 영수증, v0.37.0 리뷰#1)은 그 위 얇은 확인 줄로 살아 있다. 검증하는
+  //   계약은 동일 — "자동 종료 없이 대기하고, 방금 넣은 값을 보여준다".
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="complete-receipt-value"]')).toHaveText('106');
+  await expect(page.getByRole('status', { name: '조사 완료, 전체 2행 중 2행 입력됨' })).toBeVisible();
 
   // ② end_reached_waiting 로깅 + 세션 시작 메타에 recognitionTolerance(0.6) 박제(설정값 미로깅 갭 해소).
   const events = await loadLogEvents(page);

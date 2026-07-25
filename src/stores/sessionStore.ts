@@ -113,6 +113,15 @@ interface SessionState {
    *  재질문 진입 시 정수부로 설정, 그 외 모든 재질문·성공 커밋·리셋에서 null(setReaskReason이 함께
    *  정리 → 스테일 방지). 단일 작성 경로 = setDecimalReason. */
   reaskDecimalWhole: string | null;
+  /** 와이어프레임 §[4] complete — **조사 전체가 끝났는지**(마지막 행까지 입력 완료 = announceEndReached).
+   *  phase 'complete'는 두 가지를 겸한다: ① 완료 행 **검토 대기**(enterReviewWait — '이전'/점프로 이미
+   *  끝난 행에 착지) ② **끝 도달**(announceEndReached). 화면은 이 둘을 다르게 그려야 한다 —
+   *  ①은 와이어프레임 [1] active 레이아웃 그대로(hero가 ✓+방금값을 보인다, v035-hero-confirm 동작
+   *  계약) 이고, ②만 [4] complete(`완료 : X / N` + 종료 버튼)다. ref(awaitingFieldRef)로는 리렌더가
+   *  일어나지 않으므로 화면이 읽을 수 있는 store 상태로 둔다.
+   *  단일 작성 경로 = useVoiceSession(announceEndReached=true / enterReviewWait=false) + setPhase가
+   *  'complete'를 벗어날 때 자동 해제. */
+  endReached: boolean;
   /** All row values, keyed by row index → col id → value */
   allRowValues: Record<number, Record<string, string>>;
   /** Row indices that have been fully completed */
@@ -126,6 +135,7 @@ interface SessionState {
   returnColIdx: number | null;
 
   setPhase: (p: VoicePhase) => void;
+  setEndReached: (v: boolean) => void;
   setSessionMeta: (meta: { sessionId: string; startedAt: number; label?: string }) => void;
   setRecognized: (v: string) => void;
   setInterimValue: (v: string | null) => void;
@@ -174,13 +184,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   modifyIndicator: null,
   reaskReason: null,
   reaskDecimalWhole: null,
+  endReached: false,
   allRowValues: {},
   completedRows: [],
   skippedRows: [],
   returnRow: null,
   returnColIdx: null,
 
-  setPhase: (phase) => set({ phase }),
+  // phase가 'complete'를 벗어나면 endReached는 의미를 잃는다 — 단일 지점에서 자동 해제해
+  // 호출부마다 짝 맞춰 끄는 실수를 구조적으로 없앤다(스테일 '완료' 화면 방지).
+  setPhase: (phase) => set(phase === 'complete' ? { phase } : { phase, endReached: false }),
+  setEndReached: (endReached) => set({ endReached }),
   setSessionMeta: ({ sessionId, startedAt, label }) =>
     set({ sessionId, startedAt, sessionLabel: label }),
   setRecognized: (recognizedValue) => set({ recognizedValue }),
@@ -260,6 +274,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       completedRows: session.rows.filter((r) => r.complete).map((r) => r.index),
       skippedRows: session.rows.filter((r) => !r.complete).map((r) => r.index),
       anomalyAlert: pending.alert,
+      endReached: false,
     });
   },
 
@@ -284,6 +299,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       modifyIndicator: null,
       reaskReason: null,
       reaskDecimalWhole: null,
+      endReached: false,
       allRowValues: {},
       completedRows: [],
       skippedRows: [],
@@ -291,3 +307,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       returnColIdx: null,
     }),
 }));
+
+/** 이상치 알람 객체(스토어 SSOT의 파생 타입) — 표시 컴포넌트가 prop 타입으로 재사용한다. */
+export type AnomalyAlert = NonNullable<SessionState['anomalyAlert']>;

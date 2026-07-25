@@ -27,6 +27,30 @@ export const HERO_TYPE = {
   interim: 'max(24px, calc(clamp(44px, min(19vw, 11vh), 96px) * var(--fit-hi, 1)))',
 } as const;
 
+/** 와이어프레임 §공통규칙1 — 입력화면 공간 배정 **칩존 25% / 중앙 50% / 하단 25%**.
+ *  (SSOT: `Deliverables/2026-07-24-survey-011-active-screen-wireframe.md`)
+ *
+ *  🔴 비율의 분모는 **ActiveState 자신의 높이에서 상단 행/진행 스트립을 뺀 나머지**다.
+ *  와이어프레임 목업에서 `[칩존 25%]` 격벽은 행/진행 스트립 **아래**에서 시작하고, 하단 nav
+ *  (설정/입력/데이터/개선)는 `[하단 25%]` 안에 그려져 있지만 실제 nav는 App 레벨(TabBar)이라
+ *  ActiveState 박스 밖이다. 따라서 `auto`(스트립) + 1:2:1(=25:50:25)이 유일하게 자기모순 없는
+ *  해석이다. 테스트도 `window.innerHeight`가 아니라 이 박스 높이를 분모로 써야 한다. */
+export const ACTIVE_ZONE_ROWS = 'auto 1fr 2fr 1fr';
+
+/** 와이어프레임 §[2]·§[4] — 중앙 50%가 hero 말고 다른 정보를 그릴 때 쓰는 타이포 SSOT.
+ *  HERO_TYPE과 같은 계약: 절대 px 단독 금지(전부 clamp + min(vw,vh) 비례 + --fit 배율),
+ *  **상태별 인라인 폰트 정의 금지**(민구 지적: "상태에 따라 식별이 불가할 만큼 작아지는 경우"). */
+export const STATE_TYPE = {
+  /** 경보행 `<추세|범위>알람 : <넘어선 정도>` — 값 **위**에 오고 값을 가리지 않는다(§[2]). */
+  alarmLabel: 'max(17px, calc(clamp(22px, min(6.6vw, 3.6vh), 36px) * var(--fit-lo, 1)))',
+  /** 2열 비교의 열 라벨(`직전(YYYY-MM-DD)` / `현재`). */
+  compareLabel: 'max(12px, calc(clamp(14px, min(4.2vw, 2.2vh), 21px) * var(--fit-lo, 1)))',
+  /** 2열 비교의 값 — 원거리에서 두 값을 한눈에 대조한다(GL-005 가독 하한 22px). */
+  compareValue: 'max(22px, calc(clamp(30px, min(11vw, 6vh), 62px) * var(--fit-hi, 1)))',
+  /** 완료 요약 `완료 : X / N`(§[4]). */
+  completeSummary: 'max(24px, calc(clamp(30px, min(10vw, 5.4vh), 56px) * var(--fit-hi, 1)))',
+} as const;
+
 /** v0.23.0 입력탭#1 — 흡수영역(grid row3, 1fr, overflow:hidden) 안에서 카드가 부모에 잘리지 않게
  *  하는 공통 가드. maxHeight:100% + minHeight:0.
  *  v0.27.0 — overflowY:auto는 이제 **폴백**이다: 정상 경로에선 useFitScale이 폰트를 줄여 스크롤

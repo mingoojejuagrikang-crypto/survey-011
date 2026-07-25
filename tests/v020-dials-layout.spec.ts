@@ -118,7 +118,10 @@ test('입력탭 — 입력 조절 스탭퍼 패널(402×874)', async ({ page }) 
     return g ? g.clientHeight : null;
   });
   expect(chipClientH).not.toBeNull();
-  expect(chipClientH!).toBeLessThanOrEqual(170);
+  // 와이어프레임(2026-07-24 확정, Deliverables/2026-07-24-survey-011-active-screen-wireframe.md)
+  // §공통규칙1 — 칩 구역은 옛 3줄 픽셀 캡(170)이 아니라 ActiveState 구역의 25%다. 이 스펙의 관심은
+  //   스탭퍼 패널이지 칩 크기가 아니므로, 칩이 화면을 잠식하지 않는다는 상한만 남긴다.
+  expect(chipClientH!).toBeLessThanOrEqual(874 * 0.3);
 
   await page.screenshot({ path: '/tmp/v020-shots/steppers-402.png' });
 });

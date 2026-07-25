@@ -178,7 +178,11 @@ export function VoiceWaveform({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 7,
+        // 와이어프레임 §공통규칙5 — 파형은 이제 `<` `>` **사이**에 놓인다(종전엔 화면 폭 전체를 쓰는
+        // 독립 밴드였다). 폭 예산이 줄었으므로 간격은 뷰포트 비례로, 막대는 shrink 허용으로 바꾼다.
+        // 종전 고정값(gap 7 / flex '0 0 10px')이면 375px급에서 13개 막대가 슬롯을 넘쳐 `<` `>` 위로
+        // 삐져나온다. 레퍼런스 치수(10px/7px)는 여유가 있을 때의 **상한**으로 남는다.
+        gap: 'clamp(2px, 1.2vw, 7px)',
         color,
       }}
     >
@@ -187,8 +191,9 @@ export function VoiceWaveform({
           key={i}
           ref={(el) => { barsRef.current[i] = el; }}
           style={{
-            flex: '0 0 10px',
+            flex: '0 1 10px',
             width: 10,
+            minWidth: 5,
             height: barHeight,
             borderRadius: 999,
             background: 'currentColor',

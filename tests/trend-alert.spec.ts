@@ -5,8 +5,10 @@
  * review-screen 패턴) + v5 설정 시드(settings-migration/review-screen 페이로드 형태).
  *
  * 검증:
- *   1. 위반 값 커밋 → echo 대신 알림 TTS(v0.20.0 입력탭#6: 문구 단축 "추세 알람 증가|감소 NN" /
- *      "범위 알람 ±NN%" — "~합니다/하세요"·"직전 조사보다" 제거, 팝업 라벨과 글자 동일.
+ *   1. 위반 값 커밋 → echo 대신 알림 TTS(v0.20.0 입력탭#6: 문구 단축 "추세 알람 증가|감소 : NN" /
+ *      "범위 알람 : ±NN%" — "~합니다/하세요"·"직전 조사보다" 제거, 팝업 라벨과 **글자까지** 동일
+ *      (F3 반영 2026-07-25 — 조립부는 anomalyAlarmLabel 하나뿐. 화면·TTS·로그 3자 동등은 아래
+ *       "경보 문구 SSOT" 테스트가 고정한다).
  *       v0.13.0 R7: 끝 '확인해주세요' 없음 — self-confirm 환각 방지)
  *      + advance 중단, '확인' → 값 유지·진행 (trend_alert_fired/confirmed 로깅)
  *   2. 위반 → 새 값 발화 → 재입력(trend_alert_corrected) + 재검증(재위반 시 재알림) →
@@ -19,6 +21,13 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
+
+// ── 와이어프레임 §[2](2026-07-24 확정) 반영 ────────────────────────────────────────────────
+// 이상치 응답 대기의 [확인]/[수정]은 **카드 안이 아니라 하단 `<` `>` 자리**로 이동했다
+// ("하단 `<` `>` → 확인/수정으로 변경(알람 동안만)"). 따라서 종전
+// `popup.locator('[data-testid="anomaly-confirm-btn"]')`(카드 하위 탐색)를 `page.locator(...)`로
+// 스코프만 넓힌다. **버튼의 존재·동작 단언은 그대로다** — 바뀐 것은 화면상 위치뿐이다.
+// 버튼이 하단 바에 있다는 사실 자체는 v039-active-zones.spec.ts가 별도로 고정한다.
 
 test.setTimeout(120_000);
 
@@ -296,8 +305,8 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
 
   // echo 대신 알림 TTS + advance 중단(여전히 횡경 대기).
   const tts1 = await getTtsLog(page);
-  // v0.20.0 입력탭#6: 문구 단축 "추세 알람 증가 NN"(NN=절대 변화량 120.5−100.0=20.5). 팝업 라벨과 동일.
-  expect(tts1.some((t) => t.includes('추세 알람 증가 20.5'))).toBe(true);
+  // v0.20.0 입력탭#6: 문구 단축 "추세 알람 증가 : NN"(NN=절대 변화량 120.5−100.0=20.5). 팝업 라벨과 동일.
+  expect(tts1.some((t) => t.includes('추세 알람 증가 : 20.5'))).toBe(true);
   expect(await getActiveChipName(page)).toContain('횡경');
 
   // v0.9.0 시각 팝업: 이전값(100)→현재값(120.5)과 항목명을 화면에 표시.
@@ -306,8 +315,8 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   await expect(popup).toContainText('100');
   await expect(popup).toContainText('120.5');
   // v0.33.0 항목7 — "확인 또는 수정" 텍스트 힌트는 [확인][수정] 터치 버튼으로 대체(음성과 동일 동작).
-  await expect(popup.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
-  await expect(popup.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
+  await expect(page.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+  await expect(page.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
 
   // "확인" → 커밋된 값 유지, 종경으로 진행.
   await fireStt(page, '확인', 500);
@@ -339,7 +348,7 @@ test('% 변동률 단독 알람 — 종경 pctThreshold 15, 방향 무관 발화
 
   // 종경: 직전 50.0 → 60.5 = +21.0% (>= 15%) → 범위 알람. v0.24.0: 표시는 **실제 편차+부호** "+21%"(팝업과 동일).
   await fireStt(page, '60.5', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('범위 알람 +21%'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('범위 알람 : +21%'))).toBe(true);
   expect(await getActiveChipName(page)).toContain('종경'); // advance 중단
 
   await fireStt(page, '확인', 500);
@@ -350,7 +359,7 @@ test('% 변동률 단독 알람 — 종경 pctThreshold 15, 방향 무관 발화
   await fireStt(page, '80.5', 500);
   await waitForActiveChip(page, '종경');
   await fireStt(page, '40.0', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('범위 알람 -27%'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('범위 알람 : -27%'))).toBe(true);
   await fireStt(page, '확인', 500);
 
   const events = await getTrendEvents(page);
@@ -358,10 +367,10 @@ test('% 변동률 단독 알람 — 종경 pctThreshold 15, 방향 무관 발화
   expect(events.filter((e) => e.extra === 'trend_alert_confirmed')).toHaveLength(2);
 });
 
-test('기능3(WS-3) — 추세+범위 동시 발동(both) → 범위 우선 발화·팝업 "범위 알람 +20%"(추세 아님)', async ({ page }) => {
+test('기능3(WS-3) — 추세+범위 동시 발동(both) → 범위 우선 발화·팝업 "범위 알람 : +20%"(추세 아님)', async ({ page }) => {
   // 횡경(c8)에 trendRule 'increase' + pctThreshold 15를 동시 부여 → 직전 100.0 → 120은 커짐(방향 발동)
   //   AND +20%(범위 발동) = trigger:'both'. 종전엔 'both'가 추세로 떨어졌으나(무커버리지) v0.25.0 기능3은
-  //   범위 우선 → 음성·팝업 모두 "범위 알람 +20%"(글자 동일 계약). 순수 direction만 추세 유지(위 테스트들).
+  //   범위 우선 → 음성·팝업 모두 "범위 알람 : +20%"(글자 동일 계약). 순수 direction만 추세 유지(위 테스트들).
   const COLUMNS_BOTH = COLUMNS.map((c) =>
     c.id === 'c8' ? { ...c, trendRule: 'increase', pctThreshold: 15 } : c,
   );
@@ -372,8 +381,8 @@ test('기능3(WS-3) — 추세+범위 동시 발동(both) → 범위 우선 발�
   await fireStt(page, '120', 500); // 100.0 → 120: +20% AND 증가 = both
 
   const tts = await getTtsLog(page);
-  // 범위 우선(부호·정수 반올림) — "범위 알람 +20%".
-  expect(tts.some((t) => t.includes('범위 알람 +20%'))).toBe(true);
+  // 범위 우선(부호·정수 반올림) — "범위 알람 : +20%".
+  expect(tts.some((t) => t.includes('범위 알람 : +20%'))).toBe(true);
   // 핵심 계약: both가 추세로 떨어지지 않는다(범위 우선).
   expect(tts.some((t) => t.includes('추세 알람'))).toBe(false);
   expect(await getActiveChipName(page)).toContain('횡경'); // advance 중단(알람 대기)
@@ -381,7 +390,11 @@ test('기능3(WS-3) — 추세+범위 동시 발동(both) → 범위 우선 발�
   // 팝업도 kind='range'로 동일 문구 — 시각·청각 일치.
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible();
-  await expect(popup).toContainText('범위 알람 +20%');
+  // 와이어프레임 §[2](2026-07-24 확정) — 경보행 표기는 `<추세|범위>알람 : <넘어선 정도>`다.
+  //   F3 반영(2026-07-25, 민구 결정): TTS·로그도 **같은 문자열**이다. 종전엔 여기 주석이
+  //   "문장부호 차이는 허용 — 단어는 동일"이라며 화면만 콜론이 붙는 상태를 정당화해 위반을
+  //   테스트에 고정하고 있었다. 지금은 조립부가 `anomalyAlarmLabel` 하나뿐이다.
+  await expect(popup).toContainText('범위 알람 : +20%');
 
   await fireStt(page, '확인', 500);
   const events = await getTrendEvents(page);
@@ -390,8 +403,77 @@ test('기능3(WS-3) — 추세+범위 동시 발동(both) → 범위 우선 발�
   // v0.26.0 계측 보강(Trace 권장) — 라우팅 검증이 로그만으로 가능해야 한다: trigger=both가 kind=range로.
   expect(fired[0].extra).toContain('trigger=both');
   expect(fired[0].extra).toContain('kind=range');
-  expect(fired[0].extra).toContain('text=범위 알람 +20%');
+  expect(fired[0].extra).toContain('text=범위 알람 : +20%');
   expect(events.filter((e) => e.extra === 'trend_alert_confirmed')).toHaveLength(1);
+});
+
+// ─── 경보 문구 SSOT — 화면 == TTS == 로그 text= (F3 반영, 2026-07-25) ──────────────────────
+//
+// PRINCIPLES §2 "시각·청각 일치": 현장에선 폰을 2~3m 떨어뜨려 두고 **귀로만** 듣는 경우가 많다.
+// "들리는 말"과 "보이는 글"이 어긋나면 사용자는 둘 중 뭘 믿어야 할지 모른다.
+//
+// 종전엔 이 계약이 **주석으로만** 선언돼 있었고(AnomalyAlertPopup) 코드는 두 곳에서 따로 조립해
+// 콜론만큼 어긋나 있었다. 이 테스트가 그 계약을 **실행 가능한 단언**으로 바꾼다 — 세 문자열을
+// 실제 실행 경로에서 각각 꺼내 글자까지 비교한다.
+//
+// ⚠️ 유닛(anomalyAlert.spec.ts)이 못 보는 축을 여기서 본다: **팝업이 SSOT를 실제로 소비하는지**.
+//    팝업이 자체 조립으로 돌아가 한 글자라도 흘러가면 이 단언이 깨진다(유닛은 DOM을 못 본다).
+//    `changeNum` 빈 방어 분기는 checkAnomaly가 유한수만 통과시켜 e2e로 도달 불가 → 유닛 담당.
+
+/** 화면 헤드라인 · 알람 TTS · `trend_alert_fired`의 `text=` 세 문자열을 뽑아 동등성을 단언한다. */
+async function expectAlarmTriad(page: Page, expected: string) {
+  const headline = page.locator('[data-testid="anomaly-headline"]');
+  await expect(headline).toHaveText(expected);
+
+  const spokenAlarms = (await getTtsLog(page)).filter((t) => /추세 알람|범위 알람/.test(t));
+  const spoken = spokenAlarms[spokenAlarms.length - 1];
+
+  const firedEvents = (await getTrendEvents(page))
+    .filter((e) => (e.extra ?? '').startsWith('trend_alert_fired'));
+  const logged = firedEvents[firedEvents.length - 1].extra.split(',text=')[1];
+
+  const onScreen = (await headline.textContent())!;
+  expect(spoken, 'TTS == 화면').toBe(onScreen);
+  expect(logged, '로그 text= == 화면').toBe(onScreen);
+  expect(onScreen).toBe(expected);
+}
+
+test('경보 문구 SSOT — 추세 증가·범위 증가·범위 감소: 화면 == TTS == 로그 text=', async ({ page }) => {
+  await setupAndStart(page);
+
+  // ① 추세(증가) — 횡경 trendRule 'increase', 직전 100.0 → 120.5 = 절대차 20.5.
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '120.5', 500);
+  await expectAlarmTriad(page, '추세 알람 증가 : 20.5');
+
+  await fireStt(page, '확인', 500);
+
+  // ② 범위(증가) — 종경 pctThreshold 15, 직전 50.0 → 60.5 = +21.0% → 정수 반올림 +21%.
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '60.5', 500);
+  await expectAlarmTriad(page, '범위 알람 : +21%');
+
+  await fireStt(page, '확인', 500);
+  await waitForRow(page, 2);
+
+  // ③ 범위(감소) — 행2 종경 직전 55.0 → 40.0 = -27.3% → -27%.
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '80.5', 500); // 통과(작아짐은 increase 미발화)
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '40.0', 500);
+  await expectAlarmTriad(page, '범위 알람 : -27%');
+});
+
+test('경보 문구 SSOT — 추세 감소: 화면 == TTS == 로그 text=', async ({ page }) => {
+  // 기본 설정의 횡경은 'increase'라 감소 알람이 안 난다 → 이 케이스만 'decrease'로 뒤집는다
+  //   (기능3 테스트와 동일한 설정 오버라이드 패턴). 직전 100.0 → 80.5 = 절대차 19.5.
+  const COLUMNS_DEC = COLUMNS.map((c) => (c.id === 'c8' ? { ...c, trendRule: 'decrease' } : c));
+  const SETTINGS_DEC = { ...SETTINGS, state: { ...SETTINGS.state, columns: COLUMNS_DEC } };
+  await setupAndStart(page, { settings: SETTINGS_DEC });
+
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '80.5', 500);
+  await expectAlarmTriad(page, '추세 알람 감소 : 19.5');
 });
 
 test('이상치 → 새 값 발화 → 재입력+재검증(재알림) → 통과 값은 정상 진행 + corrected 로깅', async ({ page }) => {
@@ -399,14 +481,14 @@ test('이상치 → 새 값 발화 → 재입력+재검증(재알림) → 통과
 
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '120.5', 500); // 알람 1차 (100.0 → 120.5, 절대차 +20.5)
-  expect((await getTtsLog(page)).some((t) => t.includes('추세 알람 증가 20.5'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('추세 알람 증가 : 20.5'))).toBe(true);
   // v0.13.0 시각검증: 빨강(pending) 팝업 + R3 hero 라벨 캡처(414px). 비단언 — 레이아웃 확인용.
   await expect(page.locator('[data-testid="anomaly-alert"][data-status="pending"]')).toBeVisible();
   await page.screenshot({ path: 'test-results/v013-anomaly-red.png' });
 
   // 새 값(여전히 커짐) → 재입력(corrected) + 재알림 (절대차 +30.5).
   await fireStt(page, '130.5', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('추세 알람 증가 30.5'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('추세 알람 증가 : 30.5'))).toBe(true);
   expect(await getActiveChipName(page)).toContain('횡경'); // 여전히 advance 중단
 
   // 통과 값(80.5 < 100 — increase는 작아짐 미발화) → 알림 없이 수정 echo + 종경으로 진행.

@@ -171,7 +171,7 @@ async function glowVar(page: Page): Promise<string> {
 
 // ─── B7. 파동 — CSS 변수 반영 + 시각 변조 ──────────────────────────────────
 
-test('B7 — 대기 카드: 항목명 + 70% 폭 세로 막대 파형, "듣는 중" 텍스트 제거', async ({ page }) => {
+test('B7 — 대기 카드: 항목명 + 슬롯에 맞는 세로 막대 파형(13개), "듣는 중" 텍스트 제거', async ({ page }) => {
   await boot(page);
   await startSession(page);
 
@@ -203,10 +203,16 @@ test('B7 — 대기 카드: 항목명 + 70% 폭 세로 막대 파형, "듣는 �
       barCount: waveEl.querySelectorAll('span').length,
     };
   });
-  expect(geometry.waveWidth / geometry.availableWidth).toBeCloseTo(0.7, 2);
+  // 와이어프레임 §공통규칙5(2026-07-24 확정) — 파형은 화면 폭 전체를 쓰던 독립 밴드가 아니라
+  //   하단 `<` `>` **사이** 슬롯이다. 폭 예산이 줄었으므로 종전 고정치(가용폭의 70% / gap 7 /
+  //   막대 10px)는 **여유가 있을 때의 상한**이 되고, 좁으면 비례 축소된다. 계약(막대 13개가
+  //   슬롯을 넘치지 않고 원거리에서 세로 막대로 읽힌다)은 그대로다.
+  expect(geometry.waveWidth, '파형이 밴드 가용폭을 넘지 않는다').toBeLessThanOrEqual(geometry.availableWidth + 1);
   expect(geometry.waveHeight).toBe(geometry.expectedWaveHeight);
-  expect(geometry.gap).toBe(7);
-  expect(geometry.barWidth).toBe(10);
+  expect(geometry.gap, '간격 상한 = 레퍼런스 7px').toBeLessThanOrEqual(7);
+  expect(geometry.gap, '간격이 0으로 뭉개지지 않는다').toBeGreaterThanOrEqual(2);
+  expect(geometry.barWidth, '막대 폭 상한 = 레퍼런스 10px').toBeLessThanOrEqual(10);
+  expect(geometry.barWidth, '막대 폭 하한(원거리 판독)').toBeGreaterThanOrEqual(5);
   // v0.38.0 리뷰#1 — 막대 높이는 레퍼런스 78px이되 **밴드를 넘지 않는다**(밴드에서 파생).
   // 종전엔 78 고정이라 밴드가 78보다 낮은 뷰포트에서 삐져나왔다(이 단언이 그 상태를 계약으로
   // 굳히고 있었다 — 기본 뷰포트 720px에서도 밴드 76 vs 막대 78).
@@ -780,9 +786,12 @@ test('FB-A — 듣는 중(green): traveling sweep 바 4개가 edge-sweep 4엣지
   await page.locator('button[title="일시정지"]').click();
   await expect(glow).toHaveAttribute('data-tone', 'amber');
   expect(await sweepAnims(page), 'paused엔 sweep 없음(호흡만)').toHaveLength(0);
-  await expect(statusControl).toHaveAttribute('data-tone', 'amber');
-  await expect(statusControl).toHaveAttribute('data-status', 'paused');
-  await expect(statusControl).toHaveAttribute('aria-label', '재개');
+  // 와이어프레임 §[3](2026-07-24 확정) — 일시정지에서는 하단 `<`가 **재개** 버튼이므로 인디케이터를
+  //   또 하나의 재개 버튼으로 두지 않는다(같은 행동의 중복 타깃 제거) → voice-status-control 부재.
+  //   상태 표시 계약은 유지된다: 인디케이터 도트가 `||` 글리프로 바뀌고 재개 버튼이 노출된다.
+  await expect(statusControl, '일시정지에선 인디케이터가 버튼이 아니다').toHaveCount(0);
+  await expect(page.locator('[data-testid="state-dots"]')).toHaveAttribute('data-glyph', 'pause');
+  await expect(page.locator('button[title="재시작"][aria-label="재개"]')).toBeVisible();
   console.log('✓ FB-A: 듣는 중 4엣지 sweep+상태심볼 fade / paused는 글로우 호흡+정지심볼 fade');
 });
 

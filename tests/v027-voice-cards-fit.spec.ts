@@ -14,6 +14,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
 
+// ── 와이어프레임 §[2](2026-07-24 확정) 반영 ────────────────────────────────────────────────
+// 이상치 응답 대기의 [확인]/[수정]은 **카드 안이 아니라 하단 `<` `>` 자리**로 이동했다
+// ("하단 `<` `>` → 확인/수정으로 변경(알람 동안만)"). 따라서 종전
+// `popup.locator('[data-testid="anomaly-confirm-btn"]')`(카드 하위 탐색)를 `page.locator(...)`로
+// 스코프만 넓힌다. **버튼의 존재·동작 단언은 그대로다** — 바뀐 것은 화면상 위치뿐이다.
+// 버튼이 하단 바에 있다는 사실 자체는 v039-active-zones.spec.ts가 별도로 고정한다.
+
 test.setTimeout(120_000);
 
 const STORE_KEY = 'survey-011-settings-v3';
@@ -163,9 +170,14 @@ for (const vp of VIEWPORTS) {
     expect(m.scrollW).toBeLessThanOrEqual(m.clientW + 1);
 
     // ② 핵심 정보가 visible + 뷰포트 안(현재값 > 알람 라벨 > 직전값 > 행동).
+    // 와이어프레임 §[2](2026-07-24 확정) — 경보행은 `<추세|범위>알람 <방향> : <넘어선 정도>`,
+    //   항목명 줄은 칩존 활성칩(빨강)이 대신하므로 카드에서 빠졌다.
+    //   🔴 방향어는 TTS(`alertText`)와 **글자까지 동일** 계약이라 라벨에 남는다(민구 확정 2026-07-25).
+    //   이 케이스는 100 → -355.5 = **감소**다. 라벨이 길어져도 값을 밀어내면 안 된다(§[2] '값 안 가림').
+    //   **검증하는 계약은 그대로다** — 현재값·알람 라벨·직전값 셋이 잘리지 않고 다 보인다.
     const infoTexts = [
       '-355.5',                 // P1 현재값
-      '추세 알람 감소',           // P2 변화(알람 라벨)
+      '추세 알람 감소 :',         // P2 변화(경보행 — 이 케이스는 감소. TTS와 글자 동일 계약)
       '100',                    // P3 직전값(카드는 원본 표기 "100"으로 표시 — trend-alert.spec 동일)
     ];
     const cardBox = (await card.boundingBox())!;
@@ -181,8 +193,9 @@ for (const vp of VIEWPORTS) {
       expect(box.x + box.width, `"${t}" 뷰포트 가로 안`).toBeLessThanOrEqual(vp.width + 1);
     }
     // v0.33.0 항목7 acceptance(07-10 QA P1 #2) — 두 행동 버튼이 보이고 각 44×44px 이상.
+    // 와이어프레임 §[2](2026-07-24 확정) — 버튼은 이제 카드가 아니라 **하단 `<` `>` 자리**에 있다(위치만 이동, 계약 동일).
     for (const btnId of ['anomaly-confirm-btn', 'anomaly-modify-btn']) {
-      const btn = card.locator(`[data-testid="${btnId}"]`);
+      const btn = page.locator(`[data-testid="${btnId}"]`);
       await expect(btn, `버튼 ${btnId}`).toBeVisible();
       const bb = (await btn.boundingBox())!;
       expect(bb.height, `${btnId} 높이 ≥44`).toBeGreaterThanOrEqual(44);
@@ -205,22 +218,36 @@ for (const vp of VIEWPORTS) {
   });
 }
 
-// 일시정지 카드도 무스크롤(정보량은 적지만 v0.27.0 비례화 회귀 가드 — 375×812만).
-test('무스크롤 — 375x812: 일시정지 카드 scrollHeight≤clientHeight', async ({ page }) => {
+// 와이어프레임 §[3] paused(2026-07-24 확정) — **중앙 비움**이 확정되면서 종전의 "일시정지 중앙
+// 대형 카드"는 사라졌다. 그래서 여기서 지킬 무스크롤 계약은 카드 내부가 아니라 **화면 전체**다:
+// 일시정지 상태에서도 재개/종료 행동이 잘리지 않고 뷰포트 안에 있고, 페이지 스크롤이 생기지 않는다
+// (양손 측정 중 스크롤 불가 — 민구 07-03. 그 원칙이 이 스펙의 본래 목적이다).
+test('무스크롤 — 375x812: 일시정지 상태에서 재개/종료가 잘림 없이 뷰포트 안(중앙은 비움)', async ({ page }) => {
   await setupAndStart(page, { width: 375, height: 812 });
   await page.locator('button[title="일시정지"]').click({ force: true });
   await page.waitForTimeout(400);
 
-  const card = page.locator('[data-testid="paused-card"]');
-  await expect(card).toBeVisible();
-  const m = await card.evaluate((el) => ({
-    scrollH: el.scrollHeight, clientH: el.clientHeight,
-    scrollW: el.scrollWidth, clientW: el.clientWidth,
+  // 상단 "일시정지" 표시(§[3]).
+  await expect(page.locator('[data-testid="paused-card"]')).toHaveText('일시정지');
+  // 중앙 50%는 비어 있다(§[3] "값·'일시정지됨' 없음").
+  expect((await page.locator('[data-testid="voice-center-stage"]').innerText()).trim()).toBe('');
+
+  // 페이지 자체에 스크롤 잔여 0(무스크롤 원칙).
+  const pageOverflow = await page.evaluate(() => ({
+    y: document.documentElement.scrollHeight - document.documentElement.clientHeight,
+    x: document.documentElement.scrollWidth - document.documentElement.clientWidth,
   }));
-  expect(m.scrollH).toBeLessThanOrEqual(m.clientH + 1);
-  expect(m.scrollW).toBeLessThanOrEqual(m.clientW + 1);
-  await expect(card.getByText('재시작', { exact: false }).first()).toBeVisible();
-  await expect(card.getByText('종료', { exact: false }).first()).toBeVisible();
+  expect(pageOverflow.y, '일시정지 상태 세로 스크롤 잔여').toBeLessThanOrEqual(1);
+  expect(pageOverflow.x, '일시정지 상태 가로 스크롤 잔여').toBeLessThanOrEqual(1);
+
+  // 재개/종료가 하단 양끝에 잘림 없이(§[3] "하단 `<` `>` → 재개/종료"), 장갑 조작 타깃 유지.
+  for (const [title, label] of [['재시작', '재개'], ['입력 종료', '종료']]) {
+    const btn = page.locator(`button[title="${title}"]`);
+    await expect(btn, `${label} 버튼`).toBeVisible();
+    const bb = (await btn.boundingBox())!;
+    expect(bb.height, `${label} 높이 ≥44`).toBeGreaterThanOrEqual(44);
+    expect(bb.y + bb.height, `${label} 뷰포트 안`).toBeLessThanOrEqual(812 + 1);
+  }
   await page.screenshot({ path: `${SHOT_DIR}/paused-375x812.png` });
 });
 
@@ -307,10 +334,14 @@ test('무스크롤 — 375x812: 일시정지 카드 scrollHeight≤clientHeight'
     // 핵심 정보(현재값·알람 라벨·직전값·행동 버튼)는 여전히 visible.
     // v0.33.0 항목7 — "확인 또는 수정" 텍스트 힌트는 [확인][수정] 터치 버튼으로 대체.
     await expect(card.getByText('120.5', { exact: false }).first()).toBeVisible();
-    await expect(card.getByText('추세 알람 증가', { exact: false }).first()).toBeVisible();
+    // 와이어프레임 §[2] 경보행 `<추세|범위>알람 <방향> : <넘어선 정도>`.
+    // 🔴 방향어(증가/감소)는 TTS(`alertText`)와 **글자까지 동일** 계약이라 라벨에 반드시 남는다
+    //    (시각·청각 일치, v0.20.0 입력탭#6 · 민구 확정 2026-07-25). 여기서 그 계약이 무스크롤
+    //    예산 안에서 지켜지는지 함께 본다 — 라벨이 길어져도 값을 밀어내면 안 된다(§[2] '값 안 가림').
+    await expect(card.getByText('추세 알람 증가 :', { exact: false }).first()).toBeVisible();
     await expect(card.getByText('100', { exact: false }).first()).toBeVisible();
-    await expect(card.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
-    await expect(card.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
+    await expect(page.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+    await expect(page.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
 
     await page.screenshot({ path: `${SHOT_DIR}/anomaly-375x667-realistic.png` });
   });

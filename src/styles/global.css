@@ -123,6 +123,14 @@ input::placeholder {
   50% { opacity: 1; }
 }
 
+/* 와이어프레임 §공통규칙5 — 하단 인디케이터 도트의 "숨쉬듯 크기 반복". transform/opacity만
+   변조(합성기 전용 — 레이아웃/페인트 없음). rAF를 새로 돌리지 않는 이유: 이 호흡은 오디오와
+   무관한 상시 대기 신호이고, 오디오 반응은 같은 자리의 세로 파형이 담당한다. */
+@keyframes dot-breathe {
+  0%, 100% { transform: scale(0.86); opacity: 0.62; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+
 /* v0.38.0 #9 — 하단 토글의 glyph는 pause/play 명령이 아니라 현재 음성 상태를 나타낸다.
    톤 cadence는 EdgeGlow와 맞추고 opacity만 바꿔 원거리에서도 상태가 살아 있음을 알린다. */
 @keyframes voice-status-fade {
@@ -224,6 +232,7 @@ input::placeholder {
   [data-testid="anomaly-alert"],
   [data-testid="modify-indicator"],
   [data-testid="paused-card"],
+  [data-testid="state-dots"] span,
   [data-testid="voice-status-control"] [data-status-symbol] {
     animation: none !important;
     filter: none !important;
@@ -233,12 +242,11 @@ input::placeholder {
 /* prevent iOS bounce, keep PWA feel */
 html { -webkit-text-size-adjust: 100%; }
 
-/* v0.38.0 T2-R1 — 375×667급에서는 활성 칩과 알람 라벨이 이미 제공하는 항목명 맥락을 중복 표시하지
-   않는다. GL-005 폰트 하한은 유지하면서 카드 내부 무스크롤 공간을 확보한다. */
+/* 375×667급에서는 이상치 카드 내부 무스크롤 예산이 가장 빠듯하다(GL-005 폰트 하한은 유지).
+   와이어프레임 §[2]에서 항목명 줄과 버튼이 카드 밖으로 빠져 여백은 종전보다 넉넉해졌지만,
+   짧은 화면의 여백 압축은 그대로 둔다. */
 @media (max-height: 700px) {
   .anomaly-alert-layout {
     padding-block: 0 !important;
-    gap: 1px !important;
   }
-  .anomaly-field-name { display: none; }
 }

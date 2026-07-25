@@ -20,6 +20,7 @@ export function VoiceScreen() {
   // ActiveState/칩 전체가 다시 렌더되므로, 이 화면이 실제로 쓰는 수명주기 필드만 고정 구독한다.
   const sess = useSessionStore(useShallow((st) => ({
     phase: st.phase,
+    endReached: st.endReached,
     activeColIdx: st.activeColIdx,
     anomalyAlert: st.anomalyAlert,
     reaskReason: st.reaskReason,
@@ -124,6 +125,10 @@ export function VoiceScreen() {
         voiceCols={voiceCols}
         currentColId={currentCol?.id}
         completing={sess.phase === 'complete'}
+        // 와이어프레임 §[4] — phase 'complete'는 완료 행 **검토 대기**와 **끝 도달**을 겸한다.
+        //   검토 대기는 [1] active 레이아웃(hero ✓+방금값 — v035-hero-confirm 동작 계약)을 쓰고,
+        //   끝 도달만 [4] complete(`완료 : X / N` + 종료)를 쓴다.
+        endReached={sess.phase === 'complete' && sess.endReached}
         paused={sess.phase === 'paused'}
         anomalyPending={anomalyPending}
         tone={glowTone}

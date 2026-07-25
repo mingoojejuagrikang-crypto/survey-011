@@ -10,12 +10,51 @@
 import type { Column } from '../types';
 import type { TrendViolation } from './trendCheck';
 
+/** 경보행 문구 SSOT — 화면(AnomalyAlertPopup 헤드라인) · TTS(alertText) · 텔레메트리(`text=`)가
+ *  **글자까지 동일**해야 하는 단 하나의 조립부다(PRINCIPLES §2 시각·청각 일치 계약,
+ *  `voicePrompts.decimalReaskPrompt`와 같은 패턴).
+ *
+ *  왜 함수인가(F3 리뷰 라운드 'f3-ui' 반영, 민구 결정 2026-07-25): 종전엔 같은 문구를 두 곳에서
+ *  따로 조립했다 — `buildAnomalyDisplay`의 `alertText`(콜론 없음)와 `AnomalyAlertPopup`의
+ *  `alarmLabel`(콜론 있음). 팝업 주석이 "글자까지 동일" 계약을 선언하는데 바로 아래 코드가 그걸
+ *  깨고 있었고, 테스트는 "문장부호 차이는 허용"이라는 주석으로 위반을 고정했다. 콜론만 맞추면
+ *  다음에 또 어긋나므로 **조립부 자체를 하나로** 만든다 — 어긋남이 구조적으로 불가능해진다.
+ *  민구 확정 방향 = **화면 표기(` : `)에 TTS·로그를 맞춘다**(SOP-003 매핑표에 `trend_alert_fired`·
+ *  `text=`가 없어 파서 무영향 — 오케스트레이터 확인).
+ *
+ *  입력은 팝업이 이미 들고 있는 알람 페이로드 필드뿐이다(kind·direction·changeText·threshold).
+ *  그래서 스토어 타입도, IDB `pendingValidation.alert` 스키마도 바꾸지 않는다 — 구버전이 저장한
+ *  보류 알람을 복원해도 같은 문구가 나온다.
+ *
+ *  - 범위: `범위 알람 : ±NN%` — NN은 실제 편차%(정수 반올림), 미산출 시 설정 임계(threshold) 폴백.
+ *  - 추세: `추세 알람 증가|감소 : NN` — NN은 절대 변화량.
+ *    `changeNum`이 비면 숫자부를 **생략**한다(`추세 알람 증가`). 화면 전용 자리표시자 `—`를
+ *    TTS가 읽게 만들지 않기 위해서다(브리프 지정 방향). 이 분기는 `checkAnomaly`가 유한수만
+ *    통과시켜(parseNumeric) 실질 도달 불가한 방어 분기다. */
+export function anomalyAlarmLabel(a: {
+  /** 미지정이면 추세 형태로 폴백(구버전 저장 알람 보존 — sessionStore 주석과 동일 계약). */
+  kind?: 'trend' | 'range';
+  direction: 'up' | 'down';
+  changeText: string;
+  /** range 알람의 편차% 미산출 시 폴백(설정 임계 pctThreshold). */
+  threshold?: number;
+}): string {
+  const changeNum = a.changeText ? a.changeText.replace(/[^0-9.]/g, '') : '';
+  const sign = a.direction === 'up' ? '+' : '-';
+  if (a.kind === 'range') {
+    const rangePct = changeNum ? Math.round(Number(changeNum)) : a.threshold;
+    return `범위 알람 : ${sign}${rangePct}%`;
+  }
+  return `추세 알람 ${a.direction === 'up' ? '증가' : '감소'}${changeNum ? ` : ${changeNum}` : ''}`;
+}
+
 /** 이상치 알람 표시 산출 SSOT — v0.33.0 항목6에서 음성 커밋(handleFinal)과 수동 커밋
  *  (commitManualValue)이 공유하도록 추출. 이력·근거(원 handleFinal 블록에서 이전):
  *  - v0.9.0(민구 요청): 변동률(pct) 트리거는 % 유지, 증가/감소(direction)·both는 절대값 차이 —
  *    절대차는 부동소수 잔여(2.2000002) 방지로 컬럼 소수자리 반올림(float=col.decimals||1, int=0).
  *  - v0.20.0 입력탭#6: alertKind가 음성(alertText)·팝업(kind)을 동시에 가른다 — TTS 문구는
- *    팝업 라벨(AnomalyAlertPopup)과 **글자까지 동일** 계약(시각·청각 일치).
+ *    팝업 라벨(AnomalyAlertPopup)과 **글자까지 동일** 계약(시각·청각 일치). F3 반영(2026-07-25)
+ *    이후 그 문구 조립은 `anomalyAlarmLabel` 한 곳뿐이라 두 경로가 어긋날 수 없다.
  *  - v0.24.0(민구 요청): 범위 알람은 설정 임계가 아니라 실제 편차%를 부호와 함께("+##%"/"-##%",
  *    정수 반올림, 미산출 시 설정 임계 폴백).
  *  - v0.25.0 기능3(WS-3, 민구 요청): 추세·범위 동시 발동(trigger:'both')은 범위 우선 —
@@ -34,15 +73,14 @@ export function buildAnomalyDisplay(col: Column | null, v: TrendViolation): {
     alertKind === 'range'
       ? (v.pctText ? `${v.pctText}%` : '')
       : Math.abs(v.next - v.prev).toFixed(decForDiff);
-  // changeNum = 변화량 숫자만(팝업 changeText.replace와 동일 규칙) — 추세 발화/표시에 쓴다.
-  const changeNum = changeText.replace(/[^0-9.]/g, '');
   const rangeThreshold = col?.pctThreshold;
-  const rangePct = changeNum ? Math.round(Number(changeNum)) : rangeThreshold;
-  const rangeSign = v.direction === 'up' ? '+' : '-';
-  const alertText =
-    alertKind === 'range'
-      ? `범위 알람 ${rangeSign}${rangePct}%`
-      : `추세 알람 ${v.direction === 'up' ? '증가' : '감소'}${changeNum ? ` ${changeNum}` : ''}`;
+  // 문구 조립은 anomalyAlarmLabel 하나뿐 — 팝업 헤드라인이 같은 함수를 같은 페이로드로 호출한다.
+  const alertText = anomalyAlarmLabel({
+    kind: alertKind,
+    direction: v.direction,
+    changeText,
+    threshold: rangeThreshold,
+  });
   return { alertKind, changeText, alertText, threshold: rangeThreshold };
 }
 

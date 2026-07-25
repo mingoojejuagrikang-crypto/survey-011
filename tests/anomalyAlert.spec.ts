@@ -10,7 +10,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { buildAnomalyAlert } from '../src/lib/anomalyAlert';
+import { buildAnomalyAlert, anomalyAlarmLabel } from '../src/lib/anomalyAlert';
 import type { Column } from '../src/types';
 import type { TrendViolation } from '../src/lib/trendCheck';
 
@@ -32,9 +32,9 @@ test.describe('trend_alert_fired extra — 전체 문자열 고정 (SOP-003 파�
       col: FLOAT_COL, v: violation({ trigger: 'direction' }),
       colName: '횡경', next: '30.2', row: 3,
     });
-    expect(alertText).toBe('추세 알람 감소 4.9');
+    expect(alertText).toBe('추세 알람 감소 : 4.9');
     expect(logExtra).toBe(
-      'trend_alert_fired:trigger=direction,kind=trend,dir=down,change=4.9,text=추세 알람 감소 4.9',
+      'trend_alert_fired:trigger=direction,kind=trend,dir=down,change=4.9,text=추세 알람 감소 : 4.9',
     );
   });
 
@@ -43,9 +43,9 @@ test.describe('trend_alert_fired extra — 전체 문자열 고정 (SOP-003 파�
       col: FLOAT_COL, v: violation({ trigger: 'pct', direction: 'up', prev: 30, next: 36, pctText: '20.0' }),
       colName: '횡경', next: '36', row: 1,
     });
-    expect(alertText).toBe('범위 알람 +20%');
+    expect(alertText).toBe('범위 알람 : +20%');
     expect(logExtra).toBe(
-      'trend_alert_fired:trigger=pct,kind=range,dir=up,change=20.0%,text=범위 알람 +20%',
+      'trend_alert_fired:trigger=pct,kind=range,dir=up,change=20.0%,text=범위 알람 : +20%',
     );
   });
 
@@ -55,7 +55,7 @@ test.describe('trend_alert_fired extra — 전체 문자열 고정 (SOP-003 파�
       colName: '횡경', next: '30.2', row: 3,
     });
     expect(logExtra).toBe(
-      'trend_alert_fired:trigger=both,kind=range,dir=down,change=-14.0%,text=범위 알람 -14%',
+      'trend_alert_fired:trigger=both,kind=range,dir=down,change=-14.0%,text=범위 알람 : -14%',
     );
   });
 
@@ -65,7 +65,7 @@ test.describe('trend_alert_fired extra — 전체 문자열 고정 (SOP-003 파�
       colName: '횡경', next: '5', row: 1,
     });
     expect(logExtra).toBe(
-      'trend_alert_fired:trigger=pct,kind=range,dir=up,change=?,text=범위 알람 +10%',
+      'trend_alert_fired:trigger=pct,kind=range,dir=up,change=?,text=범위 알람 : +10%',
     );
   });
 
@@ -75,7 +75,7 @@ test.describe('trend_alert_fired extra — 전체 문자열 고정 (SOP-003 파�
       colName: '횡경', next: '30.2', row: 3, manual: { hold: true },
     });
     expect(logExtra).toBe(
-      'trend_alert_fired:trigger=direction,kind=trend,dir=down,change=4.9,text=추세 알람 감소 4.9,src=manual,hold=1',
+      'trend_alert_fired:trigger=direction,kind=trend,dir=down,change=4.9,text=추세 알람 감소 : 4.9,src=manual,hold=1',
     );
   });
 
@@ -85,7 +85,7 @@ test.describe('trend_alert_fired extra — 전체 문자열 고정 (SOP-003 파�
       colName: '횡경', next: '30.2', row: 3, manual: { hold: false },
     });
     expect(logExtra).toBe(
-      'trend_alert_fired:trigger=direction,kind=trend,dir=down,change=4.9,text=추세 알람 감소 4.9,src=manual',
+      'trend_alert_fired:trigger=direction,kind=trend,dir=down,change=4.9,text=추세 알람 감소 : 4.9,src=manual',
     );
   });
 
@@ -99,5 +99,80 @@ test.describe('trend_alert_fired extra — 전체 문자열 고정 (SOP-003 파�
       row: 3, sampleKey: '이원창-A-3', prevDate: '2026-07-10',
       status: 'pending', kind: 'range', threshold: 10,
     });
+  });
+});
+
+/** logExtra에서 `text=` 값만 뽑는다(라벨엔 쉼표가 없다 — 뒤 `,src=manual` 접미사와 안전히 분리). */
+function textField(logExtra: string): string {
+  const at = logExtra.indexOf(',text=');
+  const rest = logExtra.slice(at + ',text='.length);
+  const comma = rest.indexOf(',');
+  return comma === -1 ? rest : rest.slice(0, comma);
+}
+
+/**
+ * 시각·청각 일치 계약 — 화면 라벨 == TTS(alertText) == 로그 `text=` (PRINCIPLES §2).
+ *
+ * 여기서 검증하는 건 "같은 함수를 두 번 부르면 같다"(토톨로지)가 **아니다**. `anomalyAlarmLabel`에
+ * 넘기는 건 `buildAnomalyAlert`가 반환한 **팝업 페이로드(alert)** 다 — 팝업이 실제로 손에 쥐는
+ * 것과 같은 객체다. 즉 "팝업에 전달되는 페이로드만으로 TTS와 **글자까지 같은** 문구가 재현되는가"를
+ * 고정한다. 페이로드에서 threshold/kind/direction/changeText 중 하나라도 빠지면 여기서 깨진다.
+ *
+ * 팝업이 그 함수를 **실제로 호출하는지**(자체 조립으로 되돌아가지 않는지)는 이 유닛 레이어가
+ * 관측할 수 없다 — DOM==TTS==`text=` 3자 동등은 `trend-alert.spec.ts`의 e2e가 고정한다.
+ */
+test.describe('경보 문구 SSOT — 화면 == TTS == 로그 text=', () => {
+  const CASES: Array<{ name: string; v: Partial<TrendViolation>; expected: string }> = [
+    {
+      name: '추세 증가',
+      v: { trigger: 'direction', direction: 'up', prev: 100, next: 120.5 },
+      expected: '추세 알람 증가 : 20.5',
+    },
+    {
+      name: '추세 감소',
+      v: { trigger: 'direction', direction: 'down', prev: 35.1, next: 30.2 },
+      expected: '추세 알람 감소 : 4.9',
+    },
+    {
+      name: '범위 증가',
+      v: { trigger: 'pct', direction: 'up', prev: 30, next: 36, pctText: '20.0' },
+      expected: '범위 알람 : +20%',
+    },
+    {
+      name: '범위 감소',
+      v: { trigger: 'pct', direction: 'down', prev: 55, next: 40, pctText: '27.3' },
+      expected: '범위 알람 : -27%',
+    },
+    {
+      name: '범위 — 편차% 미산출(changeNum 빈 경우) → 설정 임계 폴백',
+      v: { trigger: 'pct', direction: 'up', prev: 0, next: 5, pctText: undefined },
+      expected: '범위 알람 : +10%',
+    },
+  ];
+
+  for (const c of CASES) {
+    test(`${c.name} — 세 문자열이 글자까지 동일`, () => {
+      const { alertText, logExtra, alert } = buildAnomalyAlert({
+        col: FLOAT_COL, v: violation(c.v), colName: '횡경', next: String(c.v.next), row: 1,
+      });
+      // 화면(팝업이 페이로드로 만드는 라벨) — 팝업과 동일 호출.
+      expect(anomalyAlarmLabel(alert)).toBe(c.expected);
+      expect(alertText).toBe(c.expected);          // TTS
+      expect(textField(logExtra)).toBe(c.expected); // 텔레메트리
+    });
+  }
+
+  test('추세 — changeNum 빈 방어 분기: 숫자부를 생략한다(화면 전용 `—`를 TTS가 읽지 않게)', () => {
+    // checkAnomaly가 parseNumeric으로 유한수만 통과시키므로 실사용에선 도달 불가한 방어 분기다.
+    // 종전엔 화면만 `추세 알람 증가 : —`, TTS는 `추세 알람 증가`로 갈렸다 — SSOT 통합 시
+    // **숫자부 생략**을 택했다(브리프 지정 방향, 기존 단언과 충돌 없음).
+    expect(anomalyAlarmLabel({ kind: 'trend', direction: 'up', changeText: '' }))
+      .toBe('추세 알람 증가');
+    expect(anomalyAlarmLabel({ kind: 'trend', direction: 'down', changeText: '' }))
+      .toBe('추세 알람 감소');
+  });
+
+  test('kind 미지정(구버전 저장 알람) — 추세 형태로 폴백(sessionStore 계약 유지)', () => {
+    expect(anomalyAlarmLabel({ direction: 'up', changeText: '20.5' })).toBe('추세 알람 증가 : 20.5');
   });
 });

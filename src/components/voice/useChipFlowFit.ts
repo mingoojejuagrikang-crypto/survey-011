@@ -1,15 +1,17 @@
 import { useLayoutEffect, useRef, type DependencyList } from 'react';
 
 /** v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 칩 플로우(voice-chip-grid)의 글자 배율 훅.
- *  민구 칩 스펙: 유동 폭 pill 플로우는 **최대 3줄까지 표시**하고, 넘치면 영역 안 스크롤. 그 전에
- *  칩 수·길이에 따라 글자 크기를 배율(--chip-fit)로 단계 축소해 가능한 한 3줄 안에 들어오게 한다.
- *  (영역 높이 상한 30dvh는 컨테이너 maxHeight가 담당 — 이 훅은 배율만.)
+ *  민구 칩 스펙(와이어프레임 §공통규칙4로 갱신): 유동 폭 pill 플로우는 **2줄까지 표시**하고, 넘치면 영역 안 스크롤. 그 전에
+ *  칩 수·길이에 따라 글자 크기를 배율(--chip-fit)로 단계 축소해 가능한 한 2줄 안에 들어오게 한다.
+ *  (영역 높이는 칩존 트랙 25%가 담당 — 이 훅은 배율만.)
  *
  *  useFitScale과 같은 계약: 실제 폰트 크기를 줄여 reflow로 수렴(최대 5회, layout effect라 페인트 전
  *  플래시 없음). ResizeObserver/resize로 뷰포트 변화에 재수렴. 하한(0.68)은 칩 쪽 max() 플로어와
- *  함께 가독 한계(≥11px)를 지킨다 — 하한에서도 3줄을 넘으면 스크롤이 이어받는다. */
+ *  함께 가독 한계(≥11px)를 지킨다 — 하한에서도 2줄을 넘으면 스크롤이 이어받는다. */
 const CHIP_FIT_STEPS = [1, 0.92, 0.84, 0.76, 0.68] as const;
-const MAX_ROWS = 3;
+/** 와이어프레임 §공통규칙4 — 칩존은 **2줄 표시**다(v0.37.0 FB-B의 2줄 캡을 와이어프레임이 확정).
+ *  하한 배율에서도 2줄을 넘으면 스크롤이 이어받는다(2줄 유지 + 초과분 스크롤). */
+const MAX_ROWS = 2;
 
 export function useChipFlowFit<T extends HTMLElement>(deps: DependencyList) {
   const ref = useRef<T | null>(null);

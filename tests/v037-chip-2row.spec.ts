@@ -115,10 +115,23 @@ test('FB-B — 칩 그리드가 2줄 캡 + 초과분 내부 스크롤(전체 그
   }));
   console.log(`chip grid clientH=${clientH} scrollH=${scrollH}`);
 
-  // 2줄 캡: 44*2 + 8 + 12(vpad) ≈ 108. 소폭 슬랙 허용.
-  expect(clientH, '칩 그리드 2줄 캡').toBeLessThanOrEqual(120);
+  // 와이어프레임(2026-07-24 확정, Deliverables/2026-07-24-survey-011-active-screen-wireframe.md)
+  // §공통규칙1·4 — 2줄 캡의 **정의가 바뀌었다**: 옛 픽셀 캡(44×2+8+12≈108)이 아니라 칩존 트랙
+  //   25%를 2줄로 나눈다("25%내 최대 크게"). 계약은 그대로 — **보이는 줄은 2줄**이고 초과분은
+  //   구역 안 스크롤이다. 그래서 픽셀 상한 대신 **보이는 줄 수**를 직접 센다(형태가 아니라 계약).
+  const visibleRows = await grid.evaluate((el) => {
+    const g = el as HTMLElement;
+    const tops: number[] = [];
+    for (const c of Array.from(g.querySelectorAll('[data-testid="column-chip"]')) as HTMLElement[]) {
+      if (!tops.some((t) => Math.abs(t - c.offsetTop) <= 8)) tops.push(c.offsetTop);
+    }
+    return tops.filter((t) => t < g.clientHeight - 4).length;
+  });
+  expect(visibleRows, '칩 그리드에 보이는 줄은 2줄').toBe(2);
   // 13개 칩(1 auto + 12 voice)은 402px에서 2줄을 넘겨 내부 스크롤이 생긴다.
   expect(scrollH, '2줄 초과 → 내부 스크롤 존재').toBeGreaterThan(clientH + 20);
+  // 칩존이 화면을 잠식하지 않는다(hero가 자라날 공간 보존 — FB-B의 본래 목적).
+  expect(clientH, '칩존이 화면 높이의 30%를 넘지 않는다').toBeLessThanOrEqual(874 * 0.3);
 });
 
 // FB-I(민구, "네비는 항상 보여야 함") — 수동 입력 시트가 **열려 있는 동안** 하단 나비가

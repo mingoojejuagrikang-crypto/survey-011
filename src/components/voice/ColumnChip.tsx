@@ -84,6 +84,9 @@ export function ColumnChip({
         fontWeight: isActive ? 800 : 700,
         cursor: clickable ? 'pointer' : 'default',
         letterSpacing: -0.1,
+        // 와이어프레임 §공통규칙4 "25%내 최대 크게" — 칩 높이는 칩존이 트랙에서 역산한 한 줄 높이
+        // (--chip-row-h)를 그대로 쓴다. 44px는 장갑 조작 하한(PRINCIPLES §2)이라 고정 하한으로 남는다.
+        height: 'var(--chip-row-h, 44px)',
         minHeight: 44,
         // 유동 폭 — 내용 길이대로. 편집 중엔 입력폭 확보를 위해 확장. compact(가로 레일)는 기존 유지.
         flex: isEditing ? '1 1 220px' : compact ? '0 0 clamp(180px, 48vw, 260px)' : '0 1 auto',
@@ -100,7 +103,8 @@ export function ColumnChip({
       <span
         style={{
           color: isActive ? activeTone : T.textDim,
-          fontSize: 'max(11px, calc(13px * var(--chip-fit, 1)))',
+          // 절대 px 단독 금지 — 화면이 커지면 칩 글자도 커진다(§공통규칙4 "최대 크게").
+          fontSize: 'max(11px, calc(clamp(13px, min(3.6vw, 1.9vh), 20px) * var(--chip-fit, 1)))',
           fontWeight: 700,
           whiteSpace: 'nowrap',
           overflow: 'hidden',
@@ -129,7 +133,7 @@ export function ColumnChip({
             background: 'transparent', border: 'none', outline: 'none',
             color: T.text,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            fontSize: 'max(13px, calc(16px * var(--chip-fit, 1)))', fontWeight: 800,
+            fontSize: 'max(13px, calc(clamp(16px, min(4.4vw, 2.3vh), 24px) * var(--chip-fit, 1)))', fontWeight: 800,
             textAlign: 'right',
           }}
         />
@@ -141,7 +145,9 @@ export function ColumnChip({
             lineHeight: 1,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             color: isActive ? T.text : isDone ? T.text : T.textDim,
-            fontSize: `max(12px, calc(${isActive ? 18 : 16}px * var(--chip-fit, 1)))`,
+            fontSize: isActive
+              ? 'max(12px, calc(clamp(18px, min(5vw, 2.6vh), 28px) * var(--chip-fit, 1)))'
+              : 'max(12px, calc(clamp(16px, min(4.4vw, 2.3vh), 24px) * var(--chip-fit, 1)))',
             fontWeight: 800,
             letterSpacing: -0.3,
             whiteSpace: 'nowrap',

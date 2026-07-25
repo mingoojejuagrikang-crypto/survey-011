@@ -339,7 +339,7 @@ test('미로그인 + 유효 폴백(2h 전) → 이상치 알람 발화 + trend_u
   await fireStt(page, '120.5', 500);
 
   const tts = await getTtsLog(page);
-  expect(tts.some((t) => t.includes('추세 알람 증가 20.5'))).toBe(true);
+  expect(tts.some((t) => t.includes('추세 알람 증가 : 20.5'))).toBe(true);
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible();
   await expect(popup).toContainText('100');
@@ -404,7 +404,7 @@ test('로그인 세션 → past_index_fetch_start 계측 + IDB write-through 레
   // 신선 캐시 경로: 알람은 뜨되 stale 계측은 없어야 한다.
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '120.5', 500);
-  expect((await getTtsLog(page)).some((t) => t.includes('추세 알람 증가 20.5'))).toBe(true);
+  expect((await getTtsLog(page)).some((t) => t.includes('추세 알람 증가 : 20.5'))).toBe(true);
   const extras2 = await getEventExtras(page);
   expect(extras2.some((x) => x.startsWith('trend_used_stale_index'))).toBe(false);
 });

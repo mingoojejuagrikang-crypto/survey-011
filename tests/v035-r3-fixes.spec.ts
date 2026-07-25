@@ -331,6 +331,12 @@ test('P1-2 — 완료 검토→종료: stopping 중 stale 이전/다음 탭은 �
   const prev = await page.locator('button[title="이전 행으로 이동"]').elementHandle();
   const next = await page.locator('button[title="다음 행으로 이동"]').elementHandle();
   await setPersistDelay(page, 1500);
+  // 와이어프레임 §[1](2026-07-24 확정) — **완료 행 검토 대기**는 [1] active 레이아웃이라 하단이
+  //   이전/다음이고 종료 버튼이 없다(종료는 §[3] 일시정지 또는 §[4] 조사 완료에서만 노출된다).
+  //   이 테스트의 계약(= stopping 중 stale 이전/다음 탭이 행을 바꾸지 않는다)은 그대로이고,
+  //   stale 핸들은 위에서 **검토 대기 상태일 때 이미 잡아 뒀다**.
+  await page.locator('button[title="일시정지"]').click({ force: true });
+  await page.waitForTimeout(300);
   await page.locator('button[title="입력 종료"]').click();
   await page.locator('button[title="종료 확인"]').click();
   await expect(page.locator('[data-testid="voice-stopping-state"]')).toBeVisible();

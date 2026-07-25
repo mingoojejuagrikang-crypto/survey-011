@@ -16,6 +16,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
 
+// ── 와이어프레임 §[2](2026-07-24 확정) 반영 ────────────────────────────────────────────────
+// 이상치 응답 대기의 [확인]/[수정]은 **카드 안이 아니라 하단 `<` `>` 자리**로 이동했다
+// ("하단 `<` `>` → 확인/수정으로 변경(알람 동안만)"). 따라서 종전
+// `popup.locator('[data-testid="anomaly-confirm-btn"]')`(카드 하위 탐색)를 `page.locator(...)`로
+// 스코프만 넓힌다. **버튼의 존재·동작 단언은 그대로다** — 바뀐 것은 화면상 위치뿐이다.
+// 버튼이 하단 바에 있다는 사실 자체는 v039-active-zones.spec.ts가 별도로 고정한다.
+
 test.setTimeout(120_000);
 
 const STORE_KEY = 'survey-011-settings-v3';
@@ -157,10 +164,13 @@ test('(a) 앞 셀 음성 + 마지막 셀 수동 입력 → 검토는 수동값(4
   await page.locator('[data-testid="manual-commit"]').click();
   await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
 
-  await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
-  // 핵심: 검토는 방금 수동 입력한 종경(4.2)을 보인다 — 종전 valueBurst 파생은 앞 음성 셀 30.7을 오표시했다.
-  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('4.2');
-  await expect(page.getByRole('status', { name: '1행 완료, 명령 대기' })).toBeVisible();
+  // 와이어프레임 §[4](2026-07-24 확정) — 마지막 행의 마지막 셀을 채우는 순간이 곧 **조사 완료**라
+  //   중앙은 `완료 : X / N` + 종료로 바뀐다. 커밋 영수증(이 스펙의 계약: "방금 확정된 셀의 값을
+  //   보여준다, stale·거부값 오표시 금지")은 그 위 확인 줄(complete-receipt)로 살아 있다.
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
+  // 핵심: 방금 수동 입력한 종경(4.2)을 보인다 — 종전 valueBurst 파생은 앞 음성 셀 30.7을 오표시했다.
+  await expect(page.locator('[data-testid="complete-receipt-value"]')).toHaveText('4.2');
+  await expect(page.getByRole('status', { name: '조사 완료, 전체 1행 중 1행 입력됨' })).toBeVisible();
 });
 
 // ─── (b) 마지막 셀 = 이상치 정정(수동 보류 [확인]) ─────────────────────────────
@@ -196,16 +206,19 @@ test('(b) 마지막 셀 이상치 정정 [확인] → 검토는 확정된 정정
   await page.locator('[data-testid="manual-commit"]').click();
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible({ timeout: 3000 });
-  await expect(popup.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+  await expect(page.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
 
   // [확인] → confirmManualAnomaly가 77.7을 확정 + 진행 재개 → 행 완료 → 검토 머묾.
   await page.waitForTimeout(400); // durable put 정착(즉시 [확인] not_durable 차단 회피)
-  await popup.locator('[data-testid="anomaly-confirm-btn"]').click();
+  await page.locator('[data-testid="anomaly-confirm-btn"]').click();
   await expect(popup).toHaveCount(0, { timeout: 4000 });
 
-  await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
-  // 핵심: 검토는 정정 [확인]으로 확정된 종경(77.7)을 보인다 — 앞 음성 셀 30.7도, 비교 직전값 50.0도 아니다.
-  const primary = page.locator('[data-testid="hero-primary"]');
+  // 와이어프레임 §[4](2026-07-24 확정) — 마지막 행의 마지막 셀을 채우는 순간이 곧 **조사 완료**라
+  //   중앙은 `완료 : X / N` + 종료로 바뀐다. 커밋 영수증(이 스펙의 계약: "방금 확정된 셀의 값을
+  //   보여준다, stale·거부값 오표시 금지")은 그 위 확인 줄(complete-receipt)로 살아 있다.
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
+  // 핵심: 정정 [확인]으로 확정된 종경(77.7)을 보인다 — 앞 음성 셀 30.7도, 비교 직전값 50.0도 아니다.
+  const primary = page.locator('[data-testid="complete-receipt-value"]');
   await expect(primary).toHaveText('77.7');
   await expect(primary).not.toHaveText('30.7');
   await expect(primary).not.toHaveText('50');
@@ -271,8 +284,11 @@ test('(e) 검토 중 터치 컬럼 인라인 편집 → 검토는 터치값(88)�
 
   // 유일 음성 컬럼(횡경) 커밋 → 행 완료(터치 컬럼은 완료 판정에 무관) → 검토 머묾, 값=30.7.
   await fireStt(page, '30.7');
-  await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
-  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('30.7');
+  // 와이어프레임 §[4](2026-07-24 확정) — 마지막 행의 마지막 셀을 채우는 순간이 곧 **조사 완료**라
+  //   중앙은 `완료 : X / N` + 종료로 바뀐다. 커밋 영수증(이 스펙의 계약: "방금 확정된 셀의 값을
+  //   보여준다, stale·거부값 오표시 금지")은 그 위 확인 줄(complete-receipt)로 살아 있다.
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
+  await expect(page.locator('[data-testid="complete-receipt-value"]')).toHaveText('30.7');
 
   // 검토 중(phase complete) 터치 칩을 인라인 편집: 칩 탭 → input → 88 → Enter(커밋).
   const touchChip = page.locator('[data-testid="column-chip"][data-col-name="수량"]');
@@ -283,6 +299,6 @@ test('(e) 검토 중 터치 컬럼 인라인 편집 → 검토는 터치값(88)�
   await input.press('Enter');
 
   // 핵심: 검토가 방금 커밋된 터치값(88)으로 갱신된다 — 종전엔 앞 음성값 30.7이 그대로 남았다.
-  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('88', { timeout: 4000 });
+  await expect(page.locator('[data-testid="complete-receipt-value"]')).toHaveText('88', { timeout: 4000 });
   await expect(page.locator('[data-testid="column-chip"][data-col-name="수량"]')).toContainText('88');
 });

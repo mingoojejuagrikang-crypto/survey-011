@@ -103,8 +103,12 @@ test('W5 — ActiveState 진입 + 컨트롤바 한자리 고정(버그B)', async
   expect(chipMetrics).not.toBeNull();
   console.log(`chip region: client=${chipMetrics!.clientHeight} scroll=${chipMetrics!.scrollHeight}`);
   expect(chipMetrics!.overflowY).toBe('auto'); // 초과분은 구역 안 스크롤
-  expect(chipMetrics!.clientHeight).toBeLessThanOrEqual(170); // 3줄 캡
-  expect(chipMetrics!.clientHeight).toBeLessThanOrEqual(874 * 0.3); // 화면 높이 30% 상한
+  // 와이어프레임(2026-07-24 확정, Deliverables/2026-07-24-survey-011-active-screen-wireframe.md)
+  // §공통규칙1 — 칩 구역은 픽셀 캡(옛 3줄 170px)이 아니라 **ActiveState 구역의 25%**다. 화면이
+  //   커지면 칩도 함께 커져야 하므로(§공통규칙4 "25%내 최대 크게") 상한을 고정 픽셀로 잠그지
+  //   않는다. 비례 자체의 정밀 단언은 v039-active-zones.spec.ts가 담당하고, 여기서는 이 스펙의
+  //   본래 목적(구역이 아래를 밀지 않는다)을 지키는 선에서 상한만 확인한다.
+  expect(chipMetrics!.clientHeight).toBeLessThanOrEqual(874 * 0.3);
 
   // 컨트롤바 기준점 = input-control-toggle의 화면상 Y(top) — 양 상태에 공통 존재.
   const beforeBox = await controlAnchor.boundingBox();

@@ -62,9 +62,38 @@ export function useFitScale<T extends HTMLElement>(
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(fit);
     };
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(schedule) : null;
-    ro?.observe(el);
-    if (el.parentElement) ro?.observe(el.parentElement);
+    // ── RO 자기관측 제거 — 피드백 가능성을 줄이는 **방어적 단순화** ──────────────
+    // 종전엔 `ro.observe(el)`과 `ro.observe(el.parentElement)`를 **동시에** 걸었다. fit()은 el의
+    // `--fit-lo/--fit-hi`를 바꿔 **el 자신의 박스를 바꾸므로** 원리상 RO 재발화 → fit() → … 피드백
+    // 루프의 여지가 있다. useChipFlowFit이 같은 위험을 "자기가 바꾸는 차원은 관측하지 않는다"로
+    // 이미 해결했고, 여기도 같은 형태로 맞춘다.
+    //
+    // ⚠️ 이것이 회전 진동(fb-01 후반부)의 **원인 수정이라는 근거는 없다 — 오히려 반증됐다.**
+    //    자기관측을 되돌린 상태로 회전 전후 `--fit-lo`를 25ms 간격 2초간 샘플링해도 시계열은
+    //    무변동, style 재기록 0건이었다. fit()은 후보 단계를 **적용한 뒤** 측정하므로 선택이
+    //    자기일관적이고, RO가 재발화해도 같은 단계로 수렴한다. 즉 이 경로는 실측상 진동하지 않았다.
+    //    **회전 진동의 실제 원인은 미확정이며 실기기 게이트로 남아 있다** — 여기 코드가 그 증상을
+    //    해결했다고 가정하지 마라(재발 시 다른 축부터 의심할 것).
+    //
+    // 여기서는 **자기 관측을 버리고 부모(가용 박스)만 본다.** 이 훅의 입력은 "부모가 준 가용
+    // 크기"뿐이고, 부모(중앙 50% 트랙)의 크기는 자식 폰트 크기에 의존하지 않으므로 루프가
+    // 구조적으로 성립하지 않는다. 부모 contentRect에 epsilon dedupe를 걸어 서브픽셀 재발화도
+    // 막는다. 부모가 없으면(이론상) window resize 폴백만 남는다.
+    const parent = el.parentElement;
+    let observedW = parent ? parent.getBoundingClientRect().width : 0;
+    let observedH = parent ? parent.getBoundingClientRect().height : 0;
+    const ro = typeof ResizeObserver !== 'undefined' && parent
+      ? new ResizeObserver(([entry]) => {
+          const rect = entry?.contentRect;
+          const w = rect?.width ?? parent.getBoundingClientRect().width;
+          const h = rect?.height ?? parent.getBoundingClientRect().height;
+          if (Math.abs(w - observedW) < 0.5 && Math.abs(h - observedH) < 0.5) return;
+          observedW = w;
+          observedH = h;
+          schedule();
+        })
+      : null;
+    if (parent) ro?.observe(parent);
     window.addEventListener('resize', schedule);
     return () => {
       ro?.disconnect();

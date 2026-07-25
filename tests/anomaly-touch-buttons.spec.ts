@@ -17,6 +17,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
 
+// ── 와이어프레임 §[2](2026-07-24 확정) 반영 ────────────────────────────────────────────────
+// 이상치 응답 대기의 [확인]/[수정]은 **카드 안이 아니라 하단 `<` `>` 자리**로 이동했다
+// ("하단 `<` `>` → 확인/수정으로 변경(알람 동안만)"). 따라서 종전
+// `popup.locator('[data-testid="anomaly-confirm-btn"]')`(카드 하위 탐색)를 `page.locator(...)`로
+// 스코프만 넓힌다. **버튼의 존재·동작 단언은 그대로다** — 바뀐 것은 화면상 위치뿐이다.
+// 버튼이 하단 바에 있다는 사실 자체는 v039-active-zones.spec.ts가 별도로 고정한다.
+
 test.setTimeout(120_000);
 
 const STORE_KEY = 'survey-011-settings-v3';
@@ -198,7 +205,7 @@ test('[확인] 버튼 — 음성 "확인"과 동일: 값 확정 + 1회 advance +
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible();
   await expect(popup).toHaveAttribute('data-status', 'pending');
-  const confirmBtn = popup.locator('[data-testid="anomaly-confirm-btn"]');
+  const confirmBtn = page.locator('[data-testid="anomaly-confirm-btn"]');
   await expect(confirmBtn).toBeVisible();
 
   await confirmBtn.click();
@@ -260,7 +267,7 @@ test('[수정] 버튼 — 음성 "수정"과 동일: 같은 필드 재청취 + �
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible();
 
-  await popup.locator('[data-testid="anomaly-modify-btn"]').click();
+  await page.locator('[data-testid="anomaly-modify-btn"]').click();
   await page.waitForTimeout(500);
 
   // 팝업 해제 + 같은 필드(횡경)에서 재청취("다시 말씀해 주세요") — 진행하지 않음.
@@ -299,8 +306,8 @@ test('v0.34.0 A1 — 수동 커밋 이상치: 진행 보류(활성 칩 부동 + 
   await expect(popup).toBeVisible();
   await expect(popup).toHaveAttribute('data-status', 'pending');
   await expect(popup).toContainText('120.5');
-  await expect(popup.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
-  await expect(popup.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
+  await expect(page.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+  await expect(page.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
   await waitForActiveChip(page, '횡경');
   const tts = await getTtsLog(page);
   expect(tts.some((t) => t.includes('추세 알람'))).toBe(false); // 알람 TTS 미발화(민구 확정 유지)
@@ -311,7 +318,7 @@ test('v0.34.0 A1 — 수동 커밋 이상치: 진행 보류(활성 칩 부동 + 
   await waitForActiveChip(page, '횡경');
 
   // [확인] 버튼 → 팝업 해제 + 그제서야 종경으로 전진.
-  await popup.locator('[data-testid="anomaly-confirm-btn"]').click();
+  await page.locator('[data-testid="anomaly-confirm-btn"]').click();
   await page.waitForTimeout(500);
   await expect(popup).toHaveCount(0);
   await waitForActiveChip(page, '종경');
@@ -338,7 +345,7 @@ test('v0.34.0 A1 — 수동 커밋 이상치 [수정]: 팝업 해제 + 해당 �
   // 동안 렌더되지 않는다(v0.34.0 리뷰 라운드2 — **보류 상태 자체는 유지**되어 시트를 취소하면
   // 팝업이 되살아난다. 미확인 이상값이 확정된 것처럼 남던 누수 차단. 취소 경로 회귀는
   // manual-input.spec.ts '[수정] 후 시트 취소' 참조).
-  await popup.locator('[data-testid="anomaly-modify-btn"]').click();
+  await page.locator('[data-testid="anomaly-modify-btn"]').click();
   await expect(popup).toHaveCount(0);
   const sheet = page.locator('[data-testid="manual-value-sheet"]');
   await expect(sheet).toBeVisible({ timeout: 3000 });
@@ -404,7 +411,7 @@ test('trendConfirm 중 소수부 재질문 → [수정] 터치 강등 → 소수
   expect(tts1.some((t) => t.includes('130') && t.includes('소수점 아래'))).toBe(true);
 
   // 터치 [수정] — modifyAnomalyTouch 강등 경로.
-  await popup.locator('[data-testid="anomaly-modify-btn"]').click();
+  await page.locator('[data-testid="anomaly-modify-btn"]').click();
   await page.waitForTimeout(400);
 
   await fireStt(page, '5', 700);

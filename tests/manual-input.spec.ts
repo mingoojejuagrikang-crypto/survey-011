@@ -19,6 +19,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
 
+// ── 와이어프레임 §[2](2026-07-24 확정) 반영 ────────────────────────────────────────────────
+// 이상치 응답 대기의 [확인]/[수정]은 **카드 안이 아니라 하단 `<` `>` 자리**로 이동했다
+// ("하단 `<` `>` → 확인/수정으로 변경(알람 동안만)"). 따라서 종전
+// `popup.locator('[data-testid="anomaly-confirm-btn"]')`(카드 하위 탐색)를 `page.locator(...)`로
+// 스코프만 넓힌다. **버튼의 존재·동작 단언은 그대로다** — 바뀐 것은 화면상 위치뿐이다.
+// 버튼이 하단 바에 있다는 사실 자체는 v039-active-zones.spec.ts가 별도로 고정한다.
+
 test.setTimeout(120_000);
 
 const STORE_KEY = 'survey-011-settings-v3';
@@ -478,15 +485,15 @@ test('v0.34.0 A1 — 수동 커밋 이상치: 팝업 보류 중 활성 칩 부�
   // 팝업 보류: [확인][수정] 버튼이 보이고, **활성 칩은 횡경에 그대로**(v0.34.0 A1 — 전진 버그 수정).
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible();
-  await expect(popup.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
-  await expect(popup.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
+  await expect(page.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+  await expect(page.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
   await waitForActiveChip(page, '횡경');
   // 알람 TTS는 종전대로 없음(민구 확정 — 시각+비프만).
   const tts = await page.evaluate(() => (window as unknown as { __ttsLog: string[] }).__ttsLog ?? []);
   expect(tts.some((t) => t.includes('추세 알람'))).toBe(false);
 
   // [확인] → 팝업 해제 + 그제서야 다음 칩(종경)으로 전진.
-  await popup.locator('[data-testid="anomaly-confirm-btn"]').click();
+  await page.locator('[data-testid="anomaly-confirm-btn"]').click();
   await page.waitForTimeout(500);
   await expect(popup).toHaveCount(0);
   await waitForActiveChip(page, '종경');
@@ -541,7 +548,7 @@ test('[리뷰] A1 회귀 — manualHold 팝업 중 STT 발화는 무시: 수동�
   expect(ignored.length).toBe(3); // 세 발화 모두 게이트에서 버려짐
 
   // 터치 [확인]만이 해제한다 — 그제서야 전진.
-  await popup.locator('[data-testid="anomaly-confirm-btn"]').click();
+  await page.locator('[data-testid="anomaly-confirm-btn"]').click();
   await expect(popup).toHaveCount(0);
   await waitForActiveChip(page, '종경');
 
@@ -596,7 +603,7 @@ test('[리뷰 High] manualHold → reload: 후보·팝업·중앙 게이트를 I
   expect(blocked.length).toBeGreaterThanOrEqual(1);
 
   // [확인] 뒤 복구 컨트롤러가 그대로 다음 셀 STT를 처리해야 한다(no-op mock 인스턴스 검증 아님).
-  await popup.locator('[data-testid="anomaly-confirm-btn"]').click();
+  await page.locator('[data-testid="anomaly-confirm-btn"]').click();
   await waitForActiveChip(page, '종경');
   await fireStt(page, '22.2', 500);
   // 복구 컨트롤러가 실제로 값을 처리했는지는 **durable 결과**로 확인한다(no-op mock 검증 아님).
@@ -656,14 +663,14 @@ test('[리뷰 High] manualHold 지연 put 중 즉시 [확인] → advance 금지
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible();
 
-  await popup.locator('[data-testid="anomaly-confirm-btn"]').click();
+  await page.locator('[data-testid="anomaly-confirm-btn"]').click();
   await page.waitForTimeout(250);
   await expect(popup).toBeVisible();
   await waitForActiveChip(page, '횡경');
   expect((await loadLogEventsFromIDB(page)).some((e) => e.extra === 'blocked:manual_hold:not_durable')).toBe(true);
 
   await page.waitForTimeout(1200);
-  await popup.locator('[data-testid="anomaly-confirm-btn"]').click();
+  await page.locator('[data-testid="anomaly-confirm-btn"]').click();
   await expect(popup).toHaveCount(0);
   await waitForActiveChip(page, '종경');
 });
@@ -683,26 +690,28 @@ test('[리뷰] A1 회귀 — manualHold 중 터치 [다음]/[이전]/[일시정�
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible();
 
-  // 하단 액션 버튼들은 팝업과 별개 영역이라 물리적으로 눌린다 — 중앙 상태기계가 거부해야 한다.
-  for (const title of ['다음 행으로 이동', '이전 행으로 이동', '일시정지']) {
-    await page.locator(`button[title="${title}"]`).first().click();
-    await page.waitForTimeout(300);
-  }
+  // 와이어프레임 §[2](2026-07-24 확정) — 알람 동안 하단 양끝은 **확인/수정**으로 바뀐다. 즉
+  //   [다음]/[이전]은 화면에 **존재하지 않는다**: 종전의 "눌리지만 상태기계가 거부한다"보다 강한
+  //   보장이다(잘못 누를 어포던스 자체가 없다). 남는 터치 우회 후보는 인디케이터(일시정지)뿐이고,
+  //   그건 여전히 상태기계가 거부해야 한다.
+  await expect(page.locator('button[title="다음 행으로 이동"]'), '알람 중 [다음] 어포던스 없음').toHaveCount(0);
+  await expect(page.locator('button[title="이전 행으로 이동"]'), '알람 중 [이전] 어포던스 없음').toHaveCount(0);
+  await page.locator('button[title="일시정지"]').first().click();
+  await page.waitForTimeout(300);
 
   // 팝업 유지 · 행 1 유지 · 활성 칩 횡경 유지 — 어떤 우회도 성립하지 않는다.
   await expect(popup).toBeVisible();
   await waitForActiveChip(page, '횡경');
-  await waitForRow(page, 1); // 행 이동 없음(다음/이전 터치가 거부됨)
+  await waitForRow(page, 1); // 행 이동 없음
   await expect(page.locator('[data-testid="column-chip"][data-col-name="횡경"]')).toContainText('120.5');
 
+  // 상태기계의 거부 계측은 그대로 — 터치로 도달 가능한 경로(pause)가 실제로 거부됐다.
   const blocked = (await loadLogEventsFromIDB(page))
     .filter((e) => (e.extra ?? '').startsWith('blocked:manual_hold:'));
-  expect(blocked.map((e) => e.extra).sort()).toEqual(
-    ['blocked:manual_hold:next', 'blocked:manual_hold:pause', 'blocked:manual_hold:prev'],
-  );
+  expect(blocked.map((e) => e.extra)).toContain('blocked:manual_hold:pause');
 
   // [확인] 터치만이 해소 — 그제서야 전진한다.
-  await popup.locator('[data-testid="anomaly-confirm-btn"]').click();
+  await page.locator('[data-testid="anomaly-confirm-btn"]').click();
   await expect(popup).toHaveCount(0);
   await waitForActiveChip(page, '종경');
 });
@@ -723,7 +732,7 @@ test('[리뷰] A1 회귀 — [수정] 후 시트 취소: 팝업·보류 유지(�
   await expect(popup).toBeVisible();
 
   // [수정] → 수동입력 시트 재오픈. 시트가 덮는 동안 팝업은 렌더되지 않지만 **보류 상태는 유지**된다.
-  await popup.locator('[data-testid="anomaly-modify-btn"]').click();
+  await page.locator('[data-testid="anomaly-modify-btn"]').click();
   await page.waitForTimeout(400);
   await expect(page.locator('[data-testid="manual-commit"]')).toBeVisible();
   await expect(popup).toHaveCount(0); // 시트가 덮음 — 상태가 아니라 표시만 숨김
@@ -747,7 +756,7 @@ test('[리뷰] A1 회귀 — [수정] 후 시트 취소: 팝업·보류 유지(�
   // [수정] → 정상값 재커밋 → 그제서야 보류 해소·전진.
   // (규칙 주의: trendRule='increase'는 "커지면 알람"이라 직전 100.0보다 **작은** 값이 무알람 —
   //  trendCheck.ts checkAnomaly '의미 반전' 주석 참조.)
-  await popup.locator('[data-testid="anomaly-modify-btn"]').click();
+  await page.locator('[data-testid="anomaly-modify-btn"]').click();
   await page.waitForTimeout(400);
   for (const k of ['9', '5', '.', '5']) {
     await page.locator(`[data-testid="manual-key-${k}"]`).click();

@@ -1,28 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { T } from '../../tokens';
 import { useSessionStore } from '../../stores/sessionStore';
-import { nestedAutoValue, computeRowFromAutoChange } from '../../lib/autoValue';
+import { T } from '../../tokens';
+import { computeRowFromAutoChange } from '../../lib/autoValue';
 import type { Column } from '../../types';
-import { AnomalyAlertPopup } from './AnomalyAlertPopup';
 import { CommandHelpPopup } from './CommandHelpPopup';
 import { ManualValueSheet } from './ManualValueSheet';
-import { PausedCard } from './PausedCard';
-import { ModifyIndicatorPill } from './ModifyIndicatorPill';
 import { type ReaskReason } from './ReaskCue';
 import { type GlowTone } from './EdgeGlow';
-import { VoiceHero, AlarmInterimStrip, useReviewCommit } from './VoiceHero';
-import { LiveListenBand } from './LiveListenBand';
-import { ColumnChip } from './ColumnChip';
-import { useChipFlowFit } from './useChipFlowFit';
-import { ActiveControlBar } from './ActiveControlBar';
+import { useReviewCommit } from './VoiceHero';
+import { ActiveHeaderStrip } from './ActiveHeaderStrip';
+import { ChipZone } from './ChipZone';
+import { CenterStage } from './CenterStage';
+import { ActiveControlBar, type EdgeMode } from './ActiveControlBar';
+import { ACTIVE_ZONE_ROWS } from './heroLayout';
+import type { DotGlyph } from './StateDots';
 import { ExitConfirmDialog } from './ExitConfirmDialog';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 
-// ─── ACTIVE ───────────────────────────────────────────────────
+/** 입력화면 조립 루트 — 와이어프레임 4상태(active·anomaly·paused·complete)를 **하나의 트리**에서
+ *  표시만 바꿔 그린다(SSOT: `Deliverables/2026-07-24-survey-011-active-screen-wireframe.md`).
+ *
+ *  🔴 상태 전환은 **표시 전환**이지 트리 교체가 아니다. 세션 트리를 조건부로 갈아치우면 인식기·
+ *  워치독·클립 레코더가 통째로 teardown된다([STT-16] 실기기 62초 사공백, [IOS-7]의 PortraitGuard가
+ *  오버레이인 이유도 같다).
+ *
+ *  구역(§공통규칙1): 상단 스트립(auto) + **칩존 25% / 중앙 50% / 하단 25%**. 비율의 분모는
+ *  `ACTIVE_ZONE_ROWS` 주석 참조. */
 export function ActiveState({
-  totalRows, columns, voiceCols, currentColId, completing, paused, anomalyPending, tone, getAudioLevel,
-  getTimeDomainData,
+  totalRows, columns, voiceCols, currentColId, completing, endReached, paused, anomalyPending, tone,
+  getAudioLevel, getTimeDomainData,
   reaskReason, uiCommand,
   onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
   onManualCommit, onManualOpen, onManualClose, onAnomalyConfirm, onAnomalyModify,
@@ -34,16 +41,18 @@ export function ActiveState({
   columns: Column[];
   voiceCols: Column[];
   currentColId?: string;
+  /** phase 'complete' — 완료 행 검토 대기 **또는** 끝 도달. 둘의 화면 차이는 endReached가 가른다. */
   completing: boolean;
+  /** 와이어프레임 §[4] — 조사 전체 완료(끝 도달). 검토 대기와 구분된다. */
+  endReached: boolean;
   paused: boolean;
   /** v0.34.0 B8 — 이상치 대기(파생 SSOT는 VoiceScreen — EdgeGlow 톤과 동일 신호). */
   anomalyPending: boolean;
-  /** v0.36.0 코덱스 시안 — 상태 톤(VoiceScreen glowTone SSOT). 파형 밴드·중앙 버튼 채움색이
-   *  엣지글로우와 같은 색으로 상태를 말한다(색 파생 중복 방지). */
+  /** 상태 톤(VoiceScreen glowTone SSOT) — 칩·도트·파형·엣지글로우가 같은 색으로 상태를 말한다. */
   tone: GlowTone;
-  /** v0.34.0 B7 — 파동 레벨 getter(useVoiceSession, 안정 참조). VoiceHero로 내려간다. */
+  /** v0.34.0 B7 — 파동 레벨 getter(useVoiceSession, 안정 참조). */
   getAudioLevel: () => number;
-  /** v0.35.0 — 시간영역 파형 getter(useVoiceSession). VoiceHero → VoiceWaveform으로 내려간다. */
+  /** v0.35.0 — 시간영역 파형 getter(useVoiceSession). */
   getTimeDomainData: (out: Uint8Array) => boolean;
   reaskReason: ReaskReason;
   /** v0.38.0 #4-③ — useVoiceSession이 최종 판정한 UI 버튼 음성 명령(단조 seq). */
@@ -55,40 +64,35 @@ export function ActiveState({
   onNextRow: () => void;
   onTogglePause: () => void;
   onTouchCommit: (row: number, colId: string, value: string) => void;
-  /** v0.33.0 항목6 — 수동 입력 시트 커밋(commitManualValue) + 열림/닫힘 STT suspend 배선. */
+  /** v0.33.0 항목6 — 수동 입력 시트 커밋 + 열림/닫힘 STT suspend 배선. */
   onManualCommit: (row: number, colId: string, value: string) => void;
   onManualOpen: () => void;
   onManualClose: () => void;
-  /** v0.33.0 항목7 — 이상치 응답 대기 팝업의 터치 버튼(음성 '확인'/'수정'과 동일 동작). */
+  /** v0.33.0 항목7 — 이상치 응답 대기의 터치 경로(음성 '확인'/'수정'과 동일 동작). */
   onAnomalyConfirm: () => void;
   onAnomalyModify: () => void;
-  /** v0.34.0 A1 — 수동 입력 이상치 **보류**(manualHold) 팝업 전용 해제 콜백. [수정]의 시트 재오픈은
-   *  시트 open 상태(manualCol)를 소유한 이 컴포넌트가 조립한다(팝업 렌더 분기에서 라우팅). */
+  /** v0.34.0 A1 — 수동 입력 이상치 **보류**(manualHold) 전용 해제 콜백. */
   onManualAnomalyConfirm: () => void;
   onManualAnomalyModify: () => void;
   onCommandHelpOpen: () => void;
   onCommandHelpClose: () => void;
-  /** v0.35.0 R2-FIX-2 — 종료 확인 다이얼로그 열림/취소 시 STT suspend·resume. 확인(종료) 경로는
-   *  stop()이 인식기를 정지시키므로 resume하지 않는다. */
+  /** v0.35.0 R2-FIX-2 — 종료 확인 다이얼로그 열림/취소 시 STT suspend·resume. */
   onExitConfirmOpen: () => void;
   onExitConfirmCancel: () => void;
 }) {
-  // 리뷰 라운드1(Codex, 수용) — 전체 store 구독 금지: 종전 `useSessionStore()`는 interimValue가
-  //   매 STT interim마다 바뀔 때 칩·컨트롤 전체를 리렌더시켰다. 필요한 필드만 useShallow로 구독해
-  //   interim 갱신은 hero 내부 라인(자체 selector)만 리렌더되게 한다. allRowValues는 칩 값 갱신
-  //   구독용(getRowValues가 파생하는 원본 상태).
+  // 전체 store 구독 금지 — interimValue가 매 STT interim마다 바뀌면 칩·컨트롤 전체가 리렌더된다.
   const sess = useSessionStore(
     useShallow((s) => ({
       activeRow: s.activeRow,
       allRowValues: s.allRowValues,
       anomalyAlert: s.anomalyAlert,
       modifyIndicator: s.modifyIndicator,
+      completedRows: s.completedRows,
       getRowValues: s.getRowValues,
     })),
   );
   const row = sess.activeRow;
-  // v0.37.0 리뷰 #1(민구: 커밋 영수증) — 검토 표시값 파생을 **여기(항상 마운트)** 에서 한다. VoiceHero는
-  //   이상치/일시정지 카드가 뜨는 동안 언마운트되므로 그 안에서 파생하면 방금 발행된 영수증을 놓친다.
+  // v0.37.0 리뷰 #1(민구: 커밋 영수증) — 검토 표시값 파생을 **여기(항상 마운트)** 에서 한다.
   const reviewCommit = useReviewCommit(completing, row);
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
@@ -96,10 +100,7 @@ export function ActiveState({
   const [cmdHelpOpen, setCmdHelpOpen] = useState(false);
   const cmdHelpSuspendedRef = useRef(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
-  // v0.35.0 R2-FIX-2(리뷰 라운드2) — 종료 확인 다이얼로그 = UI 모달이므로 열려 있는 동안 STT를
-  //   정지한다(manual_input·command_help와 동일 계약). 완료 상태에선 '종료' 음성명령 대기로 인식기가
-  //   살아 있어, 다이얼로그 중 배경 음성이 커밋/행이동으로 파싱되던 경로를 차단한다.
-  //   취소 → resume. 확인 → resume 없음(stop()이 정지).
+  // v0.35.0 R2-FIX-2 — 종료 확인 다이얼로그가 열려 있는 동안 STT 정지(취소 → resume, 확인 → stop()).
   const openExitConfirm = useCallback(() => {
     onExitConfirmOpen();
     setConfirmExitOpen(true);
@@ -108,8 +109,7 @@ export function ActiveState({
     setConfirmExitOpen(false);
     onExitConfirmCancel();
   }, [onExitConfirmCancel]);
-  // v0.33.0 항목6 — 수동 입력 시트(음성 칩 탭). 열림 중 STT hard-suspend(도움말 팝업과 동일
-  // suspend/resume 검증 경로 재사용), 닫힘 시 resume. suspend ref 패턴은 cmdHelp와 동일.
+  // v0.33.0 항목6 — 수동 입력 시트(음성 칩 탭). 열림 중 STT hard-suspend, 닫힘 시 resume.
   const [manualCol, setManualCol] = useState<Column | null>(null);
   const manualSuspendedRef = useRef(false);
   const openManualSheet = useCallback((c: Column) => {
@@ -128,32 +128,21 @@ export function ActiveState({
     }
   }, [onManualClose]);
 
-  // ── A-hero 파생 (v0.17.0 → v0.34.0 A4 단순화) — 전부 store 신호에서 읽기만 한다.
-  //    실기기 피드백: '입력 완료'/'입력됨' 상태 표시는 혼란만 줬다(advance가 TTS 전에 store 포인터를
-  //    옮기므로 커밋 즉시 다음 항목 '듣는 중'이 자동 성립). hero는 '듣는 중' 전용으로 두고, 유일한
-  //    예외는 completing(phase 'complete' — 완료행 검토 대기/종료 대기/행 완료 안내)의 정적 라벨
-  //    "N행 완료 — 명령 대기"다. 정정(correct)은 hero가 아니라 ModifyIndicatorPill이 담당(불변).
   const currentCol = voiceCols.find((c) => c.id === currentColId) || voiceCols[0];
 
   // 직전값 캡처 — store에 prevValue가 없으므로 view 레이어 ref로 정정 직전의 값을 기억한다.
-  //   매 렌더에서 필드별 "마지막 비어있지 않은 값"을 추적해 둔다(재프롬프트가 셀을 ''로 비우기
-  //   직전의 값을 잃지 않게 — 빈 값은 추적값을 덮어쓰지 않는다). 정정(modifyIndicator)이 대상 셀을
-  //   가리키면 그 추적값이 곧 "직전값"이다. store는 건드리지 않는다.
-  //   ModifyIndicatorPill의 직전값(취소선)→새값 표시에 쓴다.
+  //   빈 값은 추적값을 덮어쓰지 않는다(재프롬프트가 셀을 ''로 비우기 직전의 값을 잃지 않게).
   const lastNonEmptyRef = useRef<Record<string, string>>({});
   const lastRowRef = useRef(row);
   if (lastRowRef.current !== row) { lastNonEmptyRef.current = {}; lastRowRef.current = row; }
   const modCol = sess.modifyIndicator?.colId;
   const modCurrent = modCol ? (rowValues[modCol] ?? '') : '';
-  // 정정 대상 셀은 새 값이 이미 채워졌을 수 있으므로, 추적값 갱신 '전에' 직전값을 읽는다.
   const modPrev = modCol ? lastNonEmptyRef.current[modCol] : undefined;
-  // 추적값 갱신(비어있지 않은 값만). 정정 대상 셀은 새 값이 직전값이 되지 않도록 제외.
   for (const c of voiceCols) {
     const v = rowValues[c.id] ?? '';
     if (v && c.id !== modCol) lastNonEmptyRef.current[c.id] = v;
   }
 
-  // v0.34.0 B8 — anomalyPending은 VoiceScreen에서 파생돼 prop으로 들어온다(EdgeGlow 톤과 SSOT).
   const chipAccent = anomalyPending ? T.red : T.green;
   const progressAccent = anomalyPending ? T.red : completing ? T.green : paused ? T.amber : T.blue;
 
@@ -180,11 +169,7 @@ export function ActiveState({
     if (uiCommand.id === 'help') openCommandHelp();
   }, [uiCommand, openCommandHelp]);
 
-  // v0.37.0 리뷰#2(민구: 탭 탭 = 시트 닫고 재개) — App.tsx가 탭 전환 직전 overlayCloseSeq를 증가시키면,
-  //   열린 수동 입력 시트/？명령어 도움말을 닫는다(→ onClose→resumeRecognitionForUi로 STT 재개). 시트는
-  //   FB-I bottomInset로 나비를 남겨 탭 가능해졌는데, onClose 없이 전환되면 STT가 정지된 채 남아 발화가
-  //   유실됐다(데이터무결성). 항상 마운트된 ActiveState가 소비 단일 지점. close 함수는 매 렌더 새로
-  //   조립되므로 latest-ref로 잡아 seq만 dep에 둔다(매 렌더 재실행 방지). seenRef로 마운트 초기값엔 무동작.
+  // v0.37.0 리뷰#2 — 탭 전환 직전 overlayCloseSeq 증가 → 열린 시트/도움말을 닫아 STT를 재개한다.
   const overlayCloseSeq = useSessionStore((s) => s.overlayCloseSeq);
   const closeOverlaysRef = useRef<() => void>(() => {});
   closeOverlaysRef.current = () => { closeManualSheet(); closeCommandHelp(); };
@@ -195,263 +180,126 @@ export function ActiveState({
     closeOverlaysRef.current();
   }, [overlayCloseSeq]);
 
-  // ── v0.19.0 W5 — 칩 영역이 스크롤 밖으로 나가면 "지금 어디" 표시가 사라진다.
-  //    활성 칩을 ref로 잡아 currentColId/row 변경 시 세로 플로우 안에서 가시영역으로 이동한다.
+  // 와이어프레임 §공통규칙4 — 활성 칩은 항상 가시영역에(2줄 캡 밖으로 밀려나면 "지금 어디"를 잃는다).
   const activeChipRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    // v0.37.0 FB-B(민구) — 활성 칩을 항상 가시영역에. 종전 behavior:'smooth'는 연속 진행 시 스무스
-    //   스크롤이 서로를 가로채 활성 칩이 캡(2줄) 밖에 남는 지연이 있었다. 즉시 스크롤(기본 'auto')로
-    //   렌더 직후 동기 정착 — 원거리에서 글끗 볼 때 지연 없이 항상 현재 칩이 보인다.
     activeChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [currentColId, row]);
-  // v0.36.0 코덱스 시안 — 칩 플로우 글자 배율(--chip-fit): 칩 수·값 길이가 3줄을 넘기면 단계 축소.
-  const chipFitRef = useChipFlowFit<HTMLDivElement>([columns, row, currentColId, JSON.stringify(rowValues)]);
+
+  // ── 상태 파생(단일 지점) ────────────────────────────────────────────────────
+  // 수동 입력 시트가 화면을 덮는 동안엔 알람 표시를 접는다(중복 표시 방지). **보류 상태 자체는
+  //   유지**되므로 시트를 취소하면 알람이 그대로 다시 나타난다(v0.34.0 라운드2).
+  const alertVisible = sess.anomalyAlert && !manualCol ? sess.anomalyAlert : null;
+  // 와이어프레임 §[2] — 하단 `<` `>`가 확인/수정으로 바뀌는 건 **응답 대기 알람 동안만**이다.
+  //   정보성 알람(수동 커밋 이상치, awaitingResponse 미지정)은 이전/다음을 유지한다.
+  const anomalyActionable = !!alertVisible && alertVisible.status !== 'corrected' && !!alertVisible.awaitingResponse;
+  const edgeMode: EdgeMode = paused ? 'paused' : anomalyActionable ? 'anomaly' : 'nav';
+  const glyph: DotGlyph = paused ? 'pause' : anomalyPending ? 'alert' : endReached ? 'check' : 'mic';
+
+  const handleAnomalyConfirm = useCallback(() => {
+    if (useSessionStore.getState().anomalyAlert?.manualHold) onManualAnomalyConfirm();
+    else onAnomalyConfirm();
+  }, [onAnomalyConfirm, onManualAnomalyConfirm]);
+
+  const handleAnomalyModify = useCallback(() => {
+    const alert = useSessionStore.getState().anomalyAlert;
+    if (!alert?.manualHold) { onAnomalyModify(); return; }
+    // manualHold의 [수정]은 해당 셀의 ManualValueSheet를 재오픈한다(시트 open 상태는 여기 소유).
+    const holdCol = columns.find((c) => c.id === alert.colId);
+    onManualAnomalyModify(); // 팝업 해제(+로그) — colId 캡처 후 호출
+    if (holdCol) openManualSheet(holdCol);
+  }, [columns, onAnomalyModify, onManualAnomalyModify, openManualSheet]);
 
   return (
-    // ── v0.19.0 W5 → v0.36.0 코덱스 시안(2026-07-20) — 단일 CSS grid 루트, 4구역:
-    //      1) auto          — 상단: 소형 행 스트립(행번호/진행/도움말) + 칩 플로우(전체 ≤30dvh 캡,
-    //                         2줄 초과분은 내부 스크롤 — v0.37.0 FB-B 민구 확정 칩 스펙)
-    //      2) minmax(0,1fr) — 중앙 흡수영역: hero/일시정지/이상치/수정 카드 중 정확히 하나
-    //      3) auto          — 뷰포트별 산출한 상시 파형 밴드(상태 간 높이 고정, paused=주황 평선)
-    //      4) auto          — 하단 컨트롤바(이전/일시정지·재개/다음 + 접힘 스테퍼)
-    //    한 구역의 높이 변화가 다른 구역을 밀지 않는다(컨트롤바 Y 인변량 — v0.19.0 버그B).
-    //    fixed 오버레이(명령어 도움말/수동입력 시트/종료확인)는 grid track을 만들지 않는다.
     <div
       style={{
         flex: 1, minHeight: 0,
         display: 'grid',
-        gridTemplateRows: 'auto minmax(0, 1fr) auto auto',
+        // 와이어프레임 §공통규칙1 — auto(상단 스트립) + 칩존 25% / 중앙 50% / 하단 25%.
+        gridTemplateRows: ACTIVE_ZONE_ROWS,
       }}
       data-testid="voice-active-state"
     >
-      {/* 1) 상단: 소형 행 스트립 + 칩 플로우. 시안(§3.1)엔 행 표시가 없으므로 눈에 안 걸리는 소형
-          pill로 축소하되 data-testid="active-row" 노드 의미(행 번호)는 유지한다. */}
-      <div style={{ paddingTop: 4 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 16px 4px' }}>
-          <div
-            style={{
-              display: 'inline-flex', alignItems: 'baseline', gap: 4,
-              padding: '3px 12px', borderRadius: 999,
-              background: T.cardAlt, border: `1px solid ${T.lineStrong}`,
-              whiteSpace: 'nowrap',
-              fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            }}
-          >
-            <span data-testid="active-row" style={{ fontSize: 18, fontWeight: 800, color: T.text, letterSpacing: -0.5, lineHeight: 1.2 }}>
-              {row}
-            </span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: T.textMute }}>/ {totalRows}행</span>
-          </div>
-          <div style={{ flex: 1, position: 'relative', height: 4, borderRadius: 2, background: T.line }}>
-            <div
-              style={{
-                position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 2,
-                width: `${pct}%`,
-                background: progressAccent,
-                transition: 'width 400ms ease-out, background 200ms',
-              }}
-            />
-          </div>
-          <button
-            type="button"
-            onClick={openCommandHelp}
-            aria-label="음성 명령어 도움말"
-            title="음성 명령어 도움말"
-            style={{
-              // 리뷰 라운드1(Codex, 수용) — 44px 최소 터치 타깃(PRINCIPLES §2 장갑 조작).
-              width: 44, height: 44, borderRadius: '50%',
-              border: `1px solid ${T.lineStrong}`,
-              background: 'transparent',
-              color: T.textMute,
-              fontSize: 18, fontWeight: 900,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              cursor: 'pointer', flexShrink: 0,
-            }}
-          >
-            ?
-          </button>
-        </div>
-        {/* 칩 플로우 — 유동 폭 pill(내용 길이대로), 최대 **2줄** + 초과분 내부 스크롤(v0.37.0 FB-B
-            민구 확정: 3줄→2줄로 축소해 hero가 자라날 세로 공간을 넓힌다). 활성 칩은 currentColId/row
-            변경 시 자동 스크롤(activeChipRef.scrollIntoView)로 항상 가시영역에 둔다. 글자 배율은
-            useChipFlowFit(--chip-fit). 알람 중에는 활성 칩/진행색을 RED로 맞춰 상태 신호를 동기화. */}
-        <div
-          data-testid="voice-chip-grid"
-          ref={chipFitRef}
-          style={{
-            maxHeight: 'min(calc(30dvh - 50px), calc((44px * 2) + (8px * 1) + 12px))',
-            overflowX: 'hidden',
-            overflowY: 'auto',
-            WebkitOverflowScrolling: 'touch',
-            position: 'relative',
-            padding: '6px 12px',
-            display: 'flex',
-            flexWrap: 'wrap',
-            justifyContent: 'center',
-            alignItems: 'flex-start',
-            alignContent: 'flex-start',
-            gap: 8,
-            borderBottom: `1px solid ${anomalyPending ? 'rgba(255,82,82,0.42)' : T.line}`,
-            transition: 'border-color 180ms ease',
-          }}
-        >
-        {columns.map((c) => {
-          const isVoice = c.input === 'voice';
-          const isTouch = c.input === 'touch';
-          const value = isVoice || isTouch
-            ? rowValues[c.id] ?? ''
-            : nestedAutoValue(columns, c, row);
-          const isActive = c.id === currentColId;
-          const hasValue = rowValues[c.id] !== undefined && rowValues[c.id] !== '';
-          const isDone = (isVoice || isTouch) && hasValue;
-          const isEditingThis = editingColId === c.id;
-          return (
-            <ColumnChip
-              key={c.id}
-              containerRef={isActive ? activeChipRef : undefined}
-              col={c}
-              value={value}
-              isActive={isActive}
-              activeTone={chipAccent}
-              isDone={isDone}
-              isEditing={isEditingThis}
-              onActivate={() => {
-                if (c.type === 'date' && !isVoice) return;
-                if (isVoice) {
-                  // v0.33.0 항목6 — 음성 칩 탭 = 수동 입력 시트(기존 restartFromCol 즉시 재녹음은
-                  // 시트의 "음성으로 다시 입력" 버튼으로 이전 — 경로 보존).
-                  openManualSheet(c);
-                } else {
-                  // auto와 touch 모두 인라인 편집기로 진입
-                  setEditingColId(c.id);
-                }
-              }}
-              onCommit={(newValue) => {
-                setEditingColId(null);
-                if (isTouch) {
-                  // 터치 컬럼: sessionStore + dataStore + IDB에 즉시 반영 → sync/CSV 누락 방지.
-                  void onTouchCommit(row, c.id, newValue);
-                } else if (!isVoice && newValue !== value) {
-                  // auto 컬럼 변경 → 해당 값으로 행 점프
-                  const targetRow = computeRowFromAutoChange(columns, c, newValue, row);
-                  if (targetRow !== null) onJumpToRow(targetRow);
-                }
-              }}
-              onCancel={() => setEditingColId(null)}
-            />
-          );
-        })}
-        </div>
-      </div>
-
-      {/* 2) 중앙 흡수영역(grid row2, minmax(0,1fr), overflow:hidden) — 상호배타 카드 하나를 중앙
-          정렬. 각 카드는 ABSORB_CLAMP/useFitScale로 이 영역 높이에 맞춰 축소(무스크롤 fit 계약).
-          트랙이 1fr 고정이라 어떤 카드가 떠도 아래 파형 밴드·컨트롤바 Y는 불변(v0.19.0 인변량).
-          상호배타 우선순위: 일시정지 > 이상치 > 수정 > hero. 정확히 하나만 렌더한다.
-          (상단 MicReconnectBanner·？명령어 CommandHelpPopup은 흡수 대상 아님 — 현행 fixed 유지.
-          TTS 음성 안내는 그대로 — useVoiceSession의 say()/setLastTts 무수정.) */}
-      <div
-        style={{
-          minHeight: 0, overflow: 'hidden', width: '100%',
-          display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center',
-          padding: 'clamp(4px, 1vh, 10px) clamp(12px, 3vw, 24px)',
-        }}
-      >
-        {paused ? (
-          // 일시정지 카드(최우선) — '재시작'/'종료' 음성명령 안내.
-          <PausedCard row={row} colName={currentCol?.name} />
-        ) : sess.anomalyAlert && !manualCol ? (
-          // 이상치/범위 알람 카드 — 직전값→현재값·변화량(긴 항목명/큰 음수소수 잘림 0).
-          // v0.33.0 항목7 — 응답 대기(awaitingResponse) 팝업에 [확인][수정] 터치 버튼 배선.
-          // v0.34.0 A1 — 수동 입력 보류(manualHold) 팝업은 전용 콜백으로 라우팅. [수정]은 해당 셀
-          //   (colId)의 ManualValueSheet를 재오픈한다(시트 open 상태는 이 컴포넌트 소유).
-          // v0.34.0 리뷰 라운드2(Codex Medium) — `!manualCol`: 수동입력 시트가 열려 있는 동안엔
-          //   팝업을 렌더하지 않는다(시트가 화면을 덮으므로 중복 표시 방지). **보류 상태 자체는
-          //   유지**되므로(useVoiceSession.modifyManualAnomaly가 더 이상 알람을 지우지 않음) 시트를
-          //   취소하면 팝업이 그대로 다시 나타나고 STT 게이트도 살아 있다 — [수정] 후 취소로 미확인
-          //   이상값이 확정된 것처럼 남던 누수의 차단축. 해소는 성공적인 재커밋(advance→announceField)
-          //   또는 [확인]뿐.
-          // v0.37.0 FB-F(민구) — 알람 카드 아래·파형 위에 미확정 인식값 스트립(정정 발화 확인).
-          //   AlarmInterimStrip이 interimValue를 자체 구독(§10 실제 인식 원문만, lastTts 금지).
-          <div
-            data-central-state="alarm"
-            style={{
-              width: '100%', height: '100%', minHeight: 0,
-              display: 'grid', gridTemplateRows: 'minmax(0, 1fr) auto',
-              justifyItems: 'center', overflow: 'hidden',
-            }}
-          >
-            <AnomalyAlertPopup
-              a={sess.anomalyAlert}
-              onConfirm={sess.anomalyAlert.manualHold ? onManualAnomalyConfirm : onAnomalyConfirm}
-              onModify={
-                sess.anomalyAlert.manualHold
-                  ? () => {
-                      const holdCol = columns.find((c) => c.id === sess.anomalyAlert?.colId);
-                      onManualAnomalyModify(); // 팝업 해제(+로그) — colId 캡처 후 호출
-                      if (holdCol) openManualSheet(holdCol);
-                    }
-                  : onAnomalyModify
-              }
-            />
-            <AlarmInterimStrip />
-          </div>
-        ) : sess.modifyIndicator ? (
-          // 수정 재안내 카드 — 직전값(취소선)→새값.
-          <ModifyIndicatorPill
-            name={sess.modifyIndicator.name}
-            prevValue={modPrev}
-            newValue={modCurrent}
-          />
-        ) : currentCol ? (
-          // v0.34.0 A4 — hero는 '듣는 중'(항목명) 전용. completing(phase 'complete')일 때만
-          //   "N행 완료 — 명령 대기" 정적 라벨. 재질문 사유 큐(reaskReason)는 듣는 중에만 노출.
-          <VoiceHero
-            col={currentCol}
-            review={completing}
-            row={row}
-            tone={tone}
-            reaskReason={completing ? null : reaskReason}
-            reviewCommit={reviewCommit}
-          />
-        ) : null}
-      </div>
-
-      {/* 3) 상시 파형 밴드(§6.2) — 입력 세션 동안 뷰포트별 산출 높이를 **모든 상태에서 유지**
-          (민구 확정: 이상치 알람 중에도 제거하지 않는다). 활성 기준은 실제 청취 상태(리뷰
-          라운드1 Codex 수용): complete(검토 대기)에도 STT가 명령을 듣고 있으므로 파형은 살아
-          움직인다. paused만 active=false → rAF 중지 + 주황 평선. 색은 tone(엣지글로우 SSOT) 동기화. */}
-      <LiveListenBand
-        active={!paused}
-        tone={tone}
-        getAudioLevel={getAudioLevel}
-        getTimeDomainData={getTimeDomainData}
+      <ActiveHeaderStrip
+        row={row}
+        totalRows={totalRows}
+        progressPct={pct}
+        progressAccent={progressAccent}
+        paused={paused}
+        endReached={endReached}
+        onOpenHelp={openCommandHelp}
       />
 
-      {/* 4) 하단 컨트롤바 — 표현 전용 ActiveControlBar(GL-006 §3·§5). 입력중에는 종료를 숨기고,
-          일시정지/완료 상태에서만 종료를 노출한다(오조작 방지). */}
+      <ChipZone
+        columns={columns}
+        rowValues={rowValues}
+        row={row}
+        // 와이어프레임 §[4] — "마지막 행 확정, **활성 강조 없음**". 조사가 끝나면 가리킬 다음 칸이
+        //   없으므로 하이라이트·점멸을 거둔다(끝났는데 무언가를 기다리는 것처럼 보이지 않게).
+        currentColId={endReached ? undefined : currentColId}
+        activeTone={chipAccent}
+        anomalyPending={anomalyPending}
+        editingColId={editingColId}
+        activeChipRef={activeChipRef}
+        fitDeps={[columns, row, currentColId, JSON.stringify(rowValues)]}
+        onActivate={(c) => {
+          if (c.type === 'date' && c.input !== 'voice') return;
+          if (c.input === 'voice') openManualSheet(c);
+          else setEditingColId(c.id);
+        }}
+        onCommit={(c, newValue, prevValue) => {
+          setEditingColId(null);
+          if (c.input === 'touch') {
+            // 터치 컬럼: sessionStore + dataStore + IDB에 즉시 반영 → sync/CSV 누락 방지.
+            void onTouchCommit(row, c.id, newValue);
+          } else if (c.input !== 'voice' && newValue !== prevValue) {
+            // auto 컬럼 변경 → 해당 값으로 행 점프
+            const targetRow = computeRowFromAutoChange(columns, c, newValue, row);
+            if (targetRow !== null) onJumpToRow(targetRow);
+          }
+        }}
+        onCancel={() => setEditingColId(null)}
+      />
+
+      <CenterStage
+        paused={paused}
+        anomalyAlert={alertVisible}
+        endReached={endReached}
+        modifyIndicator={sess.modifyIndicator}
+        currentCol={currentCol}
+        completedCount={sess.completedRows.length}
+        totalRows={totalRows}
+        row={row}
+        tone={tone}
+        reaskReason={reaskReason}
+        completing={completing}
+        reviewCommit={reviewCommit}
+        modifyPrevValue={modPrev}
+        modifyCurrentValue={modCurrent}
+        onExit={openExitConfirm}
+      />
+
       <ActiveControlBar
         tone={tone}
-        paused={paused}
-        completing={completing}
+        mode={edgeMode}
+        glyph={glyph}
+        // §[3]·§[4]에서는 인디케이터가 버튼이 아니다 — 일시정지는 `<`(재개), 완료는 중앙 `종료`가
+        // 그 상태의 행동을 이미 갖는다(같은 행동의 중복 타깃·중복 셀렉터를 만들지 않는다).
+        indicatorInteractive={!endReached && !paused}
+        waveActive={!paused}
+        getAudioLevel={getAudioLevel}
+        getTimeDomainData={getTimeDomainData}
+        uiCommand={uiCommand}
         onPrevRow={onPrevRow}
         onNextRow={onNextRow}
         onTogglePause={onTogglePause}
         onExit={openExitConfirm}
-        uiCommand={uiCommand}
+        onAnomalyConfirm={handleAnomalyConfirm}
+        onAnomalyModify={handleAnomalyModify}
       />
 
-      {/* v0.23.0 입력탭#1 — 일시정지/이상치/수정 카드는 더 이상 여기(fixed 오버레이)에서 그리지
-          않는다. 위 row3(1fr) 흡수영역으로 이전했다(잘림 방지). 여기 남는 fixed 오버레이는 흡수
-          대상이 아닌 ？명령어 도움말(CommandHelpPopup)뿐 — 전체 명령어 모달이라 흡수영역 한 칸에
-          넣지 않고 화면 전체 모달을 유지한다.
-          v0.18.0 1c — CenterValueBurst('항목:값' 화면중앙 팝업)은 제거된 채 유지. v0.35.0(Vance)부터
-          store valueBurst 소비자는 VoiceHero의 확인 플래시(✓+값, ~1.5s)로 부활 — 별도 오버레이는 없다. */}
+      {/* fixed 오버레이(도움말/수동입력 시트/종료확인)는 grid track을 만들지 않는다. */}
       {cmdHelpOpen && <CommandHelpPopup onClose={closeCommandHelp} />}
-      {/* v0.33.0 항목6 — 수동 입력 하단 시트(음성 칩 탭). 닫기(suspend 해제)를 먼저 하고 커밋/음성
-          재입력을 실행한다 — resume이 컨트롤러를 복구한 뒤 echo/advance(또는 restartFromCol의
-          announceField)가 이어지도록. */}
       {manualCol && (
         <ManualValueSheet
           col={manualCol}

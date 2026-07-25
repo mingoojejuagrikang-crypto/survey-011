@@ -577,6 +577,9 @@ export function useVoiceSession() {
     // 처리되되(handleFinal는 paused만 게이트), early-commit(active 전용)은 멈춘다.
     // 종료는 '종료' 음성·종료 버튼만.
     sess.setPhase('complete');
+    // 와이어프레임 §[4] — 여기가 **조사 완료** 화면(`완료 : X / N` + 종료 버튼)의 유일한 진입점이다.
+    // 완료 행 검토 대기(enterReviewWait)는 같은 phase지만 [1] active 레이아웃을 쓴다.
+    sess.setEndReached(true);
     const tail = "종료하려면 '종료'라고 말씀하거나 종료 버튼을 누르세요.";
     const msg = empties.length > 0
       ? `마지막 행까지 입력했습니다. ${formatRowList(empties)}이 비어 있습니다. ${tail}`
@@ -610,6 +613,9 @@ export function useVoiceSession() {
     sess.setRecognized('');
     sess.setReaskReason(null);
     sess.setPhase('complete');
+    // 와이어프레임 §[4] 대비 — 검토 대기는 '조사 완료'가 아니다(끝 도달 후 '이전'으로 되돌아온
+    // 경우까지 포함해 명시적으로 내린다). [1] active 레이아웃 + hero ✓ 표시를 유지한다.
+    sess.setEndReached(false);
     awaitingFieldRef.current = firstCol
       ? { kind: 'reviewWait', row, colId: firstCol.id, name: firstCol.name }
       : null;
