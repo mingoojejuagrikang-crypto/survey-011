@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { TabBar, type TabId } from './components/TabBar';
 import { UpdateBanner } from './components/UpdateBanner';
+import { PortraitGuard } from './components/PortraitGuard';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { VoiceScreen } from './screens/VoiceScreen';
 import { DataScreen } from './screens/DataScreen';
@@ -201,6 +202,9 @@ export default function App() {
           }}
         />
       )}
+      {/* v0.38.2 F2 — 가로 회전 안내(fb-01). 오버레이일 뿐 아래 트리는 그대로 살아 있다:
+          여기서 언마운트하면 [STT-16] keep-alive가 무너져 회전 한 번에 세션이 죽는다. */}
+      <PortraitGuard />
     </div>
   );
 }

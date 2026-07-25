@@ -1,7 +1,7 @@
 {
   "name": "survey-011",
   "private": true,
-  "version": "0.38.1",
+  "version": "0.38.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "check:release": "node scripts/check-release-readme.mjs && npm run lint",
-    "predeploy": "node scripts/check-release-readme.mjs && npm run lint",
+    "test:e2e": "playwright test",
+    "predeploy": "node scripts/check-release-readme.mjs && npm run lint && npm run test:e2e",
     "deploy": "npm run build && gh-pages -d dist"
   },
   "dependencies": {

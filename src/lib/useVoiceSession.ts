@@ -14,7 +14,7 @@ import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
-import { micAutoReconnect, rowMarked } from './logEvents';
+import { audioRouteRevalidate, micAutoReconnect, rowMarked } from './logEvents';
 import { resolveFinal } from './voiceFinalResolver';
 import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
 import { hydratePastIndexFallback, prefetchPastIndex, resetPastIndexRetries } from './pastValues';
@@ -30,8 +30,10 @@ import { useClipCapture, EMPTY_CLIP_BYTES, type PendingCommandClip } from './use
 import {
   INITIAL_FOREGROUND_RETURN_STATE,
   reduceForegroundReturn,
+  shouldEmitRouteRevalidate,
   type ForegroundReturnState,
 } from './foregroundReturnPolicy';
+import { classifyInputDevice } from './inputDevice';
 
 
 /** 대기 셀 공통 좌표. */
@@ -2631,6 +2633,42 @@ export function useVoiceSession() {
   // 인앱 탭 전환([STT-16])은 visibility가 안 변하므로 이 경로가 아니라 App.tsx의 keep-alive
   // 렌더(세션 활성 중 VoiceScreen 유지)가 담당한다.
   useEffect(() => {
+    // v0.38.2 F5 — 복귀 시 오디오 경로 재검증 계측. 발행 여부 판단은 순수 함수
+    // (`shouldEmitRouteRevalidate`)에 있어 브라우저 없이 경계를 검증한다.
+    // 값은 raw 장치명이 아니라 CATEGORY — OS별 표기 편차를 걷어내고 개인 장치명도 로그에 남기지 않는다.
+    const emitRouteRevalidate = async (
+      evt: 'vis' | 'pageshow',
+      beforeLabel: string | null,
+      backgroundMs: number,
+    ) => {
+      const rec = recorderRef.current;
+      if (!rec) return; // 레코더 미초기화 — 비교할 경로 자체가 없다
+      try {
+        const { label, track, status } = await rec.revalidateActiveInput();
+        // 🔴 **관측 못 한 것을 '내장 마이크'로 확정하지 않는다**(라운드A 리뷰 Codex #2).
+        // `classifyInputDevice`는 빈 라벨을 내장으로 폴백하는데, 그건 **UI 배지의 표시 규칙**이지
+        // "관측됐다"는 뜻이 아니다. 그 의미를 텔레메트리에 재사용하면 실기기 판독에서 `unknown`과
+        // 진짜 내장 마이크를 구별할 수 없다.
+        const observed = status === 'ok' && label !== null && track !== 'none';
+        const afterCategory = observed ? classifyInputDevice(label).text : 'unknown';
+        const beforeCategory = beforeLabel === null ? null : classifyInputDevice(beforeLabel).text;
+        if (!shouldEmitRouteRevalidate({ beforeCategory, afterCategory, backgroundMs })) return;
+        logCell({
+          type: 'clip',
+          extra: audioRouteRevalidate({
+            before: beforeCategory ?? 'unknown',
+            after: afterCategory,
+            track,
+            status,
+            evt,
+            backgroundMs,
+          }),
+        });
+      } catch {
+        /* best-effort 계측 — 관찰이 실패해도 복귀 경로를 막지 않는다 */
+      }
+    };
+
     const onForegroundReturn = (evt: 'vis' | 'pageshow') => {
       const decision = reduceForegroundReturn(
         foregroundReturnRef.current,
@@ -2638,6 +2676,10 @@ export function useVoiceSession() {
         Date.now(),
       );
       foregroundReturnRef.current = decision.state;
+      // v0.38.2 F5 — 오디오 경로 재검증. teardown과 **같은 복귀 이벤트에서 짝으로** 읽히도록 여기서
+      // 시작한다(비동기라 순서는 보장 안 되지만 같은 복귀 구간임은 bg_s로 대조된다).
+      // phase 게이트보다 앞인 이유도 teardown과 같다 — prewarm이 세션 시작 전부터 캡처를 붙여둔다.
+      void emitRouteRevalidate(evt, decision.hiddenInputLabel, decision.backgroundMs);
       // v0.38.1 [MIC-B2] 낡은 오디오 그래프 선-정리는 **세션 phase보다 먼저, phase와 무관하게** 본다.
       // prewarm(입력탭 마운트)이 세션 시작 전부터 캡처를 붙여두므로 유휴 상태로 오래 백그라운드에
       // 있다 돌아온 경우가 오히려 위험하다 — 그 물린 그래프를 진 채 세션을 시작하면 첫 획득부터
@@ -2674,7 +2716,11 @@ export function useVoiceSession() {
     };
     const onVis = () => {
       if (document.visibilityState !== 'visible') {
-        const decision = reduceForegroundReturn(foregroundReturnRef.current, 'hidden', Date.now());
+        // v0.38.2 F5 — **여기서 라벨을 스냅샷하는 것이 핵심.** 복귀 후에 읽으면 before/after가 같은
+        // 읽기가 돼 "백그라운드 중 경로가 바뀌었다"를 판정할 수 없다.
+        const decision = reduceForegroundReturn(foregroundReturnRef.current, 'hidden', Date.now(), {
+          inputLabel: recorderRef.current?.getActiveInput()?.label ?? null,
+        });
         foregroundReturnRef.current = decision.state;
         return;
       }

@@ -75,6 +75,45 @@ export function recoverTimeout(reason: string, ms: number): string {
  *  (`reason` 안에 `:`가 들어가 `split(':')` 파서가 필드를 쪼갠다). 이 파일 헤더의 신규 이벤트
  *  규약대로 **kv(',')로 통일**한다 — 배포 전이라 지금 바꾸는 것이 무비용이고, 한 번 방출되면
  *  그 형태가 영원히 정답이 된다. */
+/** v0.38.2 F5 — 포그라운드 복귀 시 **오디오 경로 재검증** 결과.
+ *
+ *  **메우는 공백:** 백그라운드에서는 `devicechange`가 발화하지 않는다. 그래서 2026-07-24 실기기
+ *  세션B의 "BT 이어폰 → 아이폰 스피커" 전환은 **어떤 이벤트로도 남지 않았고**, 트리거를 추론으로만
+ *  세워야 했다(로그 분석 §2.4). 이 이벤트가 그 구간의 유일한 관측점이다.
+ *
+ *  `before`는 **백그라운드 진입 시점의 스냅샷**이다(`foregroundReturnPolicy`의 `hiddenInputLabel`).
+ *  복귀 후 둘 다 읽으면 항상 같은 값이라 경로 변경을 판정할 수 없다 — 그 설계를 쓰면 이 이벤트가
+ *  존재 이유를 잃는다.
+ *
+ *  값은 raw 장치명이 아니라 `classifyInputDevice`의 **CATEGORY**(내장 마이크/블루투스/유선 이어폰)다.
+ *  raw 라벨은 OS·브라우저마다 표기가 제각각이라 로그 대조에 쓸 수 없고, 개인 장치명이 로그에 남는
+ *  것도 피한다. 진입 스냅샷이 없으면 `before=unknown`.
+ *
+ *  `mic_teardown`과 **같은 복귀 이벤트에서 짝으로** 읽는다 — teardown이 `found=none`인데 경로가
+ *  바뀌었다면 원인이 JS측 AudioContext가 아니라는 근거가 된다.
+ *
+ *  🔴 `status`는 **계측이 자기 실패를 숨기지 않게** 한다(라운드A 리뷰 Codex #1·#2).
+ *  `ok`=실제로 다시 읽었다 / `unavailable`=읽을 대상이 없었다 / `error`=읽으려다 실패했다.
+ *  `ok`가 아니면 `after`는 `unknown`이며, **그 복귀는 경로를 관측하지 못한 것**이다 — 이 구분이
+ *  없으면 "재검증했는데 그대로였다"와 "재검증 자체가 실패했다"가 로그에서 같아 보인다. */
+export function audioRouteRevalidate(fields: {
+  before: string;
+  after: string;
+  track: 'none' | 'ended' | 'muted' | 'live';
+  status: 'ok' | 'unavailable' | 'error';
+  evt: string;
+  backgroundMs: number;
+}): string {
+  return `audio_route_revalidate:${kv({
+    before: fields.before,
+    after: fields.after,
+    track: fields.track,
+    status: fields.status,
+    evt: fields.evt,
+    bg_s: Math.round(fields.backgroundMs / 1000),
+  })}`;
+}
+
 export function micTeardown(fields: {
   found: string;
   closed: 'ok' | 'timeout' | 'error';

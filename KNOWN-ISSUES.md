@@ -293,6 +293,34 @@
 
 ## ③ iOS / TTS / Safari
 
+### [IOS-7] `screen.orientation.lock('portrait')`은 iOS Safari에서 **아무 일도 하지 않는다** — 넣어둔 lock이 무효였다 🔴
+
+- **증상(실기기 fb-01, 2026-07-24):** "세로모드 미고정 · 화면 회전 시 출력물 진동 오류". 조사 중 폰이
+  가로로 돌아가면 입력 화면(세로 기준 설계)이 어그러진다.
+- **함정의 핵심:** `src/lib/wakeLock.ts:51`에 `lockPortrait()`가 **v0.22.0부터 있었고**
+  `VoiceScreen.tsx:63`이 세션 시작 시 호출해 왔다. 코드만 보면 "세로 고정은 이미 처리됨"으로 읽힌다.
+  실제로는 **iOS Safari가 `ScreenOrientation.lock()`을 구현하지 않고**(구현한 브라우저도 fullscreen을
+  요구한다), 함수가 `try/catch`로 조용히 삼켜 **성공도 실패도 남기지 않았다.**
+  → **"호출했다 = 동작한다"가 아니다.** 특히 iOS는 표준 API를 no-op으로 두는 경우가 많고, best-effort
+  `catch {}`가 그 사실을 감춘다. 같은 계열: [IOS-5](제스처 밖 gUM), [MIC-B2](AudioContext interrupted).
+- **해결(v0.38.2):** `src/components/PortraitGuard.tsx` — `(orientation: landscape) and (pointer: coarse)`
+  미디어쿼리로 가로를 감지해 **오버레이로 덮는다**(`lockPortrait()`는 지원 기기용 best-effort로 유지).
+  - 🔴 **오버레이이지 언마운트가 아니다.** 트리를 조건부로 갈아치우면 `VoiceScreen`이 unmount돼
+    인식기·워치독·클립 레코더가 teardown된다 = [STT-16]이 실기기 62초 사공백으로 겪은 실패.
+    **회전은 조사 중 수시로 일어나므로 탭 전환보다 더 자주 세션을 죽인다.**
+    회귀 테스트가 이 계약을 잠근다(`v038-portrait-guard.spec.ts` — 회전 왕복 후 발화가 그대로 커밋되는지).
+  - **판정에 화면 폭을 쓰지 않는다.** 폰이 가로가 되면 `innerWidth`가 402→874로 커져 `App.tsx`의
+    `isMobile`(≤480) 판정이 **뒤집힌다** — 방어하려는 바로 그 순간 조건이 무너진다. `pointer`는 회전에 불변.
+  - **보조공학 격리 필수.** `position: fixed`로 덮어도 VoiceOver·스위치 제어 포커스는 뒤쪽 앱을 훑고
+    **실행까지 된다**(라운드A 리뷰 Codex #4 · agy #1 수렴 지적). 형제 노드를 `inert` + `aria-hidden`으로
+    막고, 세로 복귀 시 **우리가 켠 것만** 원복한다(격리가 남으면 앱 전체가 조작 불가로 굳는다).
+  - **태블릿 가로도 차단한다(민구 확정).** 입력화면이 세로 기준 설계라 태블릿 가로를 열어주면
+    **검증한 적 없는 레이아웃이 현장에 노출된다.**
+- **잔여:** "회전 시 출력물 **진동**"은 별건이다 — `useFitScale.ts:65-67`의 ResizeObserver가 `el`과
+  `el.parentElement`를 동시에 관측하는데 fit 루프가 `el`의 CSS 변수를 바꿔 RO를 재발화시킨다.
+  **F3(입력화면 UI)가 이 훅들을 다시 쓰므로 F3 수용기준으로 이월**했다(지금 감쇠를 넣으면 F3가 덮어쓴다).
+- **출처:** 2026-07-24 실기기 fb-01 → v0.38.2 라운드A(Larry 구현 · Codex+agy Flash 리뷰).
+
 ### [IOS-6] 이상치 알람 TTS가 "확인해주세요"로 끝나 self-confirm 환각 위험 + 알람 중 barge-in 미작동(계측 대기)
 - **증상(민구 제보):** 스피커폰/이어폰 모두 일반 안내 중 barge-in(끼어들기 발화)은 어느 정도 되는데, **이상치 알람 중에는 barge-in이 정상 작동 안 하는 느낌**.
 - **원인(코드 추적):** ① 알람 TTS가 literally **"…확인해주세요."로 끝남**(`useVoiceSession.ts` alertText). `detectCommand`는 startsWith 매칭이라 `detectCommand("확인해주세요")==='confirm'` → 스피커폰에서 이 TTS가 마이크로 새어 들어가면 **알람이 스스로 confirm되어 닫히는** self-confirm 환각([IOS-3]의 알람판). 현 post-TTS 가드는 이를 막는 보호 역할도 겸함. ② 알람 TTS가 길어(추정 3~4s) post-TTS 가드 윈도우(재생중 전체 + 종료후 250ms)가 알람 발화 거의 전 구간을 덮어, 스피커폰에서 알람 도중 '확인'/'유지'/새값이 `stt_blocked_tts_muted`로 폐기 → "barge-in 안 됨" 체감. ③ trendConfirm 응답은 `handleInterim` early-return이라 조기확정을 못 받고 풀 EOS 꼬리(~1.7s)를 먹어 지연 가중. ④ 이어폰 알람 barge-in 비정상은 코드상 명확한 차단 지점 특정 실패 — needs-real-device-data.

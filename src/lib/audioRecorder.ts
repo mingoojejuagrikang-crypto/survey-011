@@ -181,15 +181,15 @@ export class AudioRecorder {
    *  인터럽션, 라우트 변경 등)다. muted를 분리로 처리하면 BT/유선 연결 중 일시 mute에도 배지가
    *  '내장'으로 깜빡인다. 진짜 분리는 'ended' 또는 enumerate의 deviceId 부재로 잡으므로 muted는 보지
    *  않는다(unmute 리스너는 일시 mute 회복 시 라벨 재확인용으로 그대로 둔다). */
-  private async refreshActiveInputLabel(): Promise<void> {
-    if (!this.activeInput) return;
+  private async refreshActiveInputLabel(): Promise<'ok' | 'unavailable' | 'error'> {
+    if (!this.activeInput) return 'unavailable';
     const prevLabel = this.activeInput.label;
     try {
       const track = this.stream?.getAudioTracks()[0] ?? null;
       if (!track || track.readyState === 'ended') {
         this.activeInput = { ...this.activeInput, label: '' };
         this.emitInputDeviceChanged(prevLabel, '', 'refresh:track_ended');
-        return;
+        return 'ok';
       }
       const id = this.activeInput.deviceId;
       const enumerate = navigator.mediaDevices?.enumerateDevices?.bind(navigator.mediaDevices);
@@ -200,12 +200,12 @@ export class AudioRecorder {
           // 활성 장치가 목록에서 사라짐 → 끊김으로 간주, 내장 폴백.
           this.activeInput = { ...this.activeInput, label: '' };
           this.emitInputDeviceChanged(prevLabel, '', 'refresh:device_gone');
-          return;
+          return 'ok';
         }
         if (match?.label) {
           this.activeInput = { ...this.activeInput, label: match.label };
           this.emitInputDeviceChanged(prevLabel, match.label, 'refresh:enumerate');
-          return;
+          return 'ok';
         }
       }
       // 트랙이 살아있고 라벨이 있으면 트랙 라벨을 신뢰(가장 정확).
@@ -213,7 +213,13 @@ export class AudioRecorder {
         this.activeInput = { ...this.activeInput, label: track.label };
         this.emitInputDeviceChanged(prevLabel, track.label, 'refresh:track_label');
       }
-    } catch { /* best-effort — 갱신 실패 시 직전 라벨 유지 */ }
+      return 'ok';
+    } catch {
+      // 라벨은 종전대로 유지하되(파괴하지 않는다) **실패했다는 사실을 호출자에게 알린다.**
+      // 종전엔 조용히 삼켜서, 갱신 실패와 '변화 없음'이 호출자에게 구별되지 않았다
+      // (v0.38.2 라운드A 리뷰 Codex #1 — 계측이 실패를 성공으로 보고하면 판독이 거짓이 된다).
+      return 'error';
+    }
   }
 
   /** v0.19.0 W7 — 입력장치 라벨이 실제로 바뀐 순간에만(old !== new) logger 이벤트를 방출한다.
@@ -286,6 +292,32 @@ export class AudioRecorder {
     if (track.readyState === 'ended') return 'ended';
     if (track.muted) return 'muted';
     return 'live';
+  }
+
+  /** v0.38.2 F5 — 포그라운드 복귀 시 **오디오 경로 재검증**(관찰 전용).
+   *
+   *  기존 `refreshActiveInputLabel()`(private)은 `devicechange`·트랙 이벤트가 발화했을 때만 돌았다.
+   *  그런데 **백그라운드에서는 `devicechange`가 발화하지 않아** BT→스피커 전환이 아무 데도 안 남는다
+   *  (2026-07-24 실기기 세션B의 트리거를 추론으로만 세워야 했던 이유). 복귀 시점에 한 번 능동으로
+   *  다시 읽어 그 공백을 메운다.
+   *
+   *  🔴 **재-getUserMedia는 하지 않는다([IOS-5] 유지).** 비파괴 라벨 갱신 + 스냅샷 반환뿐이다 —
+   *  유휴 중 재획득이 살아있던 스트림까지 잃게 만든 전례(v0.14.0 → v0.22.0 P0)를 되풀이하지 않는다.
+   *
+   *  🔴 **`status`가 계측의 정직성을 지킨다**(라운드A 리뷰 Codex #1). `enumerateDevices()`가 권한·
+   *  WebKit 오류로 실패하면 라벨은 **직전 값 그대로** 남는데, 그걸 "재검증된 현재 경로"로 기록하면
+   *  텔레메트리가 **실패를 성공으로 보고**한다 — 관측 공백을 메우려는 기능이 거짓 관측을 만든다.
+   *   - `ok`          실제로 다시 읽었다.
+   *   - `unavailable` 읽을 대상이 없었다(레코더 미초기화/`activeInput` 없음) — **모르는 것이지
+   *                   '내장 마이크'가 아니다.**
+   *   - `error`       읽으려다 실패했다. 라벨은 직전 값이므로 신뢰하면 안 된다. */
+  async revalidateActiveInput(): Promise<{
+    label: string | null;
+    track: 'none' | 'ended' | 'muted' | 'live';
+    status: 'ok' | 'unavailable' | 'error';
+  }> {
+    const status = await this.refreshActiveInputLabel();
+    return { label: this.activeInput?.label ?? null, track: this.getTrackState(), status };
   }
 
   /** v0.33.0 항목4 — 활성 트랙의 다음 unmute 1회 관찰(once). 복귀 시 muted였던 트랙이 실제로

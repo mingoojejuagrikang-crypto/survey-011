@@ -14,6 +14,7 @@ import {
   zombieRestart,
   micAutoReconnect,
   recoverTimeout,
+  audioRouteRevalidate,
   micTeardown,
 } from '../src/lib/logEvents';
 
@@ -76,5 +77,32 @@ test('micTeardown — 포그라운드 선-정리 판정 바이트 계약', () =>
   const s = micTeardown({
     found: 'running', closed: 'timeout', reattach: 'error', evt: 'vis', backgroundMs: 61_000,
   });
+  expect(s.split(':')).toHaveLength(2);
+});
+
+/** v0.38.2 F5 — 백그라운드 경로 전환의 **유일한 관측점**. 백그라운드에선 devicechange가 발화하지
+ *  않아 2026-07-24 세션B의 BT→스피커 전환이 어떤 이벤트로도 남지 않았다(트리거를 추론으로만 세운 이유).
+ *  `mic_teardown`과 같은 복귀 이벤트에서 짝으로 읽히므로 필드 표기도 같은 규약(kv ',')이어야 한다. */
+test('audioRouteRevalidate — 오디오 경로 재검증 바이트 계약', () => {
+  // 실기기 세션B가 남겼어야 할 바이트: 50분 백그라운드 뒤 BT → 내장으로 전환.
+  expect(audioRouteRevalidate({
+    before: '블루투스', after: '내장 마이크', track: 'live', status: 'ok', evt: 'vis', backgroundMs: 3_000_000,
+  })).toBe('audio_route_revalidate:before=블루투스,after=내장 마이크,track=live,status=ok,evt=vis,bg_s=3000');
+
+  // 진입 스냅샷이 없는 복귀(앱 첫 로드 직후 pageshow 등) — before=unknown으로 읽힌다.
+  expect(audioRouteRevalidate({
+    before: 'unknown', after: '유선 이어폰', track: 'muted', status: 'ok', evt: 'pageshow', backgroundMs: 60_000,
+  })).toBe('audio_route_revalidate:before=unknown,after=유선 이어폰,track=muted,status=ok,evt=pageshow,bg_s=60');
+
+  // 필드 구분자가 ':'로 새지 않는다 — 접두 1개만 ':'를 쓴다(micTeardown과 동일한 파서 계약).
+  const s = audioRouteRevalidate({
+    before: '내장 마이크', after: '블루투스', track: 'ended', status: 'error', evt: 'vis', backgroundMs: 1_000,
+  });
+
+  // 🔴 재검증 실패/미관측은 **'내장 마이크'로 확정되지 않는다**(라운드A 리뷰 Codex #1·#2).
+  // 이 구분이 없으면 "재검증했는데 그대로였다"와 "재검증 자체가 실패했다"가 로그에서 같아 보인다.
+  expect(audioRouteRevalidate({
+    before: '블루투스', after: 'unknown', track: 'none', status: 'unavailable', evt: 'vis', backgroundMs: 90_000,
+  })).toBe('audio_route_revalidate:before=블루투스,after=unknown,track=none,status=unavailable,evt=vis,bg_s=90');
   expect(s.split(':')).toHaveLength(2);
 });

@@ -19,6 +19,7 @@ import {
   INITIAL_FOREGROUND_RETURN_STATE,
   LONG_BACKGROUND_TEARDOWN_MS,
   reduceForegroundReturn,
+  shouldEmitRouteRevalidate,
 } from '../src/lib/foregroundReturnPolicy';
 import { BASE } from './baseUrl';
 
@@ -54,6 +55,80 @@ test.describe('[MIC-B2] 포그라운드 복귀 순수 정책', () => {
     expect(visible.shouldTeardown).toBe(true);
     expect(visible.backgroundMs).toBe(LONG_BACKGROUND_TEARDOWN_MS);
     expect(pageShow.shouldTeardown).toBe(false);
+  });
+});
+
+// ─── v0.38.2 F5 — 오디오 경로 재검증 계측의 순수 경계 ────────────────────────────────────
+// 이 두 축(진입 스냅샷 / 발행 게이트)은 **각각 독립으로 반증**되어야 한다. 한쪽만 지워도 실패하는
+// 케이스를 따로 두지 않으면 이중 방어 중 한 겹이 사라지는 회귀를 못 잡는다([ORCH-18]).
+test.describe('[F5] 오디오 경로 재검증 정책', () => {
+  test('진입 시점 라벨을 스냅샷해 복귀 결정에 실어 준다 — 이게 없으면 경로 변경을 알 수 없다', () => {
+    const hidden = reduceForegroundReturn(INITIAL_FOREGROUND_RETURN_STATE, 'hidden', 1_000, {
+      inputLabel: 'OpenDots ONE by Shokz',
+    });
+    expect(hidden.state.hiddenInputLabel).toBe('OpenDots ONE by Shokz');
+
+    // 복귀 결정이 **진입 시점** 라벨을 그대로 전달한다(복귀 후 읽기가 아니라).
+    const visible = reduceForegroundReturn(hidden.state, 'visible', 2_000);
+    expect(visible.hiddenInputLabel).toBe('OpenDots ONE by Shokz');
+    // 소비 후에는 비워져 다음 복귀가 낡은 스냅샷을 재사용하지 않는다.
+    expect(visible.state.hiddenInputLabel).toBeNull();
+    expect(reduceForegroundReturn(visible.state, 'pageshow', 3_000).hiddenInputLabel).toBeNull();
+  });
+
+  test('연속 hidden은 첫 진입 스냅샷을 덮지 않는다 — 나중 라벨로 갈아치우면 비교가 무의미해진다', () => {
+    const first = reduceForegroundReturn(INITIAL_FOREGROUND_RETURN_STATE, 'hidden', 1_000, {
+      inputLabel: 'OpenDots ONE by Shokz',
+    });
+    const second = reduceForegroundReturn(first.state, 'hidden', 9_000, {
+      inputLabel: 'iPhone 마이크',
+    });
+    expect(second.state.hiddenInputLabel).toBe('OpenDots ONE by Shokz');
+    expect(second.state.hiddenAt).toBe(1_000);
+  });
+
+  test('진입 기록이 없는 복귀는 스냅샷도 없다 — before=unknown으로 내려간다', () => {
+    const visible = reduceForegroundReturn(INITIAL_FOREGROUND_RETURN_STATE, 'visible', 5_000);
+    expect(visible.hiddenInputLabel).toBeNull();
+    expect(visible.backgroundMs).toBe(0);
+  });
+
+  test('발행 게이트 (a) 경로 변경 — 임계 한참 미만이어도 발행한다', () => {
+    expect(
+      shouldEmitRouteRevalidate({
+        beforeCategory: '블루투스',
+        afterCategory: '내장 마이크',
+        backgroundMs: 1_000,
+      }),
+    ).toBe(true);
+  });
+
+  test('발행 게이트 (b) 장기 백그라운드 — 경로가 그대로여도 발행한다', () => {
+    expect(
+      shouldEmitRouteRevalidate({
+        beforeCategory: '블루투스',
+        afterCategory: '블루투스',
+        backgroundMs: LONG_BACKGROUND_TEARDOWN_MS,
+      }),
+    ).toBe(true);
+  });
+
+  test('둘 다 아니면 무발행 — 복귀마다 찍어 링버퍼를 잠식하지 않는다', () => {
+    expect(
+      shouldEmitRouteRevalidate({
+        beforeCategory: '블루투스',
+        afterCategory: '블루투스',
+        backgroundMs: LONG_BACKGROUND_TEARDOWN_MS - 1,
+      }),
+    ).toBe(false);
+    // 진입 스냅샷이 없으면 (a)는 성립할 수 없다 — (b)만으로 판단한다.
+    expect(
+      shouldEmitRouteRevalidate({
+        beforeCategory: null,
+        afterCategory: '내장 마이크',
+        backgroundMs: 1_000,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -434,5 +509,78 @@ test('[MIC-B2] 실제 복귀 배선은 ready phase에서도 임계 경계와 vis
   expect(teardown).toHaveLength(1);
   // 바이트는 logEvents SSOT 규약(kv는 ',')을 따른다 — 세그먼트가 ':'로 섞이면 파서가 필드를 쪼갠다.
   expect(teardown[0].extra).toContain(',reattach=');
+  expect(teardown[0].extra).toContain(',evt=vis,bg_s=60');
+});
+
+// ─── v0.38.2 F5 — **실제 배선** 회귀 (라운드A 리뷰 Codex #3) ─────────────────────────────
+// 🔴 이 테스트가 왜 추가됐는지: 초판의 F5 테스트는 순수 정책(`reduceForegroundReturn` /
+// `shouldEmitRouteRevalidate`)만 잠갔다. 그래서 `useVoiceSession`에서 **`emitRouteRevalidate()` 호출을
+// 통째로 지워도 24개 테스트가 전부 통과했다**(실측 확인). 정책이 맞아도 아무도 그 정책을 부르지
+// 않으면 계측은 존재하지 않는다 — [ORCH-18]("반증 없는 회귀 테스트는 회귀 테스트가 아니다")의
+// 교과서적 사례라 리뷰 지적을 그대로 수용했다.
+//
+// 여기서는 **실제 DOM visibility 이벤트**로 배선을 발화시키고 IDB에 남은 바이트를 검사한다.
+test('[F5] 실제 복귀 배선이 audio_route_revalidate를 남긴다 — 정책만이 아니라 호출까지 잠근다', async ({ page }) => {
+  await page.addInitScript(MOCK_INIT_SCRIPT);
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await page.evaluate((s) => {
+    localStorage.clear();
+    localStorage.setItem('survey-011-settings-v3', JSON.stringify(s));
+    indexedDB.deleteDatabase('survey-011');
+  }, SETTINGS_3ROWS);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(500);
+
+  await page.evaluate((threshold) => {
+    const originalNow = Date.now;
+    let now = 1_000;
+    let visibility: DocumentVisibilityState = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    Date.now = () => now;
+    try {
+      // ① 임계 미만 복귀 — 경로 변경도 없으므로 **무발행**이어야 한다(링버퍼 잠식 방지).
+      document.dispatchEvent(new Event('visibilitychange'));
+      now += threshold - 1;
+      visibility = 'visible';
+      document.dispatchEvent(new Event('visibilitychange'));
+
+      // ② 임계 이상 복귀 — 발행. 연속 pageshow는 hiddenAt이 소비돼 중복 발행되지 않아야 한다.
+      visibility = 'hidden';
+      document.dispatchEvent(new Event('visibilitychange'));
+      now += threshold;
+      visibility = 'visible';
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('pageshow'));
+    } finally {
+      Date.now = originalNow;
+      delete (document as Document & { visibilityState?: DocumentVisibilityState }).visibilityState;
+    }
+  }, LONG_BACKGROUND_TEARDOWN_MS);
+  await page.waitForTimeout(800); // 계측이 비동기(revalidateActiveInput await)라 여유를 둔다
+
+  const events = await loadLogEventsFromIDB(page);
+  const revalidate = events.filter((e) => (e.extra ?? '').startsWith('audio_route_revalidate:'));
+
+  // 배선이 살아 있다 = 정확히 1건(①은 무발행, ②는 1회, 연속 pageshow는 중복 없음).
+  expect(revalidate).toHaveLength(1);
+  const extra = revalidate[0].extra ?? '';
+  // kv(',') 규약 — 접두 1개만 ':'를 쓴다(mic_teardown과 동일한 파서 계약).
+  expect(extra.split(':')).toHaveLength(2);
+  expect(extra).toContain('before=');
+  expect(extra).toContain(',after=');
+  expect(extra).toContain(',status=');
+  // 같은 복귀 구간임을 mic_teardown과 대조할 수 있어야 한다(실기기 판독의 핵심).
+  expect(extra).toContain(',evt=vis,bg_s=60');
+
+  // headless는 getUserMedia가 거부돼 레코더가 미초기화다 → **'내장 마이크'로 확정하지 않는다.**
+  // 관측 못 한 것을 관측한 것처럼 적으면 실기기 판독에서 unknown과 built-in을 구별할 수 없다
+  // (라운드A 리뷰 Codex #2).
+  expect(extra).toContain('after=unknown');
+  expect(extra).not.toContain('status=ok');
+
+  // teardown과 같은 복귀 이벤트에서 짝으로 남는다 — 둘의 evt/bg_s가 일치해야 대조가 성립한다.
+  const teardown = events.filter((e) => (e.extra ?? '').startsWith('mic_teardown:found='));
+  expect(teardown).toHaveLength(1);
   expect(teardown[0].extra).toContain(',evt=vis,bg_s=60');
 });
