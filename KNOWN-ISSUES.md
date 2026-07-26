@@ -2,27 +2,52 @@
 
 > **목적:** 다른 AI(그리고 사람)가 **같은 실수를 반복하지 않도록** 한다. 이 앱(노지감귤 음성 생육조사 PWA)과 그 조상 프로젝트(`growth-survey-010`)에서 실제로 터졌던 버그·함정을 사실 기반·출처 명시로 수확해 모은 살아있는 로그다.
 >
-> **사용법:** 작업 시작 전에 관련 카테고리를 읽어라. 새 함정을 만나면 같은 형식으로 **append**하고, 기존 항목의 재발이면 해당 항목의 출처에 hash/세션을 덧붙여 병합하라. 추측은 본문에 쓰지 말고 맨 끝 **"확인 필요(미검증)"** 목록에 분리하라.
+> **사용법:** ⚠️ **이 파일 전체를 컨텍스트에 넣지 마라.** 지금 만지는 영역의 **카테고리와 ID만 검색해서** 읽어라(①음성/STT ②클립·IDB ③iOS/TTS ④정정·race ⑤빌드·테스트 ⑥인증·Drive ⑧입력흐름 ⑨테스트 함정). 새 함정을 만나면 같은 형식으로 **append**하고, 기존 항목의 재발이면 해당 항목의 출처에 hash/세션을 덧붙여 병합하라. 추측은 본문에 쓰지 말고 맨 끝 **"확인 필요(미검증)"** 목록에 분리하라.
+>
+> **이 파일에 무엇이 사는가 (4상태 모델):**
+>
+> | 상태 | 뜻 | 사는 곳 |
+> |------|-----|---------|
+> | `OPEN` | 지금 재현되는 문제 | **이 파일** |
+> | `MONITORING` | 수정했지만 **실기기 판정 대기** | **이 파일** |
+> | `GUARDRAIL` | 해결됐지만 다시 어기면 안 되는 계약 | [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md) |
+> | `RESOLVED` | 종결·아카이브 | [KNOWN-ISSUES-ARCHIVE.md](./KNOWN-ISSUES-ARCHIVE.md) |
+>
+> `MONITORING` → `RESOLVED` 승격의 유일한 근거는 **실기기 확인**이다. 데스크톱 테스트 통과는
+> `MONITORING` 유지 사유이지 종결 사유가 아니다.
+>
+> **상태 표기 규약 — 사건 당시와 현재를 반드시 분리한다:**
+> ```
+> - **당시 상태(YYYY-MM-DD):** 사건·수정 시점의 사실 (예: "브랜치, 미배포")
+> - **현재 상태:** 지금의 사실 (예: "v0.38.0에 포함되어 배포됨, 현재 앱 v0.39.0")
+> - **실기기 상태:** ✅확인됨 / ⚠️미확인 / ➖해당없음
+> ```
+> 한 줄에 뭉뚱그리면 시간이 지나 **AI가 "아직 배포 안 됐다"로 오해**한다(실제로 v0.38.0 항목들이
+> v0.39.0 시점까지 "미배포"로 읽혔다). 세부 아이콘 범례: ✅수정됨 | ⚠️주시·미확인 | ➖해당없음 | 🔲미구현.
 >
 > **출처 표기 규약:**
 > - `growth-survey-010@<short-hash>` — 조상 레포 git 커밋.
 > - `growth-survey-010 vX.Y.Z` / `survey-011 vX.Y.Z` — **반드시 레포를 명시**한다. 두 레포의 버전 라인이 다르다(조상은 v0.12.0까지, survey-011은 자체 v0.3.0 라인).
-> - `debug-log` — `citrus-growth-survey-codex/shared/debug-log.md`.
-> - `2026-06-04~05 세션` — survey-011에서 이번에 직접 부딪힌 함정.
->
-> **현재 상태 범례:** ✅수정됨(survey-011 코드에 가드 확인) | ⚠️주시(재발 가능/설계상 주의) | ➖해당없음.
+> - **레포 안에 있는 파일은 실제 상대 링크로 걸어라**(예: `src/lib/audioTrim.ts`). 낡기 쉬운 줄 번호보다 **함수·테스트 이름**으로 지칭한다.
+> - **레포 밖 근거는 추가 출처로만 쓴다.** 핵심 결론과 재현 절차는 반드시 이 레포 안에 남긴다 — 레포만 클론한 에이전트는 아래 경로를 열 수 없다:
+>   - `debug-log` — `citrus-growth-survey-codex/shared/debug-log.md` *(external/private)*
+>   - `Deliverables/...` 날짜별 분석 문서 — myPKA 볼트 *(external/private)*
+>   - `survey-011-test-harness` — 별도 하니스 레포 *(external/private)*
 
 ---
 
 ## 아카이브로 이동된 항목
 
-종결(✅해결·반증·비버그·환경 제약 종결) 항목은 본문에서 [KNOWN-ISSUES-ARCHIVE.md](KNOWN-ISSUES-ARCHIVE.md)로 이동했다. 아래 [ID]가 본문에 없으면 아카이브에서 찾아라(동일 ID가 복수 존재할 수 있으므로 제목까지 대조할 것).
+종결(✅해결·반증·비버그·환경 제약 종결) 항목은 본문에서 [KNOWN-ISSUES-ARCHIVE.md](./KNOWN-ISSUES-ARCHIVE.md)로 이동했다. 아래 [ID]가 본문에 없으면 아카이브에서 찾아라.
+
+> **ID 고유화(2026-07-26):** 서로 다른 두 문제가 `[CLIP-1]`을 함께 쓰고 있어 검색·자동 링크가
+> 불가능했다. 고유 ID로 분리하고 옛 ID는 `aliases:`로 남겨 과거 커밋·문서 검색을 유지한다.
 
 - [STT-1] 200대 한국어 자리값 수사 오인식 ("이백" → 100) → KNOWN-ISSUES-ARCHIVE.md
 - [STT-13] iOS Safari Web Speech가 confidence를 비워 반환 → 코드의 `?? 1` 강제변환으로 인식 허용범위 게이트 무력화 → KNOWN-ISSUES-ARCHIVE.md
-- [CLIP-1] iOS Safari에서 음성 클립이 IDB에 저장 안 됨 (근본 버그) → KNOWN-ISSUES-ARCHIVE.md
-- [CLIP-2] persistSession 타이밍 탓 클립 키 누락 → KNOWN-ISSUES-ARCHIVE.md
-- [CLIP-3] stale-epoch 클립이 올바른 클립을 덮어씀 → KNOWN-ISSUES-ARCHIVE.md
+- [CLIP-IDB-1] iOS Safari에서 음성 클립이 IDB에 저장 안 됨 (근본 버그) — 구 `CLIP-1` → [KNOWN-ISSUES-ARCHIVE.md](./KNOWN-ISSUES-ARCHIVE.md)
+- [CLIP-PERSIST-KEY-1] persistSession 타이밍 탓 클립 키 누락 — 구 `CLIP-2` → [KNOWN-ISSUES-ARCHIVE.md](./KNOWN-ISSUES-ARCHIVE.md)
+- [CLIP-EPOCH-1] stale-epoch 클립이 올바른 클립을 덮어씀 — 구 `CLIP-3` → [KNOWN-ISSUES-ARCHIVE.md](./KNOWN-ISSUES-ARCHIVE.md)
 - [CLIP-4] AudioRecorder 인스턴스 간 상태 오염 → KNOWN-ISSUES-ARCHIVE.md
 - [CLIP-7] Logger 이벤트가 reload 후 소실 (메모리 전용) → KNOWN-ISSUES-ARCHIVE.md
 - [LOAD-1] 앱 업데이트 후 "세션이 사라짐" — 실제론 App.tsx 빈 catch가 hydrate 실패를 삼킴 → KNOWN-ISSUES-ARCHIVE.md
@@ -35,7 +60,7 @@
 - [RACE-4] 정정 시 오인식 원본 오디오 유실 → 분석 불가 → KNOWN-ISSUES-ARCHIVE.md
 - [RACE-5] 동기화: 업로드 실패 세션을 autoDelete가 삭제 (데이터 손실) → KNOWN-ISSUES-ARCHIVE.md
 - [RACE-7] 일시정지(Pause) 상태에서 화면 전환 시 sessionIdRef가 초기화되어 빈 ID 및 startedAt: NaN이 DB에 영속화됨 → KNOWN-ISSUES-ARCHIVE.md
-- [CLIP-1] direct modify("수정 <값>") 시 수정한 셀의 음성 클립/재생버튼이 사라짐 → KNOWN-ISSUES-ARCHIVE.md
+- [CLIP-MODIFY-1] direct modify("수정 <값>") 시 수정한 셀의 음성 클립/재생버튼이 사라짐 — 구 `CLIP-1` → [KNOWN-ISSUES-ARCHIVE.md](./KNOWN-ISSUES-ARCHIVE.md)
 - [CLIP-VAL-1] 수정 재녹음 중 빈 캡처 → 이전 값 음성이 새 값 셀의 재생버튼으로 남음 (3중 결함) → KNOWN-ISSUES-ARCHIVE.md
 - [ENV-3] 버전 테스트 하드코딩 → 버전 bump 시 실패 → KNOWN-ISSUES-ARCHIVE.md
 - [ENV-9] settings persist migrate가 시드 trendRule을 삼킴 — Playwright 시드는 최신 version으로 → KNOWN-ISSUES-ARCHIVE.md
@@ -199,7 +224,7 @@
 
 ### [CLIP-BT-1] 블루투스→내장 마이크 전환 시 audio-capture 에러 버스트 + 클립 유실 (세션은 자가 회복)
 - **증상(v0.33.0 실기기, 2026-07-14):** Shokz OpenDots 연결 해제로 트랙 ended → `stt lifecycle:error:audio-capture` ×3 + `clip_empty` 2건(r1 c8/c9 클립 유실, **값은 무손실**). `restart_scheduled`로 자가 회복(07-13식 수동 소생 불필요) — 별도 세션 09:35:15 단발도 0초 자동 회복.
-- **관련:** [STT-12](OpenDots 소음 성능), [AUDIO-INPUT-2](장치 변경 배지 미반영), [CLIP-3](clip_empty broken pointer).
+- **관련:** [STT-12](OpenDots 소음 성능), [AUDIO-INPUT-2](장치 변경 배지 미반영), [CLIP-POINTER-1](clip_empty broken pointer).
 - **현재 상태:** ⚠️주시 — 값 무손실·자가 회복이라 v0.34.0 수정 없음(등재만). 전환 구간 클립 유실이 반복 관측되면 장치 전환 시 레코더 선제 재획득 검토.
 
 ### [CLIP-5] dispose() 시 in-flight 클립 save가 좀비화(hang)
@@ -239,23 +264,15 @@
 - **출처:** `2026-06-24 v0.19.0 하니스 재인식 대조`(BL-6 확정) → 차기 릴리스 백로그
 - **현재 상태:** 🔲 미구현(차기) — 데이터 무결성 무관이라 우선순위 Med. `Deliverables/2026-06-24-v0190-real-device-analysis.md` §클립 재인식 대조.
 
-### [CLIP-MIDSPEECH-1] 저장 클립이 발화 *중간*을 잘라 이어붙여 사람이 값을 못 알아들음 — ✅v0.21.0 해결
-- **증상(v0.20.0 실기기 2세션, 2026-06-25):** 민구 "인식값은 정상인데 음성클립을 들으면 값을 알 수 없음. 발화 중간을 편집하는 것 같다." 코드 시뮬(`buildKeptRanges` 재현 + raw 클립 72개 분석): `concatRanges`(v0.9.0 CLIP-BLANK-1)가 발화 세그먼트 사이 150ms↑ 무음을 "긴 공백"으로 보고 제거 → **72클립 중 15개(21%)에서 발화 중간을 splice**(각 세션 첫 행 r1c7은 3조각, 2곳 제거). STT 재인식은 갭 제거에 강건해 직전 BL-6 하니스가 클리어했으나, **사람 청취는 splice된 클립을 따라가지 못함** — 하니스가 검증하지 못한 사각.
-- **원인:** `audioTrim.buildKeptRanges`가 다중 세그먼트일 때 여러 보존 범위를 반환 → `concatRanges`가 사이 무음을 제거해 이어붙임(CLIP-BLANK-1 의도). 발화 중 자연스러운 멈춤(선언↔값, 호흡)이 잘림.
-- **영향:** 데이터 무결성 무관(라이브 STT 정답, CSV 일치). 클립 감사·재청취 품질 문제(민구 직접 청취 불만의 주원인).
-- **해결(v0.21.0):** `buildKeptRanges`를 **모든 세그먼트를 감싸는 단일 포괄 범위** `[max(0,min(start)−PAD_FRONT), min(len,max(end)+PAD_BACK)]`로 통합 → `concatRanges` 미도달(splice 0), **중간 무음 보존**, 앞 침묵/TTS·뒤 EOS 꼬리 가장자리 트림만 유지. `concatRanges`/`findSpeechSegments`는 휴면 폴백으로 잔존. KEEP_RATIO·MIN_KEPT_MS 가드 불변. 회귀 `tests/audioTrim.spec.ts`(구 CLIP-BLANK-1 케이스를 중간갭 보존으로 갱신 + 다중세그먼트 단일범위 검증 추가, 20 passed).
-- **출처:** `2026-06-25 v0.20.0 2세션 분석`(clip 길이/세그먼트 시뮬) → **survey-011 v0.21.0**
-- **현재 상태:** ✅해결 — 다음 실기기에서 민구 클립 청취로 체감 확인.
-- **연관:** [CLIP-9](decode-fail 계측, 이번 2세션 `clip_trim_failed` **0건**)·[CLIP-10](첫값 truncation, 별개 메커니즘 — 미구현 잔존). 이번 2세션은 webm decode-fail 없이 전부 `.wav` 트림 성공 경로였고, 청취 불가의 실제 주원인은 truncation이 아니라 **중간 splice**였음.
+### [CLIP-MIDSPEECH-1] 트림이 발화 *중간*을 잘라 이어붙임 → **가드레일로 이동**
+- ✅v0.21.0 해결. `audioTrim.buildKeptRanges`를 **단일 포괄 범위**로 유지해야 하는 계약이라
+  [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md) ⑤로 옮겼다. `audioTrim.ts`를
+  고치려면 그쪽을 먼저 읽어라.
 
-### [CLIP-BLANK-2] 조용한 클립에서 트림 시작이 실제 값 발화보다 한참 앞에 앵커돼 긴 앞 공백 — ✅v0.24.0 해결
-- **증상(v0.23.0 실기기, 2026-06-29 민구 제보):** "일부 클립 전단에 공백이 너무 길다." 누적 실기기 클립 분석(8개 v0.21+ 세션 **287 클립**, 별도 레포 `survey-011-test-harness` Tier1)으로 정량 재현: 값 클립의 **51/287(18%)** 가 트림본 앞에 0.6s↑ 공백, 최악 **10.8s**(`2026-06-23 r5c7`)·`2026-06-29 r3c8` 6.62s·`r4c8` 3.58s.
-- **원인:** `findSpeechSegments`의 thr=`robustPeak(97pct)*0.08`이 **조용한/노이즈 클립에서 노이즈 수준으로 붕괴**(예 r4c8 peak 0.023) → 초반 잡음·TTS잔향이 약한 세그먼트로 검출됨. `buildKeptRanges`가 `min(seg.start)`로 앵커하므로 약한 초반 세그먼트 하나가 트림 시작을 loud 값 발화보다 한참 앞으로 끌어당김. (프로덕션 로직을 raw WAV에 복제하면 실제 저장 트림 길이와 **4/4 비트 일치** → decode-path 아님을 확정.)
-- **해결(v0.24.0):** `findSpeechSegments`에 **약한 세그먼트 솎기**(`SEG_KEEP_RATIO=0.25`) — 세그먼트별 내부 최대 RMS를 추적해, 가장 강한 세그먼트(값 발화는 또렷이 큼) 대비 25% 미만의 약한 세그먼트를 버린다(2개↑일 때만, 전부 약하면 원본 유지). 단일/동급 세그먼트(정상·소수 재발화)는 불변 → `tests/audioTrim.spec.ts` 20 passed. 효과: 앞 공백 사례 **63→16건, 값 잘림 0건**(287 클립 스윕으로 ratio 결정 — 0.3↑은 값 잘림 6↑건 유발해 0.25 채택). 회귀: 하네스 `clip-regression`이 실제 audioTrim에 누적 raw 클립을 돌려 RED→GREEN·known-good 비퇴행 고정.
-- **출처:** `2026-06-29 v0.23.0 실기기 제보` + `survey-011-test-harness` 287클립 분석 → **survey-011 v0.24.0**
-- **현재 상태:** ✅해결 — 다음 실기기에서 민구 클립 청취로 체감 확인. 잔여 16건은 대부분 0.4~0.8s(pad+soft 온셋, 비치명적).
-- **✅ 2026-06-30 v0.24.0 실기기 2세션 측정 확정:** 값클립 71개(S1 35·S2 36) silencedetect → 앞공백 **max 0.31/0.32s, 0/71 ≥0.6s**(v0.21+ 18%·최악 10.8s 대비 소멸), 잔여 ~0.30s=의도 PAD_FRONT. **값잘림 회귀 0**(`clip_trim_failed` 0/0; 최단 0.70s="100"류 단발). 출처 `Deliverables/2026-06-30-survey-011-v0240-log-analysis.md`.
-- **연관:** [CLIP-MIDSPEECH-1](단일범위 통합)과 같은 `audioTrim` 검출부. **데이터-1(소수점 정수부 클립 유실)은 v0.21+ 287클립에서 0건 재현** — CLIP-MIDSPEECH-1 단일범위(splice 0)가 이미 유실 메커니즘 제거. 회귀 가드(`valueDrop` 단언)로만 유지.
+### [CLIP-BLANK-2] 약한 초반 세그먼트가 트림 시작을 앞으로 끌어당김 → **가드레일로 이동**
+- ✅v0.24.0 해결, 2026-06-30 실기기 측정으로 확인됨. `findSpeechSegments`의 약한 세그먼트
+  솎기(`SEG_KEEP_RATIO=0.25`)를 유지해야 하는 계약이라
+  [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md) ⑤로 옮겼다.
 
 ### [VALUE-PERSIST-1] 이상치 교정값 미반영 의혹 — 인시던트 데이터 미재현, 진단 우선(v0.24.0)
 - **의혹(v0.23.0 실기기, 2026-06-29 민구 제보):** "이상치 알람으로 새 값을 음성입력했으나 데이터엔 옛값, 음성클립만 교정값."
@@ -387,7 +404,8 @@
 - **회귀 확보(2026-07-16, v0.35.1 Stage 1-3):** ensure 로직을 `src/lib/driveFolders.ts` `ensureEmailSubFolder`(캐시 주입형)로 통합 — 캐시는 호출부가 parent별 분리 주입(로그=teamFolderId, 개선요청=무캐시)해 다른 parent로의 오업로드를 구조로 차단. `tests/driveFolders.spec.ts`(Node 러너 6케이스: 캐시 분리·최고참 선택·검색 실패 throw·생성·escape)가 계약을 고정.
 - **현재 상태:** ✅수정됨+회귀 확보 (2026-07-16)
 
-### [CLIP-2] 음성 클립에 발화 전후 무음이 과다하게 포함됨
+### [CLIP-SILENCE-1] 음성 클립에 발화 전후 무음이 과다하게 포함됨
+- **aliases:** `CLIP-2` (2026-07-26 고유화 전 ID — 아카이브의 `CLIP-PERSIST-KEY-1`과 ID가 겹쳤다)
 - **증상:** 저장된 클립 재생 시 앞뒤 공백이 김. 06-08 로그 녹음 길이 평균 5.7초·최대 20.9초인데 실제 발화는 1–3초.
 - **원인:** TTS 종료 후 녹음 시작 + STT final 후 종료라 발화 전후 무음이 통째로 저장됨. VAD/트리밍 없음.
 - **해결·회피:** 저장 직전 진폭(RMS) 기반으로 발화 구간만 남기고 앞뒤 무음을 트림해 16kHz mono WAV로 재인코딩(`audioTrim.ts`). decode 불가/음성 미검출 시 원본 반환(iOS 안전 — 녹음 게이팅은 첫 음절 손실 위험이라 회피). 트림 발생은 `clip_trimmed` 이벤트로 추적.
@@ -396,7 +414,8 @@
 - **v0.5.0 주석(프리롤 도입):** 2026-06-10 로그에서 0.32~0.60s 초단 클립 7건 관측 — barge-in 시 발화 **앞부분**이 녹음 시작 전에 잘린 정황(트림 과다가 아니라 수록 자체가 늦음). v0.5.0에서 **0.5s 프리롤**(AudioWorklet PCM 링버퍼, 실패 시 ScriptProcessor → 그것도 실패 시 프리롤 없이 현행 동작 + `clip_preroll_unavailable` 로그)을 클립 앞에 결합하고, 트림 PAD를 비대칭화(앞 300ms / 뒤 180ms). **트림 전 원본(프리롤 포함)도 `:raw` 키로 보존**(민구 결정)하고 로그 zip에 포함, `clip_duration`에 `prerollMs` 동봉. iOS 실기기 효과는 다음 로그에서 정량 확인. **v0.5.0 실기기 확인(2026-06-11):** `clip_preroll_ready:worklet:44100` + 44개 `clip_duration` 전부 `prerollMs:500`, 초단(0.32~0.60s) 클립 **0건**(06-10 7건→0건), `clip_trimmed` 39건·`:raw` 원본 보존 39건 정상. iOS Safari 프리롤·트림 경로 정상 작동 확정.
 - **[CLIP-BLANK-1] v0.9.0 — 발화 *사이* 긴 공백 잔존(내부 무음):** 2026-06-15 v0.8.0 실기기 후 민구 재제보(클립 공백 여전히 김). 원인: 기존 `findSpeechRange`가 **[첫 발화~마지막 발화] 단일 구간**만 돌려줘 그 *내부*의 긴 무음(예: 선언 후 한참 뜸 → 값)이 통째 보존됐다(앞뒤 무음만 잘림). v0.9.0: `audioTrim.findSpeechSegments`(다중 세그먼트, `MERGE_GAP_MS=150` 미만 갭은 한 발화로 병합) + `buildKeptRanges`(세그먼트별 비대칭 PAD 후 겹침 병합) + `concatRanges`(범위 사이 긴 무음 제거하고 이어붙임)으로 교체. 단일 세그먼트면 기존과 바이트 동일(회귀 없음), `KEEP_RATIO` no-effect·프리롤 폴백·`:raw` 보존 그대로. 회귀 `tests/audioTrim.spec.ts`(다중구간 갭압축 검증). ⚠️ 실기기 미검증: 선언+값 클립에서 공백만 제거되고 발화는 보존되는지, 첫 음절 유지.
 
-### [CLIP-3] 세션 첫 클립이 빈 캡처(`clip_empty`)로 저장 실패 → broken pointer(재생버튼 끊김)
+### [CLIP-POINTER-1] 세션 첫 클립이 빈 캡처(`clip_empty`)로 저장 실패 → broken pointer(재생버튼 끊김)
+- **aliases:** `CLIP-3` (2026-07-26 고유화 전 ID — 아카이브의 `CLIP-EPOCH-1`과 ID가 겹쳤다)
 - **증상:** 세션의 **맨 첫 음성 클립**이 빈 버퍼로 stop돼 저장 안 됨. sessions.json은 해당 셀(row1 횡경 c7) audioClip 포인터를 `sess_…:1:c7…`로 등록하지만 디스크에 파일이 없어 데이터탭 재생버튼이 끊김(404). 값(11.1)은 정상 커밋 — audit-trail 클립만 손실.
 - **원인(가설):** 0.5s 프리롤 링버퍼 워밍업과 **세션 첫 녹음 stop** 사이 타이밍 — 첫 캡처가 프리롤 PCM이 채워지기 전 stop돼 빈 버퍼 반환(`clip_stop_resolved:null` → `error clip_empty`). 둘째 클립부터는 정상. 빈 catch 아님(정상 계측됨 — REVIEW-1 준수).
 - **해결·회피:** ① 빈 캡처 감지 시 셀 audioClip **포인터 등록 회수**(broken pointer 방지 — [CLIP-2/persistSession] 회수 패턴), 또는 ② 첫 녹음 전 프리롤 1프레임 워밍업 보장. 값은 영향 없으므로 우선순위 낮음(P2).
@@ -464,12 +483,10 @@
 - **출처:** `2026-06-04~05 세션`
 - **현재 상태:** ⚠️주시 (`playwright.config.ts`에 webServer 부재 확인)
 
-### [ENV-4] 문서의 테스트 명령 드리프트
-- **증상:** 문서는 `npx tsx scripts/test-*.mjs`라는데, 실제 회귀는 `npx playwright test`(특히 `tests/koreanNum.spec.ts` 62케이스).
-- **원인:** `CLAUDE.md`/`AGENTS.md`의 테스트 명령이 실제 테스트 구조와 어긋남.
-- **해결·회피:** 실제 회귀는 `npx playwright test tests/koreanNum.spec.ts`로 돌려라. 문서 명령(`tsx scripts/test-koreanNum.mjs` 등)을 맹신하지 말 것.
-- **출처:** `2026-06-04~05 세션`(survey-011 `CLAUDE.md` line 33, `AGENTS.md` line 31 모두 `tsx scripts/test-*.mjs` 명시)
-- **현재 상태:** ⚠️주시 (문서 드리프트 미수정 — 문서는 이번 작업 범위 밖)
+### [ENV-4] 문서의 테스트 명령 드리프트 → **가드레일로 이동**
+- ✅2026-07-26 문서 정리에서 해소(레거시 `.mjs` 2개 삭제, 절차는 CONTRIBUTING.md로 단일화).
+  "문서의 실행 명령은 package scripts를 가리킨다"는 계약이라
+  [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md) ⑥으로 옮겼다.
 
 ### [ENV-8] PWA 업데이트 반영 지연으로 실기기에서 구버전 실행
 - **증상:** 새 버전(v0.4.2)을 배포(deploy)했으나, 실기기(iOS Safari 등)에서 이전 버전(v0.4.1)이 계속 활성화되어 실행되며 신규 버그 패치 및 기능이 누락된 채 테스트 로그가 수집됨.
@@ -647,29 +664,16 @@
 
 ---
 
-## ⑦ 리뷰 프로세스 교훈
+## ⑦ 리뷰 프로세스 교훈 → **[ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md)로 이동**
 
-### [REVIEW-1] 빈 catch가 근본 버그를 수개월 가렸다
-- **교훈:** [CLIP-1]의 핵심. 빈 `catch{}`가 iOS 클립 저장 실패를 삼켜 "에러 0건"으로 보이게 함. **모든 영속화/네트워크 실패는 로깅하라.** "에러 없음"은 "성공"이 아니다. 진단 계측(breadcrumb)을 먼저 깔고 실기기 로그로 근본 원인을 확정하라.
-- **출처:** `growth-survey-010@c8dd276`, `@fd3177a`
+이 절 전체(`[REVIEW-1]`~`[REVIEW-5]`)는 "지금 열려 있는 문제"가 아니라 **계속 지켜야 하는
+계약**이라 [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md)로 옮겼다. 내용은 그대로다.
 
-### [REVIEW-2] adversarial review는 데이터 유실을 잡는다 — 여러 회차 돌려라
-- **교훈:** Codex adversarial review가 v5.2에서만 **3~5차**에 걸쳐 CRITICAL/HIGH 데이터 유실·유출을 연속 발견했다(autoDelete 미업로드 삭제, 미동의 데이터 유출, dispose race, recorder 오염, partial sync 백업 누락). 한 번의 리뷰로 끝내지 말고, 특히 **삭제·업로드·정정 경로**는 반복 검증하라.
-- **출처:** `growth-survey-010@a36b4da, @55bb61e, @e207513, @a5950f0, @9a9c004, @8ce8dca, @79cbf2c`(Ultrareview), `@dae3e2f`(gpt-5.5)
-
-### [REVIEW-3] "best-effort"라는 말이 게이트를 같은 날 두 번 뒤집게 했다
-- **교훈:** [AUTH-1]의 핵심. 리뷰 판단("백업은 best-effort")만 믿고 안전 게이트를 제거하면, cascade 삭제의 실제 blast radius 때문에 같은 날 도로 복원하게 된다. **삭제의 cascade 범위를 먼저 확인**하고, 안전 게이트를 제거하는 변경은 특히 의심하라.
-- **출처:** `growth-survey-010@55bb61e → @ad60ba5 → @222f337`
-
-### [REVIEW-4] 진행 멈춤(silent return)은 reprompt로 — 무음 return 금지
-- **교훈:** `stt_rejected_col_name` 같은 거부 경로가 **silent return**하면 음성 세션이 그냥 멈춰 사용자가 영문 모름. 거부 시 **reprompt**(다시 안내)로 흐름을 살려라.
-- **출처:** `growth-survey-010@7dd6e8b`(입력-A)
-- **현재 상태:** ⚠️주시 (survey-011 거부 경로 점검 권장)
-
-### [REVIEW-5] 날짜 컬럼 '오늘' sentinel을 type=date 입력이 덮어쓴다
-- **교훈:** `col.auto.value='오늘'`인 동적 날짜 sentinel을 `type=date` 입력이 표시·편집 못 해 빈 상태가 되고, 사용자가 날짜 선택 시 ISO 리터럴로 덮어써 동적성 상실. `value !== '오늘'`일 때만 `type=date` 사용.
-- **출처:** `growth-survey-010@2eea438`
-- **현재 상태:** ⚠️주시 (survey-011 날짜 컬럼 설정 점검 권장)
+- `[REVIEW-1]` 빈 catch가 근본 버그를 수개월 가렸다 → 가드레일 ①
+- `[REVIEW-2]` adversarial review는 데이터 유실을 잡는다 — 여러 회차 돌려라 → 가드레일 ②
+- `[REVIEW-3]` "best-effort"라는 말이 게이트를 같은 날 두 번 뒤집게 했다 → 가드레일 ②
+- `[REVIEW-4]` 진행 멈춤(silent return)은 reprompt로 → 가드레일 ①
+- `[REVIEW-5]` 날짜 컬럼 '오늘' sentinel을 type=date 입력이 덮어쓴다 → 가드레일 ③
 
 ---
 
@@ -766,7 +770,9 @@
 - **해결(v0.38.0 `e1dbff0`):** `lastRecoverAt` 초기값을 `-RECOVER_COOLDOWN_MS`로. 쿨다운은 **연속** 재획득 폭주를 막기 위한 것이지 첫 회복을 막으려는 게 아니다. 수정 후 격리 6/6 통과.
 - **실기기 연결점:** v0.37.0 로그(2026-07-22 10:16)에 블루투스 전환 직후 `mic_reconnect_ok` → `clip_empty` → `audio-capture` 연쇄가 실재한다. **연속 실패 구간에서는 쿨다운이 실제로 걸리는 조건**이므로, 자동 재연결의 실기기 효능은 다음 회차 로그에서 `mic_auto_reconnect:result=*`로 확인해야 한다.
 - **출처:** `survey-011 v0.38.0` 2026-07-22 세션(#5 회귀 격리 검증).
-- **현재 상태:** ✅수정됨(브랜치, 미배포). ⚠️실기기 효능 미검증.
+- **당시 상태(2026-07-22):** ✅수정됨 — v0.38.0 브랜치, 미배포.
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(브랜치는 main에 병합, 현재 앱 v0.39.0). 격리 회귀 6/6 통과.
+- **실기기 상태:** ⚠️**미확인** — 자동 재연결의 실기기 효능은 다음 회차 로그의 `mic_auto_reconnect*` 연쇄로 판정한다.
 
 ### [PAST-2] 과거값 인덱스 준비 조건이 호출부마다 복붙돼 갈라짐 — 신규 호출부가 게이트를 통째로 누락
 
@@ -776,7 +782,8 @@
 - **⚠️ 통일할 때 밟은 함정:** 인증 검사(`readonlySheetsAuth`)를 **모든** 호출부에 적용했더니 v0.34.0 apikey 계측 테스트가 깨졌다. **부팅 경로는 인증이 없어도 `loadPastIndex`까지 진입시켜 `past_index_skip:not_signed_in`을 남기는 것이 의도**다 — 그 계측이 "왜 이 세션에 알람이 없었나"를 판별하는 유일한 단서이고 SOP-003 파서와의 바이트 계약이다(v0.34.0 C9). → `requireAuth` 옵션으로 분리(부팅·로그인은 인증 무관, 시트 저장·테이블 생성은 인증 확인).
 - **교훈:** 같은 파일/모듈에 유사 가드가 3개 이상이면 **헬퍼로 접는다.** 단, 접을 때 "미묘하게 다른 이유"가 있는지 먼저 확인 — 여기선 그 차이가 **계측 계약**이었다.
 - **출처:** `survey-011 v0.38.0` SOP-004 리뷰 r1(Codex Medium ×2) → 수정.
-- **현재 상태:** ✅수정됨(브랜치, 미배포).
+- **당시 상태(2026-07-22):** ✅수정됨 — v0.38.0 브랜치, 미배포.
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0).
 
 ### [PAST-3] 낡은 과거값 요청의 403이 최신 지문의 재시도 예산을 소진
 
@@ -791,9 +798,12 @@
 - **회귀:** 구요청·신요청을 각각 인위적으로 보류하고 `구 403 → 신 500 → 백오프 성공` 순서를 강제하는
   `tests/v038-past-index-retry-generation.spec.ts`. 기존 정상 403 차단 계약은
   `tests/v034-past-index-apikey.spec.ts`가 계속 고정한다.
-- **출처:** `survey-011 v0.38.0` 리뷰#3 태스크 06(2026-07-23, 미배포 브랜치).
-- **현재 상태:** ✅코드 수정·회귀 작성. ⚠️제한 샌드박스의 Chromium Mach rendezvous EPERM으로
-  브라우저 회귀·수정 제거 반증은 실행 미확인([TEST-SANDBOX-1]); 권한 있는 호스트에서 실행 필요.
+- **출처:** `survey-011 v0.38.0` 리뷰#3 태스크 06(2026-07-23, 당시 미배포 브랜치).
+- **당시 상태(2026-07-23):** ✅코드 수정·회귀 작성. ⚠️제한 샌드박스의 Chromium Mach rendezvous
+  EPERM으로 브라우저 회귀·수정 제거 반증은 실행 미확인([TEST-SANDBOX-1]).
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0). v0.38.2부터 `predeploy`가 전체
+  Playwright 스위트를 배포 전에 강제하므로 이 스펙은 릴리스 게이트에서 실행된다(2026-07-26 전체 스위트 858 passed).
+- **실기기 상태:** ➖해당없음 — 데스크톱 회귀로 고정되는 축이다.
 
 ### [PAST-4] 시트 삭제 중이던 조회가 삭제한 과거값 스냅샷을 다시 게시
 
@@ -807,9 +817,10 @@
   `clearSheets`는 이를 `await`해, 모달 직후 재연결로 만든 새 스냅샷과 늦은 delete의 경쟁도 닫는다.
 - **회귀:** 진행 조회를 인위적으로 보류한 채 clearSheets를 완료하고 응답을 해제한 뒤 IDB put 0회와
   레코드 부재를 확인하는 `tests/v038-past-index-invalidate.spec.ts`.
-- **출처:** `survey-011 v0.38.0` 리뷰#3 태스크 06(2026-07-23, 미배포 브랜치).
-- **현재 상태:** ✅코드 수정·회귀 작성. ⚠️제한 샌드박스의 Chromium Mach rendezvous EPERM으로
-  브라우저 회귀·수정 제거 반증은 실행 미확인([TEST-SANDBOX-1]); 권한 있는 호스트에서 실행 필요.
+- **출처:** `survey-011 v0.38.0` 리뷰#3 태스크 06(2026-07-23, 당시 미배포 브랜치).
+- **당시 상태(2026-07-23):** ✅코드 수정·회귀 작성. ⚠️제한 샌드박스의 Chromium Mach rendezvous
+  EPERM으로 브라우저 회귀·수정 제거 반증은 실행 미확인([TEST-SANDBOX-1]).
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0). 2026-07-26 전체 스위트 858 passed.
 
 ### [SETTINGS-1] 재로그인 자동 재연결이 사용자 컬럼 설정을 덮어써 과거값 인덱스까지 무효화
 
@@ -821,7 +832,9 @@
 - **함정(회귀 테스트):** 이 회귀는 **수정 없이도 통과하는 레이스**가 있다 — 재연결이 컬럼을 교체하기 *전에* 배지를 읽으면 옛 지문 기준으로 "준비됨"이 잡힌다. 테스트는 **교체 완료를 명시적으로 대기**한 뒤 판정해야 한다(`input[value="횡경(mm)"]` 노출). 대기 추가 후 **수정 제거 시 2/2 실패 · 적용 시 6/6 통과**로 반증 확인.
 - **주의:** 샘플키 유추 규칙(`inferSampleKey` = auto·비date) 자체는 **민구 확정이라 변경 금지**([PAST-1] 계열 참조). 규칙은 그대로 두고 "재연결이 사용자 선택을 덮지 않게" 보존만 추가한 것이다.
 - **출처:** `survey-011 v0.38.0` 2026-07-22 세션(개선요청 #1 회귀 테스트 red 추적) → 근인 확정·수정.
-- **현재 상태:** ✅수정됨(브랜치 `survey-011-v038-voice-ui`, 미배포). 실기기 확인 항목: **시즌 첫 회차처럼 행이 적은 시트에서 재로그인 후 입력방식이 '음성'으로 유지되는지.**
+- **당시 상태(2026-07-22):** ✅수정됨 — 브랜치 `survey-011-v038-voice-ui`, 미배포.
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(브랜치는 main에 병합, 현재 앱 v0.39.0). 회귀 6/6 통과.
+- **실기기 상태:** ⚠️**미확인** — 확인 항목: **시즌 첫 회차처럼 행이 적은 시트에서 재로그인 후 입력방식이 '음성'으로 유지되는지.**
 
 ### [SETTINGS-2] 다른 스프레드시트·탭 전환 시 이전 시트의 fixed 자동값이 새 시트로 오염
 
@@ -837,9 +850,12 @@
 - **회귀:** `tests/sheets-infer-columns.spec.ts`가 다른 파일·다른 탭·같은 시트 3축을 고정하고,
   `tests/v038-sheet-source-guard.spec.ts`가 저장목록/탭 선택 뒤 store 자동값과 같은 시트 설정 보존을 검증한다.
   가드 제거 시 핵심 테스트 **1/1 실패**(`강남호` 대신 `이원창`), 적용 시 순수 스위트 **9/9 통과**.
-- **출처:** `survey-011 v0.38.0` 태스크 01(2026-07-23, 미배포 브랜치).
-- **현재 상태:** ✅코드 수정·반증 확인. ⚠️5175 포트 bind가 샌드박스에서 `listen EPERM`으로 차단돼
-  브라우저 e2e 13건은 수집만 확인했으며, 권한 있는 호스트에서 실행 필요.
+- **출처:** `survey-011 v0.38.0` 태스크 01(2026-07-23, 당시 미배포 브랜치).
+- **당시 상태(2026-07-23):** ✅코드 수정·반증 확인. ⚠️샌드박스 포트 bind `listen EPERM`으로
+  브라우저 e2e 13건은 수집만 확인.
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0). 테스트 서버는 이후 [ORCH-27]로
+  Playwright `webServer`(5177)가 직접 소유하므로 당시의 포트 문제는 재현되지 않는다 —
+  2026-07-26 전체 스위트 858 passed.
 
 ### [SETTINGS-3] 시트 전환 실패·늦은 응답 뒤 이전 columns로 입력을 시작할 수 있음
 
@@ -856,8 +872,9 @@
 - **회귀:** `tests/v038-session-sheet-gate.spec.ts`가 기존 `tableGenerated=true`에서 메타 500·헤더 500을
   재현해 시작 버튼 비활성·세션 0건을 확인하고, 이전 메타 응답을 명시 신호로 늦춰 최신 원자 게시를
   검증한다. 순수 술어 경계는 `tests/sheetConnection.spec.ts`가 고정한다.
-- **현재 상태:** ✅순수 경계 수정 제거 시 2/2 실패·적용 시 2/2 통과. ⚠️브라우저 3건은 제한
-  샌드박스의 Chromium Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]). 브랜치 미배포.
+- **당시 상태(2026-07-23):** ✅순수 경계 수정 제거 시 2/2 실패·적용 시 2/2 통과. ⚠️브라우저 3건은
+  제한 샌드박스의 Chromium Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]). 브랜치 미배포.
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0). 2026-07-26 전체 스위트 858 passed.
 
 ### [SETTINGS-4] URL만 있고 탭이 빈 반연결 상태를 로컬 기록 모드로 오인
 
@@ -875,8 +892,9 @@
   뒤 재로그인 자동 재연결에 쓸 내구 URL이 필요하다. 새 pending persist 필드는 migrate까지 요구하고
   범위를 넓히므로 이번 릴리스 블로커에는 단일 게이트 수정을 택했다.
 - **회귀:** `tests/sheetConnection.spec.ts`가 URL-only·탭-only 차단과 완전 미연결 허용을 함께 고정한다.
-- **출처:** `survey-011 v0.38.0` 리뷰 후속 태스크 08(2026-07-23, 미배포 브랜치).
-- **현재 상태:** ✅경계 테스트 통과. 브랜치 미배포.
+- **출처:** `survey-011 v0.38.0` 리뷰 후속 태스크 08(2026-07-23, 당시 미배포 브랜치).
+- **당시 상태(2026-07-23):** ✅경계 테스트 통과. 브랜치 미배포.
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0).
 
 ### [SYNC-5] 세션에 대상 시트가 없어 현재 전역 설정으로 다른 농가를 append/update
 
@@ -894,8 +912,9 @@
 - **회귀:** `tests/v038-session-target-sync.spec.ts`가 A target 세션+B 전역 설정에서 B POST/PUT 0건,
   legacy 확인 전 Sheets 0건과 확인 target IDB 저장, 활성 A 세션 중 B 전환 뒤 A target·columns 보존을
   검증한다. 기존 sync e2e fixture에도 명시 target을 추가했다.
-- **현재 상태:** ✅실제 sync 코어를 전역 설정 방식으로 되돌리면 2/2 실패·적용 시 2/2 통과.
+- **당시 상태(2026-07-23):** ✅실제 sync 코어를 전역 설정 방식으로 되돌리면 2/2 실패·적용 시 2/2 통과.
   ⚠️브라우저 3건은 Chromium Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]). 브랜치 미배포.
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0). 2026-07-26 전체 스위트 858 passed.
 
 ### [SYNC-6] 업로드 이력이 있는 targetless 세션에 새 target만 붙이면 다른 시트의 같은 절대 행을 덮음
 
@@ -912,9 +931,10 @@
 - **회귀:** `tests/sessionSync.spec.ts`가 두 선택의 상태 변환을 고정하고,
   `tests/sessionSyncTarget.spec.ts`가 실제 sync 코어에서 다른 시트 선택 시 append 1건/update 0건 및
   이력 없는 legacy append를 검증한다. UI·IDB e2e는 `tests/v038-session-target-sync.spec.ts`에 추가했다.
-- **출처:** `survey-011 v0.38.0` 리뷰 후속 태스크 08(2026-07-23, 미배포 브랜치).
-- **현재 상태:** ✅순수 상태 계약 2/2·sync 코어 2/2 통과. ⚠️브라우저 e2e는 제한 샌드박스의 Chromium
-  Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]); 권한 있는 호스트에서 실행 필요.
+- **출처:** `survey-011 v0.38.0` 리뷰 후속 태스크 08(2026-07-23, 당시 미배포 브랜치).
+- **당시 상태(2026-07-23):** ✅순수 상태 계약 2/2·sync 코어 2/2 통과. ⚠️브라우저 e2e는 제한
+  샌드박스의 Chromium Mach rendezvous EPERM으로 실행 미확인([TEST-SANDBOX-1]).
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0). 2026-07-26 전체 스위트 858 passed.
 
 ### [SYNC-7] 활성 세션에 legacy target을 붙이는 저장이 STT 저장과 경합해 최신 측정값을 덮음
 
@@ -931,19 +951,17 @@
 - **회귀:** `tests/v038-legacy-batch-target.spec.ts`가 직접 `applyLegacyTarget`/`syncSelected` 호출의
   Sheets 요청 0건, 40ms 지연 target 저장이 활성 세션에서 시작되지 않아 최신 행이 store/내구 모사본에
   남는 것, 종료 뒤 35ms 지연 저장으로 최신 행+target이 함께 남고 append가 진행되는 것을 검증한다.
-- **현재 상태:** ✅수정·반증 확인(제품 가드 제거 시 신규 3/3 실패, 적용 시 3/3 통과). 브랜치 미배포.
+- **당시 상태(2026-07-23):** ✅수정·반증 확인(제품 가드 제거 시 신규 3/3 실패, 적용 시 3/3 통과). 브랜치 미배포.
+- **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0).
 
 ---
 
 ## ⑨ 테스트 / 릴리스 회귀 함정
 
-### [TEST-UI-1] 입력탭 테스트가 시각 장식(`REC`, `▶`)에 붙으면 UI 정리 때 장기 타임아웃이 난다
-- **증상:** v0.31.0 입력탭 UI 재정리 중 Playwright가 `text=REC` 또는 활성 칩의 `▶` span을 기다리며 실패하거나, `v54-30rows` 장기 테스트가 행마다 3초씩 누적 대기해 3분 타임아웃이 발생했다.
-- **원인:** 테스트가 사용자가 보는 임시 시각 표현에 직접 결합되어 있었다. v0.31.0에서 `REC` 표시와 `▶` 활성칩 아이콘을 제거했지만, 일부 테스트 helper가 여전히 `document.querySelectorAll('span')`에서 `▶`를 찾아 활성 칩을 판별했다.
-- **해결·회피(v0.31.0):** UI 상태에는 안정적인 테스트 계약을 둔다. 활성 화면은 `data-testid="voice-active-state"`, 활성 행은 `data-testid="active-row"`, 칩은 `data-testid="column-chip"` + `data-active="true"` + `data-col-name="<컬럼명>"`로 확인한다. 새 입력탭 테스트를 작성할 때 시각 아이콘/텍스트 장식 대신 이 속성을 사용한다.
-- **출처:** `2026-07-08 survey-011 v0.31.0 입력탭 UI 재정리`, 커밋 `bbf6a1e`.
-- **현재 상태:** ✅수정됨(`src/screens/VoiceScreen.tsx`, `tests/*` 활성 칩 helper 갱신). 새 UI 테스트 작성 시 계속 준수.
-- **재발 변형(2026-07-20, v0.36.0 코덱스 시안 재작업):** [TEST-UI-1]의 같은 계열 — `v019-active-layout`/`v020-dials-layout`이 칩 구역을 셀렉터가 아니라 **계산 스타일 탐색**(`display:grid && overflowY:auto`인 div 검색)으로 잡고 있었다. 칩 구역이 grid → flex-wrap pill 플로우로 바뀌자 탐색이 null을 반환하며 실패. 두 스펙 모두 `data-testid="voice-chip-grid"`(§ 셀렉터 보존표의 그 노드)로 교체해 해결 — **레이아웃 스펙도 요소 탐색은 반드시 testid 계약으로, 계산 스타일은 단언(assert) 대상으로만** 쓸 것.
+### [TEST-UI-1] 테스트를 시각 장식(`REC`, `▶`)에 붙이면 UI 정리 때 깨진다 → **가드레일로 이동**
+- ✅v0.31.0 해결(+2026-07-20 재발 변형 포함). `data-testid` 계약에 붙이는 규칙이라
+  [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md) ⑥으로 옮겼다. **새 입력탭 테스트를
+  쓸 때마다 적용된다.**
 
 ### [TEST-UI-2] 활성 상태 하단에는 `입력 종료` 버튼이 없다 — 종료 버튼 테스트는 일시정지 패널 경로로
 - **증상:** `v023-voice.spec.ts`, `correction-flow.spec.ts`가 활성 상태에서 `button[title="입력 종료"]`를 기다리다 실패했다.
@@ -1070,35 +1088,15 @@
 - **주의(안티패턴):** gUM **직전에** `await ctx.close()`를 넣지 말 것 — 제스처 창을 소모하거나 hung close가 획득을 지연시켜 **정상 경로(78클립 세션)를 깨뜨린다.** 정리는 획득 콜스택에서 분리해야 한다. 또 `ctx.state`를 분기 근거로 쓰지 말 것(복귀 직후 좀비 `'running'` 보고 사례) — 게이트는 **경과시간**이 쥔다.
 - **출처:** survey-011 v0.38.1, 2026-07-24 실기기 로그(`sess_1784865837431`) + Trace 분석 + Pax iOS gUM 리서치. **현재 상태:** ⚠️계측 배포됨, 실기기 판정 대기.
 
-### [UI-GLOW-1] `position:fixed` 엘리먼트에 `offsetParent === null` 가시성 판정을 쓰면 상시 오탐 — 글로우가 절반 duty로 끊긴다
-- **증상:** 목소리에 반응하는 테두리 글로우(`EdgeGlow`)가 **0.5초 살고 0.5초 죽는** 주기로 끊긴다. e2e `v034-wave-glow` B7(:448)·B8(:385) 2건이 v0.38.0에서 **이미 실패 중이었고 그 상태로 릴리스됐다.**
-- **원인:** `useAudioLevelVar`는 keep-alive `display:none`(탭 이탈)을 감지하려고 30프레임마다 `el.offsetParent === null`을 본다. 그런데 **HTML 스펙상 `position:fixed` 엘리먼트는 보이는 상태에서도 `offsetParent`가 항상 null**이다. v0.37.0에서 `EdgeGlow`를 full-bleed(`position:fixed`)로 바꾸면서 이 판정이 **상시 오탐**이 됐다 → 30프레임마다 `--voice-level`을 0으로 쓰고 500ms 정지.
-- **수정(v0.38.1):** `el.getClientRects().length === 0`으로 교체. `display:none`(또는 조상 display:none)이면 박스가 생성되지 않아 0개, **보이는 fixed면 1개 이상**이라 두 경우를 정확히 가른다. 비용은 동일한 레이아웃 읽기 1회.
-- **일반 규칙:** 가시성 판정에 `offsetParent`를 쓰는 코드는 **대상이 fixed로 바뀌는 순간 조용히 망가진다.** 레이아웃 방식 변경(absolute→fixed)은 이런 원격 판정 로직을 함께 깨뜨릴 수 있다.
-- **출처:** survey-011 v0.38.1, 2026-07-24. **현재 상태:** ✅수정 + `v034-wave-glow` 21/21 통과.
+### [UI-GLOW-1] `position:fixed`에 `offsetParent` 가시성 판정은 상시 오탐 → **가드레일로 이동**
+- ✅v0.38.1 수정, `v034-wave-glow` 21/21 통과. 가시성 판정은 `getClientRects().length`를 쓰는
+  일반 규칙이라 [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md) ④로 옮겼다.
 
-### [UI-ALERT-1] 같은 문구를 두 곳에서 조립하면 "글자까지 동일" 계약은 반드시 깨진다 — 주석이 계약을 선언해도 소용없다
-- **증상:** 경보 문구의 시각·청각 일치 계약(PRINCIPLES §2 / v0.20.0 입력탭#6)이 콜론만큼 어긋나 있었다.
-  화면 `범위 알람 : +20%` / TTS·텔레메트리 `범위 알람 +20%`. 화면을 안 보고 귀로만 듣는 현장에서
-  "들리는 말"과 "보이는 글"이 달라진다.
-- **왜 놓쳤나(핵심):** `AnomalyAlertPopup.tsx`가 **"이 라벨은 alertText와 글자까지 동일해야 한다"는
-  주석을 달아놓고, 바로 그 아래에서 문구를 따로 조립**하고 있었다. 계약을 아는 코드가 계약을 깼다.
-  더 나쁜 건 회귀 테스트가 이를 잡는 대신 *"문장부호 차이 — 단어는 동일"* 이라는 주석으로
-  **위반을 정당화해 고정**한 것이다. **테스트가 결함을 승인하면 그 결함은 영구화된다.**
-- **수정(v0.39.0):** 조립부를 `anomalyAlert.ts`의 `anomalyAlarmLabel()` **하나로 통합**. 팝업은
-  같은 페이로드로 그 함수를 호출해 **렌더만** 한다. 콜론만 맞추는 수정은 거부했다 — 두 조립부가
-  남아 있는 한 다음 변경에서 또 어긋난다. 화면 == TTS == 로그 `text=` **동등성을 직접 단언**하는
-  테스트를 추가했고, SSOT 호출을 옛 자체조립으로 되돌리는 **반증 4건 실패**로 안전망을 확인했다.
-- **⚠️ 텔레메트리 바이트가 바뀐다:** `trend_alert_fired`의 `text=` 값에 ` : `가 들어간다(민구 결정).
-  v0.39.0 **이전 로그와 문자열이 불연속**이므로 과거 로그를 문자열로 매칭하는 분석은 컷오버를 감안해야
-  한다. SOP-003 매핑표에는 이 이벤트·필드가 없어 파서는 무영향(확인 완료).
-- **미검증:** TTS가 `:`를 어떻게 발음/멈춤 처리하는지 실기기에서 확인되지 않았다 — 기기 게이트.
-- **일반 규칙:** **"두 곳에서 같은 문자열을 만든다"가 보이면 그 자체가 결함이다.** 주석으로 계약을
-  선언하지 말고 **조립부를 하나로 만들어 물리적으로 불가능하게** 하라. 그리고 계약 위반을 발견한
-  테스트가 단언을 느슨하게 바꾸고 있다면, 그건 테스트 수정이 아니라 **결함 승인**이다.
-- **출처:** survey-011 v0.39.0, 2026-07-25 (F3 리뷰 라운드 `f3-ui` Codex 지적 #1 — agy Flash는 오히려
-  이 변경을 "계약을 바르게 반영한 것"으로 승인했다. **합집합 판정이 아니었으면 통째로 놓쳤다**).
-  **현재 상태:** ✅수정 + 반증 확인, TTS 발음은 ⚠️기기 게이트.
+### [UI-ALERT-1] 같은 문구를 두 곳에서 조립하면 "글자까지 동일" 계약은 깨진다 → **가드레일로 이동**
+- ✅v0.39.0 수정 + 반증 4건 확인. 조립부를 하나로 두는 일반 규칙이라
+  [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md) ③으로 옮겼다.
+  ⚠️ `trend_alert_fired`의 `text=` 바이트가 v0.39.0에서 바뀐 점(로그 컷오버)도 그쪽에 있다.
+  **실기기 상태: TTS의 `:` 발음은 미확인(기기 게이트).**
 
 ---
 

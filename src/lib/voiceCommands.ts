@@ -76,7 +76,8 @@ export interface CommandSpec {
   /**
    * Per-command STT confidence floor (handleFinal). Defaults to 0.7 when omitted — commands
    * rewind/destroy state, so they clear a higher bar than the value gate (0.65).
-   * T-12: '수정'(modify) is the exception — it is recoverable (clip preserved, [CLIP-1]) and the
+   * T-12: '수정'(modify) is the exception — it is recoverable (clip preserved, [CLIP-MODIFY-1],
+   * formerly [CLIP-1] before the 2026-07-26 ID uniquification) and the
    * ~10s replay cost that justified the strict bar is already gone (re-ask is short), so a
    * false-reject costs ≈0 while a false-accept is recoverable. Real-device logs showed deliberate
    * '수정' utterances rejected at 0.587/0.634 (just under the bar); 0.55 admits those while staying

@@ -1,8 +1,24 @@
 # KNOWN-ISSUES-ARCHIVE — survey-011 종결 항목 보관소
 
-> **해결 완료·종결 항목의 이력 보관소.** 미해결·주시 항목은 [KNOWN-ISSUES.md](KNOWN-ISSUES.md)를 보라.
-> 항목 본문은 KNOWN-ISSUES.md에서 이동 당시 **원문 그대로**이며 수정하지 않는다. 섹션 구조는 원본과 동일하게 유지한다.
-> 재오픈이 필요하면 항목을 원문 그대로 KNOWN-ISSUES.md 해당 섹션으로 되돌리고, 본문의 "아카이브로 이동된 항목" 색인에서 그 줄을 제거하라.
+> **해결 완료·종결(`RESOLVED`) 항목의 이력 보관소.** 지금 열려 있거나 관측 중인 항목은
+> [KNOWN-ISSUES.md](./KNOWN-ISSUES.md), 계속 지켜야 하는 계약은
+> [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md)를 보라.
+>
+> ## ⚠️ 이 문서는 역사 기록이다 — 현재 코드를 가리키지 않는다
+>
+> 항목 본문은 이동 당시 **원문 그대로**다. 따라서:
+> - **줄 번호(`line 78~93` 등)와 파일 경로는 당시 기준**이며 **현재 코드 위치를 보장하지 않는다.**
+>   함수·테스트 이름으로 찾아라.
+> - 인용된 외부 문서(`debug-log`, `Deliverables/...`, 별도 하니스 레포)는 이 레포에 없다
+>   *(external/private)*. 없다고 해서 항목이 틀린 것은 아니다.
+> - 여기 있는 항목을 **현재 상태로 읽지 마라.** "해결됨"은 종결 시점의 판정이다.
+>
+> **예외적으로 수정하는 것:** 중복 ID의 고유화(2026-07-26). 서로 다른 두 문제가 같은 ID를
+> 쓰면 검색·자동 링크가 불가능해 원문 보존보다 식별 가능성을 택했다. 각 항목 첫 줄의
+> `aliases:`에 옛 ID를 남겨 과거 커밋·문서 검색은 그대로 된다.
+>
+> 재오픈이 필요하면 항목을 원문 그대로 KNOWN-ISSUES.md 해당 섹션으로 되돌리고, 본문의
+> "아카이브로 이동된 항목" 색인에서 그 줄을 제거하라. 섹션 구조는 원본과 동일하게 유지한다.
 
 ---
 
@@ -25,7 +41,8 @@
 
 ## ② 클립 · IndexedDB 영속화 (최대 광맥)
 
-### [CLIP-1] iOS Safari에서 음성 클립이 IDB에 저장 안 됨 (근본 버그)
+### [CLIP-IDB-1] iOS Safari에서 음성 클립이 IDB에 저장 안 됨 (근본 버그)
+- **aliases:** `CLIP-1` (2026-07-26 고유화 전 ID — 과거 커밋·문서 검색용)
 - **증상:** iPhone Safari 실기기에서 음성 클립이 IndexedDB에 저장되지 않아 데이터탭 재생 버튼·로그 ZIP에 클립 누락. value는 45건 기록되나 clip 에러 0건, ZIP에 `clips/` 폴더 없음.
 - **원인:** `saveAudioClip`이 **Blob을 IDB에 직접 저장**하다 iOS에서 실패하는데, **빈 `catch{}`가 에러를 삼킴**. 진단조차 안 됨.
 - **해결·회피:** 클립을 `{buf:ArrayBuffer, type:string}` 객체로 분해 저장(iOS Blob-in-IDB 우회) + 구형 Blob 하위호환. 빈 catch에 `clip_save_failed` 로깅 추가. timeslice 250ms, stopClip 2초 타임아웃.
@@ -33,14 +50,16 @@
 - **현재 상태:** ✅수정됨 (`src/lib/db.ts` `saveAudioClip`이 ArrayBuffer로 round-trip, line 78~93)
 - **교훈:** **빈 catch는 금지.** 영속화 실패는 반드시 로깅하라. "에러 0건"이 "성공"을 의미하지 않는다 — 삼켜진 것일 수 있다.
 
-### [CLIP-2] persistSession 타이밍 탓 클립 키 누락
+### [CLIP-PERSIST-KEY-1] persistSession 타이밍 탓 클립 키 누락
+- **aliases:** `CLIP-2` (2026-07-26 고유화 전 ID)
 - **증상:** 행 완료 시 클립 키가 세션에 등록되지 않아 누락.
 - **원인:** `persistSession()`이 행 완료 시점에 실행되는데, `handleFinal`에서 `dataStore`를 직접 업데이트하면 **해당 행이 아직 세션에 없어 항상 실패**.
 - **해결·회피:** `pendingClipsRef`로 세션 내 클립을 메모리에 추적하고 `persistSession()`에서 기존 클립과 병합. 키를 사전 등록해 persistSession 선행 race 차단, 저장 실패 시 사전 등록 키 회수.
 - **출처:** `growth-survey-010@39c1791`, `growth-survey-010@55bb61e`
 - **현재 상태:** ✅수정됨 (`src/lib/useVoiceSession.ts` `pendingClipsRef`)
 
-### [CLIP-3] stale-epoch 클립이 올바른 클립을 덮어씀
+### [CLIP-EPOCH-1] stale-epoch 클립이 올바른 클립을 덮어씀
+- **aliases:** `CLIP-3` (2026-07-26 고유화 전 ID)
 - **증상:** restart/modify/jump 후 늦게 도착한 stale 시도의 클립이 `saveAudioClip`(put)으로 올바른 클립을 덮어씀.
 - **원인:** `saveAudioClip`이 put이라 epoch 가드 없으면 나중 시도가 이전 키를 덮음.
 - **해결·회피:** 클립 저장 전 epoch 가드 — restart/modify/jump가 epoch을 바꿨다면 stale 클립 폐기. `clip_stale_epoch` 진단 로그.
@@ -138,7 +157,8 @@
 - **출처:** `2026-06-05 세션` (실기기 로그 분석) → **survey-011 v0.4.0** 수정
 - **현재 상태:** ✅수정됨 (`src/stores/sessionStore.ts` `setSessionMeta`, `src/lib/useVoiceSession.ts` 복원 effect + persist 폴백; 회귀 `tests/correction-flow.spec.ts` "D-2 RACE-7…", 무력화 시 `id:""`로 실패함을 확인). 2026-06-08 로그(v0.4.1)에서 빈 sessionId 0건으로 재발 없음 재확인.
 
-### [CLIP-1] direct modify("수정 <값>") 시 수정한 셀의 음성 클립/재생버튼이 사라짐
+### [CLIP-MODIFY-1] direct modify("수정 <값>") 시 수정한 셀의 음성 클립/재생버튼이 사라짐
+- **aliases:** `CLIP-1` (2026-07-26 고유화 전 ID)
 - **증상:** 데이터탭에서 세션을 확장해 보면 "수정 82.7"처럼 값과 함께 정정한 셀에만 음성 클립 재생버튼이 없음(값은 정상).
 - **원인:** `enterModifyMode`의 direct-modify 경로가 "stale 클립 매칭 방지" 목적으로 셀의 `audioClips` 포인터를 **삭제**했는데, direct modify는 새 값 클립을 재녹음하지 않으므로 셀에 연결된 클립이 사라짐. (cascade/restart는 재녹음 전제라 무관.)
 - **해결·회피:** 직전 `preserveCommandClip`이 저장한 수정 발화(`:cmd<n>`) 클립을 셀 포인터로 **재연결**. 재생버튼 유지 + 재생 내용이 새 값과 일치. 이전 값은 `:a<n>` archive로 ZIP에 보존.
