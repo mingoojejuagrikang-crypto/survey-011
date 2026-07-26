@@ -239,7 +239,8 @@
 - **원인:** 재생 제어가 단일 큐로 직렬화되지 않음.
 - **해결·회피:** 모듈 싱글톤 `clipPlayer`(현재 1개 + 큐)로 직렬화. await 후 stale continuation 가드(current!==key), `clipPlayer.stop()`을 언마운트/세션삭제 시 호출.
 - **출처:** `growth-survey-010@fd3177a` (v0.11.2)
-- **현재 상태:** ⚠️주시 (survey-011 데이터탭 재생 경로 점검 권장)
+- **현재 상태:** ✅**해소 확인**(2026-07-26 코드 감사) — `src/lib/clipPlayer.ts`가 **모듈 레벨 단일 재생 매니저**다(v0.11.2). 한 번에 하나만 재생하고 나머지는 큐 대기, 재생 중 재탭은 정지+큐 취소. `await` 사이 stale continuation 폐기 가드도 있다(Codex HIGH 지적 반영).
+- ⚠️ **전용 회귀 테스트는 없다**(`tests/`에 `clipPlayer` 참조 0건). 재생 큐 로직을 건드리면 회귀를 먼저 만들 것.
 
 ### [CLIP-8] IDB 스키마 업그레이드 후 구버전 롤백 시 VersionError
 - **증상:** v3로 업그레이드된 디바이스를 구버전(v2) 코드로 롤백하면 `VersionError`.
@@ -370,7 +371,7 @@
 - **원인:** `voice`는 실제 `SpeechSynthesisVoice` 인스턴스만 허용.
 - **해결·회피:** `speak()`/`warmupTts()`에서 voice 할당 시 타입 가드.
 - **출처:** `growth-survey-010@0eaa59a`
-- **현재 상태:** ⚠️주시 (survey-011 `src/lib/speech.ts` voice 설정 경로 점검 권장)
+- **현재 상태:** ✅**가드 확인**(2026-07-26 코드 감사) — `src/lib/speech.ts`의 두 발화 경로(`:551`·`:601`) 모두 `try { u.voice = v } catch {}`로 감싸 plain-object voice에서도 TypeError가 흐름을 끊지 않는다.
 
 ### [IOS-5] 스피커폰 모드 ON인데 출력이 이어피스(리시버)로 강제 전환 — getUserMedia `echoCancellation:true`의 voice-processing 세션
 - **증상:** 사용자가 설정에서 스피커폰 모드를 켰는데도(소음 현장 대응) TTS 안내 음성이 스피커가 아니라 **이어피스(리시버)** 로 나가 잘 안 들림. iOS 18.7 / WebKit 26.5 실기기.
@@ -394,7 +395,7 @@
   3. flush lag 구간 대비: 완료 직후 아직 flush 안 된 행은 실시간 sessionStore 값으로 백업 구성 (`f90c6cd`).
   4. completedRows가 비어도 correctionBackupRef가 있으면 persist 진행(조기 반환 이동) (`2075f8a`).
 - **출처:** `growth-survey-010@a45cd24` → `@0e05b2e` → `@f90c6cd` → `@2075f8a` (같은 이슈 4회 반복). 추가 보강 `@ad60ba5`(행 values 초기화 + complete:false + completedRows/syncedRows 재계산).
-- **현재 상태:** ⚠️주시 (survey-011 `src/lib/useVoiceSession.ts`에 `correctionBackupRef` + cascade 보존 경로 존재 — 회귀로 보장 권장)
+- **현재 상태:** ✅**가드 확인**(2026-07-26 코드 감사) — `src/lib/useVoiceSession.ts`에 `correctionBackupRef` 배선 7곳, 회귀 `tests/correction-flow.spec.ts` 존재. 조상에서 4회 반복된 이슈라 **cascade 정정 경로를 건드릴 때는 이 백업 경로를 함께 확인**한다.
 
 ### [RACE-6] ensureTeamSubFolder race → 중복 Drive 폴더
 - **증상:** 동시 업로드 시 팀 하위 폴더가 중복 생성되거나 검색 실패가 silent fall-through.
@@ -469,19 +470,21 @@
 
 ## ⑤ 빌드 / 테스트 / 배포 환경 (이번 세션 직격탄)
 
-### [ENV-1] dev 포트 불일치 → e2e ERR_CONNECTION_REFUSED
+### [ENV-1] dev 포트 불일치 → e2e ERR_CONNECTION_REFUSED — ✅해소
 - **증상:** Playwright e2e가 `ERR_CONNECTION_REFUSED`로 전부 실패.
-- **원인:** 문서·`npm run dev`(vite)는 **5173**인데 `playwright.config.ts`의 `baseURL`은 **5175**.
-- **해결·회피:** 테스트 전에 `npm run dev -- --port 5175 --strictPort`로 띄운 뒤 실행. (또는 baseURL을 5173으로 맞추거나 webServer를 설정 — 현재는 수동 정렬.)
+- **원인:** 문서·`npm run dev`(vite)는 **5173**인데 `playwright.config.ts`의 `baseURL`은 **5175**. 사람이 수동으로 포트를 맞춰야 했다.
 - **출처:** `2026-06-04~05 세션`
-- **현재 상태:** ⚠️주시 (`vite.config.ts` server.port=5173 vs `playwright.config.ts` baseURL=5175 — 여전히 불일치, 수동 회피 필요)
+- **당시 상태:** ⚠️주시 — 수동 정렬로 회피.
+- **현재 상태:** ✅**해소**([ORCH-27], 커밋 `5c8ae46`, 2026-07-25). Playwright가 `webServer`로 **테스트 전용 5177**을 직접 띄운다. 포트 SSOT는 `tests/baseUrl.ts`의 `BASE` 하나이고 `playwright.config.ts`의 `webServer.command`가 같은 포트를 쓴다 — 사람이 맞출 대상이 없다. `npm run dev`(5173)는 관전용으로 분리됐다.
+  ⚠️ **이 항목은 2026-07-26 문서 감사 전까지 "여전히 불일치"로 남아 있었다** — 수정이 다른 ID([ORCH-27])로 들어와 이 항목이 따라오지 못했다. `[UI-ALERT-1]`·"미배포" 건과 같은 계열의 문서 드리프트다.
 
-### [ENV-2] playwright.config에 webServer 없음 (서버 자동기동 안 됨)
+### [ENV-2] playwright.config에 webServer 없음 (서버 자동기동 안 됨) — ✅해소
 - **증상:** `npx playwright test`만 실행하면 서버가 없어 연결 거부.
 - **원인:** `playwright.config.ts`에 `webServer` 블록 없음("// No webServer — dev server started separately").
-- **해결·회피:** dev 서버를 **수동 기동**한 뒤 테스트. (자동화하려면 webServer 추가 — Mack 영역.)
 - **출처:** `2026-06-04~05 세션`
-- **현재 상태:** ⚠️주시 (`playwright.config.ts`에 webServer 부재 확인)
+- **당시 상태:** ⚠️주시 — dev 서버 수동 기동으로 회피.
+- **현재 상태:** ✅**해소**([ORCH-27], 커밋 `5c8ae46`, 2026-07-25). `webServer` 블록이 있고 `reuseExistingServer:false` + `--strictPort`라 **남이 띄운 서버를 물려받는 경로가 없다**. 종전에는 사람이 띄운 5175를 중첩 클론이 잡고 있어 **브라우저 테스트가 옛 코드를 조용히 검증**한 적이 있다. 이제 포트가 점유돼 있으면 시끄럽게 실패하고, `tests/globalSetup.ts`가 2차로 서빙 cwd까지 대조한다.
+  ⚠️ [ENV-1]과 함께 문서에만 낡은 상태로 남아 있던 항목이다.
 
 ### [ENV-4] 문서의 테스트 명령 드리프트 → **가드레일로 이동**
 - ✅2026-07-26 문서 정리에서 해소(레거시 `.mjs` 2개 삭제, 절차는 CONTRIBUTING.md로 단일화).
@@ -518,7 +521,7 @@
 ### [ENV-12] ESLint max-lines(500) 예외 목록 — GL-006 헌장 §5 도입 시점의 기존 초과 파일
 - **배경:** 공통 개발 헌장(GL-006, 민구 채택 2026-07-16) §5 — 파일 크기는 책임 크기의 신호(권장 150~250줄, 300줄 분리 검토, **500줄 리팩토링 대상**). v0.35.1 Stage 1-8에서 ESLint `max-lines`(500, `src/` 한정)를 오류 게이트로 도입(`npm run lint`, predeploy에 포함).
 - **예외(파일 상단 `eslint-disable max-lines`, 해소 시 주석 제거 + 이 목록에서 삭제):**
-  1. `src/lib/useVoiceSession.ts` (**3,112** — v0.38.0에서 3,244→3,112) — **Stage 3(v0.35.3)에서 코어
+  1. `src/lib/useVoiceSession.ts` (**3,236** — 2026-07-26 실측; v0.38.0 시점 3,112에서 v0.38.1~v0.39.0 기능 유입으로 재증가) — **Stage 3(v0.35.3)에서 코어
      재설계 완료**(판별 유니온·resolveFinal 결정표·clipPointer/trendEvaluate 모듈·logCell·
      proceedAfterCommit — 무효 상태 조합은 이제 컴파일이 차단). 줄수 해소는 후속 서브 훅 시리즈
      (클립 캡처 `useClipCapture` → persist → 내비게이션 순, ref 공유 없는 인터페이스)로 계속 —
@@ -533,7 +536,7 @@
   2. ~~`src/screens/SettingsScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/settings 16파일 + useSettingsActions 훅 분리, 3,114→489줄)
   3. ~~`src/screens/DataScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/data 15파일 + useDataActions 훅 분리, 2,420→315줄)
   4. ~~`src/screens/VoiceScreen.tsx`~~ — ✅ v0.35.2 Stage 2에서 해소(components/voice 7파일 추출, 1,342→174줄)
-  5. `src/lib/audioRecorder.ts` (**673** — v0.38.0에서 906→673) — 마이크 PCM 캡처 탭을
+  5. `src/lib/audioRecorder.ts` (**868** — 2026-07-26 실측; v0.38.0 시점 673에서 마이크 수명주기·recover 보강으로 재증가) — 마이크 PCM 캡처 탭을
      `micPrerollTap.ts`(287줄)로 분리했다(링버퍼·입력 레벨·시간영역 파형). 공개 API는 위임
      메서드로 유지해 호출부 수정 0.
      - ⚠️ **남은 673줄의 분리 경계는 자명하지 않다.** 원안이던 "장치·스트림 생명주기 / 클립 녹음"
@@ -542,13 +545,18 @@
        AudioContext 재개 1곳뿐이라 경계가 깨끗했다. 다음 분리는 **별도 설계 필요**.
      - **순서 계약(불변):** 캡처 그래프 `detach()`는 **항상 `stream.stop()`보다 먼저**다
        (source가 stream을 참조 — 뒤집히면 그래프 누수).
-  6. `src/lib/pastValues.ts` (573) — 과거값 인덱스 도메인, 분리 경계 검토 후 해소
-  7. `src/lib/sheets.ts` (545) — Sheets API 도메인, 분리 경계 검토 후 해소
-  8. `src/stores/settingsStore.ts` (~521) — persist migrate 이력 포함, 분리 경계 검토 후 해소
-  9. `src/lib/speech.ts` (~514) — STT 컨트롤러, 분리 경계 검토 후 해소
+  6. `src/lib/pastValues.ts` (650 — 2026-07-26 실측) — 과거값 인덱스 도메인, 분리 경계 검토 후 해소
+  7. `src/lib/sheets.ts` (546 — 2026-07-26 실측) — Sheets API 도메인, 분리 경계 검토 후 해소
+  8. `src/stores/settingsStore.ts` (558 — 2026-07-26 실측) — persist migrate 이력 포함, 분리 경계 검토 후 해소
+  9. `src/lib/speech.ts` (614 — 2026-07-26 실측) — STT 컨트롤러, 분리 경계 검토 후 해소
 - **규칙:** 신규 파일은 예외 금지(500 초과 = lint 실패). 기존 예외 파일에 코드를 얹기 전에 분리를 먼저 검토한다(GL-006 AI 행동 규칙 #4). 기계적 part1/part2 분할 금지 — 경계는 항상 책임 단위.
 - **출처:** GL-006 채택 + v0.35.1 리팩토링 (2026-07-16)
-- **현재 상태:** ⚠️주시 (Stage 2·3 진행에 따라 순차 해소)
+- **현재 상태:** ⚠️주시 (Stage 2·3 진행에 따라 순차 해소).
+  ⚠️ **줄 수는 낡는다.** 위 숫자는 2026-07-26 실측이며, 기능이 들어오면 다시 늘어난다(실제로
+  `useVoiceSession.ts`는 3,244→3,112로 줄었다가 3,236으로 되돌아왔다). **판단은 이 목록이 아니라
+  `wc -l src/lib/*.ts src/stores/*.ts` 실측으로 하고**, 이 항목은 "어느 파일이 예외인지"의 목록으로만
+  쓴다. 예외 여부의 진짜 SSOT는 각 파일 상단의 `eslint-disable max-lines` 주석이다
+  (`grep -rln "eslint-disable.*max-lines" src/`).
 
 ---
 

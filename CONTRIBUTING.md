@@ -24,8 +24,9 @@ cp .env.example .env.local        # VITE_GOOGLE_CLIENT_ID 설정
 | `npm run preview` | 빌드 결과 미리보기 |
 | `npm run lint` | ESLint (`max-lines` 크기 게이트 — GL-006 §5) |
 | `npm run test:e2e` | Playwright 전체 스위트 |
-| `npm run check:release` | 릴리스 일관성 검사 + lint |
-| `npm run predeploy` | 릴리스 일관성 + lint + e2e (배포 직전 자동 실행) |
+| `npm run check:docs` | 문서 정합성 (깨진 링크·중복/매달린 이슈 ID) |
+| `npm run check:release` | 릴리스 일관성 + 문서 정합성 + lint |
+| `npm run predeploy` | 릴리스 일관성 + 문서 정합성 + lint + e2e (배포 직전 자동 실행) |
 | `npm run deploy` | 빌드 후 GitHub Pages 배포 — **사용자 승인 필요** |
 
 ## 테스트
@@ -58,6 +59,21 @@ npx playwright test --workers=1                    # 격리 실행 (신규·고�
 (`test-koreanNum.mjs` · `test-autoValue.mjs`는 `tests/koreanNum.spec.ts` ·
 `tests/autoValue.spec.ts`가 완전히 대체해 v0.39.0 문서 정리에서 삭제했다. 두 스크립트는 이미
 제거된 옛 명령 별칭(`정정`·`스톱` 등)을 계속 검사하고 있어 현재 정책과도 충돌했다.)
+
+## 파인더에서 문서 알아보기 (macOS)
+
+레포 루트에 마크다운이 9개다. 이름이 비슷한데 역할이 완전히 다른 것들이 있어
+(`KNOWN-ISSUES` / `ENGINEERING-GUARDRAILS` / `KNOWN-ISSUES-ARCHIVE`), 파인더에서 헷갈리기 쉽다.
+
+```bash
+bash scripts/set-finder-comments.sh
+```
+
+각 문서·폴더에 한 줄 설명을 붙인다. 파인더에서 파일 선택 → **Cmd+I** → "설명" 칸에서 보이고,
+Spotlight 검색에도 잡힌다. 여러 번 돌려도 안전하다.
+
+> ⚠️ 이 설명은 파일의 확장 속성(xattr)이라 **git이 추적하지 않는다.** 다른 컴퓨터에서 클론하면
+> 스크립트를 다시 돌려야 한다. 문서를 추가하면 스크립트의 목록에도 한 줄 넣어라.
 
 ## 실기기 검증
 
@@ -97,7 +113,7 @@ iOS·STT·마이크·오디오 경로가 걸린 변경은 **실기기 확인 없
 2. [CHANGELOG.md](./CHANGELOG.md) 맨 위에 `- **vX.Y.Z** (YYYY-MM-DD) — …` 항목 추가
    (사용자가 읽는 문서다 — 내부 용어 말고 **무엇이 달라지는지** 쉬운 말로)
 3. [README.md](./README.md)의 `현재 버전: vX.Y.Z` 배지 갱신
-4. `npm run check:release` — 셋이 어긋나면 여기서 멈춘다
+4. `npm run check:release` — 버전 셋이 어긋나거나 문서 링크·이슈 ID가 깨지면 여기서 멈춘다
 5. `npm run predeploy` — lint + 전체 e2e 통과 확인
 6. 사용자 승인 → `npm run deploy`
 7. **배포 ≠ 라이브.** gh-pages가 "Published"여도 GitHub Pages 빌드가 조용히 스턱될 수 있다
