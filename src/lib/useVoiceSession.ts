@@ -105,7 +105,7 @@ function demoteTrendConfirm(a: AwaitingBase & { kind: 'trendConfirm'; previousVa
 const EARLY_COMMIT_STABLE_MS = 400;
 
 /** 빈/극소 클립 판정 임계(바이트) — webm/opus 컨테이너 헤더만 담긴 캡처가 이 이하로 온다.
- *  이하이면 저장하지 않고 clip_empty/clip_cmd_empty로 계측한다([CLIP-3] 가드). */
+ *  이하이면 저장하지 않고 clip_empty/clip_cmd_empty로 계측한다([CLIP-POINTER-1] 가드, 구 [CLIP-3]). */
 /** pause()가 recorder dispose 전에 in-flight 클립 저장을 기다리는 상한(ms). 경로별 유예는
  *  의도적 차등 — stop() 5초(세션 종료, 최대 보존), 아카이브 flush 1.5초(백그라운드, UX 무영향). */
 const PAUSE_FLUSH_GRACE_MS = 3000;
@@ -141,7 +141,7 @@ export function useVoiceSession() {
   // Snapshot of a persisted row being cascade-corrected; included in persistSession if stop()
   // fires before re-completion so original measurements are not lost.
   const correctionBackupRef = useRef<SessionRow | null>(null);
-  // [CLIP-VAL-1]③ / [CLIP-3] unlink race: tombstones for clip keys whose capture FAILED
+  // [CLIP-VAL-1]③ / [CLIP-POINTER-1] unlink race: tombstones for clip keys whose capture FAILED
   // (clip_empty / clip_too_small / clip_save_failed). persistSession builds its rows
   // synchronously BEFORE its first await, so an in-flight persist could re-persist a pointer
   // that unlinkClipPointer just removed (06-11 v0.6.0 row8 c7 — pointer resurrected in the
@@ -405,7 +405,7 @@ export function useVoiceSession() {
     // [CLIP-VAL-1]③ re-check AFTER the await, synchronously with the upsert: a clip_empty
     // unlink may have tombstoned a key while saveSession was in flight (this session's rows
     // were built synchronously before it). Without this re-strip the upsert below would
-    // resurrect the unlinked pointer in dataStore ([CLIP-3] race, 06-11 row8 c7). When
+    // resurrect the unlinked pointer in dataStore ([CLIP-POINTER-1] race, 06-11 row8 c7). When
     // pendingClipsRef meanwhile re-pointed the cell to a healthy key (e.g. the cmd-clip
     // relink), substitute that instead of dropping the pointer. The strip, the upsert and
     // the creation of the compensating save share one synchronous block, so no tombstone can
