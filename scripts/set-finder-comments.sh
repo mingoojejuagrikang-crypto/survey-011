@@ -20,19 +20,28 @@ ROOT="$(pwd)"
 
 # 파일:설명 — 문서가 늘어나면 여기만 고친다.
 # 설명은 "이게 뭔지"와 "언제 여는지"를 한 문장으로. 파인더 설명 칸은 좁으니 짧게.
+# bash 함정 3가지를 피해 쓴 함수다(볼트 스크립트에서 실제로 밟았다):
+#  ① `local a="$1" b="$2"` 다중 선언 금지 — 변수명이 깨질 수 있다. 한 줄에 하나씩.
+#  ② `POSIX file` 은 **절대 경로만** 해석한다. 상대 경로는 조용히 실패한다.
+#  ③ `"$var개"` 처럼 변수 뒤에 한글이 붙으면 bash가 `var개`라는 변수명으로 읽는다 → `${var}개`.
 set_comment() {
-  local file="$1" comment="$2"
+  local file="$1"
+  local comment="$2"
   if [ ! -e "$ROOT/$file" ]; then
     echo "  건너뜀 (없음): $file"
     return
   fi
-  osascript - "$ROOT/$file" "$comment" <<'APPLESCRIPT' >/dev/null
+  if ! osascript - "$ROOT/$file" "$comment" <<'APPLESCRIPT' >/dev/null 2>&1
 on run argv
   set p to item 1 of argv
   set c to item 2 of argv
   tell application "Finder" to set comment of (POSIX file p as alias) to c
 end run
 APPLESCRIPT
+  then
+    echo "  ⚠️ 실패: $file"
+    return
+  fi
   echo "  ✓ $file"
 }
 
