@@ -14,7 +14,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
   PHONE_402, PHONE_375,
-  boot, injectLevel, zoneMetrics, triggerAnomaly, fillAllRows,
+  boot, injectLevel, zoneMetrics, triggerAnomaly, fillAllRows, PREV_ROUND,
 } from './fixtures/activeZones';
 import { fireStt } from './fixtures/stt';
 
@@ -372,8 +372,13 @@ test('§[2] anomaly — 경보행 + 2열 비교(직전/현재) + 하단 `<`=확�
 
   // fb-27-7 2·3·4항(민구 확정 2026-07-27) — **상하 2줄**, 날짜는 `mm-dd`, 라벨이 **값 앞**.
   const cmp = page.locator('[data-testid="anomaly-comparison"]');
-  await expect(cmp, '날짜는 연도를 빼고 mm-dd').toContainText('07-26');
-  await expect(cmp, '연도는 표시하지 않는다').not.toContainText('2026-');
+  // 🔴 날짜를 리터럴로 박지 않는다 — 픽스처의 직전 회차가 `오늘 − 1일`이라 자정을 넘기면
+  //    하드코딩한 값이 틀어진다(실제로 07-27→07-28 롤오버에서 이 테스트가 깨졌다).
+  //    계약은 "그 날짜"가 아니라 **`mm-dd` 형식이고 연도가 없다**이므로 형식으로 판정한다.
+  const expectedMmDd = PREV_ROUND.slice(5); // PREV_ROUND = 'YYYY-MM-DD'
+  await expect(cmp, '날짜는 연도를 빼고 mm-dd').toContainText(expectedMmDd);
+  expect(expectedMmDd, '픽스처 직전 회차가 mm-dd 형식이다(공허 방지)').toMatch(/^\d{2}-\d{2}$/);
+  await expect(cmp, '연도는 표시하지 않는다').not.toContainText(PREV_ROUND.slice(0, 4) + '-');
   await expect(cmp).toContainText('현재');
   await expect(page.locator('[data-testid="anomaly-prev-value"]')).toHaveText('100');
   await expect(page.locator('[data-testid="anomaly-next-value"]')).toHaveText('120.5');
