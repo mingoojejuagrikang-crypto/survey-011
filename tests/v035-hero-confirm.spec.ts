@@ -170,7 +170,7 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
   // 대기 시작: 항목명 '당도' + 파형.
   await expect(page.locator('[data-hero-state="listening"]')).toBeVisible();
   await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('당도');
-  await expect(page.locator('[data-testid="voice-waveform"]')).toBeVisible();
+  await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
   const listeningBandHeight = await page.locator('[data-testid="live-listen-band"]').evaluate(
     (el) => el.getBoundingClientRect().height,
   );
@@ -184,7 +184,7 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
   // v0.36.0 코덱스 시안(민구 확정) — 파형은 **상시 밴드**(hero 밖 독립 row)로 이동해 확인 상태에서도
   // 유지된다(§6.2 "팝업/확인/경고 상태에서도 유지"). 종전 "확인 중 파형 미표시(count 0)" 단언을
   // 상시 유지 단언으로 교체 — 확인 플래시 자체(CONFIRM_MS·review>confirm)는 아래에서 계속 검증한다.
-  await expect(page.locator('[data-testid="voice-waveform"]')).toBeVisible();
+  await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
   const confirmBandHeight = await page.locator('[data-testid="live-listen-band"]').evaluate(
     (el) => el.getBoundingClientRect().height,
   );
@@ -199,7 +199,7 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
   // CONFIRM_MS 경과 → **다음 항목(산도)** 대기로 자동 복귀. 행 이동이 아니라 타이머가 만든 복귀다.
   await expect(page.locator('[data-hero-state="listening"]')).toBeVisible({ timeout: 3000 });
   await expect(page.locator('[data-testid="hero-primary"]'), '복귀 시 다음 항목명').toHaveText('산도');
-  await expect(page.locator('[data-testid="voice-waveform"]')).toBeVisible();
+  await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
   console.log('✓ 행 중간 커밋: ✓+값 → ~1.5s 유지 → 다음 항목(산도) 대기 복귀');
 });
 

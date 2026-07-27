@@ -14,7 +14,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
   PHONE_402, PHONE_375,
-  boot, injectLevel, zoneMetrics, indicatorOpacity, triggerAnomaly, fillAllRows,
+  boot, injectLevel, zoneMetrics, triggerAnomaly, fillAllRows,
 } from './fixtures/activeZones';
 import { fireStt } from './fixtures/stt';
 
@@ -183,7 +183,7 @@ test('§공통규칙2·3 — 중앙 정보가 중앙 50% 안에서 가로+세로
 });
 
 // ─── §공통규칙5 — 하단 `<` `>` 양끝 + 가운데 인디케이터 ────────────────────────
-test('§공통규칙5 — `<` `>`가 하단 양끝, 인디케이터가 가운데(대기=도트 → 음성 입력=세로파형)', async ({ page }) => {
+test('§공통규칙5 — `<` `>`가 하단 양끝, 인디케이터가 가운데(대기=글리프 → 음성 입력=도트 파형)', async ({ page }) => {
   await boot(page);
   const bar = await page.locator('[data-testid="voice-control-bar"]').boundingBox();
   const prev = await page.locator('button[aria-label="이전"]').boundingBox();
@@ -198,28 +198,84 @@ test('§공통규칙5 — `<` `>`가 하단 양끝, 인디케이터가 가운데
   // 장갑 조작 터치 타깃(PRINCIPLES §2).
   expect(prev!.height).toBeGreaterThanOrEqual(44);
   expect(next!.height).toBeGreaterThanOrEqual(44);
-  // 파형이 인디케이터 슬롯을 넘치지 않는다(막대 13개가 `<` `>` 위로 삐져나오지 않는다).
-  const waveFits = await page.locator('[data-testid="voice-waveform"]').evaluate((el) => {
-    const w = el as HTMLElement;
-    return { over: w.scrollWidth - w.clientWidth, bars: w.querySelectorAll('span').length };
+  // 도트 격자가 인디케이터 슬롯을 넘치지 않는다.
+  const dotsFit = await page.locator('[data-testid="state-dots"]').evaluate((el) => {
+    const d = el.getBoundingClientRect();
+    const b = (el.closest('[data-testid="live-listen-band"]') as HTMLElement).getBoundingClientRect();
+    return {
+      overflow: Math.max(0, b.top - d.top, d.bottom - b.bottom, b.left - d.left, d.right - b.right),
+      cells: el.querySelectorAll('span').length,
+    };
   });
-  expect(waveFits.bars).toBe(13);
-  expect(waveFits.over, '파형 가로 넘침 0').toBeLessThanOrEqual(1);
+  expect(dotsFit.cells, '13×7 격자').toBe(91);
+  expect(dotsFit.overflow, '격자가 밴드를 넘치지 않는다').toBeLessThan(1);
 
-  // 와이어프레임 §공통규칙5 — 대기(무음)에는 **도트 마이크**가 보이고 파형은 물러나 있다.
+  // 와이어프레임 §공통규칙5 — 대기(무음)에는 **상태 글리프**, 음성이 들어오면 같은 격자가 **파형**이 된다.
   await injectLevel(page, 0);
-  const idle = await indicatorOpacity(page);
-  expect(idle.dots, '대기: 도트 표시').toBeGreaterThan(0.9);
-  expect(idle.wave, '대기: 파형 물러남').toBeLessThan(0.1);
-  // 음성 입력이 들어오면 같은 자리가 **역동 세로파형**으로 전환된다.
+  await page.waitForTimeout(600); // hangover(400ms) 경과 대기
+  expect(await indicatorMode(page), '대기: 글리프').toBe('glyph');
   await injectLevel(page, 0.9);
-  const speaking = await indicatorOpacity(page);
-  expect(speaking.wave, '음성 입력: 파형 전환').toBeGreaterThan(0.9);
-  expect(speaking.dots, '음성 입력: 도트 물러남').toBeLessThan(0.1);
-  // 🔴 전환은 표시 전환이지 마운트 교체가 아니다 — 두 노드 모두 계속 살아 있다.
+  expect(await indicatorMode(page), '음성 입력: 도트 파형').toBe('wave');
+  // 🔴 전환은 표시 전환이지 마운트 교체가 아니다 — 격자는 계속 **하나**로 살아 있다([STT-16]).
   await expect(page.locator('[data-testid="state-dots"]')).toHaveCount(1);
-  await expect(page.locator('[data-testid="voice-waveform"]')).toHaveCount(1);
 });
+
+test('🔴 [UI-WAVE-1] 소멸 — 어떤 레벨에서도 도트와 파형이 **동시에** 보이지 않는다', async ({ page }) => {
+  // 이 스펙이 v0.40.0의 핵심 가설을 검증한다: 격자를 하나로 합치면 "겹쳐 보이는 상태"가
+  // 물리적으로 존재할 수 없다. 종전에는 `--voice-level ∈ (0, 0.125)` 구간에서 두 레이어가
+  // 각각 부분 불투명이었다(실기기 B세션 avg 0.06 → 도트 52% + 파형 48%).
+  await boot(page);
+  // 결함이 가장 심했던 구간을 촘촘히 쓸어본다(0.06이 실기기 실측 평균).
+  const levels = [0, 0.01, 0.02, 0.03, 0.0625, 0.06, 0.09, 0.124, 0.125, 0.2, 0.5, 1];
+  const seen: string[] = [];
+  for (const lv of levels) {
+    await injectLevel(page, lv);
+    await page.waitForTimeout(120);
+    const m = await page.locator('[data-testid="state-dots"]').evaluate((el) => {
+      const cells = Array.from(el.querySelectorAll('span')) as HTMLElement[];
+      // 각 셀은 켜짐(1) 또는 꺼짐(0)뿐이어야 한다. 중간 불투명도가 있으면 그게 곧 "겹쳐 보임"이다.
+      const partial = cells.filter((c) => {
+        const o = Number(getComputedStyle(c).opacity);
+        return o > 0.02 && o < 0.98;
+      }).length;
+      return {
+        mode: el.getAttribute('data-mode') ?? '',
+        lit: cells.filter((c) => Number(getComputedStyle(c).opacity) > 0.98).length,
+        partial,
+        layers: document.querySelectorAll('[data-testid="state-dots"], [data-testid="voice-waveform"]').length,
+      };
+    });
+    seen.push(`${lv}:${m.mode}/${m.lit}`);
+    // 🔴 핵심 단언 — 두 레이어가 아니라 **하나**다. 겹칠 상대가 없다.
+    expect(m.layers, `레벨 ${lv}: 인디케이터 레이어는 하나뿐`).toBe(1);
+    // 호흡 애니메이션이 opacity를 흔들지만, 그건 켜진 셀 안에서의 변조지 두 그림의 혼합이 아니다.
+    // 따라서 "무엇을 그리는가"는 항상 단일 모드다.
+    expect(['glyph', 'wave']).toContain(m.mode);
+    expect(m.lit + m.partial, `레벨 ${lv}: 켜진 셀이 존재한다(공허 방지)`).toBeGreaterThan(0);
+  }
+  console.log(`[UI-WAVE-1] sweep: ${seen.join(' ')}`);
+});
+
+test('[UI-WAVE-1] hangover — 어절 사이 침묵에 글리프로 튀지 않는다', async ({ page }) => {
+  // 말은 뚝뚝 끊긴다. 단순 임계면 한 문장 안에서 글리프↔파형이 여러 번 튀어 원거리에서
+  // 고장으로 읽힌다. 들어갈 때 즉시 / 나올 때 지연이라는 비대칭이 그걸 막는다.
+  await boot(page);
+  await injectLevel(page, 0.5);
+  expect(await indicatorMode(page), '발화 시작 → 즉시 파형').toBe('wave');
+  // 어절 사이 짧은 침묵 — hangover(400ms) 안이면 파형을 유지해야 한다.
+  // ⚠️ `injectLevel`이 자체적으로 200ms를 기다리므로 여기서 또 기다리면 창을 넘긴다.
+  await injectLevel(page, 0);
+  expect(await indicatorMode(page), '짧은 침묵에는 파형 유지(깜빡임 방지)').toBe('wave');
+  // 발화가 실제로 끝나면(hangover 경과) 글리프로 돌아간다.
+  await page.waitForTimeout(600);
+  expect(await indicatorMode(page), '발화 종료 → 글리프 복귀').toBe('glyph');
+});
+
+async function indicatorMode(page: Page): Promise<string> {
+  return page.locator('[data-testid="state-dots"]').evaluate(
+    (el) => el.getAttribute('data-mode') ?? '',
+  );
+}
 
 // ─── §[3] paused ────────────────────────────────────────────────────────────
 test('§[3] paused — 중앙 비움 + 상단 "일시정지" + 하단 `<`=재개 / `>`=종료 + 도트 `||`', async ({ page }) => {
@@ -361,7 +417,9 @@ test('§[4] 대비 — 완료 **행 검토 대기**는 [1] active 레이아웃�
 // **컨트롤바가 따라 움직이고 중앙 흡수영역이 같이 늘었다 줄었다** 했다. 새 구조는 밴드를 하단 25%
 // 트랙 **안**에 넣어 그 전달 경로를 끊는다.
 async function indicatorHeight(page: Page): Promise<number> {
-  return page.locator('[data-testid="voice-waveform"]').evaluate((el) => el.getBoundingClientRect().height);
+  // v0.40.0 — 파형 노드는 사라지고 도트 격자 하나가 그 자리를 쓴다. 이 오라클이 재는 것은
+  // "뷰포트 파생 밴드 높이가 실제로 변한다"이므로 측정 대상만 교체하면 계약은 그대로다.
+  return page.locator('[data-testid="state-dots"]').evaluate((el) => el.getBoundingClientRect().height);
 }
 
 test('진동 경로 차단 — 화면 높이를 쓸어도(밴드 높이가 실제로 변해도) 구역 비율이 흔들리지 않는다', async ({ page }) => {

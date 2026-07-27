@@ -407,21 +407,19 @@ test('P2 — Observer API 둘 다 없어도 입력 화면과 정적 파형이 �
   }))).toEqual({ resize: 'undefined', intersection: 'undefined' });
   await startSession(page);
 
-  const wave = page.locator('[data-testid="voice-waveform"]');
+  const wave = page.locator('[data-testid="state-dots"]');
   await expect(wave).toBeVisible();
-  // v0.37.0 리뷰 #5(Codex) — 파형이 canvas 선에서 **막대(span) 파형**으로 바뀌었다(FB-D, 민구 확정).
-  //   종전 getContext('2d') 캐스팅은 <div>에 대해 TypeError를 던졌다. 새 DOM(13개 span + 정적 scaleY)
-  //   을 직접 검사한다. Observer 둘 다 없고 오디오/레벨 0이면 drawStatic이 전 막대를 기본 세로 높이
-  //   (scaleY=.35)로 칠한다 — 즉 렌더는 되지만 움직이지 않는다(R3-FIX-3 데이터 무결성 계약). 실제
-  //   계약은 "Observer 둘 다 undefined여도 입력 화면 + 정적 파형이 pageerror 없이 렌더된다"이다.
-  const bars = wave.locator('span');
-  await expect(bars).toHaveCount(13); // reference-ui BAR_COUNT — 막대 파형이 실제로 렌더됐다
-  const transforms = await bars.evaluateAll((els) =>
-    els.map((el) => (el as HTMLElement).style.transform),
+  // v0.40.0 — 파형이 별도 컴포넌트에서 **도트 격자 하나**로 합쳐졌다([UI-WAVE-1] 구조적 해소).
+  //   계약은 그대로다: Observer 둘 다 undefined여도 입력 화면 + 정적 인디케이터가 pageerror 없이
+  //   렌더되고, 오디오/레벨 0이면 상태 글리프가 정적으로 표시된다(움직이지 않는다).
+  const cells = wave.locator('span');
+  await expect(cells).toHaveCount(91); // 13열 × 7행 격자가 실제로 렌더됐다
+  const litCount = async () => cells.evaluateAll(
+    (els) => els.filter((el) => Number(getComputedStyle(el as HTMLElement).opacity) > 0.02).length,
   );
-  // 정적 평막대: 모든 막대가 scaleY 변환을 갖고(파형이 그려짐), 오디오 없음 → 전부 동일한 정지값.
-  expect(transforms.every((t) => t.includes('scaleY'))).toBe(true);
-  expect(new Set(transforms).size).toBe(1); // 움직임 없는 정적선(모든 막대 동일 높이)
-  expect(transforms[0]).toBe('scaleY(0.35)');
-  expect(pageErrors).toEqual([]);
+  const lit = await litCount();
+  expect(lit, 'Observer 없어도 글리프가 그려진다').toBeGreaterThan(0);
+  expect(await wave.getAttribute('data-mode'), '레벨 0이면 글리프 모드').toBe('glyph');
+  // 🔴 이 테스트의 본체 — Observer 부재에서 **크래시가 없어야** 한다.
+  expect(pageErrors, 'Observer 부재에서 pageerror 없음').toEqual([]);
 });

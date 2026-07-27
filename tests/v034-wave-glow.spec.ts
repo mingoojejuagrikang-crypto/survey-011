@@ -183,140 +183,105 @@ test('B7 — 대기 카드: 항목명 + 슬롯에 맞는 세로 막대 파형(13
   await expect(page.locator('[data-hero-state="listening"]')).toBeVisible();
   await expect(page.locator('text=듣는 중')).toHaveCount(0);
 
-  // v0.38.0 #10: 상시 100px 밴드 안에 reference-ui 규격(13×10×78px, gap 7px)의 세로 막대를
-  // 기존 가용 폭의 70%로 배치한다. testid/role 계약은 종전 그대로다.
+  // v0.40.0 — 인디케이터가 **도트 격자 하나**로 합쳐졌다([UI-WAVE-1] 구조적 해소).
+  // 계약은 그대로: 밴드 안에 인디케이터가 있고, 밴드 높이는 뷰포트 파생이며 격자가 밴드를 넘지 않는다.
   const band = page.locator('[data-testid="live-listen-band"]');
-  const wave = page.locator('[data-testid="voice-waveform"]');
+  const wave = page.locator('[data-testid="state-dots"]');
   await expect(wave).toBeVisible();
   const geometry = await band.evaluate((el) => {
     const bandStyle = getComputedStyle(el);
-    const waveEl = el.querySelector('[data-testid="voice-waveform"]') as HTMLElement;
-    const bar = waveEl.querySelector('span') as HTMLElement;
+    const waveEl = el.querySelector('[data-testid="state-dots"]') as HTMLElement;
     return {
       availableWidth: el.clientWidth - parseFloat(bandStyle.paddingLeft) - parseFloat(bandStyle.paddingRight),
       waveWidth: waveEl.getBoundingClientRect().width,
       waveHeight: waveEl.getBoundingClientRect().height,
-      expectedWaveHeight: Math.round(Math.min(100, Math.max(60, window.innerHeight * 0.105))),
-      gap: parseFloat(getComputedStyle(waveEl).columnGap),
-      barWidth: parseFloat(getComputedStyle(bar).width),
-      barHeight: parseFloat(getComputedStyle(bar).height),
-      barCount: waveEl.querySelectorAll('span').length,
+      bandHeight: el.getBoundingClientRect().height,
+      expectedBandHeight: Math.round(Math.min(100, Math.max(60, window.innerHeight * 0.105))),
+      cells: waveEl.querySelectorAll('span').length,
     };
   });
-  // 와이어프레임 §공통규칙5(2026-07-24 확정) — 파형은 화면 폭 전체를 쓰던 독립 밴드가 아니라
-  //   하단 `<` `>` **사이** 슬롯이다. 폭 예산이 줄었으므로 종전 고정치(가용폭의 70% / gap 7 /
-  //   막대 10px)는 **여유가 있을 때의 상한**이 되고, 좁으면 비례 축소된다. 계약(막대 13개가
-  //   슬롯을 넘치지 않고 원거리에서 세로 막대로 읽힌다)은 그대로다.
-  expect(geometry.waveWidth, '파형이 밴드 가용폭을 넘지 않는다').toBeLessThanOrEqual(geometry.availableWidth + 1);
-  expect(geometry.waveHeight).toBe(geometry.expectedWaveHeight);
-  expect(geometry.gap, '간격 상한 = 레퍼런스 7px').toBeLessThanOrEqual(7);
-  expect(geometry.gap, '간격이 0으로 뭉개지지 않는다').toBeGreaterThanOrEqual(2);
-  expect(geometry.barWidth, '막대 폭 상한 = 레퍼런스 10px').toBeLessThanOrEqual(10);
-  expect(geometry.barWidth, '막대 폭 하한(원거리 판독)').toBeGreaterThanOrEqual(5);
-  // v0.38.0 리뷰#1 — 막대 높이는 레퍼런스 78px이되 **밴드를 넘지 않는다**(밴드에서 파생).
-  // 종전엔 78 고정이라 밴드가 78보다 낮은 뷰포트에서 삐져나왔다(이 단언이 그 상태를 계약으로
-  // 굳히고 있었다 — 기본 뷰포트 720px에서도 밴드 76 vs 막대 78).
-  expect(geometry.barHeight).toBe(Math.min(78, geometry.expectedWaveHeight));
-  expect(geometry.barHeight).toBeLessThanOrEqual(geometry.waveHeight);
-  expect(geometry.barCount).toBe(13);
-  console.log('✓ 대기: 항목명 + 70% 폭 세로 막대 파형, "듣는 중" 텍스트 제거');
+  console.log(`band geometry: ${JSON.stringify(geometry)}`);
+  expect(geometry.cells, '13열 × 7행 격자').toBe(91);
+  expect(geometry.bandHeight, '밴드 높이는 뷰포트 파생(clamp 60~100)').toBe(geometry.expectedBandHeight);
+  expect(geometry.waveHeight, '격자가 밴드 높이를 넘지 않는다').toBeLessThanOrEqual(geometry.bandHeight + 1);
+  expect(geometry.waveWidth, '격자가 가용 폭을 넘지 않는다').toBeLessThanOrEqual(geometry.availableWidth + 1);
 });
 
-// v0.38.0 #10 — rAF가 직접 그린 막대의 최대 픽셀 높이로 실제 시각 반응을 검증한다.
-async function waveMaxPx(page: Page): Promise<number> {
-  return page.locator('[data-testid="voice-waveform"]').evaluate((el) => {
-    const bars = Array.from(el.querySelectorAll('span')) as HTMLElement[];
-    let max = 0;
-    for (const b of bars) {
-      const height = b.getBoundingClientRect().height;
-      if (height > max) max = height;
-    }
-    return max;
-  });
+// v0.40.0 — 진폭은 막대 높이가 아니라 **켜진 셀 수**로 읽는다(도트 격자). 레벨이 오르면
+// 중앙 행에서 위아래로 더 많은 셀이 켜지므로 같은 "진폭 반응" 계약이 성립한다.
+async function waveLitCells(page: Page): Promise<number> {
+  return page.locator('[data-testid="state-dots"]').evaluate(
+    (el) => Array.from(el.querySelectorAll('span'))
+      .filter((b) => Number((b as HTMLElement).style.opacity || '1') > 0.02).length,
+  );
 }
 
-test('B7 — 파형 막대 실제 렌더 + 주입 레벨에 진폭 반응(FB-D)', async ({ page }) => {
+test('B7 — 도트 파형 실제 렌더 + 주입 레벨에 진폭 반응(FB-D)', async ({ page }) => {
   await boot(page);
   await startSession(page);
-  await expect(page.locator('[data-testid="voice-waveform"]')).toBeVisible();
+  await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
 
-  // 레벨 0: 움직임은 없되 scaleY(.35), 즉 약 27px 높이의 세로 막대가 기본으로 보인다.
+  // 레벨 0: 움직임 없이 **상태 글리프**가 정적으로 보인다(마이크 아이콘).
   await injectLevel(page, 0);
-  await page.waitForTimeout(200);
-  const lo = await waveMaxPx(page);
-  expect(lo, '무입력에도 얇은 선이 아닌 세로 막대로 보인다').toBeGreaterThan(20);
+  await page.waitForTimeout(600); // hangover 경과
+  const lo = await waveLitCells(page);
+  expect(lo, '무입력에도 글리프가 보인다(빈 격자 아님)').toBeGreaterThan(0);
   const idleFingerprint = await waveFingerprint(page);
   await page.waitForTimeout(200);
-  expect(await waveFingerprint(page), '레벨 0에서는 막대 transform이 정지').toBe(idleFingerprint);
+  expect(await waveFingerprint(page), '레벨 0에서는 그림이 정지').toBe(idleFingerprint);
 
-  // 레벨 0.85: rAF가 막대 높이를 키우고 프레임마다 transform을 실제로 바꾼다.
+  // 레벨↑: 같은 격자가 **파형**으로 바뀌고 켜진 셀이 늘어난다(진폭 반응).
   await injectLevel(page, 0.85);
-  await page.waitForTimeout(250);
-  const hi = await waveMaxPx(page);
-  expect(hi, '레벨↑ → 막대 높이↑').toBeGreaterThan(lo + 5);
-  const loudFingerprint = await waveFingerprint(page);
   await page.waitForTimeout(200);
-  expect(await waveFingerprint(page), '레벨 유입 시 프레임 간 transform 변화').not.toBe(loudFingerprint);
-  console.log(`waveMaxPx: level0=${lo} level0.85=${hi}`);
+  const hi = await waveLitCells(page);
+  expect(await page.locator('[data-testid="state-dots"]').getAttribute('data-mode')).toBe('wave');
+  console.log(`waveLitCells: level0=${lo} level0.85=${hi}`);
+  expect(hi, '레벨이 오르면 켜진 셀이 늘어난다').toBeGreaterThan(lo);
 });
 
-/**
- * v0.38.0 리뷰#1(agy Flash) — **짧은 화면에서 막대가 밴드를 넘지 않는지.**
- *
- * 결함: 막대 높이가 레퍼런스 78px 상수로 고정인데 밴드는 `clamp(60, innerHeight×0.105, 100)`이라
- * `innerHeight < 743px`이면 밴드가 78보다 낮다. rAF가 큰 소리에서 scaleY를 1.0까지 올리므로
- * 그 순간 막대가 밴드 위아래로 삐져나와 hero 텍스트·하단 컨트롤바와 겹친다.
- * 평상시(BASE_LEVEL 0.35)에는 안 보여서 눈으로 잡기 어렵다 — **최대 레벨을 주입해** 고정한다.
- *
- * 375×667은 현장에서 흔한 소형 단말(iPhone SE/8) 크기다.
- */
-test('[리뷰#1] 짧은 화면(375×667) 최대 진폭에서도 막대가 밴드를 벗어나지 않는다', async ({ page }) => {
-  await boot(page);
+test('[리뷰#1] 짧은 화면(375×667) 최대 진폭에서도 격자가 밴드를 벗어나지 않는다', async ({ page }) => {
+  await boot(page, { width: 375, height: 667 });
   await startSession(page);
-  await expect(page.locator('[data-testid="voice-waveform"]')).toBeVisible();
+  await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
 
-  await page.setViewportSize({ width: 375, height: 667 });
-  await page.waitForTimeout(200); // useBandHeight의 resize 반영
-
-  // 밴드가 레퍼런스(78)보다 낮은 조건인지 먼저 고정 — 결함의 전제 자체를 단언한다.
-  const bandHeight = await page
-    .locator('[data-testid="live-listen-band"]')
+  // v0.40.0 — 종전 전제("밴드가 레퍼런스 막대 78px보다 낮은 뷰포트")는 막대 파형 시절의 조건이었다.
+  //   도트 격자에는 고정 상수가 없고 셀 크기를 밴드에서 역산하므로, 결함 조건은 "밴드가 좁다"가
+  //   아니라 **"진폭이 최대여도 격자가 밴드를 못 넘는다"** 자체다. 좁은 화면을 계속 쓰되(짧은 화면이
+  //   가장 빡빡한 예산) 전제는 실제 불변식으로 바꾼다.
+  const bandHeight = await page.locator('[data-testid="live-listen-band"]')
     .evaluate((el) => el.getBoundingClientRect().height);
-  expect(bandHeight, '이 뷰포트에서 밴드는 레퍼런스 막대(78)보다 낮아야 결함 조건이 성립').toBeLessThan(78);
+  expect(bandHeight, '짧은 화면에서 밴드 예산이 실제로 빡빡하다(clamp 하한~100)').toBeLessThanOrEqual(100);
 
   await injectLevel(page, 1);
   await page.waitForTimeout(250);
 
   const geom = await page.locator('[data-testid="live-listen-band"]').evaluate((el) => {
     const band = el.getBoundingClientRect();
-    const bars = Array.from(el.querySelectorAll('[data-testid="voice-waveform"] span')) as HTMLElement[];
+    const grid = el.querySelector('[data-testid="state-dots"]') as HTMLElement;
+    const gr = grid.getBoundingClientRect();
+    const cells = Array.from(grid.querySelectorAll('span')) as HTMLElement[];
     let worstOverflow = 0;
-    for (const b of bars) {
-      const r = b.getBoundingClientRect();
+    for (const c of cells) {
+      const r = c.getBoundingClientRect();
       worstOverflow = Math.max(worstOverflow, band.top - r.top, r.bottom - band.bottom);
     }
-    return {
-      // 레이아웃 높이(transform 이전) — scaleY 최대가 1.0이므로 이 값이 곧 **최대 렌더 높이**다.
-      cssBarHeight: parseFloat(getComputedStyle(bars[0]).height),
-      bandHeight: band.height,
-      worstOverflow,
-    };
+    return { gridHeight: gr.height, bandHeight: band.height, worstOverflow };
   });
 
   // ⚠️ 판정은 **레이아웃 높이**로 한다(시계 비의존, GL-004 [ORCH-18]).
-  // 실제 bbox는 rAF 파동 위상에 따라 매 프레임 달라져, 스냅샷 순간이 최대 진폭이 아니면
-  // 결함이 있어도 통과한다 — 실제로 첫 시도에서 그렇게 "수정 없이도 통과"했다.
-  // scaleY는 최대 1.0이므로 `레이아웃 높이 ≤ 밴드 높이`가 곧 "어떤 진폭에서도 안 넘침"이다.
-  expect(geom.cssBarHeight, '최대 진폭 시 막대가 밴드를 넘는 치수').toBeLessThanOrEqual(geom.bandHeight);
-  // 관측된 순간 진폭도 당연히 밴드 안이어야 한다(위 불변식의 필요조건 — 보조 확인).
-  expect(geom.worstOverflow, '막대가 밴드 밖으로 삐져나옴').toBeLessThan(1);
+  //   도트 격자는 셀 크기를 밴드 높이에서 역산하므로 진폭과 무관하게 상한이 고정된다 —
+  //   종전 막대 파형이 scaleY로 밴드를 넘치던 경로가 **구조적으로** 사라졌다.
+  expect(geom.gridHeight, '격자 높이가 밴드를 넘지 않는다').toBeLessThanOrEqual(geom.bandHeight);
+  expect(geom.worstOverflow, '어떤 셀도 밴드 밖으로 삐져나오지 않는다').toBeLessThan(1);
 });
 
-/** v0.37.0 FB-D — 파형 막대들의 현재 scaleY 지문(transform 문자열 배열). 두 시점을 비교해
- *  **움직임 여부**를 판정한다(canvas toDataURL 대체). 정지=동일 / 움직임=상이. */
+/** v0.40.0 — 인디케이터가 도트 격자 하나로 합쳐졌다([UI-WAVE-1] 구조적 해소). 지문의 계약은
+ *  그대로다: 두 시점을 비교해 **움직임 여부**를 판정한다. 정지=동일 / 움직임=상이.
+ *  ⚠️ `opacity`(켜짐/꺼짐)를 읽는다 — 호흡 애니메이션은 CSS라 인라인 style에 남지 않으므로
+ *  이 지문은 **rAF가 그리는 내용**만 본다(시계 잡음 배제). */
 function waveFingerprint(page: Page): Promise<string> {
-  return page.locator('[data-testid="voice-waveform"]').evaluate(
-    (el) => Array.from(el.querySelectorAll('span')).map((b) => (b as HTMLElement).style.transform).join('|'),
+  return page.locator('[data-testid="state-dots"]').evaluate(
+    (el) => Array.from(el.querySelectorAll('span')).map((b) => (b as HTMLElement).style.opacity).join(''),
   );
 }
 
@@ -329,7 +294,7 @@ function waveFingerprint(page: Page): Promise<string> {
 test('R3-FIX-3 — 레벨 0(마이크 사망)이면 파형이 정지(정적 세로막대), 레벨↑이면 움직인다', async ({ page }) => {
   await boot(page);
   await startSession(page);
-  await expect(page.locator('[data-testid="voice-waveform"]')).toBeVisible();
+  await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
 
   // 레벨 0 = analyser 미가용(headless) + 입력 없음 = 마이크가 죽은 상태와 동일한 신호.
   await injectLevel(page, 0);
@@ -367,7 +332,7 @@ async function waveMoved(page: Page, ms: number): Promise<boolean> {
 test('R3-FIX-4 — 세션 중 탭 이탈(display:none)이면 파형 렌더 정지, 복귀 시 재개', async ({ page }) => {
   await boot(page);
   await startSession(page);
-  await expect(page.locator('[data-testid="voice-waveform"]')).toBeVisible();
+  await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
   await injectLevel(page, 0.8); // 움직이는 상태 = 루프가 실제로 도는 상태.
 
   await page.waitForTimeout(200);
@@ -733,22 +698,24 @@ test('R1-4 — 일시정지: 파형 rAF 실중지(막대 정지), 재시작 시 
   expect(await waveMoved(page, 700), 'paused 중 막대 transform 정지(rAF 미가동)').toBe(false);
   const pausedBandBox = await band.boundingBox();
   expect(pausedBandBox!.height, '상태 전환에도 파형 밴드 높이 고정').toBe(activeBandBox!.height);
-  const pausedBar = await page.locator('[data-testid="voice-waveform"] span').first().evaluate((el) => {
-    const cs = getComputedStyle(el);
-    return {
-      height: el.getBoundingClientRect().height,
-      animation: cs.animationName,
-      shadow: cs.boxShadow,
-    };
-  });
-  expect(pausedBar.height, 'paused는 scaleY(.07) 수준으로 납작').toBeCloseTo(78 * 0.07, 0);
-  expect(pausedBar.animation === 'none' || pausedBar.animation === '').toBeTruthy();
-  expect(pausedBar.shadow).toBe('none');
+  // v0.40.0 — 정지 상태의 표현이 "납작 막대"에서 **정적 글리프**로 바뀌었다. 계약은 그대로:
+  //   일시정지에서는 rAF가 돌지 않고(위 waveMoved=false), 인디케이터가 정지 상태를 그린다.
+  const pausedGlyph = await page.locator('[data-testid="state-dots"]').evaluate((el) => ({
+    glyph: el.getAttribute('data-glyph'),
+    mode: el.getAttribute('data-mode'),
+    lit: Array.from(el.querySelectorAll('span'))
+      .filter((c) => Number((c as HTMLElement).style.opacity || '1') > 0.02).length,
+  }));
+  expect(pausedGlyph.glyph, '일시정지 글리프(||)').toBe('pause');
+  expect(pausedGlyph.mode, '일시정지에는 파형 모드가 아니다').toBe('glyph');
+  expect(pausedGlyph.lit, '정지 상태에도 글리프가 그려진다').toBeGreaterThan(0);
 
-  await page.locator('button[title="재시작"]').click();
-  await page.waitForTimeout(300);
-  expect(await waveMoved(page, 400), '재시작 후 막대 이동 재개').toBe(true);
-  console.log('✓ R1-4: paused=정지 → resumed=이동');
+  // 재시작하면 rAF가 다시 돈다(수명주기 계약의 반대 방향).
+  await page.locator('button[title="재시작"]').first().click();
+  await expect(page.locator('[data-testid="paused-card"]')).toHaveCount(0);
+  await injectLevel(page, 0.8);
+  await page.waitForTimeout(200);
+  expect(await waveMoved(page, 400), '재시작 후 다시 움직인다').toBe(true);
 });
 
 // ─── v0.37.0 FB-A — 듣는 중 traveling sweep(4엣지 순환) 실제 적용 확인 ────────────────────────
@@ -809,7 +776,7 @@ test('FB-I — 이상치 알람 카드가 흡수영역에 격리 — 파형/컨�
 
   const cardBox = await card.boundingBox();
   const bandBox = await page.locator('[data-testid="live-listen-band"]').boundingBox();
-  const waveBox = await page.locator('[data-testid="voice-waveform"]').boundingBox();
+  const waveBox = await page.locator('[data-testid="state-dots"]').boundingBox();
   expect(bandBox!.height, '알람 중에도 파형 밴드는 상태 전 높이를 유지').toBe(listeningBandHeight);
   // 알람 카드는 파형 밴드(row3) 위(흡수영역 row2)에 머문다 — 파형/컨트롤을 덮지 않는다(격리).
   expect(cardBox!.y + cardBox!.height, '알람 카드 하단이 파형 밴드 위').toBeLessThanOrEqual(waveBox!.y + 2);
@@ -840,7 +807,7 @@ test('FB-F — 이상치 알람 중 정정 발화 interim이 카드 아래·파�
   // 위치: 알람 카드 아래 + 파형 위.
   const cardBox = await card.boundingBox();
   const stripBox = await strip.boundingBox();
-  const waveBox = await page.locator('[data-testid="voice-waveform"]').boundingBox();
+  const waveBox = await page.locator('[data-testid="state-dots"]').boundingBox();
   expect(stripBox!.y, '스트립은 알람 카드 상단보다 아래').toBeGreaterThanOrEqual(cardBox!.y);
   expect(stripBox!.y, '스트립은 파형 밴드보다 위').toBeLessThanOrEqual(waveBox!.y + 2);
   console.log(`✓ FB-F: 알람 중 인식 스트립 '110.0' (card.y=${Math.round(cardBox!.y)} strip.y=${Math.round(stripBox!.y)} wave.y=${Math.round(waveBox!.y)})`);

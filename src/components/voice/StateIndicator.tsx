@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react';
 import { T } from '../../tokens';
-import { VoiceWaveform } from './VoiceWaveform';
 import { StateDots, type DotGlyph } from './StateDots';
-import { useAudioLevelVar } from './useAudioLevelVar';
 import type { GlowTone } from './EdgeGlow';
 
 /** 와이어프레임 §공통규칙5 — 하단 `<` `>` **가운데**에 놓이는 상태 인디케이터.
- *  대기(무음)에는 상태별 **도트 아이콘**이 숨쉬고, 음성이 들어오면 같은 자리가 **역동 세로파형**이
- *  된다("기존 파형이 피드백이 약했음 → 더 역동적으로").
  *
- *  🔴 전환은 **마운트 교체가 아니라 표시 전환**이다. 도트와 파형은 둘 다 항상 마운트돼 있고
- *  `--voice-level`(useAudioLevelVar의 rAF, 리렌더 0)로 opacity만 교차한다. 조건부 렌더로 바꾸면
- *  VoiceWaveform의 rAF·IntersectionObserver가 발화마다 teardown/재생성돼 [STT-16] 계열 사고와
- *  같은 방식으로 관측 파이프라인이 흔들린다.
+ *  v0.40.0 — **도트 격자 하나**가 상태 글리프와 음성 파형을 둘 다 그린다(`StateDots`).
+ *  종전의 "도트 레이어 + 파형 레이어 opacity 교차"는 사라졌다.
+ *
+ *  🔴 그래서 [UI-WAVE-1](도트·파형 동시 렌더)이 **구조적으로 소멸**했다 — 겹칠 두 번째 레이어가
+ *  존재하지 않는다. `--voice-level` 기반 크로스페이드 게이트도 함께 제거했다(이 파일에서 그
+ *  두 개의 opacity 식이 결함의 원인이었다). 되살리지 마라.
+ *
+ *  🔴 **전환은 여전히 마운트 교체가 아니다.** `StateDots`는 상태와 무관하게 계속 마운트되고
+ *  내부에서 켜지는 셀만 바뀐다. 조건부 렌더로 바꾸면 rAF·IntersectionObserver가 발화마다
+ *  teardown/재생성돼 [STT-16] 계열 사고(62초 사공백)가 된다.
  *
  *  `LiveListenBand`(v0.36.0 상시 파형 밴드)의 후신이다. `data-testid="live-listen-band"`와
  *  밴드 높이 산식(뷰포트 비례, 상태 간 고정)은 그대로 유지한다 — 상태가 바뀌어도 인디케이터
@@ -36,41 +38,19 @@ export function StateIndicator({
   control?: { title: string; label: string; status: string; onClick: () => void };
 }) {
   const height = useBandHeight();
-  const levelRef = useAudioLevelVar<HTMLDivElement>(getAudioLevel, levelActive);
   const color = TONE_COLOR[tone];
 
+  // 격자 하나. 도트와 파형이 **같은 셀 집합**을 공유하므로 겹쳐 보이는 상태가 존재하지 않는다.
   const stack = (
-    <div
-      ref={levelRef}
-      style={{
-        width: '100%', height: '100%', maxHeight: '100%', minWidth: 0,
-        display: 'grid', placeItems: 'center',
-      }}
-    >
-      {/* 도트: 무음(level≈0)에서 100%, 발화가 시작되면 즉시 사라진다(×8 게인 = 레벨 0.125에서 0). */}
-      <div
-        style={{
-          gridArea: '1 / 1', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          opacity: 'max(0, calc(1 - var(--voice-level, 0) * 8))',
-        }}
-      >
-        <StateDots glyph={glyph} color={color} size={height} />
-      </div>
-      {/* 파형: 반대 위상. 레이아웃에 영향을 주지 않는 opacity만 바뀐다(useFitScale 계약과 무간섭). */}
-      <div
-        style={{
-          gridArea: '1 / 1', width: '100%', minWidth: 0,
-          opacity: 'min(1, calc(var(--voice-level, 0) * 8))',
-        }}
-      >
-        <VoiceWaveform
-          active={waveActive}
-          getLevel={getAudioLevel}
-          getTimeDomainData={getTimeDomainData}
-          height={height}
-          color={color}
-        />
-      </div>
+    <div style={{ width: '100%', height: '100%', maxHeight: '100%', minWidth: 0, display: 'grid', placeItems: 'center' }}>
+      <StateDots
+        glyph={glyph}
+        color={color}
+        size={height}
+        active={waveActive && levelActive}
+        getLevel={getAudioLevel}
+        getTimeDomainData={getTimeDomainData}
+      />
     </div>
   );
 
