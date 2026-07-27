@@ -66,12 +66,15 @@ test('recoverTimeout — 마이크 재획득 타임아웃 신규 바이트 계�
  *  배포 전에 kv(',') 규약으로 교정했고, 여기서 리터럴로 고정해 되돌아가지 못하게 한다. */
 test('foregroundReturn — 복귀마다 1건, teardown 여부를 바이트로 남긴다(F6)', () => {
   // 🔴 이 이벤트가 없어서 2026-07-27 회차의 [MIC-B2] 판정이 통째로 불가능했다.
-  //    `skipped`(훅은 돌았고 임계 미달) / `done`(실제로 정리) / **이벤트 없음**(훅 미동작)의
-  //    삼분법이 다음 회차 판정을 가능하게 만든다.
+  //    복귀 처리 결과 4값과 **이벤트 없음**(훅 미동작)의 구분이 다음 회차 판정을 가능하게 만든다.
   expect(foregroundReturn({ backgroundMs: 58_231, teardown: 'skipped', evt: 'vis' }))
     .toBe('foreground_return:bg_s=58,teardown=skipped,evt=vis');
-  expect(foregroundReturn({ backgroundMs: 61_000, teardown: 'done', evt: 'pageshow' }))
-    .toBe('foreground_return:bg_s=61,teardown=done,evt=pageshow');
+  expect(foregroundReturn({ backgroundMs: 61_000, teardown: 'no_recorder', evt: 'pageshow' }))
+    .toBe('foreground_return:bg_s=61,teardown=no_recorder,evt=pageshow');
+  expect(foregroundReturn({ backgroundMs: 62_000, teardown: 'completed', evt: 'vis' }))
+    .toBe('foreground_return:bg_s=62,teardown=completed,evt=vis');
+  expect(foregroundReturn({ backgroundMs: 63_000, teardown: 'failed', evt: 'pageshow' }))
+    .toBe('foreground_return:bg_s=63,teardown=failed,evt=pageshow');
 });
 
 test('micTeardown — 포그라운드 선-정리 판정 바이트 계약', () => {

@@ -930,8 +930,9 @@ test.describe('v0.38.1 [MIC-B2] teardownAudioGraph() — 낡은 그래프 해제
       await tapOf(rec).attach({} as MediaStream);
       env.contexts[0].state = 'interrupted'; // iOS 백그라운드 인터럽션 재현
 
-      await rec.teardownAudioGraph('vis', 3000_000);
+      const result = await rec.teardownAudioGraph('vis', 3000_000);
 
+      expect(result).toBe('completed');
       expect(env.contexts[0].closeCalls).toBe(1);
       expect(teardownExtras()).toEqual([
         'mic_teardown:found=interrupted,closed=ok,reattach=skipped,evt=vis,bg_s=3000',
@@ -952,8 +953,9 @@ test.describe('v0.38.1 [MIC-B2] teardownAudioGraph() — 낡은 그래프 해제
       env.contexts[0].state = 'interrupted';
       env.contexts[0].closeImpl = () => new Promise<void>(() => { /* 영원히 멈춘 close */ });
 
-      await rec.teardownAudioGraph('vis', 3000_000);
+      const result = await rec.teardownAudioGraph('vis', 3000_000);
 
+      expect(result).toBe('failed');
       expect(teardownExtras()).toEqual([
         'mic_teardown:found=interrupted,closed=timeout,reattach=skipped,evt=vis,bg_s=3000',
       ]);
@@ -1002,8 +1004,9 @@ test.describe('v0.38.1 [MIC-B2] teardownAudioGraph() — 낡은 그래프 해제
       env.contexts[0].state = 'interrupted';
       env.contexts[0].closeImpl = () => Promise.reject(new Error('close rejected'));
 
-      await rec.teardownAudioGraph('vis', 61_000);
+      const result = await rec.teardownAudioGraph('vis', 61_000);
 
+      expect(result).toBe('failed');
       expect(teardownExtras()).toEqual([
         'mic_teardown:found=interrupted,closed=error,reattach=skipped,evt=vis,bg_s=61',
       ]);

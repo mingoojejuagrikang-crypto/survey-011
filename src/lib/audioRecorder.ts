@@ -17,7 +17,7 @@
 
 import { logger } from './logger';
 import { TimeoutError, withTimeout } from './async';
-import { micTeardown, recoverTimeout } from './logEvents';
+import { micTeardown, recoverTimeout, type ForegroundReturnTeardownResult } from './logEvents';
 import { processClip, type PrerollPcm } from './audioTrim';
 // [ENV-12] 마이크 PCM 캡처(링버퍼·레벨·파형)는 MicPrerollTap이 소유한다 — 이 클래스는 위임만.
 import { MicPrerollTap, PREROLL_MS } from './micPrerollTap';
@@ -352,7 +352,10 @@ export class AudioRecorder {
    *  ⚠️ `ctx.state`는 **분기 판정이 아니라 기록에만** 쓴다 — 복귀 직후 WebKit이 좀비 `'running'`을
    *  보고할 수 있어(Pax Q1) 상태를 믿고 정리를 건너뛰면 정작 필요한 경우를 놓친다. 그래서 게이트는
    *  상태가 아니라 **호출부의 백그라운드 경과시간**이 쥔다. */
-  async teardownAudioGraph(evt: string, backgroundMs: number): Promise<void> {
+  async teardownAudioGraph(
+    evt: string,
+    backgroundMs: number,
+  ): Promise<ForegroundReturnTeardownResult> {
     // close 대기 중 recover/init/dispose가 소유권을 바꿀 수 있으므로 시작 시점의 세대+스트림을 함께 잡는다.
     const gen = this.acquireGen;
     const stream = this.stream;
@@ -396,6 +399,9 @@ export class AudioRecorder {
     // 콜사이트에서 템플릿으로 만들면 특성화 테스트가 지키지 못하고, `evt`에 ':'가 섞이면
     // split(':') 파서가 필드를 쪼갠다(R2 리뷰 Medium).
     logger.log({ type: 'clip', extra: micTeardown({ found, closed, reattach, evt, backgroundMs }) });
+    return closed === 'ok' && (reattach === 'ok' || reattach === 'skipped')
+      ? 'completed'
+      : 'failed';
   }
 
   /** v0.14.0 B-1 — 스트림을 재획득해 죽은 레코더/스테일 입력장치를 되살린다(재-getUserMedia).

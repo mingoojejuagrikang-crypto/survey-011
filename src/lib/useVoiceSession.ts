@@ -14,7 +14,8 @@ import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
-import { audioRouteRevalidate, foregroundReturn as foregroundReturnEvent, micAutoReconnect, rowMarked } from './logEvents';
+import { audioRouteRevalidate, micAutoReconnect, rowMarked } from './logEvents';
+import { resolveForegroundReturnEvent } from './foregroundReturnTelemetry';
 import { resolveFinal } from './voiceFinalResolver';
 import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
 import { hydratePastIndexFallback, prefetchPastIndex, resetPastIndexRetries } from './pastValues';
@@ -2676,6 +2677,9 @@ export function useVoiceSession() {
     };
 
     const onForegroundReturn = (evt: 'vis' | 'pageshow') => {
+      // reducer가 hiddenAt을 소비하기 **전**에 캡처한다. visible 직후 pageshow가 연달아 와도
+      // 첫 이벤트만 true라 실제 백그라운드 사이클당 foreground_return은 정확히 1건이다.
+      const hadHiddenCycle = foregroundReturnRef.current.hiddenAt !== null;
       const decision = reduceForegroundReturn(
         foregroundReturnRef.current,
         evt === 'vis' ? 'visible' : 'pageshow',
@@ -2690,21 +2694,17 @@ export function useVoiceSession() {
       // prewarm(입력탭 마운트)이 세션 시작 전부터 캡처를 붙여두므로 유휴 상태로 오래 백그라운드에
       // 있다 돌아온 경우가 오히려 위험하다 — 그 물린 그래프를 진 채 세션을 시작하면 첫 획득부터
       // 인터럽트된 오디오 세션 위에서 돈다. 재획득은 하지 않는다([IOS-5] 유지) — 정리만.
-      if (decision.shouldTeardown) {
-        const recForTeardown = recorderRef.current;
-        if (recForTeardown) {
-          void recForTeardown.teardownAudioGraph(evt, decision.backgroundMs);
-        }
-      }
-      // F6 — 복귀마다 **반드시** 1건. teardown을 건너뛴 복귀가 무기록이면 다음 회차에도
-      // "건너뜀"과 "훅 미동작"을 구별할 수 없다(이번 회차가 정확히 그래서 [MIC-B2] 판정 불가였다).
-      logger.log({
-        type: 'app',
-        extra: foregroundReturnEvent({
-          backgroundMs: decision.backgroundMs,
-          teardown: decision.shouldTeardown ? 'done' : 'skipped',
-          evt,
-        }),
+      // F6 — 복귀당 정확히 1건. completed는 teardown Promise가 **실제로 끝난 뒤**에만 기록한다.
+      // close/reattach 상세의 정본은 기존 mic_teardown이고, 여기서는 skipped/no_recorder/
+      // completed/failed로 복귀 처리 결과만 요약한다(PRINCIPLES §4 중복 계측 금지).
+      void resolveForegroundReturnEvent({
+        hadHiddenCycle,
+        shouldTeardown: decision.shouldTeardown,
+        backgroundMs: decision.backgroundMs,
+        evt,
+        recorder: recorderRef.current,
+      }).then((extra) => {
+        if (extra) logger.log({ type: 'app', extra });
       });
       const phase = useSessionStore.getState().phase;
       if (phase !== 'active' && phase !== 'complete' && phase !== 'paused') return;

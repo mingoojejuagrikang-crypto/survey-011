@@ -122,11 +122,18 @@ export function audioRouteRevalidate(fields: {
  *  (그 회차의 bg 58.2s < 임계 60s라는 사실조차 `vis_hidden`/`vis_visible` 두 이벤트를 **손으로
  *  뺀 것**이지 계측이 알려준 게 아니다.)
  *
- *  `teardown=skipped`는 "훅은 돌았고 임계 미달이라 안 했다", `done`은 "실제로 했다"를 뜻한다.
- *  이벤트가 **없으면** 훅이 안 돈 것이다 — 이 삼분법이 다음 회차 판정을 가능하게 만든다. */
+ *  `teardown`은 임계 미달 / 대상 없음 / 실제 완료 / 실패를 서로 다른 값으로 남긴다.
+ *  이벤트가 **없으면** 실제 hidden 사이클의 복귀가 아니었다 — 이 구분이 다음 회차 판정을
+ *  가능하게 만든다. */
+export type ForegroundReturnTeardownResult = 'completed' | 'failed';
+export type ForegroundReturnTeardown =
+  | 'skipped'
+  | 'no_recorder'
+  | ForegroundReturnTeardownResult;
+
 export function foregroundReturn(fields: {
   backgroundMs: number;
-  teardown: 'skipped' | 'done';
+  teardown: ForegroundReturnTeardown;
   evt: string;
 }): string {
   return `foreground_return:${kv({

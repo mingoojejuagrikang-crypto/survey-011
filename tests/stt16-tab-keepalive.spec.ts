@@ -21,6 +21,7 @@ import {
   reduceForegroundReturn,
   shouldEmitRouteRevalidate,
 } from '../src/lib/foregroundReturnPolicy';
+import { resolveForegroundReturnEvent } from '../src/lib/foregroundReturnTelemetry';
 import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
@@ -55,6 +56,47 @@ test.describe('[MIC-B2] 포그라운드 복귀 순수 정책', () => {
     expect(visible.shouldTeardown).toBe(true);
     expect(visible.backgroundMs).toBe(LONG_BACKGROUND_TEARDOWN_MS);
     expect(pageShow.shouldTeardown).toBe(false);
+  });
+});
+
+test.describe('[FG-RETURN-LOG-1] 정직한 복귀 요약', () => {
+  test('실제 hidden 사이클이 아니면 무기록, 임계 미달/레코더 없음은 구분', async () => {
+    expect(await resolveForegroundReturnEvent({
+      hadHiddenCycle: false, shouldTeardown: false, backgroundMs: 0, evt: 'pageshow', recorder: null,
+    })).toBeNull();
+    expect(await resolveForegroundReturnEvent({
+      hadHiddenCycle: true, shouldTeardown: false, backgroundMs: 58_231, evt: 'vis', recorder: null,
+    })).toBe('foreground_return:bg_s=58,teardown=skipped,evt=vis');
+    expect(await resolveForegroundReturnEvent({
+      hadHiddenCycle: true, shouldTeardown: true, backgroundMs: 61_000, evt: 'vis', recorder: null,
+    })).toBe('foreground_return:bg_s=61,teardown=no_recorder,evt=vis');
+  });
+
+  test('지연된 teardown이 끝나기 전 completed를 만들지 않고 resolve/reject를 구분', async () => {
+    let finish!: () => void;
+    const delayed = new Promise<'completed'>((resolve) => {
+      finish = () => resolve('completed');
+    });
+    let settled = false;
+    const pending = resolveForegroundReturnEvent({
+      hadHiddenCycle: true,
+      shouldTeardown: true,
+      backgroundMs: 62_000,
+      evt: 'vis',
+      recorder: { teardownAudioGraph: () => delayed },
+    }).then((result) => { settled = true; return result; });
+    await Promise.resolve();
+    expect(settled, 'teardown 완료 전에 completed를 기록하면 안 된다').toBe(false);
+    finish();
+    expect(await pending).toBe('foreground_return:bg_s=62,teardown=completed,evt=vis');
+
+    expect(await resolveForegroundReturnEvent({
+      hadHiddenCycle: true,
+      shouldTeardown: true,
+      backgroundMs: 63_000,
+      evt: 'pageshow',
+      recorder: { teardownAudioGraph: () => Promise.reject(new Error('close failed')) },
+    })).toBe('foreground_return:bg_s=63,teardown=failed,evt=pageshow');
   });
 });
 
@@ -510,6 +552,14 @@ test('[MIC-B2] 실제 복귀 배선은 ready phase에서도 임계 경계와 vis
   // 바이트는 logEvents SSOT 규약(kv는 ',')을 따른다 — 세그먼트가 ':'로 섞이면 파서가 필드를 쪼갠다.
   expect(teardown[0].extra).toContain(',reattach=');
   expect(teardown[0].extra).toContain(',evt=vis,bg_s=60');
+
+  // hidden→visible→pageshow 통합 계약: 두 실제 hidden 사이클에서만 1건씩, 연속 pageshow는 0건.
+  const foreground = (await loadLogEventsFromIDB(page))
+    .filter((e) => (e.extra ?? '').startsWith('foreground_return:'));
+  expect(foreground.map((e) => e.extra)).toEqual([
+    'foreground_return:bg_s=60,teardown=skipped,evt=vis',
+    'foreground_return:bg_s=60,teardown=completed,evt=vis',
+  ]);
 });
 
 // ─── v0.38.2 F5 — **실제 배선** 회귀 (라운드A 리뷰 Codex #3) ─────────────────────────────
