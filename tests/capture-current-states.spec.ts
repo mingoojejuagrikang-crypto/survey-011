@@ -61,7 +61,9 @@ test('실제 로드 경로 — file:// 로 열어도 스크롤 상태가 살아 
   await page.goto(`file://${file}`, { waitUntil: 'load' });
   await page.waitForTimeout(300);
   const fp = await fingerprint(page);
-  expect(fp.chipScrollTop, 'file://에서 스크롤 복원 스크립트가 실행되지 않았다').toBeGreaterThan(0);
+  // v0.40.0 — 칩존 스크롤 축이 세로 → **가로**로 바뀌었다(민구 확정). 복원 스크립트가 두 축을
+  // 모두 되돌리므로 검사도 가로축으로 옮긴다(계약은 그대로: 스크롤 상태가 살아 있는가).
+  expect(fp.chipScrollLeft, 'file://에서 스크롤 복원 스크립트가 실행되지 않았다').toBeGreaterThan(0);
   expect(fp.nodes['[data-testid="interim-value"]'] ?? fp.nodes['[data-hero-state]']).toBeTruthy();
   console.log(`[capture] file:// 로드 검증 — chipScrollTop=${fp.chipScrollTop}`);
 });

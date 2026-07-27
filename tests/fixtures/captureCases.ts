@@ -142,19 +142,17 @@ export const CASES: StateCase[] = [
   {
     name: '09-chipzone-overflow',
     group: '결함 재현',
-    title: '칩존 오버플로 — 2줄 밖으로 밀린 칩',
+    title: '칩존 오버플로 — 한 행 밖으로 밀린 칩(가로 스크롤)',
     feedback: 'fb-27-2 (F11)',
-    why: '15개 칩이 4줄인데 25% 트랙에는 2줄만 보인다. 나머지는 구역 안 스크롤로만 접근 가능 — 재설계 대상. 스크롤을 끝까지 내린 상태로 굳혔다.',
+    why: '15개 칩이 한 행에 늘어서고 402px 폭을 넘긴다. 넘치는 칩은 **가로** 스크롤로만 접근 가능하다(v0.40.0 민구 확정). 진행중 칩이 우측 끝에 오도록 자동 스크롤된 상태로 굳혔다.',
     drive: async (page) => {
       await injectLevel(page, 0);
       const overflow = await page.locator('[data-testid="voice-chip-grid"]').evaluate((el) => {
         const g = el as HTMLElement;
-        g.scrollTop = g.scrollHeight - g.clientHeight;
-        return { scrollTop: g.scrollTop, scrollHeight: g.scrollHeight, clientHeight: g.clientHeight };
+        return { scrollLeft: g.scrollLeft, scrollWidth: g.scrollWidth, clientWidth: g.clientWidth };
       });
       // 공허 방지 — 실제로 넘치지 않으면 이 카드는 아무것도 보여주지 못한다.
-      expect(overflow.scrollHeight, '칩존이 실제로 넘친다').toBeGreaterThan(overflow.clientHeight);
-      expect(overflow.scrollTop, '스크롤이 실제로 내려갔다').toBeGreaterThan(0);
+      expect(overflow.scrollWidth, '칩존이 실제로 가로로 넘친다').toBeGreaterThan(overflow.clientWidth);
       await page.waitForTimeout(200);
     },
   },

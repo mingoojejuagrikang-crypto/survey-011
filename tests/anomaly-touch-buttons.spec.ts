@@ -310,7 +310,10 @@ test('v0.34.0 A1 — 수동 커밋 이상치: 진행 보류(활성 칩 부동 + 
   await expect(page.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
   await waitForActiveChip(page, '횡경');
   const tts = await getTtsLog(page);
-  expect(tts.some((t) => t.includes('추세 알람'))).toBe(false); // 알람 TTS 미발화(민구 확정 유지)
+  // 🔴 fb-27-9(민구 확정 2026-07-27) — 종전 "수동 알람은 무음" 계약이 **뒤집혔다.**
+  //    hold=1 알람은 진행을 멈추는데 무음이면 왜 멈췄는지 소리로 알 수 없다(폰은 2~3m 밖).
+  //    음성 경로와 완전히 동일하게 발화한다.
+  expect(tts.some((t) => t.includes('추세 알람')), '수동 알람도 발화한다').toBe(true);
 
   // 음성 '확인'은 이 팝업을 닫지 않는다(trendConfirm 미무장 — 음성 확인 루프 없음 계약).
   await fireStt(page, '확인', 500);

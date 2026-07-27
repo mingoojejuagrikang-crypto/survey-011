@@ -61,6 +61,7 @@ export interface Fingerprint {
   /** 화면에 실제로 보이는 텍스트 전체(공백 정규화). */
   allText: string;
   chipScrollTop: number;
+  chipScrollLeft: number;
 }
 
 /** 라이브 페이지와 렌더된 프리뷰에서 **같은 코드**로 지문을 뜬다(대조가 성립하려면 같아야 한다). */
@@ -118,6 +119,8 @@ export async function fingerprint(page: Page): Promise<Fingerprint> {
       dotsOverflow,
       allText: norm(root.innerText ?? ''),
       chipScrollTop: chipGrid ? Math.round(chipGrid.scrollTop) : 0,
+      // v0.40.0 — 칩존이 가로 스크롤이 되면서 복원 검증 축이 늘었다.
+      chipScrollLeft: chipGrid ? Math.round(chipGrid.scrollLeft) : 0,
     };
   }, TRACKED_SELECTORS);
 }
@@ -175,6 +178,9 @@ export function diffFingerprints(live: Fingerprint, preview: Fingerprint): strin
 
   if (live.chipScrollTop !== preview.chipScrollTop) {
     problems.push(`칩존 scrollTop: ${live.chipScrollTop} → ${preview.chipScrollTop}`);
+  }
+  if (live.chipScrollLeft !== preview.chipScrollLeft) {
+    problems.push(`칩존 scrollLeft: ${live.chipScrollLeft} → ${preview.chipScrollLeft}`);
   }
 
   // 라이브에 보이던 텍스트 토큰이 프리뷰에서 사라지지 않았는지(브리핑의 "주요 텍스트 동일 존재").
