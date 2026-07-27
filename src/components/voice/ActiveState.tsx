@@ -18,6 +18,10 @@ import type { DotGlyph } from './StateDots';
 import { ExitConfirmDialog } from './ExitConfirmDialog';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 
+/** 우측 끝 정렬 시 칩과 트랙 오른쪽 가장자리 사이 여백(px). 칩이 가장자리에 딱 붙으면
+ *  "더 있다"는 신호가 사라져 잘린 것처럼 보인다. */
+const CHIP_SCROLL_PAD = 8;
+
 /** 입력화면 조립 루트 — 와이어프레임 4상태(active·anomaly·paused·complete)를 **하나의 트리**에서
  *  표시만 바꿔 그린다(SSOT: `Deliverables/2026-07-24-survey-011-active-screen-wireframe.md`).
  *
@@ -180,10 +184,34 @@ export function ActiveState({
     closeOverlaysRef.current();
   }, [overlayCloseSeq]);
 
-  // 와이어프레임 §공통규칙4 — 활성 칩은 항상 가시영역에(2줄 캡 밖으로 밀려나면 "지금 어디"를 잃는다).
+  // 칩존 자동 스크롤 — **진행중 칩을 보이는 영역의 우측 끝에** 둔다(민구 확정 2026-07-27).
+  //
+  // 🔴 왜 "다음 항목 보기"가 아니라 우측 끝인가 — 되돌리기 전에 반드시 읽어라.
+  //    민구 근거: "한국인들은 글을 읽을때 좌>우로 읽어. 그러니 진행칩의 하이라이트도 좌>우로 이동해야 해."
+  //    이 앱에서 특히 맞는 이유: 칩이 **'항목명 + 값'을 함께** 보여주므로 진행중 칩 왼쪽에 남는 것이
+  //    **이미 입력을 마친 칩들(값이 찍혀 있다) = 입력 확인 영역**이 된다. 반대로 오른쪽(다음 항목)은
+  //    값이 아직 `—`라 미리 볼 실익이 적다.
+  //    ⚠️ 일반적 직관은 "다음을 보여준다"라서 이 동작이 버그로 오인되기 쉽다. 실제로 설계 검토에서
+  //       제시된 세 후보(왼쪽 끝/가운데/다음 최대)가 **전부** 다음 보기 우선이었고 민구가 전부 물렸다.
+  //       "다음 항목이 안 보인다"는 제보가 오면 결함이 아니라 이 결정이다.
+  //
+  // 규칙 두 줄:
+  //   · 넘침 **전**(칩이 트랙 폭에 다 들어갈 때): 스크롤 없음. 칩이 왼쪽부터 채워지고
+  //     하이라이트가 자연히 좌→우로 이동한다. (아래 clamp의 하한 0이 이걸 자동으로 만든다.)
+  //   · 넘침 **후**: 진행중 칩의 오른쪽 끝을 가시영역 오른쪽 끝에 맞춘다.
+  //
+  // ⚠️ `scrollIntoView`를 쓰지 않는다 — 'nearest'는 "보이면 안 움직인다"라 우측 끝 정렬이 안 되고,
+  //    'end'는 스크롤 조상을 함께 움직여 하단 트랙까지 밀 수 있다. 칩존만 직접 민다.
   const activeChipRef = useRef<HTMLDivElement | null>(null);
+  const chipGridRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    activeChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const grid = chipGridRef.current;
+    const chip = activeChipRef.current;
+    if (!grid || !chip) return;
+    // offsetLeft는 offsetParent 기준이라 스크롤 컨테이너와 어긋난다 → 화면 좌표 차이로 잰다.
+    const delta = chip.getBoundingClientRect().left - grid.getBoundingClientRect().left;
+    const target = grid.scrollLeft + delta - (grid.clientWidth - chip.offsetWidth) + CHIP_SCROLL_PAD;
+    grid.scrollLeft = Math.max(0, Math.min(grid.scrollWidth - grid.clientWidth, target));
   }, [currentColId, row]);
 
   // ── 상태 파생(단일 지점) ────────────────────────────────────────────────────
@@ -241,7 +269,7 @@ export function ActiveState({
         anomalyPending={anomalyPending}
         editingColId={editingColId}
         activeChipRef={activeChipRef}
-        fitDeps={[columns, row, currentColId, JSON.stringify(rowValues)]}
+        gridRef={chipGridRef}
         onActivate={(c) => {
           if (c.type === 'date' && c.input !== 'voice') return;
           if (c.input === 'voice') openManualSheet(c);

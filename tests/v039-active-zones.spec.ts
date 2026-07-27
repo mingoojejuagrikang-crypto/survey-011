@@ -16,6 +16,7 @@ import {
   PHONE_402, PHONE_375,
   boot, injectLevel, zoneMetrics, indicatorOpacity, triggerAnomaly, fillAllRows,
 } from './fixtures/activeZones';
+import { fireStt } from './fixtures/stt';
 
 // 시딩·부팅·상태진입 헬퍼는 `tests/fixtures/activeZones.ts`로 이동했다(동작 불변). 두 번째 소비자
 // (`capture-current-states.spec.ts` — 실렌더 캡처)가 같은 상태로 진입해야 해서 복제를 피한 것이고,
@@ -45,44 +46,48 @@ for (const vp of [
   });
 }
 
-test('§공통규칙4 — 칩존은 2줄을 유지하고 초과 칩은 구역 안 스크롤로 남는다(활성칩 하이라이트+점멸)', async ({ page }) => {
+test('칩존 — 한 행 유지 + 초과 칩은 **가로** 스크롤(활성칩 하이라이트+점멸)', async ({ page }) => {
   await boot(page);
   const grid = page.locator('[data-testid="voice-chip-grid"]');
   const m = await grid.evaluate((el) => {
     const g = el as HTMLElement;
     const chips = Array.from(g.querySelectorAll('[data-testid="column-chip"]')) as HTMLElement[];
-    // 칩 상단 y를 8px 톨러런스로 클러스터링 = 보이는 줄 수(useChipFlowFit과 같은 셈법).
+    // 칩 상단 y를 8px 톨러런스로 클러스터링 = 실제로 몇 줄인가.
     const tops: number[] = [];
     for (const c of chips) {
       const top = c.offsetTop;
       if (!tops.some((t) => Math.abs(t - top) <= 8)) tops.push(top);
     }
-    tops.sort((a, b) => a - b);
-    // 스크롤 창(clientHeight) 안에 실제로 보이는 줄 수.
-    const visibleRows = tops.filter((t) => t < g.clientHeight - 4).length;
+    const cs = getComputedStyle(g);
     return {
       chipCount: chips.length,
       totalRows: tops.length,
-      visibleRows,
+      clientWidth: g.clientWidth,
+      scrollWidth: g.scrollWidth,
       clientHeight: g.clientHeight,
       scrollHeight: g.scrollHeight,
-      overflowY: getComputedStyle(g).overflowY,
+      overflowX: cs.overflowX,
+      overflowY: cs.overflowY,
+      // 🔴 프리뷰 단계에서 데인 것 — smooth면 scrollLeft 대입 직후 읽은 값이 애니메이션 중간값이라
+      //    자동 스크롤 측정·복원이 틀어진다.
+      scrollBehavior: cs.scrollBehavior,
       chipHeights: chips.slice(0, 3).map((c) => c.getBoundingClientRect().height),
     };
   });
-  console.log(`chips=${m.chipCount} rows=${m.totalRows} visible=${m.visibleRows} client=${m.clientHeight} scroll=${m.scrollHeight}`);
+  console.log(`chips=${m.chipCount} rows=${m.totalRows} clientW=${m.clientWidth} scrollW=${m.scrollWidth}`);
   expect(m.chipCount, '시드가 실제로 많은 칩을 만들었다(공허 방지)').toBeGreaterThanOrEqual(12);
-  // 와이어프레임 §공통규칙4 — "2줄 표시". 스크롤 창에는 정확히 2줄만 보인다.
-  expect(m.visibleRows, '칩존에 보이는 줄 수는 2줄').toBe(2);
-  // 와이어프레임 §공통규칙4 — "넘치는 칩은 (2줄 유지) 스크롤로".
-  expect(m.totalRows, '13개 칩은 2줄을 넘긴다').toBeGreaterThan(2);
-  expect(m.overflowY).toBe('auto');
-  expect(m.scrollHeight, '초과분은 내부 스크롤로 남는다').toBeGreaterThan(m.clientHeight);
-  // 와이어프레임 §공통규칙4 — "25%내 최대 크게": 칩 높이가 44px 하한에 묶이지 않고 구역에서 역산된다.
+  // 민구 확정(2026-07-27) — 한 행. 원 요청(fb-27-2)은 세로 스크롤이었으나 화면을 보고 뒤집혔다.
+  expect(m.totalRows, '칩은 한 행에 늘어선다').toBe(1);
+  expect(m.overflowX, '넘침은 가로 스크롤이 받는다').toBe('auto');
+  expect(m.overflowY, '세로로는 넘치지 않는다').toBe('hidden');
+  expect(m.scrollWidth, '13개 칩은 한 화면 폭을 넘긴다').toBeGreaterThan(m.clientWidth);
+  expect(m.scrollHeight - m.clientHeight, '세로 스크롤은 생기지 않는다').toBeLessThanOrEqual(1);
+  expect(m.scrollBehavior, 'smooth 금지 — 자동 스크롤 측정이 애니메이션 중간값을 읽는다').toBe('auto');
+  // 한 행이 트랙을 통째로 쓴다 = 칩이 종전(2줄)보다 확실히 높다. 44px는 장갑 조작 하한.
   const zone = await zoneMetrics(page);
-  const expectedChipH = (zone.chipHeight - 12 - 8) / 2; // 상하 패딩 12 + 줄간격 8
+  const expectedChipH = zone.chipHeight - 12; // 상하 패딩 6+6
   for (const h of m.chipHeights) {
-    expect(Math.abs(h - expectedChipH), '칩 높이는 칩존 25%에서 역산한 한 줄 높이').toBeLessThanOrEqual(1.5);
+    expect(Math.abs(h - expectedChipH), '칩 높이는 칩존 트랙 안쪽 높이 전체').toBeLessThanOrEqual(1.5);
     expect(h, '장갑 조작 44px 하한(PRINCIPLES §2)').toBeGreaterThanOrEqual(44);
   }
   // 활성 칩 하이라이트 + 점멸(chip-pulse).
@@ -90,6 +95,77 @@ test('§공통규칙4 — 칩존은 2줄을 유지하고 초과 칩은 구역 �
   await expect(active).toHaveCount(1);
   const anim = await active.evaluate((el) => getComputedStyle(el as HTMLElement).animationName);
   expect(anim, '활성칸 점멸').toBe('chip-pulse');
+});
+
+test('칩존 자동 스크롤 — 진행중 칩이 **우측 끝**, 왼쪽엔 값이 찍힌 완료 칩(민구 확정)', async ({ page }) => {
+  // 🔴 이 오라클이 지키는 결정: "다음 항목 보기"가 아니라 **입력 확인 영역**이다.
+  //    칩이 '항목+값'을 담으므로 왼쪽에 남는 완료 칩이 방금 넣은 값을 확인해 준다.
+  //    일반적 직관과 반대라 되돌려지기 쉬워서 테스트로 못박는다.
+  await boot(page);
+  // 넘칠 만큼 진행시킨다(각 커밋마다 다음 칩으로 이동).
+  for (let i = 0; i < 6; i++) await fireStt(page, `${20 + i}.0`, 320);
+  const m = await page.locator('[data-testid="voice-chip-grid"]').evaluate((el) => {
+    const g = el as HTMLElement;
+    const active = g.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement;
+    const gr = g.getBoundingClientRect();
+    const ar = active.getBoundingClientRect();
+    const done = Array.from(g.querySelectorAll('[data-testid="column-chip"]')).filter((c) => {
+      const el2 = c as HTMLElement;
+      if (el2.offsetLeft >= active.offsetLeft) return false;
+      if (el2.offsetLeft + el2.offsetWidth <= g.scrollLeft + 4) return false;
+      const v = el2.querySelectorAll('span')[1];
+      const text = (v?.textContent ?? '').trim();
+      return text !== '' && text !== '—';
+    }).length;
+    return {
+      scrollLeft: Math.round(g.scrollLeft),
+      maxScroll: Math.round(g.scrollWidth - g.clientWidth),
+      rightGap: Math.round(gr.right - ar.right),
+      leftOfActiveVisible: done,
+      activeInView: ar.left >= gr.left - 1 && ar.right <= gr.right + 1,
+    };
+  });
+  console.log(`autoscroll: scrollLeft=${m.scrollLeft}/${m.maxScroll} rightGap=${m.rightGap} done=${m.leftOfActiveVisible}`);
+  // 공허 방지 — 실제로 넘쳐서 스크롤이 걸린 상태여야 이 오라클이 의미를 갖는다.
+  expect(m.maxScroll, '칩이 실제로 넘친다').toBeGreaterThan(0);
+  expect(m.scrollLeft, '자동 스크롤이 실제로 걸렸다').toBeGreaterThan(0);
+  expect(m.activeInView, '진행중 칩이 보인다').toBe(true);
+  expect(m.rightGap, '진행중 칩이 우측 끝에 정렬된다(좌→우 읽기)').toBeLessThanOrEqual(10);
+  expect(m.leftOfActiveVisible, '왼쪽에 값이 찍힌 완료 칩이 보인다 = 입력 확인 영역')
+    .toBeGreaterThanOrEqual(1);
+
+  // 🔴 **이미 보이는 칩으로 넘어갈 때**가 이 계약의 진짜 시금석이다.
+  //    앞으로 진행하며 칩이 화면 오른쪽 **밖**에서 들어올 때는 `scrollIntoView({inline:'nearest'})`도
+  //    우연히 우측 정렬처럼 보인다('nearest'의 최소 스크롤량이 곧 우측 정렬이다). 그 경로만 재면
+  //    **수정을 제거해도 통과하는 공허한 테스트**가 된다 — 실제로 그랬다(반증 1차 실패).
+  //    다음 칩이 **이미 화면 안 왼쪽에 보이는 상태**로 만들어 두면 둘이 갈린다:
+  //      · 'nearest' → 이미 보이므로 **안 움직인다**(칩이 왼쪽에 남는다).
+  //      · 우측 끝 규칙 → 그 칩을 오른쪽 끝으로 **다시 정렬한다**.
+  const beforeGap = await page.locator('[data-testid="voice-chip-grid"]').evaluate((el) => {
+    const g = el as HTMLElement;
+    const chips = Array.from(g.querySelectorAll('[data-testid="column-chip"]')) as HTMLElement[];
+    const activeIdx = chips.findIndex((c) => c.getAttribute('data-active') === 'true');
+    const next = chips[activeIdx + 1];
+    // 다음 칩을 가시영역 **왼쪽 끝**에 오도록 미리 스크롤해 둔다.
+    g.scrollLeft = Math.max(0, next.offsetLeft - g.offsetLeft);
+    const gr = g.getBoundingClientRect();
+    const nr = next.getBoundingClientRect();
+    return { gap: Math.round(gr.right - nr.right), name: next.getAttribute('data-col-name') };
+  });
+  // 공허 방지 — 세팅이 실제로 "보이지만 우측 끝이 아닌" 상태를 만들었어야 한다.
+  expect(beforeGap.gap, '다음 칩이 우측 끝이 아닌 곳에 보이도록 세팅됐다').toBeGreaterThan(40);
+
+  await fireStt(page, '26.0', 500);
+  const after = await page.locator('[data-testid="voice-chip-grid"]').evaluate((el) => {
+    const g = el as HTMLElement;
+    const active = g.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement;
+    const gr = g.getBoundingClientRect();
+    const ar = active.getBoundingClientRect();
+    return { rightGap: Math.round(gr.right - ar.right), name: active.getAttribute('data-col-name') };
+  });
+  console.log(`autoscroll(revisit): 세팅 gap=${beforeGap.gap}(${beforeGap.name}) → 커밋 후 ${after.name} rightGap=${after.rightGap}`);
+  expect(after.name, '다음 칩이 진행중이 됐다').toBe(beforeGap.name);
+  expect(after.rightGap, '이미 보이던 칩도 우측 끝으로 재정렬된다').toBeLessThanOrEqual(10);
 });
 
 test('§공통규칙2·3 — 중앙 정보가 중앙 50% 안에서 가로+세로 중앙정렬', async ({ page }) => {

@@ -1,26 +1,36 @@
 import { type Ref } from 'react';
 import { T } from '../../tokens';
 import { ColumnChip } from './ColumnChip';
-import { useChipFlowFit } from './useChipFlowFit';
 import { nestedAutoValue } from '../../lib/autoValue';
 import type { Column } from '../../types';
 
-/** 와이어프레임 §공통규칙1·4 — **칩존 25%**.
- *  "2줄 표시, 25%내 최대 크게, 활성칸 하이라이트+점멸. 넘치는 칩은 (2줄 유지) 스크롤로."
+/** 칩존 25% 트랙 — **한 행 · 가로 스크롤 · 진행중 칩 우측 끝 정렬** (민구 확정 2026-07-27).
  *
- *  구현:
- *   - 이 구역은 grid 트랙(1fr = 25%)을 **꽉 채운다**. 종전의 `maxHeight: min(30dvh, 2줄 픽셀 캡)`은
- *     칩을 44px 고정으로 묶어 25%를 다 못 쓰게 만들었다 → 트랙 높이에서 2줄을 역산한다.
- *   - `--chip-row-h`가 칩 한 줄의 높이다(트랙 높이에서 gap·padding을 뺀 절반). 칩은 이 높이를
- *     그대로 쓰므로 화면이 클수록 칩도 커진다("25%내 최대 크게"). 44px 하한은 ColumnChip이 건다.
- *   - 2줄을 넘는 칩은 글자 배율(--chip-fit, useChipFlowFit)로 먼저 줄이고, 그래도 넘치면 **2줄을
- *     유지한 채 내부 스크롤**로 남긴다. 활성 칩은 항상 가시영역으로 스크롤된다(ActiveState). */
+ *  ## 무엇이 바뀌었나 (v0.40.0)
+ *  종전은 **2줄 + 세로 스크롤**이었고, 2줄에 맞추려고 글자를 배율(`--chip-fit`)로 줄였다.
+ *  민구가 실기기에서 보고 뒤집었다 — 칩이 작아 값을 읽기 어려웠고, 25% 트랙에서 세로로 스크롤할
+ *  공간이 애초에 없었다("세로 스크롤 영역이 너무 작기에").
+ *
+ *  ⚠️ **fb-27-2 원문은 "가로가 아닌 세로"였다.** 원문만 보고 되돌리지 마라 — 민구가 화면을 보고
+ *  판단을 바꾼 것이고, 그게 최신 결정이다.
+ *
+ *  이제 한 행이 트랙을 통째로 쓰므로 칩 높이가 약 2배가 되고, 그만큼 항목명·값을 크게 쓸 수 있다.
+ *  넘치는 칩은 줄을 늘리는 대신 **가로로** 밀린다.
+ *
+ *  ## 크기는 전부 컨테이너 비례다
+ *  민구 조건: "기기 변경 되어도 일정 비율로 조절되어서 어색하지 않아야 함."
+ *  그래서 이 요소가 **컨테이너**(`container-type: size`)이고, 칩의 글자·여백은 `cqh`/`cqw`로
+ *  이 트랙에 비례한다. 고정 px은 `clamp()`의 하한/상한(가독 한계·과대 방지)에만 쓴다.
+ *
+ *  ## 삭제된 것: `--chip-fit` / `useChipFlowFit`
+ *  그 훅은 "2줄 안에 우겨넣기" 전용이었다. 한 행 + 가로 스크롤에서는 넘침을 스크롤이 받으므로
+ *  글자를 줄일 이유가 사라졌다 — 오히려 민구 요구(비율 사이즈업)와 정반대로 작동한다. */
 const CHIP_GAP = 8;
 const CHIP_PAD_Y = 6;
 
 export function ChipZone({
   columns, rowValues, row, currentColId, activeTone, anomalyPending, editingColId,
-  activeChipRef, fitDeps, onActivate, onCommit, onCancel,
+  activeChipRef, gridRef, onActivate, onCommit, onCancel,
 }: {
   columns: Column[];
   rowValues: Record<string, string>;
@@ -30,32 +40,36 @@ export function ChipZone({
   anomalyPending: boolean;
   editingColId: string | null;
   activeChipRef: Ref<HTMLDivElement>;
-  fitDeps: unknown[];
+  /** 자동 스크롤(우측 끝 정렬)을 ActiveState가 수행하기 위한 스크롤 컨테이너 핸들. */
+  gridRef: Ref<HTMLDivElement>;
   onActivate: (c: Column) => void;
   onCommit: (c: Column, value: string, prevValue: string) => void;
   onCancel: () => void;
 }) {
-  const chipFitRef = useChipFlowFit<HTMLDivElement>(fitDeps);
   return (
     <div
       data-testid="voice-chip-grid"
-      ref={chipFitRef}
+      ref={gridRef}
       style={{
-        // 트랙(25%)을 꽉 채우고, 초과분만 내부 스크롤.
+        // 트랙(25%)을 꽉 채우고, 초과분은 가로 스크롤.
         height: '100%', minHeight: 0,
-        // 와이어프레임 §공통규칙4 — 한 줄 높이 = (구역 내부 높이 − 줄간격) / 2.
-        //   `100%`는 flex 컨테이너의 **content box**(패딩 제외)라 패딩을 또 빼면 3줄이 들어간다.
-        ['--chip-row-h' as string]: `calc((100% - ${CHIP_GAP}px) / 2)`,
-        overflowX: 'hidden',
-        overflowY: 'auto',
+        // 칩 높이 = 트랙 안쪽 높이 전체(한 행). 44px 하한은 ColumnChip이 건다.
+        ['--chip-row-h' as string]: '100%',
+        // 🔴 칩의 cqh/cqw가 **이 트랙**을 기준으로 계산되게 한다. 칩 자신에 걸면 안 된다 —
+        //    칩은 내용 기반 폭이라 size containment가 폭을 0으로 무너뜨린다.
+        ['containerType' as string]: 'size',
+        ['containerName' as string]: 'chipzone',
+        overflowX: 'auto',
+        overflowY: 'hidden',
         WebkitOverflowScrolling: 'touch',
+        // ⚠️ `scrollBehavior: 'smooth'`를 걸지 마라. `scrollLeft` 대입 직후 읽은 값이 **애니메이션
+        //    중간값**이라 측정·복원이 틀어진다(프리뷰 단계에서 실제로 간헐 실패했다).
         position: 'relative',
         padding: `${CHIP_PAD_Y}px 12px`,
         display: 'flex',
-        flexWrap: 'wrap',
-        justifyContent: 'center',
-        alignItems: 'flex-start',
-        alignContent: 'flex-start',
+        flexWrap: 'nowrap',
+        justifyContent: 'flex-start',
+        alignItems: 'stretch',
         gap: CHIP_GAP,
         borderBottom: `1px solid ${anomalyPending ? 'rgba(255,82,82,0.42)' : T.line}`,
         transition: 'border-color 180ms ease',

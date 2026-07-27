@@ -97,12 +97,19 @@ test('W5 — ActiveState 진입 + 컨트롤바 한자리 고정(버그B)', async
     return {
       clientHeight: g.clientHeight,
       scrollHeight: g.scrollHeight,
+      clientWidth: g.clientWidth,
+      scrollWidth: g.scrollWidth,
+      overflowX: getComputedStyle(g).overflowX,
       overflowY: getComputedStyle(g).overflowY,
     };
   });
   expect(chipMetrics).not.toBeNull();
   console.log(`chip region: client=${chipMetrics!.clientHeight} scroll=${chipMetrics!.scrollHeight}`);
-  expect(chipMetrics!.overflowY).toBe('auto'); // 초과분은 구역 안 스크롤
+  // v0.40.0 민구 확정 — 초과분은 **가로** 스크롤이 받는다(종전 세로에서 뒤집힘).
+  expect(chipMetrics!.overflowX).toBe('auto');
+  expect(chipMetrics!.overflowY, '세로로는 넘치지 않는다').toBe('hidden');
+  expect(chipMetrics!.scrollWidth, '초과분은 가로 스크롤로 남는다')
+    .toBeGreaterThan(chipMetrics!.clientWidth);
   // 와이어프레임(2026-07-24 확정, Deliverables/2026-07-24-survey-011-active-screen-wireframe.md)
   // §공통규칙1 — 칩 구역은 픽셀 캡(옛 3줄 170px)이 아니라 **ActiveState 구역의 25%**다. 화면이
   //   커지면 칩도 함께 커져야 하므로(§공통규칙4 "25%내 최대 크게") 상한을 고정 픽셀로 잠그지
@@ -192,18 +199,23 @@ test('R1 — 375×667: 칩 캡이 화면 30% 안에서 축소되고 초과 칩�
     return {
       clientHeight: g.clientHeight,
       scrollHeight: g.scrollHeight,
+      overflowX: getComputedStyle(g).overflowX,
       overflowY: getComputedStyle(g).overflowY,
+      clientWidth: g.clientWidth,
+      scrollWidth: g.scrollWidth,
       chips: g.querySelectorAll('[data-testid="column-chip"]').length,
-      fit: Number(g.style.getPropertyValue('--chip-fit')),
     };
   });
   expect(m).not.toBeNull();
   console.log(`375x667 chip region: chips=${m!.chips} client=${m!.clientHeight} scroll=${m!.scrollHeight}`);
   expect(m!.chips).toBeGreaterThanOrEqual(12); // 시드가 실제로 많은 칩을 만들었다(공허 방지)
   expect(m!.clientHeight).toBeLessThanOrEqual(667 * 0.3); // 화면 높이 30% 상한이 실제로 문다
-  expect(m!.overflowY).toBe('auto');
-  expect(m!.scrollHeight, '캡 초과분은 내부 스크롤로 남는다').toBeGreaterThan(m!.clientHeight);
-  expect(m!.fit, '12개 칩이면 기본 배율(1)보다 실제로 축소된다').toBeLessThan(1);
+  // v0.40.0 민구 확정 — 칩존은 **한 행 + 가로 스크롤**이다(종전 2줄 + 세로 스크롤에서 뒤집힘).
+  // 근거: "세로 스크롤 영역이 너무 작기에". 375×667에서도 같은 계약이어야 한다.
+  expect(m!.overflowX, '넘침은 가로 스크롤이 받는다').toBe('auto');
+  expect(m!.overflowY, '세로로는 넘치지 않는다').toBe('hidden');
+  expect(m!.scrollWidth, '초과분은 가로 스크롤로 남는다').toBeGreaterThan(m!.clientWidth);
+  expect(m!.scrollHeight - m!.clientHeight, '세로 스크롤은 생기지 않는다').toBeLessThanOrEqual(1);
 
   // r2(Pro Critical) 재현/회귀: 컨테이너 높이도 감시하면 fit()의 reflow가 ResizeObserver를 다시
   // 깨워 무한 순환할 수 있다는 지적. 초기 수렴 뒤 style 변이를 500ms 관측해 정지 상태를 고정한다.
@@ -220,15 +232,27 @@ test('R1 — 375×667: 칩 캡이 화면 30% 안에서 축소되고 초과 칩�
   });
   expect(stableMutations, '초기 수렴 뒤 ResizeObserver/style 피드백 루프가 없어야 한다').toBe(0);
 
-  // 실제 폭 변경에서는 재계산되고 다시 같은 축소 계약으로 수렴한다.
+  // 실제 폭 변경에서도 한 행 계약이 유지되고, 글자는 트랙 비례로 다시 계산된다
+  // (v0.40.0 — `--chip-fit` 배율 훅은 "2줄에 우겨넣기" 전용이라 제거됐다. 대신 cqh/cqw 비례).
+  const fontAt = async () => page.locator('[data-testid="column-chip"] > span').first()
+    .evaluate((el) => parseFloat(getComputedStyle(el as HTMLElement).fontSize));
+  const font375 = await fontAt();
   await page.setViewportSize({ width: 430, height: 667 });
   await page.waitForTimeout(150);
+  const font430 = await fontAt();
   await page.setViewportSize({ width: 375, height: 667 });
   await page.waitForTimeout(150);
-  const resizedFit = await page.locator('[data-testid="voice-chip-grid"]').evaluate(
-    (g) => Number((g as HTMLElement).style.getPropertyValue('--chip-fit')),
-  );
-  expect(resizedFit, '폭 복귀 뒤 칩 배율을 다시 계산한다').toBeLessThan(1);
+  const rows = await page.locator('[data-testid="voice-chip-grid"]').evaluate((g) => {
+    const tops: number[] = [];
+    for (const c of Array.from(g.children)) {
+      const top = (c as HTMLElement).offsetTop;
+      if (!tops.some((t) => Math.abs(t - top) <= 8)) tops.push(top);
+    }
+    return tops.length;
+  });
+  expect(font430, '폭이 넓어지면 칩 글자도 커진다(고정 px 아님 — 민구 "일정 비율")')
+    .toBeGreaterThan(font375);
+  expect(rows, '폭이 바뀌어도 한 행 계약은 유지된다').toBe(1);
 
   // 가로 넘침 0(민구 스펙 — 유동 폭 pill이 화면 밖으로 새지 않는다).
   const overflowX = await page.evaluate(

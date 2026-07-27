@@ -104,21 +104,23 @@ async function fireStt(page: Page, transcript: string) {
   }, transcript);
 }
 
-test('FB-B — 칩 그리드가 2줄 캡 + 초과분 내부 스크롤(전체 그리드가 화면 잠식 안 함)', async ({ page }) => {
+test('FB-B — 칩 그리드가 한 행 + 초과분 가로 스크롤(전체 그리드가 화면 잠식 안 함)', async ({ page }) => {
   await boot(page);
   const grid = page.locator('[data-testid="voice-chip-grid"]');
   await expect(grid).toBeVisible();
 
-  const { clientH, scrollH } = await grid.evaluate((el) => ({
+  const { clientH, scrollH, clientW, scrollW } = await grid.evaluate((el) => ({
     clientH: (el as HTMLElement).clientHeight,
     scrollH: (el as HTMLElement).scrollHeight,
+    clientW: (el as HTMLElement).clientWidth,
+    scrollW: (el as HTMLElement).scrollWidth,
   }));
-  console.log(`chip grid clientH=${clientH} scrollH=${scrollH}`);
+  console.log(`chip grid clientH=${clientH} scrollH=${scrollH} clientW=${clientW} scrollW=${scrollW}`);
 
-  // 와이어프레임(2026-07-24 확정, Deliverables/2026-07-24-survey-011-active-screen-wireframe.md)
-  // §공통규칙1·4 — 2줄 캡의 **정의가 바뀌었다**: 옛 픽셀 캡(44×2+8+12≈108)이 아니라 칩존 트랙
-  //   25%를 2줄로 나눈다("25%내 최대 크게"). 계약은 그대로 — **보이는 줄은 2줄**이고 초과분은
-  //   구역 안 스크롤이다. 그래서 픽셀 상한 대신 **보이는 줄 수**를 직접 센다(형태가 아니라 계약).
+  // 🔴 v0.40.0 민구 확정 — 2줄 캡이 **한 행 + 가로 스크롤**로 바뀌었다.
+  //   근거: "세로 스크롤 영역이 너무 작기에"(실기기에서 보고 판단). 원 요청 fb-27-2는 "가로가 아닌
+  //   세로"였으나 화면을 보고 뒤집혔다 — 원문만 보고 되돌리지 마라.
+  //   계약의 목적(칩존이 hero 공간을 잠식하지 않는다)은 그대로이므로 그 단언은 유지한다.
   const visibleRows = await grid.evaluate((el) => {
     const g = el as HTMLElement;
     const tops: number[] = [];
@@ -127,9 +129,10 @@ test('FB-B — 칩 그리드가 2줄 캡 + 초과분 내부 스크롤(전체 그
     }
     return tops.filter((t) => t < g.clientHeight - 4).length;
   });
-  expect(visibleRows, '칩 그리드에 보이는 줄은 2줄').toBe(2);
-  // 13개 칩(1 auto + 12 voice)은 402px에서 2줄을 넘겨 내부 스크롤이 생긴다.
-  expect(scrollH, '2줄 초과 → 내부 스크롤 존재').toBeGreaterThan(clientH + 20);
+  expect(visibleRows, '칩 그리드는 한 행').toBe(1);
+  // 13개 칩(1 auto + 12 voice)은 402px 폭을 넘겨 **가로** 스크롤이 생긴다.
+  expect(scrollW, '한 행 초과 → 가로 스크롤 존재').toBeGreaterThan(clientW + 20);
+  expect(scrollH - clientH, '세로 스크롤은 생기지 않는다').toBeLessThanOrEqual(1);
   // 칩존이 화면을 잠식하지 않는다(hero가 자라날 공간 보존 — FB-B의 본래 목적).
   expect(clientH, '칩존이 화면 높이의 30%를 넘지 않는다').toBeLessThanOrEqual(874 * 0.3);
 });

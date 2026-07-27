@@ -4,8 +4,10 @@ import type { Column } from '../../types';
 
 /** v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 기능형 컬럼 칩을 **유동 폭 pill 플로우**로 재스타일.
  *  고정 간격 그리드 대신 칩 내부 "항목+값" 길이에 맞는 자연 폭(flex-wrap 플로우, 코덱스 pill 느낌).
- *  글자 크기는 부모(voice-chip-grid)의 `--chip-fit` 배율을 따른다(칩 수·길이에 따라 3줄 안에
- *  들어오도록 축소 — useChipFlowFit).
+ *  v0.40.0 — **칩 내부를 2행(항목명 위 / 값 아래)으로** 세우고, 글자를 칩존 트랙 비례(`cqh`/`cqw`)로
+ *  키운다(민구 fb-27-2: "항목과 값은 세로로", "기기 변경 되어도 일정 비율로 조절"). 종전의
+ *  `--chip-fit` 배율은 "2줄 안에 우겨넣기" 전용이라 함께 제거됐다 — 한 행 + 가로 스크롤에서는
+ *  넘침을 스크롤이 받으므로 글자를 줄일 이유가 없다.
  *
  *  기능 불변: 점프(auto 편집→행 점프)·수동 수정(음성 칩 탭→시트, touch/auto 인라인 편집)·현재값
  *  표시·활성 스크롤 추적. data-testid="column-chip"·data-col-name·data-active 동일 노드 유지
@@ -75,8 +77,11 @@ export function ColumnChip({
       data-col-name={col.name}
       onClick={() => { if (clickable && !isEditing) onActivate(); }}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 'calc(7px * var(--chip-fit, 1))',
-        padding: '6px calc(14px * var(--chip-fit, 1))',
+        // 칩 내부 2행 — 1행 항목명 / 2행 값(민구 fb-27-2).
+        display: 'inline-flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        gap: '1.5cqh',
+        padding: '2cqh 3.5cqw',
         borderRadius: 999,
         background: bg,
         border: `${isActive || isEditing ? 2 : 1.5}px solid ${border}`,
@@ -88,10 +93,11 @@ export function ColumnChip({
         // (--chip-row-h)를 그대로 쓴다. 44px는 장갑 조작 하한(PRINCIPLES §2)이라 고정 하한으로 남는다.
         height: 'var(--chip-row-h, 44px)',
         minHeight: 44,
-        // 유동 폭 — 내용 길이대로. 편집 중엔 입력폭 확보를 위해 확장. compact(가로 레일)는 기존 유지.
-        flex: isEditing ? '1 1 220px' : compact ? '0 0 clamp(180px, 48vw, 260px)' : '0 1 auto',
-        maxWidth: '100%',
-        minWidth: 0,
+        // 🔴 폭은 **내용이 정한다**(`0 0 auto`). 종전 `0 1 auto`는 한 행에 다 넣으려고 칩을 글자
+        //    밑으로 찌그러뜨려 항목명이 한 글자로 잘렸다 — 넘치면 줄이지 말고 가로로 밀어야 한다.
+        flex: isEditing ? '1 1 220px' : compact ? '0 0 clamp(180px, 48vw, 260px)' : '0 0 auto',
+        minWidth: compact ? undefined : '24cqw',   // '—'뿐인 칩이 슬리버로 쪼그라들지 않게
+        maxWidth: compact ? '100%' : '96cqw',
         scrollSnapAlign: compact ? 'start' : undefined,
         position: 'relative',
         zIndex: isActive ? 20 : undefined,
@@ -103,15 +109,13 @@ export function ColumnChip({
       <span
         style={{
           color: isActive ? activeTone : T.textDim,
-          // 절대 px 단독 금지 — 화면이 커지면 칩 글자도 커진다(§공통규칙4 "최대 크게").
-          fontSize: 'max(11px, calc(clamp(13px, min(3.6vw, 1.9vh), 20px) * var(--chip-fit, 1)))',
+          // 절대 px 단독 금지 — 칩존 트랙에 비례한다(민구 "기기 변경 되어도 일정 비율").
+          fontSize: 'clamp(11px, min(11cqh, 3.4cqw), 22px)',
           fontWeight: 700,
           whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          maxWidth: '38vw',
-          minWidth: 0,
-          flexShrink: 1,
+          // ⚠️ overflow:hidden을 여기 두면 span의 **내재 폭 기여가 0**이 돼서 칩이 값을 담을 만큼
+          //    자라지 않는다(글자가 잘린다). 잘라내는 일은 칩(overflow:hidden)이 맡는다.
+          maxWidth: '100%',
         }}
       >
         {col.name}
@@ -133,8 +137,8 @@ export function ColumnChip({
             background: 'transparent', border: 'none', outline: 'none',
             color: T.text,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            fontSize: 'max(13px, calc(clamp(16px, min(4.4vw, 2.3vh), 24px) * var(--chip-fit, 1)))', fontWeight: 800,
-            textAlign: 'right',
+            fontSize: 'clamp(16px, min(24cqh, 8cqw), 40px)', fontWeight: 800,
+            textAlign: 'center',
           }}
         />
       ) : (
@@ -145,17 +149,12 @@ export function ColumnChip({
             lineHeight: 1,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             color: isActive ? T.text : isDone ? T.text : T.textDim,
-            fontSize: isActive
-              ? 'max(12px, calc(clamp(18px, min(5vw, 2.6vh), 28px) * var(--chip-fit, 1)))'
-              : 'max(12px, calc(clamp(16px, min(4.4vw, 2.3vh), 24px) * var(--chip-fit, 1)))',
+            // 값이 칩의 주인공이다 — 항목명보다 확실히 크게, 그리고 트랙 비례로.
+            fontSize: 'clamp(18px, min(30cqh, 9cqw), 52px)',
             fontWeight: 800,
             letterSpacing: -0.3,
             whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            maxWidth: '44vw',
-            minWidth: 0,
-            flexShrink: 1,
+            maxWidth: '100%',
           }}
         >
           {value || '—'}
