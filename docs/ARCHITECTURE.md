@@ -58,21 +58,38 @@ ready → active ⇄ paused
 **상태 전환은 표시 전환이지 트리 교체가 아니다.** `VoiceScreen`·`ActiveState`는 계속 마운트된
 채 `CenterStage` 내부 자식만 바뀐다.
 
-### 입력 화면 4구역 (v0.39.0 와이어프레임)
+### 입력 화면 4구역 (v0.40.0 — 개선요청 9건 반영판)
 
 `ActiveState`는 `gridTemplateRows: 'auto 1fr 2fr 1fr'`로 고정된다 — 상단 스트립 위에
 **칩존 25% / 중앙 50% / 하단 25%**. 402×874 실측에서 183/366/183.
 
 ```text
 ActiveHeaderStrip   상태·행 정보
-ChipZone            항목 칩 (항상 2줄 유지, 옆으로 스크롤)
+ChipZone            항목 칩 — **한 행 · 가로 스크롤 · 진행중 칩을 우측 끝에 자동 정렬**
+                    칩 내부는 2행(1행 항목명 / 2행 값)
 CenterStage         값 hero / 경보 / 일시정지 / 완료 — 상태별 자식만 교체
   └ VoiceHero · AnomalyAlertPopup · CompleteSummary · StateIndicator · StateDots
-ActiveControlBar    이전 / 일시정지 / 다음
+ActiveControlBar    상태별 좌/우 버튼 — active·complete `이전`/`다음` ·
+                    anomaly `확인`/`수정` · paused `재시작`/`종료`.
+                    가운데 인디케이터가 일시정지 컨트롤을 겸한다(자리를 새로 만들지 않는다).
+                    🔴 조절판(`ActiveControlSteppers`)이 열리면 **이 행을 통째로 언마운트**한다 —
+                    겹칠 상자가 없으므로 오탭 경로가 구조적으로 불가능하다(fb-27-5·6).
 ```
 
-값 크기는 `heroLayout.ts`의 타이포 스케일, 화면 맞춤은 `useFitScale.ts`·`useChipFlowFit.ts`.
+**하단 인디케이터는 단일 도트 격자다**(v0.40.0). 대기 글리프·경고 글리프·음성 반응 파형이
+**같은 셀 집합**을 공유하므로 겹칠 두 번째 레이어가 존재하지 않는다 — 종전의
+"도트 레이어 + 파형 레이어 opacity 교차"와 그 게이트는 제거됐고 `VoiceWaveform.tsx`도 삭제됐다.
+이것이 `[UI-WAVE-1]`(저레벨에서 도트·파형 동시 렌더)을 코드 수정 없이 소멸시킨 경로다.
+
+값 크기는 `heroLayout.ts`의 타이포 스케일(`STATE_TYPE` — **상태별 인라인 폰트 정의 금지**,
+→ 가드레일 `[TYPO-CONTRACT-1]`), 화면 맞춤은 `useFitScale.ts`.
 테두리 글로우는 `EdgeGlow.tsx` + `useAudioLevelVar.ts`(→ 가드레일 ④).
+
+⚠️ **칩존 자동 스크롤이 "다음 항목 보기"가 아닌 이유**(되돌리기 전에 읽어라): 칩이 '항목명+값'을
+함께 보여주므로 진행중 칩 왼쪽에 남는 것이 **이미 입력을 마친 칩 = 입력 확인 영역**이다.
+오른쪽(다음 항목)은 값이 아직 `—`라 미리 볼 실익이 적다. 민구 확정(2026-07-27) —
+*"한국인들은 글을 읽을때 좌>우로 읽어. 진행칩의 하이라이트도 좌>우로 이동해야 해."*
+설계 검토에서 나온 세 후보가 **전부 '다음 보기' 우선이었고 전부 물렸다.** 상세는 `ActiveState.tsx` 주석.
 
 ## 도메인 로직 (`src/lib/`)
 

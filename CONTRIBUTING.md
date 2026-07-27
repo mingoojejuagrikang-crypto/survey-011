@@ -34,10 +34,15 @@ cp .env.example .env.local        # VITE_GOOGLE_CLIENT_ID 설정
 러너는 **Playwright 단일**이다. 순수 함수 단위 테스트도 같은 러너를 쓴다 (PRINCIPLES §7 — 새 러너 도입 금지).
 
 ```bash
-npm run test:e2e                                   # 전체
-npx playwright test tests/koreanNum.spec.ts        # 한 파일만
-npx playwright test --workers=1                    # 격리 실행 (신규·고위험 테스트 필수)
+npm run test:e2e                                      # 전체
+npm run test:e2e -- tests/koreanNum.spec.ts           # 한 파일만
+npm run test:e2e -- --workers=1                       # 격리 실행 (신규·고위험 테스트 필수)
 ```
+
+🔴 **`npx playwright test`를 직접 쓰지 마라**(가드레일 `[ENV-4]`). `npx`는 패키지가 로컬에
+없거나 버전이 다르면 **레지스트리 조회 후 `Ok to proceed? (y)` 프롬프트**를 띄우고,
+비대화형(CI·배포 스크립트·에이전트 세션)에서는 그 프롬프트가 응답을 못 받아 **무한 대기**한다 —
+실제로 배포를 멈춘 이력이 있다. 문서의 테스트 명령은 **항상 package scripts를 가리킨다.**
 
 - 서버는 **Playwright가 직접 소유**한다(`playwright.config.ts`의 `webServer` — 포트 5177,
   `--strictPort`, `reuseExistingServer: false`). 사람이 따로 dev 서버를 띄울 필요가 없고,
