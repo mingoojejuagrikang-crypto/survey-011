@@ -1,0 +1,242 @@
+/**
+ * 프리뷰 자기검증 — "프리뷰가 실화면과 같은가"를 눈이 아니라 **수치로** 증명한다.
+ *
+ * 🔴 왜 필수인가: 민구는 이 카드를 보고 UI 결정을 내린다. 카드가 실화면과 어긋나 있으면
+ * 그 결정이 통째로 무효가 된다. 그래서 "프리뷰를 만들었다"로 끝내지 않고, 같은 상태의
+ * 라이브 페이지와 렌더된 프리뷰에서 **같은 지문**을 뜬 뒤 대조한다.
+ *
+ * 픽셀 diff를 쓰지 않는 이유: 지문(폰트 크기·상자 좌표·opacity)이 더 진단적이다. 어긋났을 때
+ * "몇 px 어디가"까지 바로 나오고, 애니메이션 위상 같은 무해한 차이로 오탐하지 않는다.
+ * 사람 눈을 위한 증거는 `_live/*.png` 이미지 쌍이 따로 담당한다.
+ */
+import fs from 'node:fs';
+import type { Page } from '@playwright/test';
+
+/** 카드에서 의미를 지닌 노드 전부. 없는 상태에서는 그냥 빠진다(상태별 목록을 따로 두지 않는다). */
+const TRACKED_SELECTORS = [
+  '[data-testid="voice-active-state"]',
+  '[data-testid="voice-chip-grid"]',
+  '[data-testid="voice-center-stage"]',
+  '[data-testid="voice-control-bar"]',
+  '[data-testid="live-listen-band"]',
+  '[data-testid="state-dots"]',
+  '[data-testid="voice-waveform"]',
+  '[data-testid="voice-status-control"]',
+  '[data-testid="column-chip"][data-active="true"]',
+  '[data-hero-state]',
+  '[data-testid="interim-value"]',
+  '[data-testid="anomaly-alert"]',
+  '[data-testid="anomaly-headline"]',
+  '[data-testid="anomaly-comparison"]',
+  '[data-testid="anomaly-prev-value"]',
+  '[data-testid="anomaly-next-value"]',
+  '[data-testid="anomaly-confirm-btn"]',
+  '[data-testid="anomaly-modify-btn"]',
+  '[data-testid="paused-card"]',
+  '[data-testid="complete-summary"]',
+  '[data-testid="complete-count"]',
+  '[data-testid="session-complete-badge"]',
+  '[data-testid="input-control-panel"]',
+  '[data-testid="input-control-toggle"]',
+  '[data-testid="stepper-tolerance"]',
+  '[data-testid="stepper-tts-rate"]',
+  'button[aria-label="이전"]',
+  'button[aria-label="다음"]',
+] as const;
+
+export interface NodePrint {
+  text: string;
+  fontSize: string;
+  lineHeight: string;
+  opacity: string;
+  rect: [number, number, number, number];
+}
+
+export interface Fingerprint {
+  nodes: Record<string, NodePrint>;
+  /** 도트↔파형 크로스페이드 — fb-27-1(F4)이 지목한 바로 그 두 노드의 opacity. */
+  crossfade: { dots: number; wave: number; voiceLevel: string } | null;
+  /** 도트 그리드가 밴드 상자를 위·아래로 넘친 px — fb-27-5(F2) 겹침의 정량 지표. */
+  dotsOverflow: { top: number; bottom: number; dotsH: number; bandH: number } | null;
+  /** 화면에 실제로 보이는 텍스트 전체(공백 정규화). */
+  allText: string;
+  chipScrollTop: number;
+}
+
+/** 라이브 페이지와 렌더된 프리뷰에서 **같은 코드**로 지문을 뜬다(대조가 성립하려면 같아야 한다). */
+export async function fingerprint(page: Page): Promise<Fingerprint> {
+  return page.evaluate((selectors: readonly string[]) => {
+    const root = document.getElementById('root');
+    if (!root) throw new Error('#root 없음');
+    const origin = root.getBoundingClientRect();
+    const round = (n: number) => Math.round(n * 100) / 100;
+    const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+    const nodes: Record<string, NodePrint> = {};
+    for (const sel of selectors) {
+      const el = root.querySelector<HTMLElement>(sel);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      nodes[sel] = {
+        text: norm(el.textContent ?? '').slice(0, 160),
+        fontSize: cs.fontSize,
+        lineHeight: cs.lineHeight,
+        opacity: cs.opacity,
+        rect: [round(r.x - origin.x), round(r.y - origin.y), round(r.width), round(r.height)],
+      };
+    }
+
+    const band = root.querySelector<HTMLElement>('[data-testid="live-listen-band"]');
+    const dotsEl = root.querySelector<HTMLElement>('[data-testid="state-dots"]');
+    const waveEl = root.querySelector<HTMLElement>('[data-testid="voice-waveform"]');
+    let crossfade: Fingerprint['crossfade'] = null;
+    let dotsOverflow: Fingerprint['dotsOverflow'] = null;
+    if (band && dotsEl && waveEl) {
+      // `--voice-level`은 도트/파형 래퍼의 **부모**(useAudioLevelVar의 ref)에 실린다. band의
+      // firstElementChild로 잡으면 안 된다 — active에서는 그 자리가 일시정지 <button>이다.
+      const levelHost = dotsEl.parentElement?.parentElement as HTMLElement | null;
+      crossfade = {
+        dots: Number(getComputedStyle(dotsEl.parentElement as HTMLElement).opacity),
+        wave: Number(getComputedStyle(waveEl.parentElement as HTMLElement).opacity),
+        voiceLevel: levelHost ? getComputedStyle(levelHost).getPropertyValue('--voice-level').trim() : '',
+      };
+      const b = band.getBoundingClientRect();
+      const d = dotsEl.getBoundingClientRect();
+      dotsOverflow = {
+        top: round(Math.max(0, b.top - d.top)),
+        bottom: round(Math.max(0, d.bottom - b.bottom)),
+        dotsH: round(d.height),
+        bandH: round(b.height),
+      };
+    }
+
+    const chipGrid = root.querySelector<HTMLElement>('[data-testid="voice-chip-grid"]');
+    return {
+      nodes,
+      crossfade,
+      dotsOverflow,
+      allText: norm(root.innerText ?? ''),
+      chipScrollTop: chipGrid ? Math.round(chipGrid.scrollTop) : 0,
+    };
+  }, TRACKED_SELECTORS);
+}
+
+const RECT_TOLERANCE_PX = 1.0;
+const OPACITY_TOLERANCE = 0.01;
+
+/** 라이브 지문 ↔ 프리뷰 지문. 반환 배열이 비어 있어야 "실화면과 같다"고 말할 수 있다. */
+export function diffFingerprints(live: Fingerprint, preview: Fingerprint): string[] {
+  const problems: string[] = [];
+
+  for (const [sel, l] of Object.entries(live.nodes)) {
+    const p = preview.nodes[sel];
+    if (!p) { problems.push(`${sel}: 프리뷰에 노드가 없다`); continue; }
+    if (l.text !== p.text) problems.push(`${sel}: 텍스트 다름 live="${l.text}" preview="${p.text}"`);
+    if (l.fontSize !== p.fontSize) problems.push(`${sel}: fontSize ${l.fontSize} → ${p.fontSize}`);
+    if (l.lineHeight !== p.lineHeight) problems.push(`${sel}: lineHeight ${l.lineHeight} → ${p.lineHeight}`);
+    if (Math.abs(Number(l.opacity) - Number(p.opacity)) > OPACITY_TOLERANCE) {
+      problems.push(`${sel}: opacity ${l.opacity} → ${p.opacity}`);
+    }
+    const axes = ['x', 'y', 'w', 'h'];
+    l.rect.forEach((v, i) => {
+      const delta = Math.abs(v - p.rect[i]);
+      if (delta > RECT_TOLERANCE_PX) {
+        problems.push(`${sel}: rect.${axes[i]} ${v} → ${p.rect[i]} (Δ${round1(delta)}px)`);
+      }
+    });
+  }
+
+  const extra = Object.keys(preview.nodes).filter((k) => !(k in live.nodes));
+  if (extra.length > 0) problems.push(`프리뷰에만 있는 노드: ${extra.join(', ')}`);
+
+  if (live.crossfade && preview.crossfade) {
+    for (const key of ['dots', 'wave'] as const) {
+      const delta = Math.abs(live.crossfade[key] - preview.crossfade[key]);
+      if (delta > OPACITY_TOLERANCE) {
+        problems.push(`크로스페이드 ${key}: ${live.crossfade[key]} → ${preview.crossfade[key]}`);
+      }
+    }
+    if (live.crossfade.voiceLevel !== preview.crossfade.voiceLevel) {
+      problems.push(`--voice-level: ${live.crossfade.voiceLevel} → ${preview.crossfade.voiceLevel}`);
+    }
+  } else if (Boolean(live.crossfade) !== Boolean(preview.crossfade)) {
+    problems.push('크로스페이드 노드 존재 여부가 다르다');
+  }
+
+  if (live.dotsOverflow && preview.dotsOverflow) {
+    for (const key of ['top', 'bottom', 'dotsH', 'bandH'] as const) {
+      const delta = Math.abs(live.dotsOverflow[key] - preview.dotsOverflow[key]);
+      if (delta > RECT_TOLERANCE_PX) {
+        problems.push(`도트 넘침 ${key}: ${live.dotsOverflow[key]} → ${preview.dotsOverflow[key]}`);
+      }
+    }
+  }
+
+  if (live.chipScrollTop !== preview.chipScrollTop) {
+    problems.push(`칩존 scrollTop: ${live.chipScrollTop} → ${preview.chipScrollTop}`);
+  }
+
+  // 라이브에 보이던 텍스트 토큰이 프리뷰에서 사라지지 않았는지(브리핑의 "주요 텍스트 동일 존재").
+  const missing = live.allText.split(' ').filter((t) => t.length > 0 && !preview.allText.includes(t));
+  if (missing.length > 0) problems.push(`프리뷰에 없는 텍스트: ${[...new Set(missing)].join(' | ')}`);
+
+  return problems;
+}
+
+/** 뷰포트 독립성 — 카드가 402×874가 아닌 창에서 열려도 같은 지문이어야 한다(동결이 실제로 먹었는가). */
+export function diffStability(base: Fingerprint, resized: Fingerprint): string[] {
+  const problems: string[] = [];
+  for (const [sel, b] of Object.entries(base.nodes)) {
+    const r = resized.nodes[sel];
+    if (!r) { problems.push(`${sel}: 창 크기 변경 후 사라짐`); continue; }
+    if (b.fontSize !== r.fontSize) problems.push(`${sel}: 창 크기에 따라 fontSize가 흔들림 ${b.fontSize} → ${r.fontSize}`);
+    b.rect.forEach((v, i) => {
+      if (Math.abs(v - r.rect[i]) > RECT_TOLERANCE_PX) {
+        problems.push(`${sel}: 창 크기에 따라 rect[${i}]가 흔들림 ${v} → ${r.rect[i]}`);
+      }
+    });
+  }
+  return problems;
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+export interface PixelDiff { width: number; height: number; changed: number; total: number; pct: number }
+
+/** 라이브 PNG ↔ 프리뷰 PNG 화소 대조.
+ *  외부 이미지 라이브러리를 들이지 않는다(PRINCIPLES §7 — 러너는 Playwright 단일, 새 도구 금지).
+ *  이미 떠 있는 브라우저의 canvas로 재고, 두 이미지는 data: URI로 넣어 파일 접근 권한도 필요 없다. */
+export async function pixelDiff(page: Page, aPath: string, bPath: string): Promise<PixelDiff> {
+  const a = fs.readFileSync(aPath).toString('base64');
+  const b = fs.readFileSync(bPath).toString('base64');
+  return page.evaluate(async ([srcA, srcB]: string[]) => {
+    const load = (data: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('PNG 디코드 실패'));
+      img.src = `data:image/png;base64,${data}`;
+    });
+    const [imgA, imgB] = await Promise.all([load(srcA), load(srcB)]);
+    if (imgA.width !== imgB.width || imgA.height !== imgB.height) {
+      return { width: imgA.width, height: imgA.height, changed: -1, total: 0, pct: 100 };
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = imgA.width; canvas.height = imgA.height;
+    const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+    ctx.drawImage(imgA, 0, 0);
+    const da = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(imgB, 0, 0);
+    const db = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    // 채널당 16/255 이하는 안티에일리어싱·서브픽셀 잡음으로 본다(내용 차이가 아니다).
+    let changed = 0;
+    for (let i = 0; i < da.length; i += 4) {
+      if (Math.abs(da[i] - db[i]) > 16 || Math.abs(da[i + 1] - db[i + 1]) > 16 || Math.abs(da[i + 2] - db[i + 2]) > 16) changed++;
+    }
+    const total = da.length / 4;
+    return { width: imgA.width, height: imgA.height, changed, total, pct: Math.round((changed / total) * 10000) / 100 };
+  }, [a, b]);
+}
