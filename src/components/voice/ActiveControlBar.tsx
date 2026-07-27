@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useState } from 'react';
 import { T } from '../../tokens';
 import { I } from '../icons';
 import type { GlowTone } from './EdgeGlow';
@@ -49,6 +50,8 @@ export function ActiveControlBar({
   onAnomalyConfirm: () => void;
   onAnomalyModify: () => void;
 }) {
+  // 조절판 확장 상태를 여기서 소유한다 — 열리면 인디케이터·`<`·`>` 행을 숨겨야 하므로.
+  const [controlsOpen, setControlsOpen] = useState(false);
   return (
     <div
       data-testid="voice-control-bar"
@@ -59,7 +62,15 @@ export function ActiveControlBar({
         padding: '4px 12px 2px',
       }}
     >
+      {/* 🔴 조절판이 열리면 이 행을 **통째로 숨긴다**(민구 확정 2026-07-27).
+          fb-27-5(겹침) + fb-27-6(오탭)을 한 번에 없앤다 — 겹칠 상자가 존재하지 않으므로
+          "91px 도트가 40.75px 밴드를 넘쳐 토글 위에 그려지고, 그 도트가 곧 일시정지 버튼이라
+          오탭된다"는 경로가 **구조적으로 불가능**해진다(실기기 오터치 4회의 원인).
+          ⚠️ `maxHeight`나 `pointer-events:none`으로 때우지 마라 — 자식 overflow를 못 막고,
+             겹침이 남으면 `<` `>`도 같은 위험에 노출된다. 접히면 그대로 돌아온다. */}
+      {!controlsOpen && (
       <div
+        data-testid="voice-nav-row"
         style={{
           flex: '1 1 0', minHeight: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
@@ -95,8 +106,9 @@ export function ActiveControlBar({
           <EdgeButton kind="icon" label="다음" title="다음 행으로 이동" onClick={onNextRow} icon={I.chevron(26, T.textDim)} />
         )}
       </div>
+      )}
 
-      <ActiveControlSteppers uiCommand={uiCommand} />
+      <ActiveControlSteppers uiCommand={uiCommand} open={controlsOpen} onOpenChange={setControlsOpen} />
     </div>
   );
 }

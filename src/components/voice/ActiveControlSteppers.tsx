@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { T } from '../../tokens';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { logger } from '../../lib/logger';
@@ -13,7 +13,13 @@ function clampStep(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value * 100) / 100));
 }
 
-export function ActiveControlSteppers({ uiCommand }: { uiCommand: VoiceUiCommandSignal | null }) {
+export function ActiveControlSteppers({ uiCommand, open, onOpenChange }: {
+  uiCommand: VoiceUiCommandSignal | null;
+  /** 확장 여부 — **부모가 소유**한다. 열려 있는 동안 하단 인디케이터·`<`·`>`를 숨겨야 하는데
+   *  (fb-27-6 오탭 원인 제거), 그 판단이 이 컴포넌트 밖에서 필요하기 때문이다. */
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+}) {
   const s = useSettingsStore();
   const ttsDebounceRef = useRef<number | null>(null);
   const sampleTts = (rate: number) => {
@@ -28,7 +34,9 @@ export function ActiveControlSteppers({ uiCommand }: { uiCommand: VoiceUiCommand
   // v0.33.0 B-6 — recognitionTolerance 로깅 디바운스(이전엔 탭마다 즉시 로깅 → 연타 시 링버퍼 잠식).
   // ttsDebounceRef와 동일 패턴·동일 350ms 창, 최종값만 기록.
   const tolLogDebounceRef = useRef<number | null>(null);
-  const [open, setOpen] = useState(false);
+  const setOpen = (updater: boolean | ((v: boolean) => boolean)) => {
+    onOpenChange(typeof updater === 'function' ? updater(open) : updater);
+  };
   const setTolerance = (next: number) => {
     const value = clampStep(next, 0.4, 0.9);
     s.set({ recognitionTolerance: value });

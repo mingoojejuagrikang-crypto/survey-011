@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { T } from '../../tokens';
 import { useSessionStore } from '../../stores/sessionStore';
 import { HERO_FIT_STEPS, useFitScale } from './useFitScale';
-import { HERO_TYPE } from './heroLayout';
+import { STATE_TYPE, HERO_TYPE } from './heroLayout';
 import { ReaskCue, type ReaskReason } from './ReaskCue';
 import type { GlowTone } from './EdgeGlow';
 import type { Column } from '../../types';
@@ -273,11 +273,14 @@ export function AlarmInterimStrip() {
       aria-hidden={interim ? undefined : true}
       style={{
         flexShrink: 0,
-        width: '100%', height: 'clamp(46px, 6.5vh, 68px)',
+        // 높이도 인식값에 맞춰 키운다 — 종전 고정 높이가 알람 카드의 fit 단계까지 끌어내렸다.
+        width: '100%', height: 'auto', minHeight: 'clamp(46px, 6.5vh, 68px)',
         padding: '2px 8px',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: T.text,
-        fontSize: 'clamp(24px, min(8vw, 4.8vh), 42px)',
+        // 🔴 인라인 하드코딩 금지([TYPO-CONTRACT-1]) — heroLayout의 상수 계층을 소비한다.
+        //    종전 인라인 값이 실기기에서 32.16px로 렌더돼 fb-27-7("너무 작음")의 근인이었다.
+        fontSize: STATE_TYPE.alarmInterim,
         fontWeight: 900,
         lineHeight: 1.15,
         letterSpacing: -0.8,

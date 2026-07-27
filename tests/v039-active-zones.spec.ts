@@ -320,15 +320,19 @@ test('§[2] anomaly — 경보행 + 2열 비교(직전/현재) + 하단 `<`=확�
   const compareBox = (await page.locator('[data-testid="anomaly-comparison"]').boundingBox())!;
   expect(headlineBox.y + headlineBox.height, '경보행이 값 위').toBeLessThanOrEqual(compareBox.y + 1);
 
-  // 2열 비교: 직전(날짜)↓과거값 / 현재↓알람 유발값.
-  await expect(page.locator('[data-testid="anomaly-comparison"]')).toContainText('직전');
-  await expect(page.locator('[data-testid="anomaly-comparison"]')).toContainText('현재');
+  // fb-27-7 2·3·4항(민구 확정 2026-07-27) — **상하 2줄**, 날짜는 `mm-dd`, 라벨이 **값 앞**.
+  const cmp = page.locator('[data-testid="anomaly-comparison"]');
+  await expect(cmp, '날짜는 연도를 빼고 mm-dd').toContainText('07-26');
+  await expect(cmp, '연도는 표시하지 않는다').not.toContainText('2026-');
+  await expect(cmp).toContainText('현재');
   await expect(page.locator('[data-testid="anomaly-prev-value"]')).toHaveText('100');
   await expect(page.locator('[data-testid="anomaly-next-value"]')).toHaveText('120.5');
   const prevBox = (await page.locator('[data-testid="anomaly-prev-value"]').boundingBox())!;
   const nextBox = (await page.locator('[data-testid="anomaly-next-value"]').boundingBox())!;
-  expect(prevBox.x + prevBox.width, '직전값이 왼쪽 열').toBeLessThanOrEqual(nextBox.x + 1);
-  expect(Math.abs(prevBox.y - nextBox.y), '두 값이 같은 줄').toBeLessThanOrEqual(4);
+  const prevLabelBox = (await cmp.locator('span').first().boundingBox())!;
+  expect(prevBox.y + prevBox.height, '직전 줄이 현재 줄 **위**(상하 배치)').toBeLessThanOrEqual(nextBox.y + 1);
+  expect(prevLabelBox.x + prevLabelBox.width, '라벨이 값 앞(같은 줄 왼쪽)').toBeLessThanOrEqual(prevBox.x + 1);
+  expect(Math.abs(prevLabelBox.y - prevBox.y), '라벨과 값이 같은 줄').toBeLessThanOrEqual(prevBox.height);
 
   // 하단 `<` `>` → 확인 / 수정(알람 동안만). 카드 안이 아니라 **하단 양끝**이다.
   const confirm = page.locator('[data-testid="anomaly-confirm-btn"]');
@@ -349,6 +353,23 @@ test('§[2] anomaly — 경보행 + 2열 비교(직전/현재) + 하단 `<`=확�
   const activeChipBorder = await page.locator('[data-testid="column-chip"][data-active="true"]')
     .evaluate((el) => getComputedStyle(el as HTMLElement).borderTopColor);
   expect(activeChipBorder, '활성칸 빨강 강조').toBe('rgb(255, 82, 82)');
+});
+
+test('fb-27-8 — 정정 후에는 `정상 : 복귀` 헤드라인을 렌더하지 않는다(하단 아이콘·글로우가 대신 말한다)', async ({ page }) => {
+  await boot(page);
+  await triggerAnomaly(page);
+  // 알람 상태에서는 헤드라인이 **있다**(대조군 — 삭제가 무차별이 아님을 같은 테스트가 증명).
+  await expect(page.locator('[data-testid="anomaly-headline"]'), '알람 중엔 경보행이 있다').toBeVisible();
+  // 직전값 100.0 · trendRule=increase(=커지면 알람) → 100 미만은 통과 = 정정 완료.
+  await fireStt(page, '80.5', 0);
+  const corrected = page.locator('[data-testid="anomaly-alert"][data-status="corrected"]');
+  await expect(corrected).toBeVisible({ timeout: 4000 });
+  // 🔴 민구 확정(2026-07-27) — 문구 삭제. 오늘 실기기에서 19회 노출됐고, TTS·로그 경로가 없어
+  //    삭제 부작용이 없다. 상태는 하단 글리프(green)와 엣지 글로우가 이미 말한다.
+  await expect(page.locator('[data-testid="anomaly-headline"]'), '정정 후 경보행 미렌더').toHaveCount(0);
+  await expect(corrected, '`정상 : 복귀` 문구 자체가 없다').not.toContainText('정상');
+  // 값은 그대로 보인다(문구만 지웠지 정보를 지운 게 아니다).
+  await expect(page.locator('[data-testid="anomaly-next-value"]')).toHaveText('80.5');
 });
 
 // ─── §[4] complete ──────────────────────────────────────────────────────────

@@ -49,6 +49,13 @@ export const STATE_TYPE = {
   compareValue: 'max(22px, calc(clamp(30px, min(11vw, 6vh), 62px) * var(--fit-hi, 1)))',
   /** 완료 요약 `완료 : X / N`(§[4]). */
   completeSummary: 'max(24px, calc(clamp(30px, min(10vw, 5.4vh), 56px) * var(--fit-hi, 1)))',
+  /** 🔴 알람 중 **실시간 인식값**(fb-27-7 5항 "정상 진행될때의 수준만큼 커야 함").
+   *  종전 `AlarmInterimStrip`이 이 값을 **인라인 하드코딩**(`clamp(24px, min(8vw,4.8vh), 42px)`)해
+   *  실기기에서 32.16px로 렌더됐다 — 정상 진행 InterimLine(90.13px)의 36%. [TYPO-CONTRACT-1]이
+   *  "상태별 인라인 정의 금지"로 막으려던 바로 그 증상이 계약을 우회한 코드에서 재현된 것이다.
+   *  그래서 여기 상수로 승격한다. **다시 인라인으로 내리지 마라.**
+   *  크기는 HERO_TYPE.interim과 같은 급으로 맞추되, 알람 카드가 같은 트랙을 쓰므로 상한만 낮춘다. */
+  alarmInterim: 'max(24px, calc(clamp(44px, min(19vw, 11vh), 96px) * var(--fit-hi, 1)))',
 } as const;
 
 /** v0.23.0 입력탭#1 — 흡수영역(grid row3, 1fr, overflow:hidden) 안에서 카드가 부모에 잘리지 않게

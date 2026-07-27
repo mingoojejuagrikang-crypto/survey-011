@@ -62,11 +62,16 @@ export function AnomalyAlertPopup({
   //      있었다(F3 리뷰 지적). 지금은 `anomalyAlarmLabel`(anomalyAlert.ts) 하나가 화면·TTS·로그의
   //      유일한 출처이고, 이 컴포넌트는 그 함수를 같은 페이로드로 호출해 **렌더만** 한다.
   //      문구를 바꿔야 하면 이 파일이 아니라 그 함수를 고쳐라.
-  //  - `정상 : 복귀`(정정 후 정상)는 알람이 아니라 alertText/TTS 경로가 없다 → 이 카드 전용 문구로 남는다.
-  const alarmLabel = corrected ? '정상 : 복귀' : anomalyAlarmLabel(a);
+  //  - 🔴 fb-27-8(민구 확정 2026-07-27) — 정정 후 `정상 : 복귀` 문구는 **렌더하지 않는다**.
+  //    민구 근거: "이미 하단에 아이콘과 엣지 글로우로 알 수 있음." 실제로 `ActiveState`가 corrected
+  //    시 glyph·tone을 green으로 바꿔 같은 정보를 이미 준다. 이 문구는 alertText/TTS/로그 경로가
+  //    없는 **이 카드 전용**이었으므로 삭제 부작용이 없다(오늘 실기기에서 19회 노출됐다).
+  //    지운 자리는 비우지 않고 값 영역이 그만큼 커진다(아래 gap/fit이 자동 흡수).
+  const alarmLabel = corrected ? null : anomalyAlarmLabel(a);
   // corrected(정정 후 정상)면 GREEN, 그 외(이상치 대기)는 RED 통일.
   const accent = corrected ? T.green : T.red;
-  const previousLabel = a.prevDate ? `직전(${a.prevDate})` : '직전';
+  // fb-27-7 3항(민구 확정) — **연도를 빼고 `mm-dd`만**, 값 **앞**에 둔다. 현장에서 연도는 늘 올해다.
+  const previousLabel = formatCompareDate(a.prevDate);
   const fitRef = useFitScale<HTMLDivElement>([
     a.colName, a.prev, a.next, a.changeText, a.sampleKey, a.prevDate, a.status, a.kind,
   ], ANOMALY_FIT_STEPS);
@@ -88,36 +93,50 @@ export function AnomalyAlertPopup({
         textAlign: 'center',
       }}
     >
-      <span
-        data-testid="anomaly-headline"
-        style={{
-          maxWidth: '100%', color: accent,
-          fontSize: STATE_TYPE.alarmLabel,
-          fontWeight: 900, lineHeight: 1.08,
-          wordBreak: 'keep-all', overflowWrap: 'anywhere',
-        }}
-      >
-        {alarmLabel}
-      </span>
-      {/* 와이어프레임 §[2] 2열 비교 — 라벨 행 / 값 행. 두 열의 값이 같은 baseline에 서야 크기를
-          눈으로 비교할 수 있으므로 grid 2열로 고정한다(줄바꿈으로 세로로 무너지지 않게 nowrap). */}
+      {alarmLabel !== null && (
+        <span
+          data-testid="anomaly-headline"
+          style={{
+            maxWidth: '100%', color: accent,
+            fontSize: STATE_TYPE.alarmLabel,
+            fontWeight: 900, lineHeight: 1.08,
+            wordBreak: 'keep-all', overflowWrap: 'anywhere',
+          }}
+        >
+          {alarmLabel}
+        </span>
+      )}
+      {/* fb-27-7 2·3·4항(민구 확정 2026-07-27) — 직전/현재를 **좌우 2열 → 상하 2줄**로 바꾸고,
+          라벨을 **값 앞**(같은 줄 왼쪽)에 둔다. 종전은 라벨 행 / 값 행이 분리된 2×2 그리드라
+          "무엇의 값인지"를 눈이 위아래로 오가며 맞춰야 했다. 이제 한 줄이 한 사실을 말한다.
+          두 값은 오른쪽 정렬이라 자릿수가 맞아 크기 비교는 그대로 된다. */}
       <div
         data-testid="anomaly-comparison"
         style={{
           width: '100%',
-          display: 'grid', gridTemplateColumns: '1fr 1fr',
-          columnGap: 'clamp(8px, 4vw, 32px)',
+          display: 'grid',
+          // 🔴 열만 바꾸고 행을 안 정하면 자식 4개가 한 줄로 흘러 "상하 배치"가 되지 않는다.
+          gridTemplateColumns: 'max-content minmax(0, 1fr)',
+          gridTemplateRows: 'auto auto',
+          columnGap: 'clamp(8px, 3vw, 24px)',
           rowGap: 'max(2px, calc(clamp(4px, 0.9vh, 10px) * var(--fit-lo, 1)))',
-          alignItems: 'baseline', justifyItems: 'center',
+          alignItems: 'baseline', justifyContent: 'center',
         }}
       >
         <span style={COMPARE_LABEL}>{previousLabel}</span>
-        <span style={COMPARE_LABEL}>현재</span>
         <span data-testid="anomaly-prev-value" style={{ ...COMPARE_VALUE, color: T.textDim }}>{a.prev}</span>
+        <span style={COMPARE_LABEL}>현재</span>
         <span data-testid="anomaly-next-value" style={{ ...COMPARE_VALUE, color: accent }}>{a.next}</span>
       </div>
     </div>
   );
+}
+
+/** `2026-07-26` → `07-26`. 날짜 형식이 아니면 그대로 두고, 없으면 `직전`. */
+function formatCompareDate(raw?: string): string {
+  if (!raw) return '직전';
+  const m = raw.match(/(\d{2})-(\d{2})$/);
+  return m ? `${m[1]}-${m[2]}` : raw;
 }
 
 const COMPARE_LABEL: React.CSSProperties = {
@@ -128,6 +147,7 @@ const COMPARE_LABEL: React.CSSProperties = {
   lineHeight: 1.1,
   letterSpacing: -0.3,
   whiteSpace: 'nowrap',
+  textAlign: 'left',
 };
 
 const COMPARE_VALUE: React.CSSProperties = {
@@ -138,4 +158,6 @@ const COMPARE_VALUE: React.CSSProperties = {
   letterSpacing: -1.4,
   fontVariantNumeric: 'tabular-nums',
   whiteSpace: 'nowrap',
+  textAlign: 'right',
+  justifySelf: 'end',
 };
