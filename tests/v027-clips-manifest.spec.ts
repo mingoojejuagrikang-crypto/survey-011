@@ -182,3 +182,39 @@ test.describe('clips-manifest.json 동봉 (v0.27.0)', () => {
     expect(manifest.clips).toEqual([]);
   });
 });
+
+test('F5 — 커밋 이후 같은 셀에 들어온 비커밋 발화가 sttText를 덮지 않는다', () => {
+  // 🔴 실측(2026-07-27 B세션 row16 횡경): `committedValue=311.1`인데 `sttText="완료"`로 남았다.
+  //    events.json이 시간순이라 "뒤에서 첫 매칭"을 채택하면 **커밋 뒤에 온 다음 명령 발화**가
+  //    감사 메타데이터를 덮는다. 오디오·시트값은 무손상이지만 **다음 클립 감사가 거짓 MISMATCH**를
+  //    내고, 그러면 진짜 오염을 찾는 능력이 같이 죽는다.
+  const events = [
+    { type: 'stt', sessionId: 'S1', row: 16, colId: 'c1', text: '삼백십일 점 일', confidence: 0.97 },
+    { type: 'value', sessionId: 'S1', row: 16, colId: 'c1', text: '311.1', confidence: 0.97 },
+    // 커밋 **이후** 같은 셀 컨텍스트에서 들어온 비커밋 발화(다음 명령).
+    { type: 'stt', sessionId: 'S1', row: 16, colId: 'c1', text: '완료', confidence: 0.42 },
+  ] as unknown as ManifestSourceEvent[];
+  const manifest = buildClipsManifest(
+    [{ file: 'clips/S1:16:c1.webm', key: 'S1:16:c1' }],
+    [{ id: 'S1', rows: [{ index: 16, values: { c1: '311.1' } }] }] as unknown as Session[],
+    events,
+    '0.40.0',
+  );
+  const entry = manifest.clips[0];
+  expect(entry.committedValue, '시트에 올라간 값').toBe('311.1');
+  expect(entry.sttText, '커밋 발화가 감사 신호로 남는다(비커밋 "완료"가 아니라)').toBe('311.1');
+  expect(entry.confidence).toBe(0.97);
+});
+
+test('F5 — value 이벤트가 아예 없으면 stt로 폴백한다(기존 동작 보존)', () => {
+  const events = [
+    { type: 'stt', sessionId: 'S1', row: 2, colId: 'c1', text: '이십오 점 영', confidence: 0.88 },
+  ] as unknown as ManifestSourceEvent[];
+  const manifest = buildClipsManifest(
+    [{ file: 'clips/S1:2:c1.webm', key: 'S1:2:c1' }],
+    [{ id: 'S1', rows: [{ index: 2, values: {} }] }] as unknown as Session[],
+    events,
+    '0.40.0',
+  );
+  expect(manifest.clips[0].sttText, 'value가 없으면 stt가 그대로 쓰인다').toBe('이십오 점 영');
+});

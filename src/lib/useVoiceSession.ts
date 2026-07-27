@@ -14,7 +14,7 @@ import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
-import { audioRouteRevalidate, micAutoReconnect, rowMarked } from './logEvents';
+import { audioRouteRevalidate, foregroundReturn as foregroundReturnEvent, micAutoReconnect, rowMarked } from './logEvents';
 import { resolveFinal } from './voiceFinalResolver';
 import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
 import { hydratePastIndexFallback, prefetchPastIndex, resetPastIndexRetries } from './pastValues';
@@ -2696,6 +2696,16 @@ export function useVoiceSession() {
           void recForTeardown.teardownAudioGraph(evt, decision.backgroundMs);
         }
       }
+      // F6 — 복귀마다 **반드시** 1건. teardown을 건너뛴 복귀가 무기록이면 다음 회차에도
+      // "건너뜀"과 "훅 미동작"을 구별할 수 없다(이번 회차가 정확히 그래서 [MIC-B2] 판정 불가였다).
+      logger.log({
+        type: 'app',
+        extra: foregroundReturnEvent({
+          backgroundMs: decision.backgroundMs,
+          teardown: decision.shouldTeardown ? 'done' : 'skipped',
+          evt,
+        }),
+      });
       const phase = useSessionStore.getState().phase;
       if (phase !== 'active' && phase !== 'complete' && phase !== 'paused') return;
       resumeTtsEngine();
@@ -2890,7 +2900,12 @@ export function useVoiceSession() {
       // ',src=manual[,hold=1]' 접미사 조립까지 buildAnomalyAlert가 담당한다(SOP-003 바이트 계약,
       // 특성화 테스트가 실제 조립 경로를 그대로 검증).
       const alertExtra = getAnomalyAlertData(row);
-      const { logExtra, alert } = buildAnomalyAlert({
+      // 🔴 `alertText`를 반드시 함께 받는다(fb-27-9, 민구 확정 2026-07-27).
+      //    v0.39.0까지 이 줄이 `alertText`를 구조분해에서 빼고 `say()`도 호출하지 않아, **수동 커밋이
+      //    유발한 이상치 알람만 무음**이었다(실기기 20건 중 음성 19/19 발화, 수동 0/1).
+      //    hold=1이면 사용자 응답을 기다리며 진행이 멈추는데 **왜 멈췄는지 소리로 알 수 없는** 상태가
+      //    된다 — 현장에서는 폰을 2~3m 떨어뜨려 두므로 화면을 못 본다(PRINCIPLES §2 시각·청각 일치).
+      const { alertText, logExtra, alert } = buildAnomalyAlert({
         col, v, colName: col.name, next: formatForTts(value), row,
         sampleKey: alertExtra.sampleKey, prevDate: alertExtra.prevDate,
         manual: { hold },
@@ -2910,6 +2925,11 @@ export function useVoiceSession() {
         ...(hold ? { awaitingResponse: true, manualHold: true } : {}),
       });
       playBeep('alert');
+      // 민구 확정(2026-07-27): **음성 경로와 완전 동일하게 전 알람 발화**(hold 여부 무관).
+      //   비-hold 정보성 알람도 말한다 — 값이 이상하다는 사실 자체가 현장에서 즉시 필요한 정보고,
+      //   경로에 따라 들리다 안 들리다 하면 그게 더 혼란스럽다는 판단이다.
+      useSessionStore.getState().setLastTts(alertText);
+      void say(alertText);
     };
 
     const awaiting = awaitingFieldRef.current;

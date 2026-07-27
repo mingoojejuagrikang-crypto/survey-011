@@ -758,7 +758,7 @@ test('FB-A — 듣는 중(green): traveling sweep 바 4개가 edge-sweep 4엣지
   //   상태 표시 계약은 유지된다: 인디케이터 도트가 `||` 글리프로 바뀌고 재개 버튼이 노출된다.
   await expect(statusControl, '일시정지에선 인디케이터가 버튼이 아니다').toHaveCount(0);
   await expect(page.locator('[data-testid="state-dots"]')).toHaveAttribute('data-glyph', 'pause');
-  await expect(page.locator('button[title="재시작"][aria-label="재개"]')).toBeVisible();
+  await expect(page.locator('button[title="재시작"][aria-label="재시작"]')).toBeVisible();
   console.log('✓ FB-A: 듣는 중 4엣지 sweep+상태심볼 fade / paused는 글로우 호흡+정지심볼 fade');
 });
 

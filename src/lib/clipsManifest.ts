@@ -105,17 +105,28 @@ function findLastCellEvent(
   colId: string | null,
 ): { sttText: string | null; confidence: number | null } {
   if (row === null || colId === null) return { sttText: null, confidence: null };
-  // events.json은 append 순서(시간순) — 배열 뒤에서부터 첫 매칭이 "마지막" 이벤트.
+  // 🔴 F5(2026-07-27 실기기 로그 분석) — **`value`(커밋)를 우선하고 `stt`는 `value`가 없을 때만**
+  //    폴백한다. 종전엔 종류를 가리지 않고 "뒤에서 첫 매칭"을 채택해서, 커밋 **이후** 같은 셀에
+  //    들어온 **비커밋 발화**가 감사 메타데이터를 덮었다.
+  //    실측: B세션 row16 횡경이 `committedValue=311.1`인데 `sttText="완료"`(다음 명령 발화)로 남았다.
+  //    오디오 blob·시트값은 무손상이지만, 안 고치면 **다음 클립 감사가 거짓 MISMATCH를 낸다** —
+  //    감사 도구가 못 믿을 신호를 내면 진짜 오염을 찾는 능력이 같이 죽는다.
+  //
+  //    events.json은 append 순서(시간순)이므로 뒤에서부터 훑되, `value`를 만나면 즉시 채택하고
+  //    `stt`는 **가장 마지막 것만 기억**했다가 `value`가 하나도 없을 때 쓴다.
+  let sttFallback: { sttText: string | null; confidence: number | null } | null = null;
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (!e || (e.type !== 'value' && e.type !== 'stt')) continue;
     if (e.sessionId !== sessionId || e.row !== row || e.colId !== colId) continue;
-    return {
+    const picked = {
       sttText: typeof e.text === 'string' ? e.text : null,
       confidence: typeof e.confidence === 'number' ? e.confidence : null,
     };
+    if (e.type === 'value') return picked;
+    if (sttFallback === null) sttFallback = picked;
   }
-  return { sttText: null, confidence: null };
+  return sttFallback ?? { sttText: null, confidence: null };
 }
 
 /** zip 내 clips/ 항목 목록에서 manifest를 만든다. 입력이 뭐가 빠져 있든 throw하지 않고

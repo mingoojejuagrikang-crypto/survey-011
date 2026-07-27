@@ -114,6 +114,28 @@ export function audioRouteRevalidate(fields: {
   })}`;
 }
 
+/** 🔴 F6(2026-07-27 실기기 분석) — **포그라운드 복귀를 빠짐없이 1건 남긴다.**
+ *
+ *  왜 필요한가: `shouldTeardown=false`인 복귀(임계 미달)는 v0.39.0까지 **아무 이벤트도 남기지
+ *  않았다.** 그래서 2026-07-27 회차에서 `mic_teardown` 0건을 두고 "판단해서 건너뛴 것"인지
+ *  "훅이 아예 안 돈 것"인지 **구별할 수 없었고**, [MIC-B2] 판정 사다리가 통째로 미결로 남았다.
+ *  (그 회차의 bg 58.2s < 임계 60s라는 사실조차 `vis_hidden`/`vis_visible` 두 이벤트를 **손으로
+ *  뺀 것**이지 계측이 알려준 게 아니다.)
+ *
+ *  `teardown=skipped`는 "훅은 돌았고 임계 미달이라 안 했다", `done`은 "실제로 했다"를 뜻한다.
+ *  이벤트가 **없으면** 훅이 안 돈 것이다 — 이 삼분법이 다음 회차 판정을 가능하게 만든다. */
+export function foregroundReturn(fields: {
+  backgroundMs: number;
+  teardown: 'skipped' | 'done';
+  evt: string;
+}): string {
+  return `foreground_return:${kv({
+    bg_s: Math.round(fields.backgroundMs / 1000),
+    teardown: fields.teardown,
+    evt: fields.evt,
+  })}`;
+}
+
 export function micTeardown(fields: {
   found: string;
   closed: 'ok' | 'timeout' | 'error';

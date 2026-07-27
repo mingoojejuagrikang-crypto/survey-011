@@ -488,9 +488,16 @@ test('v0.34.0 A1 — 수동 커밋 이상치: 팝업 보류 중 활성 칩 부�
   await expect(page.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
   await expect(page.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
   await waitForActiveChip(page, '횡경');
-  // 알람 TTS는 종전대로 없음(민구 확정 — 시각+비프만).
+  // 🔴 fb-27-9(민구 확정 2026-07-27) — **수동 경로도 음성 경로와 완전히 동일하게 발화한다.**
+  //    종전 계약은 "시각+비프만"이었으나 실기기에서 뒤집혔다: 이 알람은 hold=1이라 사용자 응답을
+  //    기다리며 진행이 멈추는데, 무음이면 **왜 멈췄는지 소리로 알 수 없다.** 현장에서는 폰을
+  //    2~3m 떨어뜨려 두므로 화면을 못 본다(PRINCIPLES §2 시각·청각 일치).
+  //    실측: 실기기 알람 20건 중 음성 경로 19/19 발화, 수동 경로 0/1(유일한 미발화).
   const tts = await page.evaluate(() => (window as unknown as { __ttsLog: string[] }).__ttsLog ?? []);
-  expect(tts.some((t) => t.includes('추세 알람'))).toBe(false);
+  expect(tts.some((t) => t.includes('추세 알람')), '수동 알람도 발화한다').toBe(true);
+  // 발화 문구는 화면 라벨과 **글자까지 같다**([UI-ALERT-1] — 조립부가 anomalyAlarmLabel 하나다).
+  const headline = (await page.locator('[data-testid="anomaly-headline"]').textContent())?.trim();
+  expect(tts.some((t) => t.trim() === headline), 'TTS와 화면 문구가 바이트 동일').toBe(true);
 
   // [확인] → 팝업 해제 + 그제서야 다음 칩(종경)으로 전진.
   await page.locator('[data-testid="anomaly-confirm-btn"]').click();

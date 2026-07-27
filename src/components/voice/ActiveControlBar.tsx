@@ -15,7 +15,7 @@ import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
  * |       인식률 45% / 안내 1.15x
  * ```
  *  - `<` `>`는 **양끝**에 두고 **상태별로 라벨·기능이 전환**된다:
- *      active/complete → `이전` / `다음` · anomaly → `확인` / `수정` · paused → `재개` / `종료`
+ *      active/complete → `이전` / `다음` · anomaly → `확인` / `수정` · paused → `재시작` / `종료`
  *  - 가운데는 상태별 **도트 인디케이터** → 음성 입력 시 **역동 세로파형**(StateIndicator).
  *  - 그 아래 옵션(인식률/안내)을 **얇게**(ActiveControlSteppers, 기본 접힘).
  *
@@ -76,8 +76,13 @@ export function ActiveControlBar({
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
         }}
       >
+        {/* 🔴 일시정지의 왼쪽 버튼 라벨은 **"재시작"**이다(민구 확정 2026-07-27). 파서는 건드리지 않는다.
+            종전 라벨 "재개"는 음성 명령 어휘("재시작")와 달라, 화면을 보고 "재개"라고 말한 사용자의
+            발화가 명령으로 잡히지 않았다(실기기 09:53:58 conf 0.561 미인식).
+            귀로 외운 어휘를 바꾸는 대신 **화면을 어휘에 맞춘다** — 보이는 말과 하는 말이 같아야
+            한다(PRINCIPLES §2 시각·청각 일치). aria-label(label)도 함께 맞춘다. */}
         {mode === 'paused' ? (
-          <EdgeButton kind="text" label="재개" title="재시작" onClick={onTogglePause} accent={T.amber} accentBg={T.amberGlowFaint} />
+          <EdgeButton kind="text" label="재시작" title="재시작" onClick={onTogglePause} accent={T.amber} accentBg={T.amberGlowFaint} />
         ) : mode === 'anomaly' ? (
           <EdgeButton kind="text" testId="anomaly-confirm-btn" label="확인" title="확인" onClick={onAnomalyConfirm} />
         ) : (
@@ -113,7 +118,7 @@ export function ActiveControlBar({
   );
 }
 
-/** 양끝 버튼 — 아이콘형(`<` `>`)과 텍스트형(확인/수정/재개/종료)이 같은 타깃 크기를 쓴다.
+/** 양끝 버튼 — 아이콘형(`<` `>`)과 텍스트형(확인/수정/재시작/종료)이 같은 타깃 크기를 쓴다.
  *  장갑 조작(PRINCIPLES §2) 하한 44px보다 넉넉한 56px 높이를 유지하되, 하단 25%가 얇은 기기에서는
  *  트랙을 넘지 않도록 flex로 수축한다(최소 44px). */
 function EdgeButton({
@@ -124,7 +129,7 @@ function EdgeButton({
   title: string;
   onClick: () => void;
   icon?: ReactNode;
-  /** 위험/상태 강조가 필요한 버튼(재개=amber, 종료·수정=red)만 지정. 인라인 일회색 금지 — 토큰. */
+  /** 위험/상태 강조가 필요한 버튼(재시작=amber, 종료·수정=red)만 지정. 인라인 일회색 금지 — 토큰. */
   accent?: string;
   accentBg?: string;
   testId?: string;

@@ -15,6 +15,7 @@ import {
   micAutoReconnect,
   recoverTimeout,
   audioRouteRevalidate,
+  foregroundReturn,
   micTeardown,
 } from '../src/lib/logEvents';
 
@@ -63,6 +64,16 @@ test('recoverTimeout — 마이크 재획득 타임아웃 신규 바이트 계�
 /** v0.38.1 [MIC-B2] 실기기 판정 바이트 — 이 문자열이 SOP-003 파서와의 계약이다.
  *  R1 초안은 필드를 ':'로 잇고 evt를 `vis:bg=3000s`로 박아 split(':') 파서가 필드를 쪼갰다.
  *  배포 전에 kv(',') 규약으로 교정했고, 여기서 리터럴로 고정해 되돌아가지 못하게 한다. */
+test('foregroundReturn — 복귀마다 1건, teardown 여부를 바이트로 남긴다(F6)', () => {
+  // 🔴 이 이벤트가 없어서 2026-07-27 회차의 [MIC-B2] 판정이 통째로 불가능했다.
+  //    `skipped`(훅은 돌았고 임계 미달) / `done`(실제로 정리) / **이벤트 없음**(훅 미동작)의
+  //    삼분법이 다음 회차 판정을 가능하게 만든다.
+  expect(foregroundReturn({ backgroundMs: 58_231, teardown: 'skipped', evt: 'vis' }))
+    .toBe('foreground_return:bg_s=58,teardown=skipped,evt=vis');
+  expect(foregroundReturn({ backgroundMs: 61_000, teardown: 'done', evt: 'pageshow' }))
+    .toBe('foreground_return:bg_s=61,teardown=done,evt=pageshow');
+});
+
 test('micTeardown — 포그라운드 선-정리 판정 바이트 계약', () => {
   expect(micTeardown({
     found: 'interrupted', closed: 'ok', reattach: 'ok', evt: 'vis', backgroundMs: 3_000_000,

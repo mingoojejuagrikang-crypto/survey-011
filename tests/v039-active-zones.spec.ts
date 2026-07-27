@@ -294,7 +294,11 @@ test('§[3] paused — 중앙 비움 + 상단 "일시정지" + 하단 `<`=재개
 
   // 하단 `<` `>` → 재개 / 종료(§[3]). 재개 버튼은 정확히 하나다(인디케이터는 표시 전용).
   await expect(page.locator('button[title="재시작"]')).toHaveCount(1);
-  await expect(page.locator('button[title="재시작"][aria-label="재개"]')).toBeVisible();
+  // 🔴 라벨 = 음성 명령 어휘와 **같은 말**(민구 확정 2026-07-27). 화면에 "재개"라고 쓰여 있으면
+  //    사용자가 "재개"라고 말하는데 파서는 "재시작"만 받아 인식되지 않는다(실기기 관측).
+  await expect(page.locator('button[title="재시작"][aria-label="재시작"]')).toBeVisible();
+  await expect(page.locator('button[title="재시작"]'), '버튼 글자도 명령 어휘와 같다').toHaveText('재시작');
+  await expect(page.locator('button[aria-label="재개"]'), '옛 라벨은 남아 있지 않다').toHaveCount(0);
   await expect(page.locator('button[title="입력 종료"]')).toBeVisible();
   await expect(page.locator('button[aria-label="이전"]'), '일시정지 중엔 이전/다음이 아니다').toHaveCount(0);
 
