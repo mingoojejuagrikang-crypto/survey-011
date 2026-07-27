@@ -22,7 +22,7 @@ function localISO(d: Date): string {
 }
 export const PREV_ROUND = localISO(new Date(Date.now() - 86_400_000));
 
-/** 1 auto(샘플키) + 12 voice — 402px 폭에서 확실히 2줄을 넘겨 칩존 스크롤 계약이 실제로 물린다. */
+/** 1 auto(샘플키) + 12 voice — 402px 폭에서 한 행을 확실히 넘겨 가로 스크롤 계약이 실제로 물린다. */
 const VOICE_COLS = Array.from({ length: 12 }, (_, i) => ({
   id: `v${i}`,
   name: `측정항목${String(i + 1).padStart(2, '0')}`,
@@ -153,17 +153,6 @@ export async function zoneMetrics(page: Page) {
       centerBottom: center.bottom,
       centerLeft: center.left,
       centerRight: center.right,
-    };
-  });
-}
-
-export async function indicatorOpacity(page: Page) {
-  return page.locator('[data-testid="live-listen-band"]').evaluate((el) => {
-    const dots = (el.querySelector('[data-testid="state-dots"]') as HTMLElement).parentElement!;
-    const wave = (el.querySelector('[data-testid="voice-waveform"]') as HTMLElement).parentElement!;
-    return {
-      dots: Number(getComputedStyle(dots).opacity),
-      wave: Number(getComputedStyle(wave).opacity),
     };
   });
 }

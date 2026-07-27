@@ -20,7 +20,6 @@ const TRACKED_SELECTORS = [
   '[data-testid="voice-control-bar"]',
   '[data-testid="live-listen-band"]',
   '[data-testid="state-dots"]',
-  '[data-testid="voice-waveform"]',
   '[data-testid="voice-status-control"]',
   '[data-testid="column-chip"][data-active="true"]',
   '[data-hero-state]',
@@ -54,10 +53,15 @@ export interface NodePrint {
 
 export interface Fingerprint {
   nodes: Record<string, NodePrint>;
-  /** 도트↔파형 크로스페이드 — fb-27-1(F4)이 지목한 바로 그 두 노드의 opacity. */
-  crossfade: { dots: number; wave: number; voiceLevel: string } | null;
-  /** 도트 그리드가 밴드 상자를 위·아래로 넘친 px — fb-27-5(F2) 겹침의 정량 지표. */
-  dotsOverflow: { top: number; bottom: number; dotsH: number; bandH: number } | null;
+  /** 단일 도트 격자의 실제 마스크. 삭제된 파형 레이어를 요구하면 이 진단이 조용히 null이 된다. */
+  dotMask: { mode: string; lit: number; partial: number; off: number } | null;
+  /** 도트 그리드가 밴드 상자를 넘친 px — fb-27-5(F2) 겹침의 정량 지표. */
+  dotsOverflow: {
+    top: number; right: number; bottom: number; left: number;
+    dotsW: number; dotsH: number; bandW: number; bandH: number;
+  } | null;
+  /** 조절판의 실제 hit-test. `ok=false`면 넘친 도트/다른 상자가 터치 타깃을 가린 것이다. */
+  controlHitTest: Array<{ target: string; hit: string; ok: boolean }> | null;
   /** 화면에 실제로 보이는 텍스트 전체(공백 정규화). */
   allText: string;
   chipScrollTop: number;
@@ -90,33 +94,57 @@ export async function fingerprint(page: Page): Promise<Fingerprint> {
 
     const band = root.querySelector<HTMLElement>('[data-testid="live-listen-band"]');
     const dotsEl = root.querySelector<HTMLElement>('[data-testid="state-dots"]');
-    const waveEl = root.querySelector<HTMLElement>('[data-testid="voice-waveform"]');
-    let crossfade: Fingerprint['crossfade'] = null;
+    let dotMask: Fingerprint['dotMask'] = null;
     let dotsOverflow: Fingerprint['dotsOverflow'] = null;
-    if (band && dotsEl && waveEl) {
-      // `--voice-level`은 도트/파형 래퍼의 **부모**(useAudioLevelVar의 ref)에 실린다. band의
-      // firstElementChild로 잡으면 안 된다 — active에서는 그 자리가 일시정지 <button>이다.
-      const levelHost = dotsEl.parentElement?.parentElement as HTMLElement | null;
-      crossfade = {
-        dots: Number(getComputedStyle(dotsEl.parentElement as HTMLElement).opacity),
-        wave: Number(getComputedStyle(waveEl.parentElement as HTMLElement).opacity),
-        voiceLevel: levelHost ? getComputedStyle(levelHost).getPropertyValue('--voice-level').trim() : '',
+    if (dotsEl) {
+      const opacities = Array.from(dotsEl.querySelectorAll('span'))
+        .map((cell) => Number(getComputedStyle(cell).opacity));
+      dotMask = {
+        mode: dotsEl.dataset.mode ?? '',
+        lit: opacities.filter((opacity) => opacity >= 0.98).length,
+        partial: opacities.filter((opacity) => opacity > 0.02 && opacity < 0.98).length,
+        off: opacities.filter((opacity) => opacity <= 0.02).length,
       };
+    }
+    if (band && dotsEl) {
       const b = band.getBoundingClientRect();
       const d = dotsEl.getBoundingClientRect();
       dotsOverflow = {
         top: round(Math.max(0, b.top - d.top)),
+        right: round(Math.max(0, d.right - b.right)),
         bottom: round(Math.max(0, d.bottom - b.bottom)),
+        left: round(Math.max(0, b.left - d.left)),
+        dotsW: round(d.width),
         dotsH: round(d.height),
+        bandW: round(b.width),
         bandH: round(b.height),
       };
     }
 
+    const hitTargets = [
+      '[data-testid="input-control-toggle"]',
+      '[data-testid="stepper-tolerance"]',
+      '[data-testid="stepper-tts-rate"]',
+    ];
+    const controlHitTest = hitTargets.flatMap((selector) => {
+      const target = root.querySelector<HTMLElement>(selector);
+      if (!target || target.getClientRects().length === 0) return [];
+      const rect = target.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const hitOwner = hit?.closest<HTMLElement>('[data-testid]');
+      return [{
+        target: target.dataset.testid ?? selector,
+        hit: hitOwner?.dataset.testid ?? hit?.tagName.toLowerCase() ?? 'none',
+        ok: hit !== null && (hit === target || target.contains(hit)),
+      }];
+    });
+
     const chipGrid = root.querySelector<HTMLElement>('[data-testid="voice-chip-grid"]');
     return {
       nodes,
-      crossfade,
+      dotMask,
       dotsOverflow,
+      controlHitTest: controlHitTest.length > 0 ? controlHitTest : null,
       allText: norm(root.innerText ?? ''),
       chipScrollTop: chipGrid ? Math.round(chipGrid.scrollTop) : 0,
       // v0.40.0 — 칩존이 가로 스크롤이 되면서 복원 검증 축이 늘었다.
@@ -153,27 +181,33 @@ export function diffFingerprints(live: Fingerprint, preview: Fingerprint): strin
   const extra = Object.keys(preview.nodes).filter((k) => !(k in live.nodes));
   if (extra.length > 0) problems.push(`프리뷰에만 있는 노드: ${extra.join(', ')}`);
 
-  if (live.crossfade && preview.crossfade) {
-    for (const key of ['dots', 'wave'] as const) {
-      const delta = Math.abs(live.crossfade[key] - preview.crossfade[key]);
-      if (delta > OPACITY_TOLERANCE) {
-        problems.push(`크로스페이드 ${key}: ${live.crossfade[key]} → ${preview.crossfade[key]}`);
+  if (live.dotMask && preview.dotMask) {
+    for (const key of ['mode', 'lit', 'partial', 'off'] as const) {
+      if (live.dotMask[key] !== preview.dotMask[key]) {
+        problems.push(`도트 마스크 ${key}: ${live.dotMask[key]} → ${preview.dotMask[key]}`);
       }
     }
-    if (live.crossfade.voiceLevel !== preview.crossfade.voiceLevel) {
-      problems.push(`--voice-level: ${live.crossfade.voiceLevel} → ${preview.crossfade.voiceLevel}`);
-    }
-  } else if (Boolean(live.crossfade) !== Boolean(preview.crossfade)) {
-    problems.push('크로스페이드 노드 존재 여부가 다르다');
+  } else if (Boolean(live.dotMask) !== Boolean(preview.dotMask)) {
+    problems.push('도트 마스크 진단 존재 여부가 다르다');
   }
 
   if (live.dotsOverflow && preview.dotsOverflow) {
-    for (const key of ['top', 'bottom', 'dotsH', 'bandH'] as const) {
+    for (const key of ['top', 'right', 'bottom', 'left', 'dotsW', 'dotsH', 'bandW', 'bandH'] as const) {
       const delta = Math.abs(live.dotsOverflow[key] - preview.dotsOverflow[key]);
       if (delta > RECT_TOLERANCE_PX) {
         problems.push(`도트 넘침 ${key}: ${live.dotsOverflow[key]} → ${preview.dotsOverflow[key]}`);
       }
     }
+  } else if (Boolean(live.dotsOverflow) !== Boolean(preview.dotsOverflow)) {
+    problems.push('도트 넘침 진단 존재 여부가 다르다');
+  }
+
+  if (live.controlHitTest && preview.controlHitTest) {
+    if (JSON.stringify(live.controlHitTest) !== JSON.stringify(preview.controlHitTest)) {
+      problems.push(`조절판 hit-test: ${JSON.stringify(live.controlHitTest)} → ${JSON.stringify(preview.controlHitTest)}`);
+    }
+  } else if (Boolean(live.controlHitTest) !== Boolean(preview.controlHitTest)) {
+    problems.push('조절판 hit-test 진단 존재 여부가 다르다');
   }
 
   if (live.chipScrollTop !== preview.chipScrollTop) {

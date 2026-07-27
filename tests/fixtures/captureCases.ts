@@ -42,23 +42,23 @@ export const CASES: StateCase[] = [
     group: '입력화면 현재상태',
     title: '입력 대기(도트)',
     feedback: 'fb-27-1 기준선',
-    why: '무음(레벨 0) 기준선. 도트만 보이고 파형은 물러나 있어야 하는 상태 — 02와 대조하면 결함이 드러난다.',
+    why: '무음(레벨 0) 기준선. 단일 도트 격자가 마이크 글리프를 그리는 상태 — 02와 대조하면 같은 격자의 모드 전환이 보인다.',
     drive: async (page) => { await injectLevel(page, 0); },
   },
   {
     name: '02-active-lowlevel',
-    group: '결함 재현',
-    title: '저레벨 입력 — 도트·파형 동시 렌더',
+    group: '입력화면 현재상태',
+    title: '저레벨 입력 — 단일 도트 파형',
     feedback: 'fb-27-1 (F4)',
-    why: 'B세션 실측 평균 레벨 0.06 주입. 크로스페이드 게이트가 오디오 레벨의 연속함수라 도트와 파형이 **동시에** 부분 가시가 된다. 결함 자체.',
+    why: 'B세션 실측 평균 레벨 0.06 주입. 별도 파형 레이어 없이 같은 13×7 도트 격자가 파형 모드로 전환된다.',
     drive: async (page) => { await injectLevel(page, 0.06); },
   },
   {
     name: '03-active-highlevel',
     group: '입력화면 현재상태',
-    title: '고레벨 입력 — 파형 전환',
+    title: '고레벨 입력 — 단일 도트 파형',
     feedback: 'fb-27-1 대조군',
-    why: 'A세션 실측 평균 레벨 0.20 주입. 파형이 완전히 올라온 정상 전환 상태 — 02와 나란히 봐야 대조가 성립한다.',
+    why: 'A세션 실측 평균 레벨 0.20 주입. 같은 13×7 도트 격자가 더 큰 진폭의 파형을 그리는 상태.',
     drive: async (page) => { await injectLevel(page, 0.20); },
   },
   {
@@ -86,9 +86,9 @@ export const CASES: StateCase[] = [
   {
     name: '05-anomaly-corrected',
     group: '알람 카드',
-    title: '정정 완료 — `정상 : 복귀`',
+    title: '정정 완료 — 문구 없이 복귀',
     feedback: 'fb-27-8 (F10)',
-    why: '삭제 대상 문구가 실제로 어떻게 보이는지. 오늘 실기기에서 19회 노출됐다.',
+    why: '정정값을 수용한 뒤 `정상 : 복귀` 문구를 다시 띄우지 않고 진행으로 돌아가는 과도 상태.',
     // 이 카드는 에코 TTS 동안에만 떠 있다 — 캡처 뒤에도 살아 있는지 반드시 확인한다.
     holdSelector: '[data-testid="anomaly-alert"][data-status="corrected"]',
     drive: async (page) => {
@@ -103,10 +103,10 @@ export const CASES: StateCase[] = [
   },
   {
     name: '06-panel-open',
-    group: '결함 재현',
-    title: '조절판 확장 — 도트가 패널 위로 넘침',
+    group: '입력화면 현재상태',
+    title: '조절판 확장 — 하단 행동행 완전 숨김',
     feedback: 'fb-27-5 (F2) · fb-27-6 (F1)',
-    why: '🔴 가장 중요한 카드. 확장하면 인디케이터 행이 줄어드는데 StateDots에는 클램프 전 크기가 그대로 전달돼, 도트가 토글/스테퍼 위로 그려진다. 그 도트가 곧 일시정지 버튼이라 오탭이 났다(실기기 4회).',
+    why: '확장 중에는 도트·양끝 행동행을 통째로 숨겨 겹칠 상자와 오탭 경로를 없앤 상태. 토글·스테퍼는 실제 hit-test로 가림이 없는지 검증한다.',
     drive: async (page) => {
       await injectLevel(page, 0);
       await page.locator('[data-testid="input-control-toggle"]').click();
@@ -119,7 +119,7 @@ export const CASES: StateCase[] = [
     group: '입력화면 현재상태',
     title: '일시정지',
     feedback: '§[3] 기준선',
-    why: '중앙 비움 + 상단 배지 + 하단 `<`=재개 / `>`=종료. 오탭이 실제로 만들어낸 화면이기도 하다.',
+    why: '중앙 비움 + 상단 배지 + 하단 `<`=재시작 / `>`=종료.',
     drive: async (page) => {
       await page.locator('button[title="일시정지"]').click({ force: true });
       await expect(page.locator('[data-testid="paused-card"]')).toBeVisible({ timeout: 3000 });
@@ -141,7 +141,7 @@ export const CASES: StateCase[] = [
   },
   {
     name: '09-chipzone-overflow',
-    group: '결함 재현',
+    group: '입력화면 현재상태',
     title: '칩존 오버플로 — 한 행 밖으로 밀린 칩(가로 스크롤)',
     feedback: 'fb-27-2 (F11)',
     why: '15개 칩이 한 행에 늘어서고 402px 폭을 넘긴다. 넘치는 칩은 **가로** 스크롤로만 접근 가능하다(v0.40.0 민구 확정). 진행중 칩이 우측 끝에 오도록 자동 스크롤된 상태로 굳혔다.',

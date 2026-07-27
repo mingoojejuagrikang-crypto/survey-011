@@ -30,7 +30,7 @@ import { diffFingerprints, diffStability, fingerprint, pixelDiff } from './fixtu
 
 test.setTimeout(180_000);
 
-const VERSION = '0.39.0';
+const VERSION = (JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')) as { version: string }).version;
 const COMMIT = (() => {
   try { return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); }
   catch { return 'unknown'; }
@@ -129,14 +129,16 @@ async function captureAndVerify(
     const unstable = diffStability(previewFp, resizedFp);
     const pixels = await pixelDiff(preview, livePng, previewPng);
 
-    const cf = liveFp.crossfade;
+    const mask = liveFp.dotMask;
     const ov = liveFp.dotsOverflow;
+    const hits = liveFp.controlHitTest;
     reportLines.push(
       `## ${meta.name}\n`
       + `- 파일: \`${path.relative(PREVIEW_DIR, file)}\` (${Math.round(html.length / 1024)} KB) · 그룹 \`${meta.group}\` · ${meta.feedback}\n`
       + `- 추적 노드 ${Object.keys(liveFp.nodes).length}개 · 동결 타이포 ${serialized.frozenTypography} / 뷰포트단위 박스 ${serialized.frozenBoxes} / 스크롤 ${serialized.scrollNodes}\n`
-      + (cf ? `- 크로스페이드: --voice-level=\`${cf.voiceLevel}\` → 도트 opacity ${cf.dots} · 파형 opacity ${cf.wave}\n` : '')
-      + (ov ? `- 도트 넘침: 위 ${ov.top}px · 아래 ${ov.bottom}px (도트 ${ov.dotsH}px vs 밴드 ${ov.bandH}px)\n` : '')
+      + (mask ? `- 도트 마스크: mode=\`${mask.mode}\` · 켜짐 ${mask.lit} / 중간 ${mask.partial} / 꺼짐 ${mask.off}\n` : '')
+      + (ov ? `- 도트 넘침: 상/우/하/좌 ${ov.top}/${ov.right}/${ov.bottom}/${ov.left}px (도트 ${ov.dotsW}×${ov.dotsH} vs 밴드 ${ov.bandW}×${ov.bandH})\n` : '')
+      + (hits ? `- 조절판 hit-test: ${hits.map((hit) => `${hit.target}→${hit.hit}:${hit.ok ? 'ok' : 'blocked'}`).join(' · ')}\n` : '')
       + Object.entries(measured).map(([k, v]) => `- 실측 ${k}: **${v}**\n`).join('')
       + `- 화소 대조: ${pixels.width}×${pixels.height} 일치 · 차이 화소 ${pixels.changed}/${pixels.total} (**${pixels.pct}%**)\n`
       + `- **라이브 대비 어긋남: ${drift.length}건** / 창크기 불안정: ${unstable.length}건\n`
@@ -146,9 +148,25 @@ async function captureAndVerify(
 
     // 콘솔에도 남긴다 — 실패 시 러너 출력만 봐도 원인이 보이게.
     console.log(`[capture] ${meta.name}: drift=${drift.length} unstable=${unstable.length} px=${pixels.pct}% nodes=${Object.keys(liveFp.nodes).length}`
-      + (cf ? ` level=${cf.voiceLevel} dots=${cf.dots} wave=${cf.wave}` : '')
-      + (ov ? ` overflow=${ov.top}/${ov.bottom} dots=${ov.dotsH} band=${ov.bandH}` : ''));
+      + (mask ? ` dots=${mask.mode}/${mask.lit}/${mask.partial}/${mask.off}` : '')
+      + (ov ? ` overflow=${ov.top}/${ov.right}/${ov.bottom}/${ov.left}` : '')
+      + (hits ? ` hits=${hits.map((hit) => `${hit.target}:${hit.ok}`).join(',')}` : ''));
 
+    // 🔴 C6 공허 방지 — 삭제된 `voice-waveform`을 요구해 핵심 진단이 항상 null이었던 회귀.
+    // 화면에 도트가 있으면 마스크·overflow가 반드시 계산돼야 하고, 조절판 hit-test도 모든
+    // 현재 상태에서 최소 토글 1곳을 실제로 찔러야 한다. null을 "해당 없음"으로 조용히 넘기지 않는다.
+    const hasDots = Boolean(liveFp.nodes['[data-testid="state-dots"]']);
+    if (hasDots) {
+      expect(mask, `${meta.name}: state-dots가 있는데 마스크 진단이 null`).not.toBeNull();
+      expect(ov, `${meta.name}: state-dots가 있는데 overflow 진단이 null`).not.toBeNull();
+      expect(mask!.lit + mask!.partial + mask!.off, `${meta.name}: 13×7 도트 마스크`).toBe(91);
+    }
+    expect(hits, `${meta.name}: 조절판 hit-test 진단이 null`).not.toBeNull();
+    expect(hits!.every((hit) => hit.ok), `${meta.name}: 조절판 타깃을 다른 상자가 가렸다`).toBe(true);
+    if (meta.name === '06-panel-open') {
+      expect(hits!.map((hit) => hit.target), '펼친 조절판의 토글·스테퍼 3곳을 실제 hit-test한다')
+        .toEqual(['input-control-toggle', 'stepper-tolerance', 'stepper-tts-rate']);
+    }
     expect(drift, `${meta.name}: 프리뷰가 실화면과 어긋난다`).toEqual([]);
     expect(unstable, `${meta.name}: 카드가 뷰어 창 크기에 따라 흔들린다`).toEqual([]);
     // 브리핑 요구 — "두 이미지의 뷰포트 크기 일치".
