@@ -168,6 +168,52 @@ test('칩존 자동 스크롤 — 진행중 칩이 **우측 끝**, 왼쪽엔 값
   expect(after.rightGap, '이미 보이던 칩도 우측 끝으로 재정렬된다').toBeLessThanOrEqual(10);
 });
 
+test('fb-27-2 — 대기 중엔 중앙 항목명을 렌더하지 않는다(칩존이 그 정보를 준다)', async ({ page }) => {
+  // 🔴 민구 원문: "중앙 히어로 영역의 입력 항목 삭제. 칩이 사이즈 업 되었고, 진행 항목
+  //    하이라이트 하기에 없어도 됨." v0.40.0에서 칩이 트랙 한 행을 통째로 쓰므로 중복이다.
+  await boot(page);
+  const hero = page.locator('[data-hero-state="listening"]');
+  await expect(hero).toBeVisible();
+  // 항목명이 화면 어디에도 **중앙에는** 없다. 칩존에는 있어야 한다(정보 자체를 잃은 게 아니다).
+  await expect(page.locator('[data-testid="hero-primary"]'), '대기 중 중앙 항목명 미렌더').toHaveCount(0);
+  const activeChip = page.locator('[data-testid="column-chip"][data-active="true"]');
+  await expect(activeChip, '항목명은 활성 칩이 준다').toContainText('측정항목01');
+  // 🔴 **항목명이 있던 자리**에 빈 줄 간격이 남지 않아야 한다 — 슬롯을 비우는 게 아니라 렌더를
+  //    통째로 건너뛰는 방식이어야 한다(민구 지적: "프리뷰처럼 빈 줄 간격도 남지 않게").
+  //
+  //    ⚠️ 단, `HeroValueSlot`(인식값이 들어올 고정 높이 슬롯)은 **남아 있는 게 맞다.** 그건 지운
+  //    자리의 잔재가 아니라, 발화가 시작될 때 중앙이 위아래로 튀지 않게 미리 잡아둔 공간이다
+  //    (그 슬롯을 없애면 인식값이 나타날 때마다 레이아웃이 점프한다 = 와이어프레임이 금지한
+  //    "안 바뀐 요소가 따라 움직인다"의 재발). 그래서 **자식 개수**로 판정한다 — 항목명 노드가
+  //    사라져 값 슬롯 하나만 남았는가.
+  const m = await hero.evaluate((el) => {
+    const kids = Array.from(el.children) as HTMLElement[];
+    return {
+      childCount: kids.length,
+      hasNameLine: kids.some((k) => (k.textContent ?? '').trim() !== ''),
+      valueSlotHeight: Math.round((kids[0]?.getBoundingClientRect().height) ?? 0),
+      text: (el.innerText ?? '').trim(),
+    };
+  });
+  console.log(`hero(listening): children=${m.childCount} valueSlot=${m.valueSlotHeight}px text="${m.text}"`);
+  expect(m.childCount, '항목명 노드가 사라지고 값 슬롯만 남는다').toBe(1);
+  expect(m.hasNameLine, '글자를 담은 줄이 없다').toBe(false);
+  expect(m.text, '대기 중 중앙은 비어 있다(인식값이 들어올 자리)').toBe('');
+  expect(m.valueSlotHeight, '인식값 슬롯은 유지된다(발화 시 레이아웃 점프 방지)').toBeGreaterThan(40);
+});
+
+test('fb-27-2 대비 — 커밋 직후·검토에서는 항목명이 **남는다**(무차별 삭제가 아니다)', async ({ page }) => {
+  // 🔴 이 대조군이 없으면 "항목명을 전부 지웠다"와 구별되지 않는다. 커밋 직후의 항목명은
+  //    "지금 무엇을 입력하나"가 아니라 **"방금 무엇을 확정했나"** 이고, 그 시점엔 활성 칩이
+  //    이미 다음 항목으로 옮겨가 칩존이 그 정보를 주지 못한다.
+  await boot(page);
+  await fireStt(page, '25.0', 300);
+  const confirmHero = page.locator('[data-hero-state="confirm"]');
+  await expect(confirmHero, '커밋 직후 확인 카드').toBeVisible({ timeout: 3000 });
+  await expect(confirmHero, '확정한 항목명이 보인다').toContainText('측정항목01');
+  await expect(confirmHero, '확정값도 함께').toContainText('25');
+});
+
 test('§공통규칙2·3 — 중앙 정보가 중앙 50% 안에서 가로+세로 중앙정렬', async ({ page }) => {
   await boot(page);
   const zone = await zoneMetrics(page);

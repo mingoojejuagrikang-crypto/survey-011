@@ -167,9 +167,11 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
   await boot(page);
   await startSession(page);
 
-  // 대기 시작: 항목명 '당도' + 파형.
+  // 대기 시작: v0.40.0 fb-27-2 — **중앙 항목명은 렌더하지 않는다**(칩존 활성 칩이 그 정보를 준다).
   await expect(page.locator('[data-hero-state="listening"]')).toBeVisible();
-  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('당도');
+  await expect(page.locator('[data-testid="hero-primary"]'), '대기 중 중앙 항목명 미렌더').toHaveCount(0);
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '항목명은 활성 칩이 준다')
+    .toContainText('당도');
   await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
   const listeningBandHeight = await page.locator('[data-testid="live-listen-band"]').evaluate(
     (el) => el.getBoundingClientRect().height,
@@ -198,7 +200,8 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
 
   // CONFIRM_MS 경과 → **다음 항목(산도)** 대기로 자동 복귀. 행 이동이 아니라 타이머가 만든 복귀다.
   await expect(page.locator('[data-hero-state="listening"]')).toBeVisible({ timeout: 3000 });
-  await expect(page.locator('[data-testid="hero-primary"]'), '복귀 시 다음 항목명').toHaveText('산도');
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '복귀 시 다음 항목은 활성 칩이 가리킨다')
+    .toContainText('산도');
   await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
   console.log('✓ 행 중간 커밋: ✓+값 → ~1.5s 유지 → 다음 항목(산도) 대기 복귀');
 });
@@ -236,7 +239,9 @@ test('R3-FIX-5 — 행 마지막 음성 컬럼 커밋: ✓ 대신 "N행 완료"(
 
   // 행 중간(당도) 커밋 → 확인 플래시가 끝나고 산도 대기까지 진행.
   await fireStt(page, '30.7');
-  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('산도', { timeout: 4000 });
+  // v0.40.0 — 다음 항목 대기로 복귀했음을 **활성 칩**으로 확인한다(중앙 항목명은 이제 없다).
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '산도 대기로 복귀')
+    .toContainText('산도', { timeout: 4000 });
 
   // 행 **마지막**(산도) 커밋의 전이를 통째로 기록.
   await recordHeroTimeline(page);
@@ -268,8 +273,15 @@ test('R3-FIX-5 — 행 마지막 음성 컬럼 커밋: ✓ 대신 "N행 완료"(
     tl.slice(reviewAt).some((f) => f.st === 'confirm'),
     'review 이후엔 확인 플래시가 되살아나지 않는다(FIX-3의 seq 소비 — 과거 burst 재생 방지)',
   ).toBe(false);
-  // 이후 다음 행(2행) 대기로 복귀한다.
-  expect(tl.some((f) => f.st === 'listening' && f.prim === '당도'), '다음 행 대기로 복귀').toBe(true);
+  // 이후 다음 행(2행) 대기로 복귀한다. v0.40.0 fb-27-2 — 대기 상태의 중앙 항목명은 렌더하지
+  //   않으므로(칩존 활성 칩이 그 정보를 준다) `prim`이 아니라 **상태 전이**로 판정한다.
+  //   ⚠️ 여기서 오라클이 약해지지 않게, "listening으로 돌아왔다"에 더해 그 시점의 중앙이
+  //   **비어 있다**(항목명이 되살아나지 않았다)까지 함께 고정한다.
+  const listeningAt = tl.findIndex((f) => f.st === 'listening');
+  expect(listeningAt, '다음 행 대기로 복귀').toBeGreaterThan(reviewAt);
+  expect(tl[listeningAt].prim, '대기 복귀 시 중앙 항목명이 되살아나지 않는다').toBe('');
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '다음 행 포인터=당도')
+    .toContainText('당도');
   console.log('✓ 행 마지막 커밋: review "1행 완료" (✓ 아님 — 확정 스펙 고정)');
 });
 
@@ -316,8 +328,9 @@ test('리뷰#2 — skip-완료 검토는 방금 커밋된 앞 셀(당도)을 보
   await bootOneRow(page);
   await startSession(page);
 
-  // 대기: 당도(row1, awaiting=당도).
-  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('당도', { timeout: 4000 });
+  // 대기: 당도(row1, awaiting=당도). v0.40.0 — 포인터는 **활성 칩**이 가리킨다(중앙 항목명 삭제).
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '대기 포인터=당도')
+    .toContainText('당도', { timeout: 4000 });
 
   // 뒤 컬럼 **산도**를 수동 키패드로 먼저 채운다. awaiting(당도)≠산도라 commitManualValue는
   //   advance하지 않는다 → 포인터는 당도에 그대로, 산도(4.2)만 채워진 부분작성 행이 만들어진다.
@@ -327,7 +340,8 @@ test('리뷰#2 — skip-완료 검토는 방금 커밋된 앞 셀(당도)을 보
   await page.locator('[data-testid="manual-commit"]').click();
   await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
   await expect(page.locator('[data-testid="column-chip"][data-col-name="산도"]')).toContainText('4.2');
-  await expect(page.locator('[data-testid="hero-primary"]'), '포인터는 여전히 당도').toHaveText('당도');
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '포인터는 여전히 당도')
+    .toContainText('당도');
 
   // 이제 **당도**를 음성 커밋 → advance가 이미 채워진 산도(idx1)를 건너뛰고 row1 완료(skip). 1행이라
   //   다음 미완료 행이 없어 announceEndReached로 **검토가 머문다** → 안정적으로 단언한다.

@@ -97,14 +97,27 @@ export function VoiceHero({
         textAlign: 'center', minWidth: 0,
       }}
     >
-      <HeroNameLine
-        checked={checked}
-        accent={accent}
-        reduced={reduced}
-        primary={labelIsPrimary}
-      >
-        {label}
-      </HeroNameLine>
+      {/* 🔴 fb-27-2(민구 확정 2026-07-27) — **대기(listening)에서는 항목명을 렌더하지 않는다.**
+          근거(민구 원문): "중앙 히어로 영역의 입력 항목 삭제. 칩이 사이즈 업 되었고, 진행 항목
+          하이라이트 하기에 없어도 됨." v0.40.0에서 칩이 트랙 한 행을 통째로 써서 항목명이 크게
+          보이고 활성 칩이 하이라이트되므로, 중앙의 같은 글자는 중복이다. 비운 공간은 인식값을
+          크게 쓰는 데 쓴다.
+
+          ⚠️ **조건부로 지우는 것은 listening뿐이다.** confirm(커밋 직후 `✓ 항목명` + 확정값)과
+          review(검토 대기)에서는 그대로 남는다 — 그 상태에서 항목명은 "지금 무엇을 입력하나"가
+          아니라 **"방금 무엇을 확정했나"** 이고, 커밋 직후엔 활성 칩이 이미 다음 항목으로 옮겨가
+          칩존이 그 정보를 주지 못한다. 값이 없는 review의 `N행 완료`도 항목명이 아니라 상태 문구다.
+          (렌더를 통째로 건너뛰므로 빈 줄 간격도 남지 않는다 — 슬롯을 비우는 방식이 아니다.) */}
+      {!interimValue && (
+        <HeroNameLine
+          checked={checked}
+          accent={accent}
+          reduced={reduced}
+          primary={labelIsPrimary}
+        >
+          {label}
+        </HeroNameLine>
+      )}
       <HeroValueSlot>
         {value && (
           interimValue

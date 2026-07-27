@@ -175,9 +175,10 @@ test('B7 — 대기 카드: 항목명 + 슬롯에 맞는 세로 막대 파형(13
   await boot(page);
   await startSession(page);
 
-  const hero = page.locator('[data-testid="hero-primary"]');
-  await expect(hero).toBeVisible();
-  await expect(hero).toHaveText('횡경');
+  // v0.40.0 fb-27-2 — 대기 중 **중앙 항목명은 렌더하지 않는다**. 항목명은 칩존 활성 칩이 준다.
+  await expect(page.locator('[data-testid="hero-primary"]'), '대기 중 중앙 항목명 미렌더').toHaveCount(0);
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '항목명은 활성 칩이 준다')
+    .toContainText('횡경');
 
   // 대기 상태 표식 + "듣는 중" 텍스트 제거(파형이 신호).
   await expect(page.locator('[data-hero-state="listening"]')).toBeVisible();
@@ -385,7 +386,11 @@ test('B7 — prefers-reduced-motion 시 hero 카드 애니메이션 정지(FIX-6
   const cardAnim = await card.evaluate((el) => getComputedStyle(el).animationName);
   expect(cardAnim === 'none' || cardAnim === '').toBeTruthy(); // panel-pulse 미적용
 
+  // v0.40.0 — 대기 중엔 중앙 항목명이 없다(fb-27-2). chip-pop은 **값**에 붙는 애니메이션이므로
+  //   값이 실제로 그려지는 상태(커밋 직후 확인 카드)에서 정지 계약을 잰다.
+  await fireStt(page, '25.0');
   const hero = page.locator('[data-testid="hero-primary"]');
+  await expect(hero).toBeVisible({ timeout: 4000 });
   const heroAnim = await hero.evaluate((el) => getComputedStyle(el).animationName);
   expect(heroAnim === 'none' || heroAnim === '').toBeTruthy(); // chip-pop 미적용
 
@@ -398,20 +403,22 @@ test('B7 — prefers-reduced-motion 시 hero 카드 애니메이션 정지(FIX-6
 test('B7 — listening 외 상태(일시정지) 무동작: hero 파동 대상 자체가 없다 + 글로우 amber', async ({ page }) => {
   await boot(page);
   await startSession(page);
-  await expect(page.locator('[data-testid="hero-primary"]')).toBeVisible();
+  await expect(page.locator('[data-hero-state="listening"]')).toBeVisible();
 
   // 일시정지 — EdgeGlow(zIndex 54, inset:0)가 컨트롤바 위를 덮고 있으므로, 이 클릭 성공 자체가
   // pointer-events:none 통과 증명이기도 하다(force 미사용).
   await page.locator('button[title="일시정지"]').click();
   await page.waitForTimeout(400);
   await expect(page.locator('[data-testid="paused-card"]')).toBeVisible();
-  await expect(page.locator('[data-testid="hero-primary"]')).toHaveCount(0);
+  // 일시정지에서는 hero 자체가 사라진다(중앙 비움 — §[3]). 대기 중엔 항목명이 없으므로
+  // hero-primary가 아니라 **hero 상태 노드**로 판정한다.
+  await expect(page.locator('[data-hero-state]')).toHaveCount(0);
   await expect(page.locator('[data-testid="edge-glow"]')).toHaveAttribute('data-tone', 'amber');
 
   // 재시작 → 다시 듣는 중(green) + hero 복귀.
   await page.locator('button[title="재시작"]').click();
   await page.waitForTimeout(400);
-  await expect(page.locator('[data-testid="hero-primary"]')).toBeVisible();
+  await expect(page.locator('[data-hero-state="listening"]')).toBeVisible();
   await expect(page.locator('[data-testid="edge-glow"]')).toHaveAttribute('data-tone', 'green');
   console.log('✓ 일시정지: hero 파동 대상 제거 + 글로우 amber↔green 전환 + 글로우 아래 버튼 터치 통과');
 });
