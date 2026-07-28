@@ -21,6 +21,7 @@ import { initAutoCapture } from './lib/screenshot';
 import { captureForFeedback, initFeedbackQueueFlush, submitFeedback } from './lib/feedback';
 import { FeedbackModal } from './components/FeedbackModal';
 import { logger } from './lib/logger';
+import { lifecycleSignal, visibilityContext } from './lib/logEvents';
 import { useSessionStore } from './stores/sessionStore';
 import { onTokenSettled } from './lib/googleAuth';
 
@@ -88,14 +89,70 @@ export default function App() {
   // "visibility 상실"(OS 레벨)을 다음 로그부터 분별한다. VoiceScreen 수명과 무관하게 살아 있고,
   // logger가 세션 컨텍스트를 자동 첨부하므로 세션 중이면 sessionId가 실린다.
   useEffect(() => {
+    const awaySignals = new Set<'blur' | 'pagehide' | 'freeze'>();
+    const currentVisibility = (): 'hidden' | 'visible' =>
+      document.visibilityState === 'hidden' ? 'hidden' : 'visible';
+    const logSignal = (
+      signal: 'blur' | 'focus' | 'pagehide' | 'pageshow' | 'freeze' | 'resume',
+      persisted: 'yes' | 'no' | 'na' = 'na',
+    ) => {
+      logger.log({
+        type: 'app',
+        extra: lifecycleSignal({
+          signal,
+          visibility: currentVisibility(),
+          focus: document.hasFocus(),
+          persisted,
+        }),
+      });
+    };
+    const onBlur = () => {
+      awaySignals.add('blur');
+      logSignal('blur');
+    };
+    const onFocus = () => logSignal('focus');
+    const onPageHide = (event: PageTransitionEvent) => {
+      awaySignals.add('pagehide');
+      logSignal('pagehide', event.persisted ? 'yes' : 'no');
+    };
+    const onPageShow = (event: PageTransitionEvent) =>
+      logSignal('pageshow', event.persisted ? 'yes' : 'no');
+    const onFreeze = () => {
+      awaySignals.add('freeze');
+      logSignal('freeze');
+    };
+    const onResume = () => logSignal('resume');
     const onVis = () => {
       logger.log({
         type: 'app',
         extra: `lifecycle:${document.visibilityState === 'hidden' ? 'vis_hidden' : 'vis_visible'}`,
       });
+      logger.log({
+        type: 'app',
+        extra: visibilityContext({
+          state: currentVisibility(),
+          focus: document.hasFocus(),
+          evidence: awaySignals.size > 0 ? [...awaySignals].join('+') : 'none',
+        }),
+      });
+      if (document.visibilityState === 'visible') awaySignals.clear();
     };
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', onPageShow);
+    document.addEventListener('freeze', onFreeze);
+    document.addEventListener('resume', onResume);
     document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', onPageShow);
+      document.removeEventListener('freeze', onFreeze);
+      document.removeEventListener('resume', onResume);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, []);
 
   // v0.33.0 B-4 — 탭 전환 계측(이전엔 완전 무로깅 → 데이터탭 오터치·[STT-16] 재구성 불가).

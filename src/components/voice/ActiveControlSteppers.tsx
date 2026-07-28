@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { T } from '../../tokens';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { logger } from '../../lib/logger';
-import { settingChanged } from '../../lib/logEvents';
+import { inputControlPanelOpened, settingChanged } from '../../lib/logEvents';
 import { speak } from '../../lib/speech';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 
@@ -36,9 +36,16 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
   // v0.33.0 B-6 — recognitionTolerance 로깅 디바운스(이전엔 탭마다 즉시 로깅 → 연타 시 링버퍼 잠식).
   // ttsDebounceRef와 동일 패턴·동일 350ms 창, 최종값만 기록.
   const tolLogDebounceRef = useRef<number | null>(null);
-  const setOpen = (updater: boolean | ((v: boolean) => boolean)) => {
+  const setOpen = (
+    updater: boolean | ((v: boolean) => boolean),
+    source: 'touch' | 'voice',
+  ) => {
     const next = typeof updater === 'function' ? updater(open) : updater;
-    onOpenChange(canExpand ? next : false);
+    const allowedNext = canExpand ? next : false;
+    if (allowedNext && !open) {
+      logger.log({ type: 'app', extra: inputControlPanelOpened(source) });
+    }
+    onOpenChange(allowedNext);
   };
   const setTolerance = (next: number) => {
     const value = clampStep(next, 0.4, 0.9);
@@ -59,7 +66,7 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
     handledUiCommandSeqRef.current = uiCommand.seq;
     const current = useSettingsStore.getState();
     switch (uiCommand.id) {
-      case 'toggleInputControls': setOpen((v) => !v); break;
+      case 'toggleInputControls': setOpen((v) => !v, 'voice'); break;
       case 'recognitionDown': setTolerance(current.recognitionTolerance - 0.05); break;
       case 'recognitionUp': setTolerance(current.recognitionTolerance + 0.05); break;
       case 'guidanceSlower': setTtsRate(current.ttsRate - 0.05); break;
@@ -91,7 +98,7 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
           // v0.33.0 B-7 — 입력 조절 패널 열림/닫힘 계측(ui_suspend/ui_resume의 command 컨벤션).
           // updater 밖에서 로깅(StrictMode의 updater 중복 호출로 이벤트가 2배로 찍히지 않게).
           logger.log({ type: 'command', parsed: open ? 'ui_close' : 'ui_open', extra: 'input_control_panel' });
-          setOpen((v) => !v);
+          setOpen((v) => !v, 'touch');
         }}
         style={{
           minHeight: 42,

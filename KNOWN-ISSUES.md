@@ -392,6 +392,35 @@
 - **출처:** `2026-06-15 v0.7.0 실기기 로그` (민구 제보; 코드 firsthand 확인) → `2026-06-17 v0.11.0 로그`(A/B 무효과 + 민구 토글 제거 결정). 메커니즘 외부 출처 교차확인은 **미수행**(확인 필요).
 - **현재 상태:** ✅PWA 레벨 종결(토글 제거, echoCancellation 항상 ON) — 출력 강제는 AUDIO-ROUTE-1 네이티브 셸로 이관. `src/lib/audioRecorder.ts` acquireStream(echoCancellation:true 고정).
 
+### [WAKELOCK-REACQUIRE-1] 브라우저가 해제한 stale sentinel 때문에 화면 wake lock을 영구 재획득하지 못한다
+- **증상:** 조사 중 브라우저가 화면 wake lock을 한 번 해제하면 이후 `hidden→visible` 복귀에서도
+  재획득하지 못해 화면 자동 꺼짐을 막지 못한다.
+- **원인:** 해제된 `WakeLockSentinel`은 객체가 사라지지 않고 `released=true`인 채 남는데,
+  `useWakeLock`이 `release` 이벤트를 구독하지 않아 `sentinelRef.current`가 계속 truthy였다.
+- **수정(2026-07-28, 미배포):** sentinel의 `release` 이벤트에서 현재 ref를 `null` 처리한다.
+  실제 훅을 켠 회귀 테스트가 브라우저 해제 후 `hidden→visible`을 두 번 반복해 요청 수
+  **1→2→3**을 단언한다. 수정 제거 반증은 첫 복귀에서 기대 2/실제 1로 실패했다.
+- **현재 상태:** 🟡**MONITORING** — 데스크톱 회귀·반증 완료, iOS 실기기 화면 자동 꺼짐/복귀 판정 대기.
+
+### [WAKELOCK-LOG-1] wake lock 획득·해제·재획득 실패가 로그에 전혀 남지 않는다
+- **증상:** wake lock이 성공했는지, 브라우저가 해제했는지, visible 복귀 재요청이 거부됐는지
+  로그만으로 판정할 수 없었다.
+- **수정(2026-07-28, 미배포):** 신규 빌더 이벤트
+  `wake_lock:action=<acquire|reacquire|release>,result=<attempt|ok|failed|unsupported>`를 추가했다.
+  해제 source와 실패 Error.name도 저카디널리티 필드로 남기며 기존 이벤트 extra는 바꾸지 않았다.
+  Playwright가 초기 획득, 브라우저 해제, 재획득 성공, `NotAllowedError` 실패를 실제 발화 순서로 고정한다.
+- **현재 상태:** 🟡**MONITORING** — 자동화 및 바이트 특성화 완료, iOS 실기기 이벤트 수집 대기.
+
+### [SCREEN-LOCK-1] 화면 잠금과 앱 전환이 모두 `lifecycle:vis_hidden`이라 원인을 구별할 수 없다
+- **증상:** 같은 visibility 사이클이 화면 잠금인지 앱 전환인지 로그에 근거가 없어 실기기 제보 축을
+  재구성하지 못했다. `[MIC-B2]`의 60초 백그라운드 문제와는 별도 항목이다.
+- **수정(2026-07-28, 미배포):** 기존 `lifecycle:vis_*` 바이트는 보존하고, 각 visibility 순간의
+  `focus`와 그 사이 실제 관측된 `blur/pagehide/freeze` 증거를 `visibility_context`로 함께 기록한다.
+  `focus/pageshow/resume`을 포함한 원시 신호도 `lifecycle_signal`로 남긴다. 선행 증거가 없으면
+  추측 라벨 대신 **`evidence=none`(구별 불가)** 을 명시한다.
+- **현재 상태:** 🟡**MONITORING** — 합성 신호 회귀·바이트 특성화 완료. 웹 표준만으로 100% 분류하지
+  않으며 iOS 실기기 패턴 수집 후 분석 측에서 판정한다.
+
 ---
 
 ## ④ 정정 · race · 데이터 유실

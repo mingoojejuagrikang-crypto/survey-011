@@ -306,6 +306,11 @@ async function openInputControls(page: Page) {
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('[data-testid="stepper-tolerance"]')).toBeVisible();
   await expect(page.locator('[data-testid="voice-nav-row"]'), '열린 동안 행동 행 전체 숨김 계약').toHaveCount(0);
+  await expect.poll(async () => (
+    await loadLogEventsFromIDB(page)
+  ).some((event) => (
+    event.type === 'app' && event.extra === 'input_control_panel:action=open,source=touch'
+  ))).toBe(true);
 }
 
 async function expectControlsLockedClosed(page: Page) {
@@ -346,6 +351,12 @@ for (const viewport of PHONE_VIEWPORTS) {
     await expectControlsLockedClosed(page);
     await expect(page.locator('button[title="재시작"]')).toBeVisible();
     await expect(page.locator('button[title="입력 종료"]')).toBeVisible();
+    // C7: extra의 기존 `tts_silent` 바이트는 유지하면서 어떤 명령인지 parsed에 반드시 남긴다.
+    await expect.poll(async () => (
+      await loadLogEventsFromIDB(page)
+    ).some((event) => (
+      event.type === 'command' && event.extra === 'tts_silent' && event.parsed === 'pause'
+    ))).toBe(true);
   });
 }
 

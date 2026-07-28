@@ -143,6 +143,56 @@ export function foregroundReturn(fields: {
   })}`;
 }
 
+/** [WAKELOCK-LOG-1] 화면 wake lock의 요청·결과·해제 전 경로.
+ *  실패 reason은 Error.name 같은 저카디널리티 분류만 받는다(원문 메시지/PII 금지). */
+export function wakeLockEvent(fields: {
+  action: 'acquire' | 'reacquire' | 'release';
+  result: 'attempt' | 'ok' | 'failed' | 'unsupported';
+  source?: 'browser' | 'cleanup' | 'late_request';
+  reason?: string;
+}): string {
+  return `wake_lock:${kv({
+    action: fields.action,
+    result: fields.result,
+    ...(fields.source ? { source: fields.source } : {}),
+    ...(fields.reason ? { reason: fields.reason } : {}),
+  })}`;
+}
+
+/** [SCREEN-LOCK-1] visibility 전환 순간까지 실제 관측된 수명주기 신호.
+ *  `evidence=none`은 화면 잠금/앱 전환을 웹 표준 신호만으로 구별하지 못했다는 뜻이다. */
+export function visibilityContext(fields: {
+  state: 'hidden' | 'visible';
+  focus: boolean;
+  evidence: string;
+}): string {
+  return `visibility_context:${kv({
+    state: fields.state,
+    focus: fields.focus,
+    evidence: fields.evidence,
+  })}`;
+}
+
+/** [SCREEN-LOCK-1] blur/pagehide/freeze 및 대응 복귀 신호를 추측 없이 원형대로 기록한다. */
+export function lifecycleSignal(fields: {
+  signal: 'blur' | 'focus' | 'pagehide' | 'pageshow' | 'freeze' | 'resume';
+  visibility: 'hidden' | 'visible';
+  focus: boolean;
+  persisted: 'yes' | 'no' | 'na';
+}): string {
+  return `lifecycle_signal:${kv({
+    signal: fields.signal,
+    vis: fields.visibility,
+    focus: fields.focus,
+    persisted: fields.persisted,
+  })}`;
+}
+
+/** 조절판을 실제로 펼친 횟수(오탭률의 분모). 기존 command 이벤트는 바이트 불변으로 별도 유지한다. */
+export function inputControlPanelOpened(source: 'touch' | 'voice'): string {
+  return `input_control_panel:${kv({ action: 'open', source })}`;
+}
+
 export function micTeardown(fields: {
   found: string;
   closed: 'ok' | 'timeout' | 'error';

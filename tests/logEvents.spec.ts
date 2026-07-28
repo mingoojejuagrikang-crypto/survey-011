@@ -16,6 +16,10 @@ import {
   recoverTimeout,
   audioRouteRevalidate,
   foregroundReturn,
+  wakeLockEvent,
+  visibilityContext,
+  lifecycleSignal,
+  inputControlPanelOpened,
   micTeardown,
 } from '../src/lib/logEvents';
 
@@ -59,6 +63,37 @@ test('micAutoReconnect — 자동 재연결 시도/결과 신규 바이트 계�
 
 test('recoverTimeout — 마이크 재획득 타임아웃 신규 바이트 계약', () => {
   expect(recoverTimeout('auto', 7_000)).toBe('clip_recorder_recover_timeout:auto:ms=7000');
+});
+
+test('wakeLockEvent — 획득/재획득/해제 전 경로 바이트 계약', () => {
+  expect(wakeLockEvent({ action: 'acquire', result: 'attempt' }))
+    .toBe('wake_lock:action=acquire,result=attempt');
+  expect(wakeLockEvent({ action: 'acquire', result: 'ok' }))
+    .toBe('wake_lock:action=acquire,result=ok');
+  expect(wakeLockEvent({ action: 'acquire', result: 'failed', reason: 'NotAllowedError' }))
+    .toBe('wake_lock:action=acquire,result=failed,reason=NotAllowedError');
+  expect(wakeLockEvent({ action: 'acquire', result: 'unsupported' }))
+    .toBe('wake_lock:action=acquire,result=unsupported');
+  expect(wakeLockEvent({ action: 'reacquire', result: 'failed', reason: 'NotAllowedError' }))
+    .toBe('wake_lock:action=reacquire,result=failed,reason=NotAllowedError');
+  expect(wakeLockEvent({ action: 'release', result: 'ok', source: 'browser' }))
+    .toBe('wake_lock:action=release,result=ok,source=browser');
+  expect(wakeLockEvent({ action: 'release', result: 'failed', source: 'cleanup', reason: 'AbortError' }))
+    .toBe('wake_lock:action=release,result=failed,source=cleanup,reason=AbortError');
+});
+
+test('SCREEN-LOCK-1 — visibility 문맥과 원시 lifecycle 신호 바이트 계약', () => {
+  expect(visibilityContext({ state: 'hidden', focus: true, evidence: 'none' }))
+    .toBe('visibility_context:state=hidden,focus=true,evidence=none');
+  expect(visibilityContext({ state: 'visible', focus: false, evidence: 'blur+pagehide' }))
+    .toBe('visibility_context:state=visible,focus=false,evidence=blur+pagehide');
+  expect(lifecycleSignal({ signal: 'pagehide', visibility: 'hidden', focus: false, persisted: 'yes' }))
+    .toBe('lifecycle_signal:signal=pagehide,vis=hidden,focus=false,persisted=yes');
+});
+
+test('inputControlPanelOpened — 조절판 펼침 분모 바이트 계약', () => {
+  expect(inputControlPanelOpened('touch')).toBe('input_control_panel:action=open,source=touch');
+  expect(inputControlPanelOpened('voice')).toBe('input_control_panel:action=open,source=voice');
 });
 
 /** v0.38.1 [MIC-B2] 실기기 판정 바이트 — 이 문자열이 SOP-003 파서와의 계약이다.
