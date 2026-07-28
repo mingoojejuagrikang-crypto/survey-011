@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type Ref } from 'react';
 import { T } from '../../tokens';
 import type { Column } from '../../types';
+import { CHIP_TYPE } from './heroLayout';
 
 /** v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 기능형 컬럼 칩을 **유동 폭 pill 플로우**로 재스타일.
  *  고정 간격 그리드 대신 칩 내부 "항목+값" 길이에 맞는 자연 폭(flex-wrap 플로우, 코덱스 pill 느낌).
@@ -82,7 +83,7 @@ export function ColumnChip({
         alignItems: 'center', justifyContent: 'center',
         gap: '1.5cqh',
         padding: '2cqh 3.5cqw',
-        borderRadius: 999,
+        borderRadius: 16,
         background: bg,
         border: `${isActive || isEditing ? 2 : 1.5}px solid ${border}`,
         color: textColor,
@@ -107,10 +108,10 @@ export function ColumnChip({
       }}
     >
       <span
+        data-testid="column-chip-label"
         style={{
           color: isActive ? activeTone : T.textDim,
-          // 절대 px 단독 금지 — 칩존 트랙에 비례한다(민구 "기기 변경 되어도 일정 비율").
-          fontSize: 'clamp(11px, min(11cqh, 3.4cqw), 22px)',
+          fontSize: CHIP_TYPE.name,
           fontWeight: 700,
           whiteSpace: 'nowrap',
           // ⚠️ overflow:hidden을 여기 두면 span의 **내재 폭 기여가 0**이 돼서 칩이 값을 담을 만큼
@@ -137,7 +138,7 @@ export function ColumnChip({
             background: 'transparent', border: 'none', outline: 'none',
             color: T.text,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-            fontSize: 'clamp(16px, min(24cqh, 8cqw), 40px)', fontWeight: 800,
+            fontSize: CHIP_TYPE.inputValue, fontWeight: 800,
             textAlign: 'center',
           }}
         />
@@ -150,7 +151,7 @@ export function ColumnChip({
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             color: isActive ? T.text : isDone ? T.text : T.textDim,
             // 값이 칩의 주인공이다 — 항목명보다 확실히 크게, 그리고 트랙 비례로.
-            fontSize: 'clamp(18px, min(30cqh, 9cqw), 52px)',
+            fontSize: CHIP_TYPE.value,
             fontWeight: 800,
             letterSpacing: -0.3,
             whiteSpace: 'nowrap',

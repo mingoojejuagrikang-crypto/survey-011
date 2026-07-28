@@ -106,26 +106,23 @@ export function AnomalyAlertPopup({
           {alarmLabel}
         </span>
       )}
-      {/* fb-27-7 2·3·4항(민구 확정 2026-07-27) — 직전/현재를 **좌우 2열 → 상하 2줄**로 바꾸고,
-          라벨을 **값 앞**(같은 줄 왼쪽)에 둔다. 종전은 라벨 행 / 값 행이 분리된 2×2 그리드라
-          "무엇의 값인지"를 눈이 위아래로 오가며 맞춰야 했다. 이제 한 줄이 한 사실을 말한다.
-          두 값은 오른쪽 정렬이라 자릿수가 맞아 크기 비교는 그대로 된다. */}
+      {/* 직전/현재는 상하 2줄을 유지하되, 각 행을 같은 폭의 라벨/값 영역으로 나누고 셀 안에서
+          중앙정렬한다. 내용 폭으로 열을 정하면 짧은 라벨은 좌단, 값은 우단에 붙어 중앙이 비게 된다. */}
       <div
         data-testid="anomaly-comparison"
         style={{
           width: '100%',
           display: 'grid',
-          // 🔴 열만 바꾸고 행을 안 정하면 자식 4개가 한 줄로 흘러 "상하 배치"가 되지 않는다.
-          gridTemplateColumns: 'max-content minmax(0, 1fr)',
+          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
           gridTemplateRows: 'auto auto',
-          columnGap: 'clamp(8px, 3vw, 24px)',
+          columnGap: 'clamp(4px, 1.5vw, 12px)',
           rowGap: 'max(2px, calc(clamp(4px, 0.9vh, 10px) * var(--fit-lo, 1)))',
-          alignItems: 'baseline', justifyContent: 'center',
+          alignItems: 'center', justifyItems: 'center',
         }}
       >
-        <span style={COMPARE_LABEL}>{previousLabel}</span>
+        <span data-testid="anomaly-prev-label" style={COMPARE_LABEL}>{previousLabel}</span>
         <span data-testid="anomaly-prev-value" style={{ ...COMPARE_VALUE, color: T.textDim }}>{a.prev}</span>
-        <span style={COMPARE_LABEL}>현재</span>
+        <span data-testid="anomaly-next-label" style={COMPARE_LABEL}>현재</span>
         <span data-testid="anomaly-next-value" style={{ ...COMPARE_VALUE, color: accent }}>{a.next}</span>
       </div>
     </div>
@@ -147,7 +144,8 @@ const COMPARE_LABEL: React.CSSProperties = {
   lineHeight: 1.1,
   letterSpacing: -0.3,
   whiteSpace: 'nowrap',
-  textAlign: 'left',
+  textAlign: 'center',
+  justifySelf: 'center',
 };
 
 const COMPARE_VALUE: React.CSSProperties = {
@@ -158,6 +156,6 @@ const COMPARE_VALUE: React.CSSProperties = {
   letterSpacing: -1.4,
   fontVariantNumeric: 'tabular-nums',
   whiteSpace: 'nowrap',
-  textAlign: 'right',
-  justifySelf: 'end',
+  textAlign: 'center',
+  justifySelf: 'center',
 };

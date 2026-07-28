@@ -19,6 +19,7 @@ test.setTimeout(90_000);
 
 const PHONE_402 = { width: 402, height: 874 };
 const PHONE_375 = { width: 375, height: 667 };
+const PHONE_390_SHORT = { width: 390, height: 568 };
 
 // 1 auto(seq) + 12 voice float — 402px 폭에서 확실히 2줄을 넘긴다.
 const VOICE_COLS = Array.from({ length: 12 }, (_, i) => ({
@@ -135,6 +136,36 @@ test('FB-B — 칩 그리드가 한 행 + 초과분 가로 스크롤(전체 그�
   expect(scrollH - clientH, '세로 스크롤은 생기지 않는다').toBeLessThanOrEqual(1);
   // 칩존이 화면을 잠식하지 않는다(hero가 자라날 공간 보존 — FB-B의 본래 목적).
   expect(clientH, '칩존이 화면 높이의 30%를 넘지 않는다').toBeLessThanOrEqual(874 * 0.3);
+});
+
+test('[CHIP-TYPO-1] rounded rect + 커진 항목명, 390×568에서도 세로 넘침 없음', async ({ page }) => {
+  await boot(page);
+  const chip = page.locator('[data-testid="column-chip"]').first();
+  const label = chip.locator('[data-testid="column-chip-label"]');
+  const metrics = await chip.evaluate((el) => {
+    const style = getComputedStyle(el);
+    const labelEl = el.querySelector('[data-testid="column-chip-label"]') as HTMLElement;
+    return {
+      height: el.getBoundingClientRect().height,
+      radius: parseFloat(style.borderTopLeftRadius),
+      labelSize: parseFloat(getComputedStyle(labelEl).fontSize),
+    };
+  });
+  expect(metrics.labelSize, 'v0.40.0 항목명 상한 22px보다 커야 한다').toBeGreaterThan(22);
+  expect(metrics.radius, '캡슐 반지름(height / 2)이 아니어야 한다').toBeLessThan(metrics.height / 2 - 1);
+  await expect(label).toBeVisible();
+
+  await page.setViewportSize(PHONE_390_SHORT);
+  await page.waitForTimeout(250);
+  const grid = page.locator('[data-testid="voice-chip-grid"]');
+  const narrow = await grid.evaluate((el) => ({
+    clientHeight: (el as HTMLElement).clientHeight,
+    scrollHeight: (el as HTMLElement).scrollHeight,
+    pageClientWidth: document.documentElement.clientWidth,
+    pageScrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(narrow.scrollHeight - narrow.clientHeight, '390×568 칩존 세로 넘침').toBeLessThanOrEqual(1);
+  expect(narrow.pageScrollWidth - narrow.pageClientWidth, '390×568 페이지 가로 넘침').toBeLessThanOrEqual(1);
 });
 
 // FB-I(민구, "네비는 항상 보여야 함") — 수동 입력 시트가 **열려 있는 동안** 하단 나비가

@@ -27,6 +27,14 @@ export const HERO_TYPE = {
   interim: 'max(24px, calc(clamp(44px, min(19vw, 11vh), 96px) * var(--fit-hi, 1)))',
 } as const;
 
+/** 칩 내부 타이포 SSOT. HERO_TYPE과 같은 뷰포트 양축 + fit 배율 계약을 따른다.
+ *  값이 주인공인 위계는 유지하되, rounded rect가 회수한 세로 공간을 항목명 크기로 돌려준다. */
+export const CHIP_TYPE = {
+  name: 'max(12px, calc(clamp(14px, min(7vw, 3.5vh), 30px) * var(--fit-lo, 1)))',
+  inputValue: 'max(16px, calc(clamp(18px, min(10vw, 5.2vh), 42px) * var(--fit-hi, 1)))',
+  value: 'max(18px, calc(clamp(22px, min(13vw, 6.5vh), 52px) * var(--fit-hi, 1)))',
+} as const;
+
 /** 와이어프레임 §공통규칙1 — 입력화면 공간 배정 **칩존 25% / 중앙 50% / 하단 25%**.
  *  (SSOT: `Deliverables/2026-07-24-survey-011-active-screen-wireframe.md`)
  *
@@ -46,7 +54,7 @@ export const STATE_TYPE = {
   /** 2열 비교의 열 라벨(`직전(YYYY-MM-DD)` / `현재`). */
   compareLabel: 'max(12px, calc(clamp(14px, min(4.2vw, 2.2vh), 21px) * var(--fit-lo, 1)))',
   /** 2열 비교의 값 — 원거리에서 두 값을 한눈에 대조한다(GL-005 가독 하한 22px). */
-  compareValue: 'max(22px, calc(clamp(30px, min(11vw, 6vh), 62px) * var(--fit-hi, 1)))',
+  compareValue: 'max(22px, calc(clamp(30px, min(16vw, 8vh), 62px) * var(--fit-hi, 1)))',
   /** 완료 요약 `완료 : X / N`(§[4]). */
   completeSummary: 'max(24px, calc(clamp(30px, min(10vw, 5.4vh), 56px) * var(--fit-hi, 1)))',
   /** 🔴 알람 중 **실시간 인식값**(fb-27-7 5항 "정상 진행될때의 수준만큼 커야 함").

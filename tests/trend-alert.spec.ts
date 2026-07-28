@@ -337,6 +337,66 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   expect(events.filter((e) => e.extra === 'trend_alert_corrected')).toHaveLength(0);
 });
 
+test('[ALERT-COMPARE-1] 비교 라벨·값은 동일 영역 중앙, 값 62px, 390×568 무넘침', async ({ page }) => {
+  await page.setViewportSize({ width: 402, height: 874 });
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '120.5', 500);
+
+  const comparison = page.locator('[data-testid="anomaly-comparison"]');
+  const metrics = await comparison.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const child = (testId: string) =>
+      el.querySelector(`[data-testid="${testId}"]`) as HTMLElement;
+    const prevLabel = child('anomaly-prev-label').getBoundingClientRect();
+    const prevValueEl = child('anomaly-prev-value');
+    const prevValue = prevValueEl.getBoundingClientRect();
+    const nextLabel = child('anomaly-next-label').getBoundingClientRect();
+    const nextValue = child('anomaly-next-value').getBoundingClientRect();
+    const centerX = (r: DOMRect) => r.x + r.width / 2;
+    const centerY = (r: DOMRect) => r.y + r.height / 2;
+    return {
+      width: box.width,
+      prevLabelX: (centerX(prevLabel) - box.x) / box.width,
+      prevValueX: (centerX(prevValue) - box.x) / box.width,
+      nextLabelX: (centerX(nextLabel) - box.x) / box.width,
+      nextValueX: (centerX(nextValue) - box.x) / box.width,
+      prevCenterDeltaY: Math.abs(centerY(prevLabel) - centerY(prevValue)),
+      nextCenterDeltaY: Math.abs(centerY(nextLabel) - centerY(nextValue)),
+      valueSize: parseFloat(getComputedStyle(prevValueEl).fontSize),
+    };
+  });
+  for (const x of [metrics.prevLabelX, metrics.nextLabelX]) {
+    expect(Math.abs(x - 0.25), '라벨은 왼쪽 영역 가로 중앙').toBeLessThan(0.04);
+  }
+  for (const x of [metrics.prevValueX, metrics.nextValueX]) {
+    expect(Math.abs(x - 0.75), '값은 오른쪽 영역 가로 중앙').toBeLessThan(0.04);
+  }
+  expect(metrics.prevCenterDeltaY, '직전 행 라벨/값 세로 중앙').toBeLessThanOrEqual(1);
+  expect(metrics.nextCenterDeltaY, '현재 행 라벨/값 세로 중앙').toBeLessThanOrEqual(1);
+  expect(metrics.valueSize, '402×874에서 compareValue 62px 상한 도달').toBeGreaterThanOrEqual(61.5);
+
+  await page.setViewportSize({ width: 390, height: 568 });
+  await page.waitForTimeout(300);
+  const narrow = await page.locator('[data-testid="anomaly-alert"]').evaluate((el) => {
+    const comparisonEl = el.querySelector('[data-testid="anomaly-comparison"]') as HTMLElement;
+    return {
+      clientWidth: (el as HTMLElement).clientWidth,
+      scrollWidth: (el as HTMLElement).scrollWidth,
+      clientHeight: (el as HTMLElement).clientHeight,
+      scrollHeight: (el as HTMLElement).scrollHeight,
+      comparisonClientWidth: comparisonEl.clientWidth,
+      comparisonScrollWidth: comparisonEl.scrollWidth,
+    };
+  });
+  expect(narrow.scrollWidth - narrow.clientWidth, '390×568 알람 카드 가로 넘침').toBeLessThanOrEqual(1);
+  expect(narrow.scrollHeight - narrow.clientHeight, '390×568 알람 카드 세로 넘침').toBeLessThanOrEqual(1);
+  expect(
+    narrow.comparisonScrollWidth - narrow.comparisonClientWidth,
+    '390×568 비교 영역 가로 넘침',
+  ).toBeLessThanOrEqual(1);
+});
+
 test('% 변동률 단독 알람 — 종경 pctThreshold 15, 방향 무관 발화(증가/감소)', async ({ page }) => {
   await setupAndStart(page);
 
