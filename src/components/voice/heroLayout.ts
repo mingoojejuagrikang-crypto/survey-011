@@ -30,7 +30,7 @@ export const HERO_TYPE = {
 /** 칩 내부 타이포 SSOT. HERO_TYPE과 같은 뷰포트 양축 + fit 배율 계약을 따른다.
  *  값이 주인공인 위계는 유지하되, rounded rect가 회수한 세로 공간을 항목명 크기로 돌려준다. */
 export const CHIP_TYPE = {
-  name: 'max(12px, calc(clamp(14px, min(7vw, 3.5vh), 30px) * var(--fit-lo, 1)))',
+  name: 'max(12px, calc(clamp(14px, min(7vw, 4.6vh), 30px) * var(--fit-lo, 1)))',
   inputValue: 'max(16px, calc(clamp(18px, min(10vw, 5.2vh), 42px) * var(--fit-hi, 1)))',
   value: 'max(18px, calc(clamp(22px, min(13vw, 6.5vh), 52px) * var(--fit-hi, 1)))',
 } as const;
