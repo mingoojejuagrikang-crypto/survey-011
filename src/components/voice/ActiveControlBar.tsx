@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { T } from '../../tokens';
 import { I } from '../icons';
 import type { GlowTone } from './EdgeGlow';
@@ -52,6 +52,14 @@ export function ActiveControlBar({
 }) {
   // 조절판 확장 상태를 여기서 소유한다 — 열리면 인디케이터·`<`·`>` 행을 숨겨야 하므로.
   const [controlsOpen, setControlsOpen] = useState(false);
+  const controlsExpandable = mode === 'nav';
+  // C3 — 열린 조절판 뒤에서 필수 행동 행이 사라지지 않게 상태 역할이 바뀌는 즉시 접는다.
+  // ActiveState/VoiceScreen 트리는 그대로 두고 이 로컬 표시 상태만 바꾼다([STT-16]).
+  useEffect(() => {
+    if (!controlsExpandable) setControlsOpen(false);
+  }, [controlsExpandable]);
+  // effect 전 한 프레임에도 필수 행동 행이 가려지지 않도록 렌더값은 mode로 함께 제한한다.
+  const panelOpen = controlsExpandable && controlsOpen;
   return (
     <div
       data-testid="voice-control-bar"
@@ -68,7 +76,7 @@ export function ActiveControlBar({
           오탭된다"는 경로가 **구조적으로 불가능**해진다(실기기 오터치 4회의 원인).
           ⚠️ `maxHeight`나 `pointer-events:none`으로 때우지 마라 — 자식 overflow를 못 막고,
              겹침이 남으면 `<` `>`도 같은 위험에 노출된다. 접히면 그대로 돌아온다. */}
-      {!controlsOpen && (
+      {!panelOpen && (
       <div
         data-testid="voice-nav-row"
         style={{
@@ -113,7 +121,12 @@ export function ActiveControlBar({
       </div>
       )}
 
-      <ActiveControlSteppers uiCommand={uiCommand} open={controlsOpen} onOpenChange={setControlsOpen} />
+      <ActiveControlSteppers
+        uiCommand={uiCommand}
+        open={panelOpen}
+        canExpand={controlsExpandable}
+        onOpenChange={setControlsOpen}
+      />
     </div>
   );
 }

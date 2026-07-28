@@ -32,6 +32,10 @@ function localISO(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 const PREV_ROUND = localISO(new Date(Date.now() - 86_400_000));
+const PHONE_VIEWPORTS = [
+  { name: '402x874', width: 402, height: 874 },
+  { name: '375x667', width: 375, height: 667 },
+] as const;
 
 const COLUMNS = [
   { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
@@ -294,6 +298,55 @@ async function commitManual1205(page: Page) {
   }
   await page.locator('[data-testid="manual-commit"]').click();
   await page.waitForTimeout(700);
+}
+
+async function openInputControls(page: Page) {
+  const toggle = page.locator('[data-testid="input-control-toggle"]');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('[data-testid="stepper-tolerance"]')).toBeVisible();
+  await expect(page.locator('[data-testid="voice-nav-row"]'), '열린 동안 행동 행 전체 숨김 계약').toHaveCount(0);
+}
+
+async function expectControlsLockedClosed(page: Page) {
+  const toggle = page.locator('[data-testid="input-control-toggle"]');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(toggle, '필수 행동 상태에서는 재확장을 막는다').toBeDisabled();
+  await expect(page.locator('[data-testid="stepper-tolerance"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="voice-nav-row"]')).toBeVisible();
+  // disabled DOM click도 열림 상태를 되살리지 못해야 한다.
+  await toggle.evaluate((el) => (el as HTMLButtonElement).click());
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+}
+
+for (const viewport of PHONE_VIEWPORTS) {
+  test(`C3 ${viewport.name} — 조절판 열기 → manualHold: 자동 접힘 + [확인]/[수정] 유지`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await setupAndStart(page);
+    await waitForActiveChip(page, '횡경');
+    await openInputControls(page);
+
+    await commitManual1205(page);
+
+    await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible();
+    await expectControlsLockedClosed(page);
+    await expect(page.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
+    await expect(page.locator('[data-testid="anomaly-modify-btn"]')).toBeVisible();
+  });
+
+  test(`C3 ${viewport.name} — 조절판 열기 → paused: 자동 접힘 + [재시작]/[종료] 유지`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await setupAndStart(page);
+    await openInputControls(page);
+
+    // 조절판이 nav 행을 숨긴 상태에서도 음성 일시정지는 유효한 실제 진입 경로다.
+    await fireStt(page, '일시정지', 700);
+
+    await expect(page.locator('[data-testid="paused-card"]')).toBeVisible();
+    await expectControlsLockedClosed(page);
+    await expect(page.locator('button[title="재시작"]')).toBeVisible();
+    await expect(page.locator('button[title="입력 종료"]')).toBeVisible();
+  });
 }
 
 test('v0.34.0 A1 — 수동 커밋 이상치: 진행 보류(활성 칩 부동 + 버튼) → [확인]으로 전진', async ({ page }) => {

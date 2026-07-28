@@ -13,11 +13,13 @@ function clampStep(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value * 100) / 100));
 }
 
-export function ActiveControlSteppers({ uiCommand, open, onOpenChange }: {
+export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange }: {
   uiCommand: VoiceUiCommandSignal | null;
   /** 확장 여부 — **부모가 소유**한다. 열려 있는 동안 하단 인디케이터·`<`·`>`를 숨겨야 하는데
    *  (fb-27-6 오탭 원인 제거), 그 판단이 이 컴포넌트 밖에서 필요하기 때문이다. */
   open: boolean;
+  /** anomaly/paused에서는 확인·수정/재시작·종료가 필수이므로 조절판 재확장을 막는다. */
+  canExpand: boolean;
   onOpenChange: (next: boolean) => void;
 }) {
   const s = useSettingsStore();
@@ -35,7 +37,8 @@ export function ActiveControlSteppers({ uiCommand, open, onOpenChange }: {
   // ttsDebounceRef와 동일 패턴·동일 350ms 창, 최종값만 기록.
   const tolLogDebounceRef = useRef<number | null>(null);
   const setOpen = (updater: boolean | ((v: boolean) => boolean)) => {
-    onOpenChange(typeof updater === 'function' ? updater(open) : updater);
+    const next = typeof updater === 'function' ? updater(open) : updater;
+    onOpenChange(canExpand ? next : false);
   };
   const setTolerance = (next: number) => {
     const value = clampStep(next, 0.4, 0.9);
@@ -83,6 +86,7 @@ export function ActiveControlSteppers({ uiCommand, open, onOpenChange }: {
         type="button"
         data-testid="input-control-toggle"
         aria-expanded={open}
+        disabled={!canExpand}
         onClick={() => {
           // v0.33.0 B-7 — 입력 조절 패널 열림/닫힘 계측(ui_suspend/ui_resume의 command 컨벤션).
           // updater 밖에서 로깅(StrictMode의 updater 중복 호출로 이벤트가 2배로 찍히지 않게).
@@ -102,7 +106,8 @@ export function ActiveControlSteppers({ uiCommand, open, onOpenChange }: {
           alignItems: 'center',
           justifyContent: 'center',
           gap: 8,
-          cursor: 'pointer',
+          cursor: canExpand ? 'pointer' : 'default',
+          opacity: canExpand ? 1 : 0.6,
           touchAction: 'manipulation',
         }}
         title="허용 인식률·안내속도"
