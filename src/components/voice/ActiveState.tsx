@@ -100,6 +100,7 @@ export function ActiveState({
   const reviewCommit = useReviewCommit(completing, row);
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
+  const activeChipValue = currentColId ? rowValues[currentColId] : undefined;
   const [editingColId, setEditingColId] = useState<string | null>(null);
   const [cmdHelpOpen, setCmdHelpOpen] = useState(false);
   const cmdHelpSuspendedRef = useRef(false);
@@ -205,14 +206,21 @@ export function ActiveState({
   const activeChipRef = useRef<HTMLDivElement | null>(null);
   const chipGridRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    const grid = chipGridRef.current;
-    const chip = activeChipRef.current;
-    if (!grid || !chip) return;
-    // offsetLeft는 offsetParent 기준이라 스크롤 컨테이너와 어긋난다 → 화면 좌표 차이로 잰다.
-    const delta = chip.getBoundingClientRect().left - grid.getBoundingClientRect().left;
-    const target = grid.scrollLeft + delta - (grid.clientWidth - chip.offsetWidth) + CHIP_SCROLL_PAD;
-    grid.scrollLeft = Math.max(0, Math.min(grid.scrollWidth - grid.clientWidth, target));
-  }, [currentColId, row]);
+    const alignActiveChip = () => {
+      const grid = chipGridRef.current;
+      const chip = activeChipRef.current;
+      if (!grid || !chip) return;
+      // offsetLeft는 offsetParent 기준이라 스크롤 컨테이너와 어긋난다 → 화면 좌표 차이로 잰다.
+      const delta = chip.getBoundingClientRect().left - grid.getBoundingClientRect().left;
+      const target = grid.scrollLeft + delta - (grid.clientWidth - chip.offsetWidth) + CHIP_SCROLL_PAD;
+      grid.scrollLeft = Math.max(0, Math.min(grid.scrollWidth - grid.clientWidth, target));
+    };
+    alignActiveChip();
+    // C4 — 회전·뷰포트 변화도 같은 산술을 다시 적용한다. 칩/컨테이너를 관측하는 ResizeObserver가
+    // 아니라 window 이벤트만 읽으므로 useFitScale에서 경계한 자기관측 루프가 생기지 않는다.
+    window.addEventListener('resize', alignActiveChip);
+    return () => window.removeEventListener('resize', alignActiveChip);
+  }, [currentColId, row, activeChipValue]);
 
   // ── 상태 파생(단일 지점) ────────────────────────────────────────────────────
   // 수동 입력 시트가 화면을 덮는 동안엔 알람 표시를 접는다(중복 표시 방지). **보류 상태 자체는

@@ -168,6 +168,71 @@ test('칩존 자동 스크롤 — 진행중 칩이 **우측 끝**, 왼쪽엔 값
   expect(after.rightGap, '이미 보이던 칩도 우측 끝으로 재정렬된다').toBeLessThanOrEqual(10);
 });
 
+async function activeChipAlignment(page: Page) {
+  return page.locator('[data-testid="voice-chip-grid"]').evaluate((el) => {
+    const grid = el as HTMLElement;
+    const active = grid.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement;
+    const gridRect = grid.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+    return {
+      value: active.querySelectorAll('span')[1]?.textContent?.trim() ?? '',
+      width: activeRect.width,
+      rightGap: Math.round(gridRect.right - activeRect.right),
+      scrollLeft: Math.round(grid.scrollLeft),
+      maxScroll: Math.round(grid.scrollWidth - grid.clientWidth),
+    };
+  });
+}
+
+async function commitManualValue(page: Page, keys: string[]) {
+  await page.locator('[data-testid="column-chip"][data-active="true"]').click();
+  await expect(page.locator('[data-testid="manual-value-sheet"]')).toBeVisible();
+  for (const key of keys) await page.locator(`[data-testid="manual-key-${key}"]`).click();
+  await page.locator('[data-testid="manual-commit"]').click();
+  await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
+}
+
+for (const vp of [
+  { name: '402×874', viewport: PHONE_402 },
+  { name: '375×667', viewport: PHONE_375 },
+]) {
+  test(`C4 — 같은 활성 칩의 값·폭 변화 후 우측 끝 재정렬 @ ${vp.name}`, async ({ page }) => {
+    await boot(page, vp.viewport);
+    const before = await activeChipAlignment(page);
+    expect(before.maxScroll, '칩존이 실제로 넘친다(공허 방지)').toBeGreaterThan(0);
+    expect(before.scrollLeft, '첫 활성 음성 칩도 이미 우측 끝 정렬 대상이다').toBeGreaterThan(0);
+    expect(Math.abs(before.rightGap - 8), '변경 전 우측 여백 = CHIP_SCROLL_PAD').toBeLessThanOrEqual(2);
+
+    // 첫 음성 칩은 추세 규칙이 있어 수동 120.5 커밋 뒤 manualHold에 머문다.
+    // currentColId/row는 그대로이고 값만 `—`→`120.5`로 바뀌므로 C4 의존성 누락을 직접 찌른다.
+    await commitManualValue(page, ['1', '2', '0', '.', '5']);
+    await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible();
+    const after = await activeChipAlignment(page);
+
+    expect(after.value).toBe('120.5');
+    expect(after.width, '값이 길어져 활성 칩 폭이 실제로 변했다(공허 방지)').toBeGreaterThan(before.width + 1);
+    expect(after.scrollLeft, '늘어난 폭만큼 스크롤을 다시 계산한다').toBeGreaterThan(before.scrollLeft);
+    expect(Math.abs(after.rightGap - 8), '값 변경 뒤에도 우측 여백 = CHIP_SCROLL_PAD').toBeLessThanOrEqual(2);
+  });
+}
+
+test('C4 — 402×874 ↔ 375×667 뷰포트 변화 뒤에도 활성 칩 우측 끝 재정렬', async ({ page }) => {
+  await boot(page, PHONE_402);
+  const initial = await activeChipAlignment(page);
+  expect(initial.scrollLeft, '리사이즈 전에 실제 스크롤 상태다(공허 방지)').toBeGreaterThan(0);
+  expect(Math.abs(initial.rightGap - 8)).toBeLessThanOrEqual(2);
+
+  await page.setViewportSize(PHONE_375);
+  await page.waitForTimeout(100);
+  const narrow = await activeChipAlignment(page);
+  expect(Math.abs(narrow.rightGap - 8), '375×667에서도 우측 여백 유지').toBeLessThanOrEqual(2);
+
+  await page.setViewportSize(PHONE_402);
+  await page.waitForTimeout(100);
+  const restored = await activeChipAlignment(page);
+  expect(Math.abs(restored.rightGap - 8), '402×874 복귀 뒤 우측 여백 유지').toBeLessThanOrEqual(2);
+});
+
 test('fb-27-2 — 대기 중엔 중앙 항목명을 렌더하지 않는다(칩존이 그 정보를 준다)', async ({ page }) => {
   // 🔴 민구 원문: "중앙 히어로 영역의 입력 항목 삭제. 칩이 사이즈 업 되었고, 진행 항목
   //    하이라이트 하기에 없어도 됨." v0.40.0에서 칩이 트랙 한 행을 통째로 쓰므로 중복이다.
