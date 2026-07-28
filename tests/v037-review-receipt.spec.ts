@@ -149,6 +149,55 @@ function oneRowSettings(extra?: Record<string, unknown>) {
   };
 }
 
+function oneRowThreeVoiceSettings() {
+  const settings = oneRowSettings();
+  settings.state.columns.push(
+    { id: 'c10', name: '당도', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+  );
+  return settings;
+}
+
+// ─── [MODIFY-TARGET-1] 마지막 행 완료(atEnd) 수정 타깃 ────────────────────────
+test('[MODIFY-TARGET-1] atEnd bare "수정" → 마지막 항목만 재입력 대상으로 비운다', async ({ page }) => {
+  await bootAndStart(page, oneRowSettings());
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '30.7');
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '40.2', 600);
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
+
+  await fireStt(page, '수정', 600);
+  await waitForActiveChip(page, '종경');
+
+  const first = page.locator('[data-testid="column-chip"][data-col-name="횡경"]');
+  const last = page.locator('[data-testid="column-chip"][data-col-name="종경"]');
+  await expect(first).toContainText('30.7');
+  await expect(last).toContainText('—');
+  await expect(last).not.toContainText('40.2');
+});
+
+test('[MODIFY-TARGET-1] atEnd "수정 <첫컬럼명>" → 명시한 첫 항목을 타깃으로 캐스케이드한다', async ({ page }) => {
+  await bootAndStart(page, oneRowThreeVoiceSettings());
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '30.7');
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '40.2');
+  await waitForActiveChip(page, '당도');
+  await fireStt(page, '12.3', 600);
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
+
+  await fireStt(page, '수정 횡경', 600);
+  await waitForActiveChip(page, '횡경');
+
+  const first = page.locator('[data-testid="column-chip"][data-col-name="횡경"]');
+  const middle = page.locator('[data-testid="column-chip"][data-col-name="종경"]');
+  const last = page.locator('[data-testid="column-chip"][data-col-name="당도"]');
+  await expect(first).toContainText('—');
+  await expect(first).not.toContainText('30.7');
+  await expect(middle).toContainText('—');
+  await expect(last).toContainText('—');
+});
+
 // ─── (a) 마지막 셀 = 수동 입력 ────────────────────────────────────────────────
 test('(a) 앞 셀 음성 + 마지막 셀 수동 입력 → 검토는 수동값(4.2)을 보인다(앞 음성 셀 30.7 오표시 금지)', async ({ page }) => {
   await bootAndStart(page, oneRowSettings());

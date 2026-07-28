@@ -746,10 +746,18 @@ export function useVoiceSession() {
     const vc = voiceColsList();
     const curRow = sess.activeRow;
     const curIdx = sess.activeColIdx;
+    const endSentinel = awaitingFieldRef.current?.kind === 'atEnd'
+      ? awaitingFieldRef.current
+      : null;
+    const endTargetIdx = endSentinel
+      ? vc.findIndex((c) => c.id === endSentinel.colId)
+      : -1;
 
     // Find previous voice col (could be in previous row)
-    let targetRow = curRow;
-    let targetIdx = curIdx - 1;
+    let targetRow = endSentinel?.row ?? curRow;
+    // [MODIFY-TARGET-1] 마지막 행 완료 뒤 bare "수정"은 "직전 인덱스"가 아니라 atEnd 센티넬이
+    // 이미 가리키는 마지막 컬럼을 다시 연다. 센티넬 불일치 시에만 기존 직전-컬럼 규칙으로 폴백.
+    let targetIdx = endTargetIdx >= 0 ? endTargetIdx : curIdx - 1;
     if (reviewTarget) {
       targetRow = reviewTarget.row;
       targetIdx = reviewTarget.idx;
@@ -1347,7 +1355,7 @@ export function useVoiceSession() {
     }
 
     /** '수정' — 명령 발화 클립을 보존한 뒤 수정 모드 진입. 이미 수정 의미론이면 같은 셀 재질문.
-     *  reviewWait에선 v0.34.0 A3 확정 규칙: bare '수정'=포인터 컬럼, "수정 <컬럼명>"=지목 컬럼. */
+     *  reviewWait/atEnd에선 bare '수정'=포인터 컬럼, "수정 <컬럼명>"=지목 컬럼. */
     async function cmdModify(a: AwaitingField, utterance: string): Promise<void> {
       cancelTts();
       // Capture the '수정'/'정정' utterance itself (spoken into the awaiting cell's active clip)
@@ -1368,12 +1376,12 @@ export function useVoiceSession() {
         return;
       }
       // 상호배타 순서 주의 — extractModifyValue는 '수정' 뒤 **임의 텍스트**를 값 후보로 돌려주므로
-      // ("수정 종경" → '종경'), reviewWait에선 컬럼명 매치를 먼저 확인해야 한다(숫자 발화는 컬럼명과
-      // 매치될 수 없어 "수정 30.7" 직접값 경로는 그대로 성립). reviewWait 스코프 한정 — 일반 수정
-      // 의미론(직전 필드·값 추출)은 불변. 직접값 적용 후엔 검토 대기 복귀(enterModifyMode).
+      // ("수정 종경" → '종경'), 완료 행 대기에서는 컬럼명 매치를 먼저 확인해야 한다(숫자 발화는
+      // 컬럼명과 매치될 수 없어 "수정 30.7" 직접값 경로는 그대로 성립). reviewWait/atEnd 한정 —
+      // 일반 수정 의미론(직전 필드·값 추출)은 불변. 직접값 적용 후엔 검토 대기 복귀(enterModifyMode).
       let modifyVal = extractModifyValue(utterance);
       let reviewTarget: { row: number; idx: number } | undefined;
-      if (a.kind === 'reviewWait') {
+      if (a.kind === 'reviewWait' || a.kind === 'atEnd') {
         const vcRw = voiceColsList();
         let idx = Math.max(0, vcRw.findIndex((c) => c.id === a.colId));
         const named = extractModifyColumn(utterance, vcRw.map((c) => c.name));
@@ -1381,8 +1389,10 @@ export function useVoiceSession() {
         if (namedIdx >= 0) {
           idx = namedIdx;
           modifyVal = null; // 컬럼명 지목 — 값 후보('종경' 등 비숫자 잔여)로 오적용 금지
+          reviewTarget = { row: a.row, idx };
+        } else if (a.kind === 'reviewWait') {
+          reviewTarget = { row: a.row, idx };
         }
-        reviewTarget = { row: a.row, idx };
       }
       await enterModifyMode(modifyVal || undefined, pendingCmd, reviewTarget);
     }

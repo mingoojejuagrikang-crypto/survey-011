@@ -1309,3 +1309,22 @@
   (단일 녹음창 4,151ms·4,269ms), 적용 시 2/2 green.
 - **현재 상태:** 🟡 **MONITORING** — 데스크톱 Playwright 수정·반증 완료. iOS 실기기 판정 전에는
   `RESOLVED`로 올리지 않는다.
+
+### [MODIFY-TARGET-1] 마지막 행 완료 뒤 “수정”이 마지막 항목 대신 첫 항목을 타깃함
+- **증상(2026-07-27 실기기):** 마지막 행 입력 완료 뒤 bare “수정”을 말하면 마지막 항목이 아니라
+  첫 음성 항목부터 행 끝까지 화면에서 `—`로 바뀌어, 사용자가 행 전체 데이터가 사라졌다고 오인했다.
+- **데이터 손실 0:** 캐스케이드 clear는 sessionStore **in-memory only**다. 실측 `sessions.json`의
+  마지막 행 값·`complete=true`·`audioClips`는 모두 온전하며, 재완료 전에는 IDB/dataStore의
+  기존 측정값을 덮지 않는 보존 계약도 불변이다.
+- **근인 A:** `atEnd` 센티넬은 마지막 컬럼 `colId`를 이미 가리키지만 `enterModifyMode`가 이를
+  참조하지 않고 `activeColIdx - 1`을 써서 첫 컬럼을 골랐다.
+- **근인 B:** 기존 캐스케이드가 선택된 `targetIdx`부터 행 끝까지 비우므로, 잘못 고른 첫 컬럼 때문에
+  두 값 모두 화면에서 사라졌다. 타깃 선택을 바로잡으면 bare 수정은 마지막 한 칸만 비운다.
+- **수정:** `atEnd` 센티넬 `(row,colId)`을 bare 수정 타깃으로 우선하고, 기존
+  `extractModifyColumn` 호출 스코프를 `reviewWait`에서 `reviewWait | atEnd`로 넓혔다.
+  파서 어휘·캐스케이드·영속 계층은 변경하지 않았다.
+- **재현 범위:** 일반 `active` 중 수정은 기존에도 마지막 항목을 올바르게 골랐고, 결함은 마지막 행
+  완료 후 `atEnd`에 한정된다. 회귀 `tests/v037-review-receipt.spec.ts` 2건, 구현 제거 2/2 red,
+  적용 2/2 green.
+- **현재 상태:** 🟡 **MONITORING** — 데스크톱 Playwright 수정·반증 완료. 음성 명령 실기기 판정 전에는
+  `RESOLVED`로 올리지 않는다.
