@@ -1020,6 +1020,15 @@
 - **권장 수정 방향:** 게이트를 **인식 상태**(interim 존재 등)로 교체하거나 최소한 **히스테리시스 임계**로 중간 구간을 없앤다. 🔴 **조건부 렌더로 바꾸지 말 것** — `VoiceWaveform`의 rAF·IntersectionObserver가 발화마다 teardown되면 [STT-16] 계열 사고가 된다(`StateIndicator` 헤더 주석이 같은 경고를 한다). fb-27-3(파형을 도트 집합으로)과 함께 설계하면 교차 자체가 불필요해질 수 있다.
 - **출처:** `2026-07-27 실기기 로그` + fb-27-1. **현재 상태:** 🔴미수정(v0.39.0).
 
+### [UI-DOT-GHOST-1] 꺼진 셀에도 `dot-breathe`가 붙어 유령 도트가 켜진다
+- **증상(2026-07-28 R2 재실측):** 공용 테스트 하네스의 전역 `animation-duration:0ms!important`만 끄고 실제 duration으로 실행하자, 대기 mic 글리프 진입 약 1.5초 뒤 꺼진 셀 index 45의 computed opacity가 인라인 `0`이 아니라 키프레임 시작값 **`0.62`**였다. 글리프 전이 때는 켜짐→꺼짐으로 바뀐 셀이 이미 active 구간에 있어 더 넓게 재현될 수 있다.
+- **유입 시점:** `f9dd114`(파형을 도트로 통합)가 13×7 **91셀을 항상 DOM에 렌더**하고 opacity 0/1로 전환하는 구조를 도입했다. v0.39.0(`ff75c46`)은 `if (ch !== '#') return null`로 꺼진 셀을 아예 렌더하지 않아 이 결함이 존재할 수 없었다. 즉 오래된 취약 전제가 아니라 어젯밤 새로 들어온 회귀이며, 아직 실기기 배포본에는 노출되지 않았다.
+- **원인:** `@keyframes dot-breathe`가 `opacity:0.62~1`을 소유해 인라인 `opacity:0`보다 우선한다. 모든 셀에 animation을 붙이고 꺼진 셀을 `paused`만 해도, delay가 0인 셀이나 이미 active 구간에 진입한 셀은 키프레임 opacity에서 멈춘다.
+- **수정(v0.40.0 R2 C1):** 꺼진 셀은 `animation:'none'`, 켜진 셀만 상태별 `dot-breathe`를 받는다. 글리프·파형 paint가 켜짐 집합을 바꿀 때 animation도 함께 on/off한다. 인라인 `!important`나 키프레임 opacity 삭제는 사용하지 않아 특이성 싸움을 남기거나 켜진 셀 호흡을 죽이지 않는다.
+- **검증:** `tests/v039-active-zones.spec.ts`가 실제 duration에서 전이 전/직후 150ms/안정 후를 측정해 ①꺼진 셀 computed opacity 정확히 `0` ②animation 대상 인덱스 = 켜진 셀 인덱스 ③전후 켜진 집합 변화까지 단언한다. 수정 전 증거는 `Deliverables/evidence/2026-07-28-r2-c1-before-t1.5s.png`와 `…-opacity.json`.
+- **C5와의 관계:** animation 대상이 대기 mic 기준 91→18셀로 줄어 배터리에는 유리한 방향이지만, 무음 시 91셀 재기록 비용을 측정하지 않았으므로 **C5 해결을 주장하지 않는다.**
+- **출처:** `f9dd114` 도입 → 2026-07-28 R2 실-duration 재현(Codex), Larry R1 기각 폐기·수정안 (A) 확정. **현재 상태:** 🟡MONITORING — 수정·데스크톱 반증 완료, 미배포.
+
 ### [TYPO-CONTRACT-1] "상태별 인라인 폰트 정의 금지" 계약을 우회한 컴포넌트에서 **계약이 막으려던 증상이 그대로 재현됐다**
 - **증상(민구 제보 fb-27-7, 2026-07-27):** "인식된 음성인식 실시간 표현되는 문자도 너무 작음. 정상 진행될때의 수준만큼 커야 함."
 - **원인(소스 확정):** interim 렌더러가 **둘**이고 크기가 다르다.
@@ -1058,6 +1067,13 @@
 ---
 
 ## ⑨ 테스트 / 릴리스 회귀 함정
+
+### [TEST-ANIMATION-ZERO-1] 전역 `animation-duration:0ms!important`가 실제 시각 결함을 false-green으로 가린다
+- **증상(C1에서 확정):** 기존 `v039-active-zones` 픽스처로는 꺼진 셀 computed opacity 테스트가 green이었고, 셀별 delay를 제거해도 계속 green이라 반증이 불가능했다. 전역 0ms를 끄자 제품 수정 전 코드에서 즉시 `0.62`가 관측돼 `[UI-DOT-GHOST-1]` 실제 결함이 드러났다.
+- **범위:** `tests/fixtures/stt.ts`가 `* { animation-duration:0ms!important; transition-duration:0ms!important }`를 주입하고, 같은 문자열 복제까지 합치면 **13개 주입 지점·19개 spec 파일**이 영향을 받는다(2026-07-28 직접 grep). 타이밍 flake를 줄이는 목적은 유효하지만, 이 상태에서 애니메이션 기반 시각 단언을 하면 제품이 아니라 정지된 별도 화면을 측정한다.
+- **회피:** 비시각 STT/상태머신 테스트의 기본 0ms는 유지한다. animation 자체가 오라클인 테스트만 `installVoiceMocks(..., { preserveAnimations:true })`로 명시적으로 실제 duration을 켜고, 수정 제거 red까지 확인한다. C1이 첫 적용 사례다.
+- **범위 밖 기록:** `[UI-WAVE-1]`의 구조적 소멸은 소스에서 두 opacity 교차 레이어가 없어졌다는 근거가 있어 판정이 유효할 수 있으나, 이를 뒷받침한 시각 테스트는 0ms에서 돌았다. R2에서 재개봉하지 않고 Larry의 릴리스 게이트로 넘긴다.
+- **현재 상태:** ⚠️함정 등재 + C1 opt-out 추가. 나머지 영향 spec의 시각 오라클은 미감사.
 
 ### [TEST-UI-1] 테스트를 시각 장식(`REC`, `▶`)에 붙이면 UI 정리 때 깨진다 → **가드레일로 이동**
 - ✅v0.31.0 해결(+2026-07-20 재발 변형 포함). `data-testid` 계약에 붙이는 규칙이라

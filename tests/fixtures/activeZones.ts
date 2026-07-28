@@ -97,10 +97,14 @@ export async function stubSheets(page: Page) {
   });
 }
 
-export async function boot(page: Page, viewport = PHONE_402) {
+export async function boot(
+  page: Page,
+  viewport = PHONE_402,
+  opts?: { preserveAnimations?: boolean },
+) {
   await page.setViewportSize(viewport);
   await stubSheets(page);
-  await installVoiceMocks(page);
+  await installVoiceMocks(page, opts);
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(

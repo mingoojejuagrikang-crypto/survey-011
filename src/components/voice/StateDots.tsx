@@ -63,6 +63,14 @@ const GLYPHS: Record<DotGlyph, string[]> = {
 /** 호흡 주기 — EdgeGlow/voice-status-fade와 같은 상태별 cadence(경고는 빠르게, 일시정지는 느리게). */
 const BREATHE_S: Record<DotGlyph, number> = { mic: 1.75, alert: 0.7, pause: 2.4, check: 2 };
 
+function dotBreatheAnimation(glyph: DotGlyph, index: number): string {
+  const r = Math.floor(index / FIELD_COLS);
+  const c = index % FIELD_COLS;
+  const delay = (Math.hypot(c - (FIELD_COLS - 1) / 2, r - (FIELD_ROWS - 1) / 2)
+    / Math.hypot((FIELD_COLS + 1) / 2, (FIELD_ROWS + 1) / 2)) * 0.45;
+  return `dot-breathe ${BREATHE_S[glyph]}s ease-in-out ${delay.toFixed(2)}s infinite`;
+}
+
 /** 파형 모드 진입 임계 — `VoiceWaveform`의 검증된 값을 그대로 승계한다.
  *  근거: recorder 레벨은 `RMS/LEVEL_REF_RMS` 지수평활이고 프리롤 미가용·teardown 시 **정확히 0**.
  *  대화 발화는 0.2~1.0 → 0.02는 죽은 마이크보다 확실히 위, 조용한 실제 발화보다 한참 아래. */
@@ -105,8 +113,16 @@ export function StateDots({
         if (!el) continue;
         const on = lit[i] === true;
         el.style.opacity = on ? '1' : '0';
-        // 애니메이션은 켜진 셀에만 — 꺼진 셀이 호흡하면 유령 도트가 보인다.
-        el.style.animationPlayState = on ? 'running' : 'paused';
+        // 🔴 꺼진 셀에는 animation 자체가 없어야 한다. paused만 쓰면 이미 active 구간에 들어간
+        // keyframe opacity(0.62~1)가 인라인 opacity:0을 이겨 유령 도트가 남는다([UI-DOT-GHOST-1]).
+        if (!on) {
+          if (el.style.animationName !== 'none') el.style.animation = 'none';
+        } else if (
+          el.style.animationName !== 'dot-breathe'
+          || el.style.animationDuration !== `${BREATHE_S[glyph]}s`
+        ) {
+          el.style.animation = dotBreatheAnimation(glyph, i);
+        }
       }
     };
 
@@ -238,9 +254,7 @@ export function StateDots({
       {Array.from({ length: FIELD_COLS * FIELD_ROWS }, (_, i) => {
         const r = Math.floor(i / FIELD_COLS);
         const c = i % FIELD_COLS;
-        // 중심에서 멀수록 늦게 부푼다 = 안에서 밖으로 번지는 호흡(원거리에서 "살아 있음"으로 읽힌다).
-        const delay = (Math.hypot(c - (FIELD_COLS - 1) / 2, r - (FIELD_ROWS - 1) / 2)
-          / Math.hypot((FIELD_COLS + 1) / 2, (FIELD_ROWS + 1) / 2)) * 0.45;
+        const on = GLYPHS[glyph][r][c] === '#';
         return (
           <span
             key={i}
@@ -255,8 +269,10 @@ export function StateDots({
               background: 'currentColor',
               boxShadow: `0 0 ${Math.round(dot * 0.9)}px currentColor`,
               // 초기 상태는 글리프 — 첫 페인트에 빈 격자가 보이지 않게 한다.
-              opacity: GLYPHS[glyph][r][c] === '#' ? 1 : 0,
-              animation: `dot-breathe ${BREATHE_S[glyph]}s ease-in-out ${delay.toFixed(2)}s infinite`,
+              opacity: on ? 1 : 0,
+              // 중심에서 멀수록 늦게 부푼다. 꺼진 셀은 keyframe opacity가 인라인 0을 이기지 못하게
+              // animation을 아예 두지 않는다([UI-DOT-GHOST-1]).
+              animation: on ? dotBreatheAnimation(glyph, i) : 'none',
               willChange: 'transform, opacity',
             }}
           />

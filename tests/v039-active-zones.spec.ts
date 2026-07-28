@@ -367,6 +367,74 @@ test('🔴 [UI-WAVE-1] 소멸 — 어떤 레벨에서도 도트와 파형이 **�
   console.log(`[UI-WAVE-1] sweep: ${seen.join(' ')}`);
 });
 
+async function dotOpacitySnapshot(page: Page) {
+  return page.locator('[data-testid="state-dots"]').evaluate((el) => {
+    const cells = Array.from(el.querySelectorAll('span')) as HTMLElement[];
+    const litIndices: number[] = [];
+    const animatedIndices: number[] = [];
+    const off: Array<{ index: number; computedOpacity: string }> = [];
+    cells.forEach((cell, index) => {
+      if (cell.style.opacity === '1') litIndices.push(index);
+      else if (cell.style.opacity === '0') {
+        off.push({ index, computedOpacity: getComputedStyle(cell).opacity });
+      }
+      if (getComputedStyle(cell).animationName === 'dot-breathe') animatedIndices.push(index);
+    });
+    return {
+      glyph: el.getAttribute('data-glyph') ?? '',
+      cellCount: cells.length,
+      litIndices,
+      animatedIndices,
+      off,
+    };
+  });
+}
+
+function expectNoGhostDots(
+  snapshot: Awaited<ReturnType<typeof dotOpacitySnapshot>>,
+  label: string,
+) {
+  expect(snapshot.cellCount, `${label}: 13×7 격자가 실제로 존재한다`).toBe(91);
+  expect(snapshot.litIndices.length, `${label}: 켜진 셀이 존재한다`).toBeGreaterThan(0);
+  expect(snapshot.off.length, `${label}: 꺼진 셀이 존재한다`).toBeGreaterThan(0);
+  expect(snapshot.litIndices.length + snapshot.off.length, `${label}: 모든 셀을 켜짐/꺼짐으로 분류했다`)
+    .toBe(snapshot.cellCount);
+  expect(
+    [...new Set(snapshot.off.map((cell) => cell.computedOpacity))],
+    `${label}: 꺼진 셀의 computed opacity는 정확히 0`,
+  ).toEqual(['0']);
+  expect(snapshot.animatedIndices, `${label}: animation 대상은 켜진 셀뿐`).toEqual(snapshot.litIndices);
+}
+
+for (const vp of [
+  { name: '402×874', viewport: PHONE_402 },
+  { name: '375×667', viewport: PHONE_375 },
+]) {
+  test(`C1 [UI-DOT-GHOST-1] — 전이 전·직후·안정 후 꺼진 셀 opacity=0 @ ${vp.name}`, async ({ page }) => {
+    // 공용 STT 픽스처의 전역 0ms를 끄고 제품 animation duration 그대로 측정한다.
+    await boot(page, vp.viewport, { preserveAnimations: true });
+    await injectLevel(page, 0);
+    await page.waitForTimeout(600); // hangover 종료 뒤 대기 글리프 안정 상태
+    const before = await dotOpacitySnapshot(page);
+    expect(before.glyph).toBe('mic');
+    expectNoGhostDots(before, '전이 전 mic');
+
+    await page.locator('button[title="일시정지"]').click({ force: true });
+    await expect(page.locator('[data-testid="state-dots"]')).toHaveAttribute('data-glyph', 'pause');
+    await page.waitForTimeout(150); // Larry 실측과 같은 전이 직후 창
+    const justAfter = await dotOpacitySnapshot(page);
+    expect(justAfter.glyph).toBe('pause');
+    expectNoGhostDots(justAfter, '전이 직후 pause');
+    // 전이가 일어나지 않아 통과하는 공허한 테스트를 막는다.
+    expect(justAfter.litIndices, '켜진 셀 인덱스 집합이 실제로 바뀐다').not.toEqual(before.litIndices);
+
+    await page.waitForTimeout(700); // delay 상한(0.45s)을 지난 안정 상태도 별도 측정
+    const stable = await dotOpacitySnapshot(page);
+    expectNoGhostDots(stable, '전이 안정 후 pause');
+    expect(stable.litIndices, '안정 후에도 pause 글리프가 유지된다').toEqual(justAfter.litIndices);
+  });
+}
+
 test('[UI-WAVE-1] hangover — 어절 사이 침묵에 글리프로 튀지 않는다', async ({ page }) => {
   // 말은 뚝뚝 끊긴다. 단순 임계면 한 문장 안에서 글리프↔파형이 여러 번 튀어 원거리에서
   // 고장으로 읽힌다. 들어갈 때 즉시 / 나올 때 지연이라는 비대칭이 그걸 막는다.

@@ -26,7 +26,8 @@ import type { Page } from '@playwright/test';
  *    수백ms~수초의 축약)로 발화 + window.__ttsLog에 문구 적재. 동기 onend는 TTS를 기다리는
  *    상태 전이(advance/review/확인 플래시)를 페인트 없이 접어 false-green을 만든다
  *    ([TEST-TTS-MOCK-1] 코드 확정 — 그래서 복붙 원본과 달리 여기서는 비동기가 기본).
- *  - 애니메이션/트랜지션 0ms 스타일(타이밍 flake 제거).
+ *  - 애니메이션/트랜지션 0ms 스타일(타이밍 flake 제거). 시각 애니메이션 자체를 검증할 때는
+ *    `preserveAnimations:true`로 이 전역 오버라이드를 반드시 끈다([TEST-ANIMATION-ZERO-1]).
  *  - SpeechRecognition/webkitSpeechRecognition → MockSTT. 인스턴스는 window.__mockSTT로 노출되고
  *    fireResult(단일)·fireResultWithAlts(대안 포함, [STT-15] 재현)를 제공한다. */
 export const VOICE_MOCK_INIT_SCRIPT = `
@@ -57,6 +58,7 @@ export const VOICE_MOCK_INIT_SCRIPT = `
     catch(e2) { try { window.speechSynthesis = mockSynth; } catch(e3) {} }
   }
   var _addStyle = function() {
+    if (window.__preserveTestAnimations === true) return;
     var s = document.createElement('style');
     s.textContent = '* { animation-duration: 0ms !important; transition-duration: 0ms !important; }';
     (document.head || document.documentElement).appendChild(s);
@@ -105,14 +107,21 @@ export const VOICE_MOCK_INIT_SCRIPT = `
 /** 페이지에 STT/TTS 목 주입 — page.goto 전에 호출한다.
  *  ttsOnendDelayMs: TTS onend 비동기 지연(기본 200ms — [TEST-TTS-MOCK-1] 권장). TTS-대기 전이를
  *  단언하지 않는 순수 파서/즉답 spec만 0으로 낮춰라(그래도 setTimeout(0) = 비동기 유지). */
-export async function installVoiceMocks(page: Page, opts?: { ttsOnendDelayMs?: number }): Promise<void> {
+export async function installVoiceMocks(page: Page, opts?: {
+  ttsOnendDelayMs?: number;
+  /** 시각 애니메이션 자체를 검증하는 스펙만 true. 기본 0ms는 다수 비시각 스펙의 flake 억제 계약. */
+  preserveAnimations?: boolean;
+}): Promise<void> {
   if (opts?.ttsOnendDelayMs !== undefined) {
     await page.addInitScript(
       (d) => { (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = d; },
       opts.ttsOnendDelayMs,
     );
   }
-  await page.addInitScript({ content: VOICE_MOCK_INIT_SCRIPT });
+  const mockScript = opts?.preserveAnimations
+    ? `window.__preserveTestAnimations = true;\n${VOICE_MOCK_INIT_SCRIPT}`
+    : VOICE_MOCK_INIT_SCRIPT;
+  await page.addInitScript({ content: mockScript });
 }
 
 /** final 인식 결과 1건 주입 후 처리 대기. */

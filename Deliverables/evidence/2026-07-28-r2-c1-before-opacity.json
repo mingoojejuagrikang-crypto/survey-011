@@ -1,0 +1,326 @@
+{
+  "capturedAt": "2026-07-28T00:19:04.872Z",
+  "viewport": {
+    "width": 402,
+    "height": 874
+  },
+  "phase": "mic glyph, approximately 1.5s after ActiveState entry",
+  "snapshot": {
+    "glyph": "mic",
+    "cellCount": 91,
+    "litIndices": [
+      5,
+      6,
+      7,
+      18,
+      19,
+      20,
+      31,
+      32,
+      33,
+      43,
+      47,
+      57,
+      58,
+      59,
+      71,
+      83,
+      84,
+      85
+    ],
+    "off": [
+      {
+        "index": 0,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 1,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 2,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 3,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 4,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 8,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 9,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 10,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 11,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 12,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 13,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 14,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 15,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 16,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 17,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 21,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 22,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 23,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 24,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 25,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 26,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 27,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 28,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 29,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 30,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 34,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 35,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 36,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 37,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 38,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 39,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 40,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 41,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 42,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 44,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 45,
+        "computedOpacity": "0.62"
+      },
+      {
+        "index": 46,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 48,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 49,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 50,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 51,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 52,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 53,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 54,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 55,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 56,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 60,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 61,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 62,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 63,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 64,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 65,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 66,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 67,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 68,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 69,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 70,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 72,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 73,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 74,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 75,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 76,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 77,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 78,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 79,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 80,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 81,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 82,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 86,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 87,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 88,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 89,
+        "computedOpacity": "0"
+      },
+      {
+        "index": 90,
+        "computedOpacity": "0"
+      }
+    ]
+  }
+}
