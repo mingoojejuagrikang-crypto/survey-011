@@ -97,6 +97,56 @@ test('칩존 — 한 행 유지 + 초과 칩은 **가로** 스크롤(활성칩 �
   expect(anim, '활성칸 점멸').toBe('chip-pulse');
 });
 
+for (const vp of [
+  { name: '402×874', viewport: PHONE_402 },
+  { name: '375×667', viewport: PHONE_375 },
+]) {
+  test(`§공통규칙4 [TEST-ANIMATION-ZERO-1] — 활성 칩만 실시간 점멸 @ ${vp.name}`, async ({ page }) => {
+    // 전역 animation-duration:0ms 하네스를 끄고 제품의 1.2초 주기를 그대로 측정한다.
+    await boot(page, vp.viewport, { preserveAnimations: true });
+
+    const active = page.locator('[data-testid="column-chip"][data-active="true"]');
+    await expect(active, '활성 칩이 정확히 하나 존재한다(공허 방지)').toHaveCount(1);
+    await expect(active, '활성 칩이 실제로 보인다').toBeVisible();
+    await expect(active, '활성 칩 상태 계약').toHaveAttribute('data-active', 'true');
+
+    const inactive = page.locator('[data-testid="column-chip"][data-active="false"]').first();
+    await expect(inactive, '비활성 대조 칩이 존재한다').toHaveCount(1);
+    await expect(inactive, '비활성 대조 칩이 실제로 보인다').toBeVisible();
+    await expect(inactive, '비활성 칩 상태 계약').toHaveAttribute('data-active', 'false');
+
+    const animation = await active.evaluate((el) => {
+      const cs = getComputedStyle(el as HTMLElement);
+      return { name: cs.animationName, duration: cs.animationDuration };
+    });
+    expect(animation.name, '활성 칩은 chip-pulse를 실행한다').toBe('chip-pulse');
+    expect(animation.duration, '제품의 실 점멸 주기는 1.2초다').toBe('1.2s');
+
+    const fingerprints: Array<{ active: string; inactive: string }> = [];
+    for (let i = 0; i < 9; i++) {
+      fingerprints.push(await page.locator('[data-testid="voice-chip-grid"]').evaluate((el) => {
+        const activeChip = el.querySelector(
+          '[data-testid="column-chip"][data-active="true"]',
+        ) as HTMLElement;
+        const inactiveChip = el.querySelector(
+          '[data-testid="column-chip"][data-active="false"]',
+        ) as HTMLElement;
+        return {
+          active: Number(getComputedStyle(activeChip).opacity).toFixed(3),
+          inactive: Number(getComputedStyle(inactiveChip).opacity).toFixed(3),
+        };
+      }));
+      if (i < 8) await page.waitForTimeout(150);
+    }
+
+    const activeFrames = [...new Set(fingerprints.map((sample) => sample.active))];
+    const inactiveFrames = [...new Set(fingerprints.map((sample) => sample.inactive))];
+    console.log(`[chip-pulse] ${vp.name}: ${JSON.stringify({ activeFrames, inactiveFrames })}`);
+    expect(activeFrames.length, '활성 칩 opacity가 시간에 따라 실제로 변한다').toBeGreaterThan(1);
+    expect(inactiveFrames.length, '비활성 칩 opacity는 시간에 따라 변하지 않는다').toBe(1);
+  });
+}
+
 test('칩존 자동 스크롤 — 진행중 칩이 **우측 끝**, 왼쪽엔 값이 찍힌 완료 칩(민구 확정)', async ({ page }) => {
   // 🔴 이 오라클이 지키는 결정: "다음 항목 보기"가 아니라 **입력 확인 영역**이다.
   //    칩이 '항목+값'을 담으므로 왼쪽에 남는 완료 칩이 방금 넣은 값을 확인해 준다.
