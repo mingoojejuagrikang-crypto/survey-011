@@ -435,6 +435,80 @@ for (const vp of [
   });
 }
 
+for (const vp of [
+  { name: '402×874', viewport: PHONE_402 },
+  { name: '375×667', viewport: PHONE_375 },
+]) {
+  test(`C5 — 무음 대기 2초 opacity 쓰기 0 + 파형 프레임 갱신 @ ${vp.name}`, async ({ page }) => {
+    await boot(page, vp.viewport, { preserveAnimations: true });
+    await injectLevel(page, 0);
+    await page.waitForTimeout(600);
+
+    await page.locator('[data-testid="state-dots"]').evaluate((el) => {
+      const meter = { count: 0, startedAt: performance.now() };
+      Array.from(el.querySelectorAll('span')).forEach((cell) => {
+        const style = (cell as HTMLElement).style;
+        Object.defineProperty(style, 'opacity', {
+          configurable: true,
+          get: () => style.getPropertyValue('opacity'),
+          set: (value: string) => {
+            meter.count += 1;
+            style.setProperty('opacity', value);
+          },
+        });
+      });
+      (window as unknown as { __dotOpacityWriteMeter: typeof meter }).__dotOpacityWriteMeter = meter;
+    });
+
+    await page.waitForTimeout(2_000);
+    const measured = await page.evaluate(() => {
+      const meter = (window as unknown as {
+        __dotOpacityWriteMeter: { count: number; startedAt: number };
+      }).__dotOpacityWriteMeter;
+      return { count: meter.count, elapsedMs: performance.now() - meter.startedAt };
+    });
+    console.log(`[C5 idle] ${vp.name}: ${JSON.stringify(measured)}`);
+    expect(measured.count, '안정된 무음 글리프는 같은 opacity를 재기록하지 않는다').toBe(0);
+
+    // 파형 진입은 cache가 신뢰 불가한 경계라 첫 프레임을 전량 쓰고, 이후에는 실제 변화만 쓴다.
+    await injectLevel(page, 0.85);
+    await expect(page.locator('[data-testid="state-dots"]')).toHaveAttribute('data-mode', 'wave');
+    const entryWrites = await page.evaluate(() => (
+      window as unknown as { __dotOpacityWriteMeter: { count: number } }
+    ).__dotOpacityWriteMeter.count);
+    expect(entryWrites, '파형 진입 첫 프레임은 91셀 전량 쓰기로 재동기화한다').toBeGreaterThanOrEqual(91);
+
+    await page.evaluate(() => {
+      const meter = (window as unknown as {
+        __dotOpacityWriteMeter: { count: number; startedAt: number };
+      }).__dotOpacityWriteMeter;
+      meter.count = 0;
+      meter.startedAt = performance.now();
+    });
+    const fingerprints: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      await page.waitForTimeout(125);
+      fingerprints.push(await page.locator('[data-testid="state-dots"]').evaluate((el) => (
+        Array.from(el.querySelectorAll('span'))
+          .map((cell) => (cell as HTMLElement).style.opacity)
+          .join('')
+      )));
+    }
+    const waveMeasured = await page.evaluate(() => {
+      const meter = (window as unknown as {
+        __dotOpacityWriteMeter: { count: number; startedAt: number };
+      }).__dotOpacityWriteMeter;
+      return { count: meter.count, elapsedMs: performance.now() - meter.startedAt };
+    });
+    const distinctFrames = new Set(fingerprints).size;
+    console.log(
+      `[C5 wave] ${vp.name}: ${JSON.stringify({ ...waveMeasured, distinctFrames, entryWrites })}`,
+    );
+    expect(waveMeasured.count, '파형 모드에서는 실제 셀 변화가 DOM에 계속 반영된다').toBeGreaterThan(0);
+    expect(distinctFrames, '파형이 시간에 따라 끊김 없이 다른 프레임을 그린다').toBeGreaterThan(1);
+  });
+}
+
 test('[UI-WAVE-1] hangover — 어절 사이 침묵에 글리프로 튀지 않는다', async ({ page }) => {
   // 말은 뚝뚝 끊긴다. 단순 임계면 한 문장 안에서 글리프↔파형이 여러 번 튀어 원거리에서
   // 고장으로 읽힌다. 들어갈 때 즉시 / 나올 때 지연이라는 비대칭이 그걸 막는다.

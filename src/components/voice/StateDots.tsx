@@ -105,14 +105,30 @@ export function StateDots({
     const reduced =
       typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // effect-local 캐시다. glyph/active/오디오 공급자가 바뀌어 effect가 다시 만들어지면
+    // null에서 시작해 첫 paint를 전량 쓰기로 강제한다. 전역 상태와 DOM의 불일치가 남지 않는다.
+    let paintedLit: boolean[] | null = null;
 
     /** 켜진 셀만 보이게 한다. **글리프와 파형이 같은 셀 집합을 공유**하므로 겹칠 수가 없다. */
-    const paint = (lit: boolean[]) => {
+    const paint = (lit: boolean[], force = false) => {
+      const cacheTrusted =
+        !force
+        && paintedLit !== null
+        && paintedLit.length === cells.length
+        && lit.length === cells.length;
+      let allCellsPresent = true;
       for (let i = 0; i < cells.length; i++) {
         const el = cells[i];
-        if (!el) continue;
+        if (!el) {
+          allCellsPresent = false;
+          continue;
+        }
         const on = lit[i] === true;
-        el.style.opacity = on ? '1' : '0';
+        // C5 — 무음에서도 같은 91개 값을 ~30fps로 재기록하지 않는다. cache가 없거나
+        // 신뢰할 수 없는 경계에서는 화면 동결보다 중복 쓰기가 안전하므로 전량 쓴다.
+        if (!cacheTrusted || paintedLit![i] !== on) {
+          el.style.opacity = on ? '1' : '0';
+        }
         // 🔴 꺼진 셀에는 animation 자체가 없어야 한다. paused만 쓰면 이미 active 구간에 들어간
         // keyframe opacity(0.62~1)가 인라인 opacity:0을 이겨 유령 도트가 남는다([UI-DOT-GHOST-1]).
         if (!on) {
@@ -124,6 +140,7 @@ export function StateDots({
           el.style.animation = dotBreatheAnimation(glyph, i);
         }
       }
+      paintedLit = allCellsPresent && lit.length === cells.length ? lit.slice() : null;
     };
 
     const glyphLit = (): boolean[] => {
@@ -135,7 +152,8 @@ export function StateDots({
       return out;
     };
 
-    paint(glyphLit());
+    // 마운트 직후·glyph/active 변경으로 effect가 재생성된 직후는 cache를 신뢰하지 않는다.
+    paint(glyphLit(), true);
     if (reduced || !active || !getLevel) return;
 
     const buf = new Uint8Array(FFT);
@@ -144,6 +162,7 @@ export function StateDots({
     let lastFrameAt = 0;
     let visible = true;
     let lastLoudAt = 0;
+    let paintedMode: 'glyph' | 'wave' = 'glyph';
 
     /** 열별 진폭(0~3) → 중앙 행에서 위아래로 대칭으로 켠다(막대 scaleY와 같은 읽기). */
     const waveLit = (amps: number[]): boolean[] => {
@@ -177,7 +196,10 @@ export function StateDots({
       const speaking = lastLoudAt > 0 && now - lastLoudAt < HANGOVER_MS;
 
       if (!speaking) {
-        paint(glyphLit());
+        // 파형→글리프 전환은 cache 경계다. 첫 글리프 프레임은 전량 써서 DOM을 재동기화한다.
+        const enteringGlyph = paintedMode !== 'glyph';
+        paint(glyphLit(), enteringGlyph);
+        paintedMode = 'glyph';
         rootRef.current?.setAttribute('data-mode', 'glyph');
         schedule();
         return;
@@ -205,7 +227,10 @@ export function StateDots({
           amps[c] = Math.min(3, Math.max(0, Math.round(lv * env * wave * 3 + 0.5)));
         }
       }
-      paint(waveLit(amps));
+      // 글리프→파형 진입도 첫 프레임은 전량 쓴다. 이후 프레임부터 실제로 달라진 셀만 쓴다.
+      const enteringWave = paintedMode !== 'wave';
+      paint(waveLit(amps), enteringWave);
+      paintedMode = 'wave';
       rootRef.current?.setAttribute('data-mode', 'wave');
       schedule();
     };
