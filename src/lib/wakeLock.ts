@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
 
-type Sentinel = { release: () => Promise<void> };
+type Sentinel = {
+  release: () => Promise<void>;
+  addEventListener?: (type: 'release', listener: () => void) => void;
+  removeEventListener?: (type: 'release', listener: () => void) => void;
+};
 
 /**
  * Keeps the screen on while `active` is true.
@@ -25,6 +29,11 @@ export function useWakeLock(active: boolean) {
           s.release();
           return;
         }
+        const onRelease = () => {
+          s.removeEventListener?.('release', onRelease);
+          if (sentinelRef.current === s) sentinelRef.current = null;
+        };
+        s.addEventListener?.('release', onRelease);
         sentinelRef.current = s;
       } catch {
         /* user-denied or no permission — ignore */
