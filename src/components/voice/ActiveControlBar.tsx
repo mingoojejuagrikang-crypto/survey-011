@@ -26,7 +26,7 @@ import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 export type EdgeMode = 'nav' | 'anomaly' | 'paused';
 
 export function ActiveControlBar({
-  tone, mode, glyph, indicatorInteractive, waveActive,
+  tone, mode, glyph, indicatorInteractive, showPauseHint, waveActive,
   getAudioLevel, getTimeDomainData, uiCommand,
   onPrevRow, onNextRow, onTogglePause, onExit, onAnomalyConfirm, onAnomalyModify,
 }: {
@@ -37,8 +37,10 @@ export function ActiveControlBar({
   glyph: DotGlyph;
   /** false면 인디케이터가 표시 전용. 일시정지 상태에선 `<`가 이미 재개 버튼이라 인디케이터까지
    *  버튼으로 두면 같은 행동이 두 개가 되고(셀렉터 계약도 중복), 완료 상태에선 유일한 행동이
-   *  중앙 `종료`다. 즉 인디케이터가 버튼인 상태는 **입력 중/이상치**뿐이다. */
+   *  중앙 `종료`다. 즉 인디케이터가 버튼인 상태는 **입력 중/완료 행 검토/이상치**다. */
   indicatorInteractive: boolean;
+  /** [EXIT-REACH-1] 끝 도달 뒤 완료 행 검토에서만 도트의 일시정지 기능을 보이게 한다. */
+  showPauseHint: boolean;
   waveActive: boolean;
   getAudioLevel: () => number;
   getTimeDomainData: (out: Uint8Array) => boolean;
@@ -106,7 +108,13 @@ export function ActiveControlBar({
           getTimeDomainData={getTimeDomainData}
           control={
             indicatorInteractive
-              ? { title: '일시정지', label: '일시정지', status: tone === 'red' ? 'alert' : 'listening', onClick: onTogglePause }
+              ? {
+                  title: '일시정지',
+                  label: '일시정지',
+                  status: tone === 'red' ? 'alert' : 'listening',
+                  onClick: onTogglePause,
+                  ...(showPauseHint ? { hint: '눌러 일시정지' } : {}),
+                }
               : undefined
           }
         />

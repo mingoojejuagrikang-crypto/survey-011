@@ -1063,12 +1063,23 @@ export function useVoiceSession() {
     }
     const next = findNextIncompleteRow(row + 1, total, vc);
     if (next === null) {
+      // [EXIT-REACH-1] 끝 도달 뒤 완료 행을 검토 중이면 "아래 미완료 없음"은 새 끝 도달이 아니다.
+      // 다음 완료 행은 검토 상태로 이동하고, 마지막 행 경계에서는 현재 검토를 재무장한다.
+      // 이 분기가 없으면 완료 행의 [다음]마다 announceEndReached가 재발화해 중앙 종료가 부활한다.
+      if (sess.phase === 'complete' && !sess.endReached && isRowVoiceComplete(row, vc)) {
+        if (row < total) {
+          await jumpToRow(row + 1, { setReturn: false, source });
+        } else {
+          await enterReviewWait(row);
+        }
+        return;
+      }
       // v0.23.0 입력탭#4 — '다음'으로 마지막 행에 도달해도 자동 종료하지 않고 종료 안내 후 대기.
       await announceEndReached();
       return;
     }
     await jumpToRow(next, { setReturn: false, source });
-  }, [announceEndReached, jumpToRow, persistSession]);
+  }, [announceEndReached, enterReviewWait, jumpToRow, persistSession]);
 
   // ── v0.7.0 B4: 추세 검증 ───────────────────────────────────
   /** trend_skip 텔레메트리 — 같은 원인은 세션당 1회만 기록(셀마다 반복돼 로그를 도배하지 않게).

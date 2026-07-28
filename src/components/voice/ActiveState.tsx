@@ -322,6 +322,7 @@ export function ActiveState({
         // §[3]·§[4]에서는 인디케이터가 버튼이 아니다 — 일시정지는 `<`(재개), 완료는 중앙 `종료`가
         // 그 상태의 행동을 이미 갖는다(같은 행동의 중복 타깃·중복 셀렉터를 만들지 않는다).
         indicatorInteractive={!endReached && !paused}
+        showPauseHint={completing && !endReached && !paused && edgeMode === 'nav'}
         waveActive={!paused}
         getAudioLevel={getAudioLevel}
         getTimeDomainData={getTimeDomainData}

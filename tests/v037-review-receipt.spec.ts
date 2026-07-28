@@ -157,6 +157,27 @@ function oneRowThreeVoiceSettings() {
   return settings;
 }
 
+function twoRowSettings() {
+  const settings = oneRowSettings();
+  settings.state.totalRows = 2;
+  settings.state.columns[0] = {
+    ...settings.state.columns[0],
+    auto: { kind: 'seq', from: 1, to: 2 },
+  };
+  return settings;
+}
+
+async function waitForRow(page: Page, targetRow: number, timeout = 5000) {
+  await page.waitForFunction(
+    (row) => {
+      const match = document.body.innerText.match(/(\d+)\s*\/\s*\d+\s*행/);
+      return match && Number(match[1]) === row;
+    },
+    targetRow,
+    { timeout },
+  );
+}
+
 // ─── [MODIFY-TARGET-1] 마지막 행 완료(atEnd) 수정 타깃 ────────────────────────
 test('[MODIFY-TARGET-1] atEnd bare "수정" → 마지막 항목만 재입력 대상으로 비운다', async ({ page }) => {
   await bootAndStart(page, oneRowSettings());
@@ -196,6 +217,84 @@ test('[MODIFY-TARGET-1] atEnd "수정 <첫컬럼명>" → 명시한 첫 항목�
   await expect(first).not.toContainText('30.7');
   await expect(middle).toContainText('—');
   await expect(last).toContainText('—');
+});
+
+// ─── [EXIT-REACH-1] 조사 완료 종료 노출과 완료 행 검토 ────────────────────────
+test('[EXIT-REACH-1] 최초 끝 도달만 중앙 종료 — 완료 행 검토·재진입은 숨김, 일시정지로 종료 도달', async ({ page }) => {
+  await bootAndStart(page, twoRowSettings());
+  // 짧은 현장폰 높이에서도 라벨 추가가 도트를 기존 하단 밴드 밖으로 밀지 않아야 한다.
+  // 부트 뒤 축소해 이 과제와 무관한 기존 탭바↔시작버튼 겹침은 테스트 경로에서 분리한다.
+  await page.setViewportSize({ width: 390, height: 568 });
+  await waitForActiveChip(page, '횡경');
+  await expect(page.locator('[data-testid="review-pause-hint"]')).toHaveCount(0);
+
+  await fireStt(page, '30.7');
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '40.2');
+  await waitForRow(page, 2);
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '31.8');
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '41.3', 600);
+
+  const exit = page.getByRole('button', { name: '종료', exact: true });
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
+  await expect(exit).toBeVisible();
+
+  // 끝 도달 뒤 다른 완료 행을 보면 중앙 종료가 사라지고 검토 화면을 유지한다.
+  await page.getByRole('button', { name: '이전', exact: true }).click();
+  await waitForRow(page, 1);
+  await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
+  await expect(exit).toHaveCount(0);
+  const pauseHint = page.locator('[data-testid="review-pause-hint"]');
+  await expect(pauseHint).toHaveText('눌러 일시정지');
+
+  // 완료 행에서 [다음]으로 완료 행에 재진입해도 announceEndReached가 재발화하지 않는다.
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await waitForRow(page, 2);
+  await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
+  await expect(exit).toHaveCount(0);
+  await expect(pauseHint).toBeVisible();
+
+  // 라벨을 위해 도트를 키우거나 새 행을 만들지 않는다 — 도트·라벨 모두 기존 고정 밴드 안에 있다.
+  const bandMetrics = await page.evaluate(() => {
+    const band = document.querySelector('[data-testid="live-listen-band"]')?.getBoundingClientRect();
+    const dots = document.querySelector('[data-testid="state-dots"]')?.getBoundingClientRect();
+    const hint = document.querySelector('[data-testid="review-pause-hint"]')?.getBoundingClientRect();
+    if (!band || !dots || !hint) return null;
+    return {
+      band: { top: band.top, bottom: band.bottom, height: band.height },
+      dots: { top: dots.top, bottom: dots.bottom, height: dots.height },
+      hint: { top: hint.top, bottom: hint.bottom, height: hint.height },
+    };
+  });
+  const contained = (() => {
+    if (!bandMetrics) return false;
+    const epsilon = 1;
+    return bandMetrics.dots.top >= bandMetrics.band.top - epsilon &&
+      bandMetrics.dots.bottom <= bandMetrics.band.bottom + epsilon &&
+      bandMetrics.hint.top >= bandMetrics.band.top - epsilon &&
+      bandMetrics.hint.bottom <= bandMetrics.band.bottom + epsilon;
+  })();
+  expect(
+    contained,
+    `검토 도트/일시정지 라벨이 기존 밴드 밖으로 넘침: ${JSON.stringify(bandMetrics)}`,
+  ).toBe(true);
+
+  // 기존 안전 게이트: 조절판이 열리면 라벨을 포함한 하단 행동 행 전체가 사라지고, 닫으면 복귀한다.
+  const controlsToggle = page.locator('[data-testid="input-control-toggle"]');
+  await controlsToggle.click();
+  await expect(controlsToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('[data-testid="voice-nav-row"]')).toHaveCount(0);
+  await expect(pauseHint).toHaveCount(0);
+  await controlsToggle.click();
+  await expect(controlsToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(pauseHint).toBeVisible();
+
+  // 검토 상태의 가운데 컨트롤로 일시정지하면 계약된 좌/우 재시작·종료에 도달한다.
+  await page.locator('[data-testid="voice-status-control"]').click();
+  await expect(page.getByRole('button', { name: '재시작', exact: true })).toBeVisible();
+  await expect(exit).toBeVisible();
 });
 
 // ─── (a) 마지막 셀 = 수동 입력 ────────────────────────────────────────────────

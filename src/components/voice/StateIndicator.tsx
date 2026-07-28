@@ -35,22 +35,48 @@ export function StateIndicator({
   getTimeDomainData: (out: Uint8Array) => boolean;
   /** 있으면 인디케이터 전체가 버튼이 된다(와이어프레임에 일시정지 터치 경로가 없어 여기로 통합).
    *  없으면 표시 전용(완료 상태 — 일시정지 버튼이 존재하지 않아야 한다). */
-  control?: { title: string; label: string; status: string; onClick: () => void };
+  control?: { title: string; label: string; status: string; onClick: () => void; hint?: string };
 }) {
   const height = useBandHeight();
   const color = TONE_COLOR[tone];
+  const hintHeight = control?.hint ? 15 : 0;
+  // [EXIT-REACH-1] 라벨이 밴드 높이를 키우지 않게 같은 고정 높이 안에서 도트 몫만 줄인다.
+  // panelOpen이면 부모 nav row 전체가 렌더되지 않는 기존 게이트도 그대로 유지된다.
+  const dotsSize = control?.hint ? Math.max(28, height - hintHeight - 8) : height;
 
   // 격자 하나. 도트와 파형이 **같은 셀 집합**을 공유하므로 겹쳐 보이는 상태가 존재하지 않는다.
   const stack = (
-    <div style={{ width: '100%', height: '100%', maxHeight: '100%', minWidth: 0, display: 'grid', placeItems: 'center' }}>
+    <div
+      style={{
+        width: '100%', height: '100%', maxHeight: '100%', minWidth: 0,
+        display: 'grid', placeItems: 'center',
+        ...(control?.hint
+          ? { gridTemplateRows: `minmax(0, 1fr) ${hintHeight}px`, overflow: 'hidden' }
+          : {}),
+      }}
+    >
       <StateDots
         glyph={glyph}
         color={color}
-        size={height}
+        size={dotsSize}
         active={waveActive && levelActive}
         getLevel={getAudioLevel}
         getTimeDomainData={getTimeDomainData}
       />
+      {control?.hint && (
+        <span
+          data-testid="review-pause-hint"
+          style={{
+            color: T.textDim,
+            fontSize: 11,
+            fontWeight: 800,
+            lineHeight: `${hintHeight}px`,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {control.hint}
+        </span>
+      )}
     </div>
   );
 
