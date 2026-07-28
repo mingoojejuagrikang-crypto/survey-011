@@ -292,7 +292,60 @@ async function getIdbSessions(page: Page) {
   });
 }
 
+async function getClipDurations(page: Page): Promise<number[]> {
+  return page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((resolve, reject) => {
+      const req = indexedDB.open('survey-011');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    if (!db.objectStoreNames.contains('logEvents')) { db.close(); return []; }
+    const tx = db.transaction('logEvents', 'readonly');
+    const all: Array<{ extra?: string; durationMs?: number }> = await new Promise((resolve, reject) => {
+      const req = tx.objectStore('logEvents').getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return all
+      .filter((e) => e.extra === 'clip_duration' && typeof e.durationMs === 'number')
+      .map((e) => e.durationMs as number);
+  });
+}
+
 // ─── Tests ──────────────────────────────────────────────────────
+
+test('[CLIP-WINDOW-1] 개선요청 모달 대기 시간은 커밋 클립 녹음창에 포함되지 않는다', async ({ page }) => {
+  await setupAndStart(page);
+  await waitForActiveChip(page, '횡경');
+
+  await page.locator('[data-testid="tab-feedback"]').click();
+  await expect(page.locator('[data-testid="feedback-modal"]')).toBeVisible({ timeout: 6000 });
+
+  const modalWaitMs = 3000;
+  await page.waitForTimeout(modalWaitMs);
+  await page.locator('[data-testid="feedback-cancel"]').click();
+  await expect(page.locator('[data-testid="feedback-modal"]')).toBeHidden();
+
+  // 닫힌 뒤 같은 셀의 새 녹음창에 값 발화를 커밋한다.
+  await page.waitForTimeout(200);
+  await fireStt(page, '35.1', 1400);
+  await waitForActiveChip(page, '종경');
+
+  const durations = await getClipDurations(page);
+  expect(durations.length, `clip_duration 없음: ${JSON.stringify(durations)}`).toBeGreaterThanOrEqual(2);
+  expect(
+    Math.max(...durations),
+    `모달 ${modalWaitMs}ms 대기가 녹음창에 포함됨: ${JSON.stringify(durations)}`,
+  ).toBeLessThan(modalWaitMs - 500);
+
+  const events = await getClipLog(page);
+  expect(events.filter((e) => e.extra === 'clip_empty'), 'resume 후 값 클립이 비었음').toHaveLength(0);
+  expect(
+    events.some((e) => e.extra?.startsWith('clip_saved') && e.row === 1 && e.colId === 'c8'),
+    'resume 후 같은 셀의 값 클립이 저장되지 않음',
+  ).toBe(true);
+});
 
 test('① modify 재안내 후 재발화가 녹음된다 — 이중 수정("수정"→"수정 155.5") 체인 후 clip_saved, clip_empty 0건', async ({ page }) => {
   await setupAndStart(page);

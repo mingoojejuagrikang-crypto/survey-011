@@ -137,6 +137,9 @@ export function useVoiceSession() {
   // (i.e. while announceField's TTS prompt is still playing) — which would otherwise stop a
   // non-existent clip or let a cancelled announceField start an obsolete clip.
   const activeClipRef = useRef<{ row: number; colId: string } | null>(null);
+  // [CLIP-WINDOW-1] UI suspend가 끊은 셀. 모달 전 조각은 저장하지 않고, 모든 중첩 UI가 닫힌 뒤
+  // 여전히 같은 셀의 값을 기다릴 때만 새 녹음창을 연다(모달 대기 구간 splice/보존 금지).
+  const uiSuspendedClipRef = useRef<{ row: number; colId: string } | null>(null);
   // rowIndex → colId → IDB key; accumulated in-memory until persistSession writes to dataStore
   const pendingClipsRef = useRef<Record<number, Record<string, string>>>({});
   // Snapshot of a persisted row being cascade-corrected; included in persistSession if stop()
@@ -1217,6 +1220,7 @@ export function useVoiceSession() {
     //   was=a+b로 함께 남겨 어떤 소스들이 걸려 있었는지 로그로 판별한다(단일 소스는 종전과 동일).
     const prev = [...latch.reasons].join('+') || 'unknown';
     uiSuspendRef.current = { hadController: false, reasons: new Set<string>() };
+    uiSuspendedClipRef.current = null;
     // 기존 ui_resume/ui_suspend와 같은 command 레인 — 신규 이벤트 타입 무첨가(log-replay 호환).
     logCell({
       type: 'command',
@@ -1251,6 +1255,21 @@ export function useVoiceSession() {
     ctrlRef.current?.stop();
     ctrlRef.current = null;
     cancelTts();
+    // [CLIP-WINDOW-1] STT와 독립인 MediaRecorder도 함께 끊는다. 반환 blob은 의도적으로 버려
+    // 모달 전 조각이 가짜 셀 클립으로 저장되지 않게 하고, resume에서 새 창으로 다시 녹음한다.
+    const activeClip = activeClipRef.current;
+    if (activeClip) {
+      uiSuspendedClipRef.current = activeClip;
+      activeClipRef.current = null;
+      void recorderRef.current?.stopClip().catch((error) => {
+        logCell({
+          type: 'error',
+          extra: `clip_ui_suspend_stop_failed:${reason}:${String((error as Error)?.message ?? error)}`,
+          row: activeClip.row,
+          colId: activeClip.colId,
+        });
+      });
+    }
   }, []);
 
   // ── final result handler ───────────────────────────────────
@@ -2222,15 +2241,32 @@ export function useVoiceSession() {
       hadController &&
       (phase === 'active' || phase === 'complete' || phase === 'paused') &&
       isSpeechSupported();
-    if (!shouldRestore || ctrlRef.current) return;
-    ctrlRef.current = new SpeechController({
-      onFinal: handleFinal,
-      onInterim: handleInterim,
-      onError: () => {},
-    });
-    setActiveController(ctrlRef.current);
-    ctrlRef.current.start();
-  }, [handleFinal, handleInterim]);
+    const suspendedClip = uiSuspendedClipRef.current;
+    uiSuspendedClipRef.current = null;
+    if (!shouldRestore) return;
+
+    // 값 대기 좌표가 그대로일 때만 재무장한다. 모달 안의 터치 처리 등으로 타깃이 바뀌었다면
+    // announceField가 새 좌표의 녹음창을 소유하므로 오래된 셀을 되살리지 않는다.
+    const awaiting = awaitingFieldRef.current;
+    if (
+      suspendedClip &&
+      !activeClipRef.current &&
+      awaiting?.row === suspendedClip.row &&
+      awaiting.colId === suspendedClip.colId
+    ) {
+      armClipForCell(suspendedClip.row, suspendedClip.colId);
+    }
+
+    if (!ctrlRef.current) {
+      ctrlRef.current = new SpeechController({
+        onFinal: handleFinal,
+        onInterim: handleInterim,
+        onError: () => {},
+      });
+      setActiveController(ctrlRef.current);
+      ctrlRef.current.start();
+    }
+  }, [armClipForCell, handleFinal, handleInterim]);
 
   // ── v0.34.0 A2 — 개선요청(피드백) 팝업 열림 중 STT 일시정지 ──
   // App.tsx가 sessionStore.uiModalOpen('feedback')을 올리고/내리는 단일 신호를 구독한다.

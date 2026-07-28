@@ -1287,3 +1287,25 @@
 5. **행 미완료(complete:false) 상태에서 clips-manifest committedValue가 정정 전 값으로 남음** — 2026-07-07 [CLIP-CORRECTION-1] 수정 재검증(Sonar A4 라운드3) 중 관측: 종경(다음 컬럼)에 값을 아직 안 주고 행을 넘긴 export에서 `committedValue`가 33.3(정정 전 값)으로 남아 있었음. [CLIP-CORRECTION-1] 수정(cmd 클립 컬럼 태깅)과는 무관 — colId 태깅 자체는 이 케이스에서도 정확했음. "필드 이탈 시 커밋" 기존 설계와 다른 조건인지, 별도 버그인지 미확정(n=1). 다음 실기기 로그 또는 추가 데스크탑 재현으로 확인 필요.
 6. **"~점이요" 공손 종결 발화가 소수로 합성될 수 있음** — 2026-07-14 v0.34.0 O3 작업 중 관측: "266 점이요"가 266.2로 파싱('이요'의 '이'가 소수 2로 합성). "점 이 요"(=.2 의도) 정당 발화와 문자열상 구분 불가라 **블라인드 수정 금지** — 실기기 로그에서 "점이요" 발화 빈도·오커밋 여부 관측 후 판단.
 7. **Playwright 병렬 부하 플레이크** — `correction-flow.spec.ts`(:276, :411)·`trend-alert.spec.ts`(:458)가 2-worker 병렬 부하에서 간헐 실패(고정 `waitForTimeout` 기반 오라클). 단독·재실행 모두 PASS(2026-07-14 확인, 코드 변경과 무관). 전체 스윕에서 재발 시 flaky로 취급하고 이벤트 기반 대기로 교체 후보.
+
+---
+
+## 2026-07-28 추가
+
+### [CLIP-WINDOW-1] 개선요청 모달 대기 시간이 커밋 클립 녹음창에 포함돼 값 발화를 밀어냄
+- **증상(2026-07-27~28 실기기 로그·클립 감사):** 길이 이상 클립 10/10이 `ui_suspend`~
+  `ui_resume` 창과 61~92% 겹쳤다. 최악 323.6초 클립은 모달 대기만 296.3초였고, 값 발화는
+  마지막 5초 안에 있었다.
+- **근인:** [`useVoiceSession.ts`](./src/lib/useVoiceSession.ts)의 `suspendRecognitionForUi`가
+  STT·TTS만 중단하고 독립 `MediaRecorder` 녹음창은 계속 열어 뒀다.
+- **🔴 2026-07-27 오진 정정:** 이 현상을 **“커밋 클립 트림 무작동”으로 본 결론은 오진**이다.
+  [`audioTrim.ts`](./src/lib/audioTrim.ts)는 모든 발화를 감싸는 단일 범위의 가장자리만 트림하는
+  계약대로 작동했다. 내부 모달 대기를 잘라 이어붙이는 수정은 [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md)
+  ⑤ `[CLIP-MIDSPEECH-1]`을 위반하므로 금지한다. 근인은 트림이 아니라 **녹음창 수명**이다.
+- **수정:** 첫 UI suspend에서 활성 클립을 stop하되 반환 blob은 저장하지 않고 폐기한다. 중첩 UI가
+  모두 닫힌 뒤에도 같은 `(row,colId)` 값을 기다릴 때만 새 클립을 시작한다. 따라서 모달 전 조각과
+  대기 구간을 splice하지 않으며, 가짜 셀 클립도 저장하지 않는다.
+- **회귀·반증:** `tests/clip-modify-rerecord.spec.ts` `[CLIP-WINDOW-1]`. 구현 제거 시 2/2 red
+  (단일 녹음창 4,151ms·4,269ms), 적용 시 2/2 green.
+- **현재 상태:** 🟡 **MONITORING** — 데스크톱 Playwright 수정·반증 완료. iOS 실기기 판정 전에는
+  `RESOLVED`로 올리지 않는다.
