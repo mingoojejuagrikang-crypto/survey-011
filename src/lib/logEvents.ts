@@ -95,12 +95,28 @@ export function recoverTimeout(reason: string, ms: number): string {
  *  🔴 `status`는 **계측이 자기 실패를 숨기지 않게** 한다(라운드A 리뷰 Codex #1·#2).
  *  `ok`=실제로 다시 읽었다 / `unavailable`=읽을 대상이 없었다 / `error`=읽으려다 실패했다.
  *  `ok`가 아니면 `after`는 `unknown`이며, **그 복귀는 경로를 관측하지 못한 것**이다 — 이 구분이
- *  없으면 "재검증했는데 그대로였다"와 "재검증 자체가 실패했다"가 로그에서 같아 보인다. */
+ *  없으면 "재검증했는데 그대로였다"와 "재검증 자체가 실패했다"가 로그에서 같아 보인다.
+ *
+ *  🔴 v0.42.0 계측 F — **`status`가 조기 반환 경로까지 덮는다.** 위 문단은 이미 *"계측이 자기
+ *  실패를 숨기지 않게 한다"*고 선언했는데, **정작 호출부가 그 설계를 배신하고 있었다**:
+ *  `!rec`·방출 게이트·`catch` 세 갈래에서 아무것도 남기지 않고 `return`했다.
+ *
+ *  그 대가가 2026-07-29 회차에서 드러났다. `audio_route_revalidate` **0건**인데 그 0이
+ *  *무엇의 0인지 판정할 수 없었다*. 실측 대조: 그날 복귀 5건 중 `bg_s=256`·`7058`은
+ *  `teardown=no_recorder`(레코더 null)로 설명되고 `bg_s=48`·`15`는 임계(60초) 미달로 설명되나,
+ *  **`bg_s=67,teardown=completed`는 레코더도 있었고 게이트도 통과했는데 침묵했다** — 어느 갈래로
+ *  빠졌는지 소스만으로 확정할 수 없다. 그래서 갈래마다 1건씩 남긴다.
+ *
+ *  `gated`는 **관측은 성공했으나 방출 정책이 걸러낸** 경우다(`status='ok'`와 정보량이 같고
+ *  `before`/`after`도 그대로 실린다 — 판독 측에서 `routeChanged`를 재계산할 수 있다).
+ *  `ok`와 별개 값으로 두는 이유: 섞으면 *"경로가 안 바뀌어서 안 남았다"*와 *"관측 자체가
+ *  실패했다"*가 다시 구분되지 않는다. 포그라운드 복귀는 세션당 5건 수준이라(07-29 실측)
+ *  전수 방출해도 노이즈가 되지 않는다. */
 export function audioRouteRevalidate(fields: {
   before: string;
   after: string;
   track: 'none' | 'ended' | 'muted' | 'live';
-  status: 'ok' | 'unavailable' | 'error';
+  status: 'ok' | 'gated' | 'unavailable' | 'error';
   evt: string;
   backgroundMs: number;
 }): string {
@@ -231,5 +247,127 @@ export function micTeardown(fields: {
     reattach: fields.reattach,
     evt: fields.evt,
     bg_s: Math.round(fields.backgroundMs / 1000),
+  })}`;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * v0.42.0 계측 — 2026-07-29 실기기 회차가 "판정 불가"로 닫은 축들을 연다.
+ *
+ * 🔑 이 묶음의 공통 원칙: **어떤 이벤트도 0건이 두 가지 뜻을 갖게 두지 않는다.**
+ * 배선이 틀린 계측과 재현되지 않은 결함은 로그에서 똑같이 0건으로 보인다(`[FG-RETURN-LOG-1]`).
+ * 그래서 "일어나지 않았다"를 남기는 값(`skipped`·`silent`·`none`)을 유니온에 명시한다.
+ *
+ * ⚠️ 신규 이벤트를 추가할 때는 **볼트 `SOP-003` 파서 매핑표도 함께 갱신**해야 한다.
+ * 안 하면 이벤트는 남는데 다음 회차 분석이 읽지 못한다(v0.39.0 `trend_alert_fired` 전례).
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 계측 A — **알람음 재생 시도와 그 결과.** 제보 #5 *"알람음이 안 들린다"*의 3갈래를 가른다.
+ *
+ *  현재 `beep.ts`에는 **로깅이 전무**하고 07-29 로그의 `beep` 이벤트는 0건이다. 그래서
+ *  ①호출 자체가 없었다 ②호출됐으나 무음이었다 ③TTS에 묻혔다 — 셋을 구별할 수 없다.
+ *  `playBeep`·`playSchedule`이 둘 다 `catch {}`로 삼키는 구조라 실패도 흔적이 없다.
+ *
+ *  `result`가 셋을 가른다:
+ *   - `played`     오실레이터를 실제로 스케줄했다. 안 들렸다면 원인은 앱 밖(무음 스위치·볼륨·TTS 중첩)
+ *   - `no_ctx`     `getCtx()`가 null — AudioContext 자체가 없다(iOS 제스처 미획득 등)
+ *   - `suspended`  ctx가 있으나 `state='suspended'` — **스케줄해도 소리가 안 난다.** 가장 유력한 무음 원인
+ *   - `silent`     마스터 게인이 0 — 볼륨 설정이 0이거나 배수가 0으로 클램프됐다
+ *   - `empty`      재생할 톤이 0개 — 변형 조회가 빈 스케줄을 냈다
+ *   - `error`      예외
+ *
+ *  `gain`은 실제 적용된 마스터 배수(소수 3자리)다. `silent` 판정의 근거를 남긴다. */
+export function beepPlay(fields: {
+  kind: string;
+  result: 'played' | 'no_ctx' | 'suspended' | 'silent' | 'empty' | 'error';
+  ctx: 'running' | 'suspended' | 'closed' | 'none';
+  gain: number;
+  tones: number;
+}): string {
+  return `beep_play:${kv({
+    kind: fields.kind,
+    result: fields.result,
+    ctx: fields.ctx,
+    gain: Math.round(fields.gain * 1000) / 1000,
+    tones: fields.tones,
+  })}`;
+}
+
+/** 계측 G — **개선요청 업로드가 마이크를 죽이는가.** 07-29 최대 미판정 축.
+ *
+ *  **왜 초 단위로는 안 갈리나:** 모달 닫힘 10건을 갈라보니 실제 업로드 6건 중 **5건**에서 마이크가
+ *  죽었고 취소·큐잉 4건은 **0건**이었다. 그런데 사망 3건이 `feedback_uploaded`와 **같은 초**에
+ *  찍혀 인과 방향이 확정되지 않는다. 가설은 *"6.77~7.12MB zip 업로드가 메인스레드·메모리를 압박해
+ *  iOS가 오디오 트랙을 회수한다"* 인데, 이를 판정하려면 **ms 해상도와 zip 바이트**가 필요하다.
+ *
+ *  `phase`가 같은 제출을 앞뒤로 묶는다 — `start`(업로드 직전)와 종료(`uploaded`/`queued`/`failed`)를
+ *  **같은 `bytes`로 짝지어** 읽는다. 그 사이 `elapsedMs` 동안 `track`이 `live`→`ended`로 바뀌었다면
+ *  업로드가 원인이라는 직접 증거가 된다.
+ *
+ *  🔴 `track`은 **업로드 경로가 아니라 레코더에서 읽은 실제 트랙 상태**다. `unknown`은 레코더를
+ *  못 읽었다는 뜻이며 *"트랙이 없다"(`none`)와 다르다* — 이 구분이 없으면 계측 실패가 결함으로
+ *  오독된다. */
+export function feedbackUploadMic(fields: {
+  phase: 'start' | 'uploaded' | 'queued' | 'failed';
+  track: 'none' | 'ended' | 'muted' | 'live' | 'unknown';
+  bytes: number;
+  elapsedMs: number;
+}): string {
+  return `feedback_upload_mic:${kv({
+    phase: fields.phase,
+    track: fields.track,
+    bytes: fields.bytes,
+    ms: fields.elapsedMs,
+  })}`;
+}
+
+/** 계측 H — **백그라운드 진입 *시점*의 오디오 스택 스냅샷.**
+ *
+ *  **메우는 공백:** 07-29의 `foreground_return:bg_s=7058,teardown=no_recorder`는 *복귀 시점에*
+ *  레코더가 null이었음을 알려줄 뿐, **언제 어디서 사라졌는지**는 말하지 않는다. 진입 시점 상태가
+ *  없으면 "들어갈 때 이미 없었다"와 "백그라운드에서 회수됐다"가 구분되지 않는다 — [MIC-B2]의
+ *  근인 축이 3회차째 여기서 막혔다.
+ *
+ *  기존 `lifecycle:vis_hidden`·`visibility_context`는 **화면 상태만** 찍는다. 이 이벤트는 같은
+ *  순간의 **레코더·트랙·인식기**를 함께 찍어 복귀 시점 스냅샷과 앞뒤로 대조하게 한다.
+ *
+ *  `rec=none`이면 진입 시점에 이미 레코더가 없었다는 뜻이고, 그 경우 복귀의 `no_recorder`는
+ *  백그라운드 회수가 **아니다**. */
+export function bgEnterSnapshot(fields: {
+  rec: 'none' | 'idle' | 'recording';
+  track: 'none' | 'ended' | 'muted' | 'live' | 'unknown';
+  stt: 'none' | 'idle' | 'listening' | 'suspended';
+  phase: string;
+}): string {
+  return `bg_enter_snapshot:${kv({
+    rec: fields.rec,
+    track: fields.track,
+    stt: fields.stt,
+    phase: fields.phase,
+  })}`;
+}
+
+/** 계측 I — **회전이 실제로 일어났는가.** 3회차 연속 판정 불가였던 축.
+ *
+ *  **왜 필요한가:** 민구가 `PortraitGuard` 안내 화면을 **눈으로 봤다고 진술**했는데 로그에는
+ *  회전·방향 이벤트가 **0건**이다. 회전 진동(fb-01) 재현 조건을 세 회차째 못 잡은 이유가 여기다 —
+ *  안내가 떴다는 것조차 로그로 확인이 안 되니 진동 보고와 대조할 축이 없다.
+ *
+ *  `guard`가 **안내 오버레이의 실제 표시 여부**다. `(orientation: landscape)`만으로는 안 뜨고
+ *  `(pointer: coarse)` 게이트를 함께 통과해야 하므로(데스크톱 제외), 방향 전환과 안내 표시는
+ *  별개 사실이다. 둘을 한 이벤트에 담아 *"돌렸는데 안내가 안 떴다"*도 판정 가능하게 한다.
+ *
+ *  ⚠️ `standalone` 여부는 여기 싣지 않는다 — 부팅 시 `sa_insets`가 이미 남기므로(2026-07-29
+ *  실측 확인) 중복이다. 그 값이 이 이벤트 판독의 분모다. */
+export function orientationChange(fields: {
+  to: 'portrait' | 'landscape';
+  guard: 'shown' | 'hidden';
+  w: number;
+  h: number;
+}): string {
+  return `orientation_change:${kv({
+    to: fields.to,
+    guard: fields.guard,
+    w: fields.w,
+    h: fields.h,
   })}`;
 }

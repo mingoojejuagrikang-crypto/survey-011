@@ -24,6 +24,10 @@ import {
   anomalyAlertCleared,
   clipArmBlocked,
   micTeardown,
+  beepPlay,
+  feedbackUploadMic,
+  bgEnterSnapshot,
+  orientationChange,
 } from '../src/lib/logEvents';
 
 test('settingChanged — 기존 4개 콜사이트 산출과 바이트 동일', () => {
@@ -171,4 +175,116 @@ test('audioRouteRevalidate — 오디오 경로 재검증 바이트 계약', () 
     before: '블루투스', after: 'unknown', track: 'none', status: 'unavailable', evt: 'vis', backgroundMs: 90_000,
   })).toBe('audio_route_revalidate:before=블루투스,after=unknown,track=none,status=unavailable,evt=vis,bg_s=90');
   expect(s.split(':')).toHaveLength(2);
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * v0.42.0 계측 — 2026-07-29 실기기 회차가 "판정 불가"로 닫은 축들.
+ * 아래 리터럴이 SOP-003 파서와의 계약이다. 고치고 싶어지면 파서도 함께 고쳐야 한다.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 계측 F — `audioRouteRevalidate`의 `status`가 **조기 반환 경로까지** 덮는다.
+ *  07-29 `audio_route_revalidate` 0건의 정체를 갈래별로 남기려는 확장이다. */
+test('audioRouteRevalidate — 조기 반환 3갈래가 status로 갈린다 (계측 F)', () => {
+  // 갈래① 레코더 자체가 없다. before/after 둘 다 관측 못 했으므로 unknown.
+  expect(audioRouteRevalidate({
+    before: 'unknown', after: 'unknown', track: 'none', status: 'unavailable', evt: 'vis', backgroundMs: 7_058_000,
+  })).toBe('audio_route_revalidate:before=unknown,after=unknown,track=none,status=unavailable,evt=vis,bg_s=7058');
+
+  // 갈래② 관측은 성공했으나 방출 게이트가 걸렀다(경로 무변화 + 임계 미달).
+  // 🔑 status=ok와 정보량이 같고 before/after도 실린다 — 판독 측이 routeChanged를 재계산할 수 있다.
+  expect(audioRouteRevalidate({
+    before: '내장 마이크', after: '내장 마이크', track: 'live', status: 'gated', evt: 'vis', backgroundMs: 48_000,
+  })).toBe('audio_route_revalidate:before=내장 마이크,after=내장 마이크,track=live,status=gated,evt=vis,bg_s=48');
+
+  // 갈래③ 관측 중 예외. 07-29 bg_s=67(레코더 있음·게이트 통과)의 침묵이 여기였는지 다음 회차가 판정한다.
+  expect(audioRouteRevalidate({
+    before: 'unknown', after: 'unknown', track: 'none', status: 'error', evt: 'vis', backgroundMs: 67_000,
+  })).toBe('audio_route_revalidate:before=unknown,after=unknown,track=none,status=error,evt=vis,bg_s=67');
+});
+
+/** 계측 A — 제보 #5 "알람음 안 들림"의 3갈래(호출 안 됨 / 무음 / TTS에 묻힘). */
+test('beepPlay — 알람음 재생 결과 바이트 계약 (계측 A)', () => {
+  // 정상 재생. 안 들렸다면 원인은 앱 밖(무음 스위치·볼륨·TTS 중첩)이라는 근거가 된다.
+  expect(beepPlay({
+    kind: 'negative', result: 'played', ctx: 'running', gain: 0.6, tones: 3,
+  })).toBe('beep_play:kind=negative,result=played,ctx=running,gain=0.6,tones=3');
+
+  // 🔴 가장 유력한 무음 원인 — ctx가 suspended면 스케줄해도 소리가 안 난다.
+  expect(beepPlay({
+    kind: 'corrected', result: 'suspended', ctx: 'suspended', gain: 0.6, tones: 2,
+  })).toBe('beep_play:kind=corrected,result=suspended,ctx=suspended,gain=0.6,tones=2');
+
+  // 게인 0 — 볼륨 설정이 0이거나 배수가 0으로 클램프됐다. gain이 판정 근거로 남는다.
+  expect(beepPlay({
+    kind: 'modify', result: 'silent', ctx: 'running', gain: 0, tones: 1,
+  })).toBe('beep_play:kind=modify,result=silent,ctx=running,gain=0,tones=1');
+
+  // AudioContext 자체가 없다(iOS 제스처 미획득 등).
+  expect(beepPlay({
+    kind: 'negative', result: 'no_ctx', ctx: 'none', gain: 0.6, tones: 0,
+  })).toBe('beep_play:kind=negative,result=no_ctx,ctx=none,gain=0.6,tones=0');
+
+  // gain은 소수 3자리로 반올림한다 — 부동소수 꼬리가 파서 대조를 깨지 않도록.
+  expect(beepPlay({
+    kind: 'negative', result: 'played', ctx: 'running', gain: 0.123456, tones: 3,
+  })).toBe('beep_play:kind=negative,result=played,ctx=running,gain=0.123,tones=3');
+});
+
+/** 계측 G — 개선요청 업로드가 마이크를 죽이는가. **ms와 zip 바이트**가 핵심이다. */
+test('feedbackUploadMic — 업로드 전후 트랙 상태를 ms·바이트로 짝짓는다 (계측 G)', () => {
+  // 업로드 직전 스냅샷. bytes가 뒤 이벤트와 짝을 이루는 키다.
+  expect(feedbackUploadMic({
+    phase: 'start', track: 'live', bytes: 7_118_336, elapsedMs: 0,
+  })).toBe('feedback_upload_mic:phase=start,track=live,bytes=7118336,ms=0');
+
+  // 🔴 가설이 참이면 이 모양으로 찍힌다 — 같은 bytes, live→ended, 그 사이 경과 ms.
+  expect(feedbackUploadMic({
+    phase: 'uploaded', track: 'ended', bytes: 7_118_336, elapsedMs: 3_412,
+  })).toBe('feedback_upload_mic:phase=uploaded,track=ended,bytes=7118336,ms=3412');
+
+  // 취소·미로그인 큐잉 — 07-29 실측에서 이 경로는 마이크 사망 0건이었다(분모).
+  expect(feedbackUploadMic({
+    phase: 'queued', track: 'live', bytes: 6_770_112, elapsedMs: 12,
+  })).toBe('feedback_upload_mic:phase=queued,track=live,bytes=6770112,ms=12');
+
+  // 🔴 unknown은 "트랙이 없다"(none)가 아니라 "레코더를 못 읽었다"다 —
+  // 이 구분이 없으면 계측 실패가 결함으로 오독된다.
+  expect(feedbackUploadMic({
+    phase: 'failed', track: 'unknown', bytes: 0, elapsedMs: 88,
+  })).toBe('feedback_upload_mic:phase=failed,track=unknown,bytes=0,ms=88');
+});
+
+/** 계측 H — 백그라운드 **진입 시점**의 오디오 스택. 복귀 스냅샷과 앞뒤로 대조한다. */
+test('bgEnterSnapshot — 진입 시점 레코더·트랙·인식기 (계측 H)', () => {
+  // 정상 진입 — 복귀에서 no_recorder가 나온다면 그건 백그라운드 회수다.
+  expect(bgEnterSnapshot({
+    rec: 'recording', track: 'live', stt: 'listening', phase: 'active',
+  })).toBe('bg_enter_snapshot:rec=recording,track=live,stt=listening,phase=active');
+
+  // 🔑 진입 시점에 이미 없었다 — 이 경우 복귀의 no_recorder는 백그라운드 회수가 **아니다**.
+  expect(bgEnterSnapshot({
+    rec: 'none', track: 'none', stt: 'none', phase: 'idle',
+  })).toBe('bg_enter_snapshot:rec=none,track=none,stt=none,phase=idle');
+
+  // 모달로 STT가 suspend된 채 이탈한 경우 — [FEEDBACK-MIC-KILL-1] 축과 교차 판독한다.
+  expect(bgEnterSnapshot({
+    rec: 'idle', track: 'muted', stt: 'suspended', phase: 'active',
+  })).toBe('bg_enter_snapshot:rec=idle,track=muted,stt=suspended,phase=active');
+});
+
+/** 계측 I — 회전이 실제로 일어났는가 + 안내가 실제로 떴는가(별개 사실). */
+test('orientationChange — 방향 전환과 가드 표시를 함께 남긴다 (계측 I)', () => {
+  // 민구가 눈으로 본 그 화면. 07-29까지 이 이벤트는 0건이었다.
+  expect(orientationChange({
+    to: 'landscape', guard: 'shown', w: 874, h: 402,
+  })).toBe('orientation_change:to=landscape,guard=shown,w=874,h=402');
+
+  expect(orientationChange({
+    to: 'portrait', guard: 'hidden', w: 402, h: 874,
+  })).toBe('orientation_change:to=portrait,guard=hidden,w=402,h=874');
+
+  // 🔑 "돌렸는데 안내가 안 떴다"도 판정 가능해야 한다 — (pointer: coarse) 게이트가 별도이기 때문.
+  expect(orientationChange({
+    to: 'landscape', guard: 'hidden', w: 1280, h: 720,
+  })).toBe('orientation_change:to=landscape,guard=hidden,w=1280,h=720');
 });
