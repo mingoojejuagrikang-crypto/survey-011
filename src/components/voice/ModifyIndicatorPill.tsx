@@ -10,7 +10,9 @@ import { useFitScale } from './useFitScale';
  *   정렬한다. 컴포넌트명은 호환 위해 ...Pill 유지하나 실 렌더는 대형 카드다.
  *  v0.27.0 무스크롤·반응형(민구 07-03): 양손 측정 중이라 스크롤 불가 → 고정 px를 vh/vw clamp로
  *   비례화 + useFitScale로 넘칠 때만 축소(새값·항목명=--fit-hi 완만, 직전값·보조문=--fit-lo 먼저).
- *   스크롤 잔여 0(scrollHeight ≤ clientHeight) 보장, ellipsis 잘림 금지. */
+ *   스크롤 잔여 0(scrollHeight ≤ clientHeight) 보장, ellipsis 잘림 금지.
+ *  v0.42.0 제보 #7 — 카드 chrome 제거(민구 결정 2026-07-29). animation은 box-shadow를
+ *   애니메이션하므로 함께 제거. */
 export function ModifyIndicatorPill({ name, prevValue, newValue }: { name: string; prevValue?: string; newValue?: string }) {
   // v0.17.0 A-hero: 정정 구간 두 국면을 한 카드로 표현한다(이 카드가 정정 내내 화면을 점유 — hero와
   //   z-fight 없음). ① 재프롬프트(새 값 아직): "수정 — 다시 말해주세요" + 항목명.
@@ -26,12 +28,9 @@ export function ModifyIndicatorPill({ name, prevValue, newValue }: { name: strin
       style={{
         // v0.23.0 — 중앙 흡수영역 가용 높이에 맞춤(부모 overflow:hidden 클립 방지).
         maxWidth: 'min(560px, 94vw)', width: '100%', ...ABSORB_CLAMP,
-        padding: 'clamp(12px, 2.4vh, 20px) clamp(16px, 4.6vw, 28px)', borderRadius: 18,
-        background: committed ? 'rgba(40,32,12,0.96)' : 'rgba(18,26,40,0.96)',
-        border: `2px solid ${accent}`,
-        boxShadow: '0 10px 36px rgba(0,0,0,0.5)',
+        padding: 'clamp(12px, 2.4vh, 20px) clamp(16px, 4.6vw, 28px)',
+        background: 'transparent',
         display: 'flex', flexDirection: 'column', gap: 'clamp(4px, 0.8vh, 8px)', alignItems: 'center',
-        animation: committed ? 'card-breathe-amber 2.2s ease-in-out infinite' : 'card-breathe-blue 2.4s ease-in-out infinite',
       }}
     >
       <span
