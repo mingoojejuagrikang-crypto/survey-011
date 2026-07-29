@@ -106,8 +106,9 @@ export function AnomalyAlertPopup({
           {alarmLabel}
         </span>
       )}
-      {/* 직전/현재는 상하 2줄을 유지하되, 각 행을 같은 폭의 라벨/값 영역으로 나누고 셀 안에서
-          중앙정렬한다. 내용 폭으로 열을 정하면 짧은 라벨은 좌단, 값은 우단에 붙어 중앙이 비게 된다. */}
+      {/* 직전/현재는 상하 2줄을 유지하되, 각 행을 같은 폭의 라벨/값 영역으로 나눈다.
+          2026-07-29 민구 제보 #3 — 각 영역 중앙정렬은 글자 크기 차이 때문에 시각 무게가 오른쪽으로
+          쏠려 반려됐다. 라벨 끝과 값 시작을 화면 중앙축으로 모아 한 비교 덩어리로 읽히게 한다. */}
       <div
         data-testid="anomaly-comparison"
         style={{
@@ -117,7 +118,7 @@ export function AnomalyAlertPopup({
           gridTemplateRows: 'auto auto',
           columnGap: 'clamp(4px, 1.5vw, 12px)',
           rowGap: 'max(2px, calc(clamp(4px, 0.9vh, 10px) * var(--fit-lo, 1)))',
-          alignItems: 'center', justifyItems: 'center',
+          alignItems: 'center',
         }}
       >
         <span data-testid="anomaly-prev-label" style={COMPARE_LABEL}>{previousLabel}</span>
@@ -144,8 +145,8 @@ const COMPARE_LABEL: React.CSSProperties = {
   lineHeight: 1.1,
   letterSpacing: -0.3,
   whiteSpace: 'nowrap',
-  textAlign: 'center',
-  justifySelf: 'center',
+  textAlign: 'right',
+  justifySelf: 'end',
 };
 
 const COMPARE_VALUE: React.CSSProperties = {
@@ -156,6 +157,6 @@ const COMPARE_VALUE: React.CSSProperties = {
   letterSpacing: -1.4,
   fontVariantNumeric: 'tabular-nums',
   whiteSpace: 'nowrap',
-  textAlign: 'center',
-  justifySelf: 'center',
+  textAlign: 'left',
+  justifySelf: 'start',
 };

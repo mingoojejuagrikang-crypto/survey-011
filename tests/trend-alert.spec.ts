@@ -337,12 +337,15 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   expect(events.filter((e) => e.extra === 'trend_alert_corrected')).toHaveLength(0);
 });
 
-test('[ALERT-COMPARE-1] 비교 라벨·값은 동일 영역 중앙, 값 62px, 390×568 무넘침', async ({ page }) => {
+test('[ALERT-COMPARE-1] 2026-07-29 제보 #3 — 라벨 end·값 start 중앙축, 값 62px, 390×568 무넘침', async ({ page }) => {
   await page.setViewportSize({ width: 402, height: 874 });
   await setupAndStart(page);
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '120.5', 500);
 
+  // 2026-07-29 민구 제보 #3 — v0.41.0의 "각 1/2 영역 중앙(25%/75%)"은 구현 누락이 아니라
+  // 반영된 결과였으나, 큰 값 쪽으로 시각 무게가 쏠려 반려됐다. 새 계약은 날짜 라벨의 오른쪽 끝과
+  // 값의 왼쪽 시작을 화면 50% 축으로 모으는 것이다. 옛 중심 단언으로 되돌리지 마라.
   const comparison = page.locator('[data-testid="anomaly-comparison"]');
   const metrics = await comparison.evaluate((el) => {
     const box = el.getBoundingClientRect();
@@ -353,25 +356,45 @@ test('[ALERT-COMPARE-1] 비교 라벨·값은 동일 영역 중앙, 값 62px, 39
     const prevValue = prevValueEl.getBoundingClientRect();
     const nextLabel = child('anomaly-next-label').getBoundingClientRect();
     const nextValue = child('anomaly-next-value').getBoundingClientRect();
-    const centerX = (r: DOMRect) => r.x + r.width / 2;
     const centerY = (r: DOMRect) => r.y + r.height / 2;
+    const axisX = box.x + box.width / 2;
+    const alignment = (label: DOMRect, value: DOMRect) => ({
+      labelEndGap: axisX - label.right,
+      valueStartGap: value.left - axisX,
+      meetAxis: ((label.right + value.left) / 2 - box.x) / box.width,
+    });
+    const prevLabelEl = child('anomaly-prev-label');
+    const nextLabelEl = child('anomaly-next-label');
+    const nextValueEl = child('anomaly-next-value');
     return {
       width: box.width,
-      prevLabelX: (centerX(prevLabel) - box.x) / box.width,
-      prevValueX: (centerX(prevValue) - box.x) / box.width,
-      nextLabelX: (centerX(nextLabel) - box.x) / box.width,
-      nextValueX: (centerX(nextValue) - box.x) / box.width,
+      prev: alignment(prevLabel, prevValue),
+      next: alignment(nextLabel, nextValue),
       prevCenterDeltaY: Math.abs(centerY(prevLabel) - centerY(prevValue)),
       nextCenterDeltaY: Math.abs(centerY(nextLabel) - centerY(nextValue)),
       valueSize: parseFloat(getComputedStyle(prevValueEl).fontSize),
+      prevLabelJustify: getComputedStyle(prevLabelEl).justifySelf,
+      nextLabelJustify: getComputedStyle(nextLabelEl).justifySelf,
+      prevValueJustify: getComputedStyle(prevValueEl).justifySelf,
+      nextValueJustify: getComputedStyle(nextValueEl).justifySelf,
+      prevLabelAlign: getComputedStyle(prevLabelEl).textAlign,
+      nextLabelAlign: getComputedStyle(nextLabelEl).textAlign,
+      prevValueAlign: getComputedStyle(prevValueEl).textAlign,
+      nextValueAlign: getComputedStyle(nextValueEl).textAlign,
     };
   });
-  for (const x of [metrics.prevLabelX, metrics.nextLabelX]) {
-    expect(Math.abs(x - 0.25), '라벨은 왼쪽 영역 가로 중앙').toBeLessThan(0.04);
+  for (const row of [metrics.prev, metrics.next]) {
+    expect(row.labelEndGap, '라벨 오른쪽 끝은 중앙축 왼쪽에 붙는다').toBeGreaterThanOrEqual(0);
+    expect(row.labelEndGap, '라벨 오른쪽 끝과 중앙축 사이 여백').toBeLessThanOrEqual(8);
+    expect(row.valueStartGap, '값 왼쪽 시작은 중앙축 오른쪽에 붙는다').toBeGreaterThanOrEqual(0);
+    expect(row.valueStartGap, '값 왼쪽 시작과 중앙축 사이 여백').toBeLessThanOrEqual(8);
+    expect(Math.abs(row.meetAxis - 0.5), '라벨 end / 값 start 사이가 화면 중앙축이다')
+      .toBeLessThan(0.01);
   }
-  for (const x of [metrics.prevValueX, metrics.nextValueX]) {
-    expect(Math.abs(x - 0.75), '값은 오른쪽 영역 가로 중앙').toBeLessThan(0.04);
-  }
+  expect([metrics.prevLabelJustify, metrics.nextLabelJustify]).toEqual(['end', 'end']);
+  expect([metrics.prevValueJustify, metrics.nextValueJustify]).toEqual(['start', 'start']);
+  expect([metrics.prevLabelAlign, metrics.nextLabelAlign]).toEqual(['right', 'right']);
+  expect([metrics.prevValueAlign, metrics.nextValueAlign]).toEqual(['left', 'left']);
   expect(metrics.prevCenterDeltaY, '직전 행 라벨/값 세로 중앙').toBeLessThanOrEqual(1);
   expect(metrics.nextCenterDeltaY, '현재 행 라벨/값 세로 중앙').toBeLessThanOrEqual(1);
   expect(metrics.valueSize, '402×874에서 compareValue 62px 상한 도달').toBeGreaterThanOrEqual(61.5);

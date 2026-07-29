@@ -79,10 +79,14 @@ export function ColumnChip({
       onClick={() => { if (clickable && !isEditing) onActivate(); }}
       style={{
         // 칩 내부 2행 — 1행 항목명 / 2행 값(민구 fb-27-2).
-        display: 'inline-flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center',
-        gap: '1.5cqh',
-        padding: '2cqh 3.5cqw',
+        // 두 행이 가용 높이를 절반씩 써서, 가운데에 콘텐츠를 뭉치고 위·아래를 비우지 않는다.
+        display: 'inline-grid',
+        gridTemplateRows: 'repeat(2, minmax(0, 1fr))',
+        placeItems: 'center',
+        rowGap: 0,
+        // 값이 들어오면 좌우 여백도 함께 확보한다. 큰 항목명이 폭을 결정하는 경우에도 빈 값→실제 값
+        // 커밋이 칩 폭 변화를 만들므로 ActiveState의 우측 끝 재정렬 계약(C4)이 계속 발화한다.
+        padding: `1cqh ${value ? 4.5 : 3.5}cqw`,
         borderRadius: 16,
         background: bg,
         border: `${isActive || isEditing ? 2 : 1.5}px solid ${border}`,
@@ -134,7 +138,7 @@ export function ColumnChip({
           }}
           onClick={(e) => e.stopPropagation()}
           style={{
-            flex: 1, minWidth: 0,
+            width: '100%', minWidth: 0,
             background: 'transparent', border: 'none', outline: 'none',
             color: T.text,
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
