@@ -102,6 +102,8 @@ export interface ActiveInputInfo {
   label: string;
 }
 
+export type AudioTrackState = 'none' | 'ended' | 'muted' | 'live';
+
 export class AudioRecorder {
   private stream: MediaStream | null = null;
   /** v0.25.0 기능2(prewarm) — 진행 중 init() Promise 공유(동시 획득 직렬화). prewarm(입력탭 마운트)과
@@ -286,12 +288,17 @@ export class AudioRecorder {
    *  상태(통화/Siri 인터럽션·라우트 변경)로, unmute 대기가 옳다(래치하면 멀쩡한 마이크에 재연결
    *  배너가 뜬다 — refreshActiveInputLabel 주석의 동일 원칙). 'none'은 레코더 미초기화/해제
    *  (일시정지 등 의도된 상태)로 판정 대상이 아니다. */
-  getTrackState(): 'none' | 'ended' | 'muted' | 'live' {
+  getTrackState(): AudioTrackState {
     const track = this.stream?.getAudioTracks()[0] ?? null;
     if (!track) return 'none';
     if (track.readyState === 'ended') return 'ended';
     if (track.muted) return 'muted';
     return 'live';
+  }
+
+  /** 계측 H — 백그라운드 진입 순간 실제 MediaRecorder 슬롯이 녹음 중인지 읽는 관찰 전용 getter. */
+  isRecording(): boolean {
+    return this.active?.recorder.state === 'recording' && !this.active.finalized;
   }
 
   /** v0.38.2 F5 — 포그라운드 복귀 시 **오디오 경로 재검증**(관찰 전용).

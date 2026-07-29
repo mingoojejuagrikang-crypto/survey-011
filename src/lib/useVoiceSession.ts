@@ -12,7 +12,7 @@ import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoVal
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
-import { AudioRecorder, type ClipResult } from './audioRecorder';
+import { AudioRecorder, type AudioTrackState, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import {
   anomalyAlertCleared,
@@ -116,6 +116,14 @@ const EARLY_COMMIT_STABLE_MS = 400;
 /** pause()가 recorder dispose 전에 in-flight 클립 저장을 기다리는 상한(ms). 경로별 유예는
  *  의도적 차등 — stop() 5초(세션 종료, 최대 보존), 아카이브 flush 1.5초(백그라운드, UX 무영향). */
 const PAUSE_FLUSH_GRACE_MS = 3000;
+
+export type VoiceTrackState = AudioTrackState | 'unknown';
+
+export interface VoiceRuntimeSnapshot {
+  rec: 'none' | 'idle' | 'recording';
+  track: VoiceTrackState;
+  stt: 'none' | 'idle' | 'listening' | 'suspended';
+}
 
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
@@ -2767,8 +2775,20 @@ export function useVoiceSession() {
       beforeLabel: string | null,
       backgroundMs: number,
     ) => {
+      const emit = (fields: Parameters<typeof audioRouteRevalidate>[0]) => {
+        try {
+          logCell({ type: 'clip', extra: audioRouteRevalidate(fields) });
+        } catch {
+          /* best-effort 계측 — 로그 실패가 복귀 경로를 막지 않는다 */
+        }
+      };
+      // 레코더 미초기화 — 비교할 경로 자체가 없다.
+      // 🔴 v0.42.0 계측 F: **여기서는 방출하지 않는다.** 같은 복귀의 `foreground_return`이
+      // `teardown=no_recorder`로 이미 이 사실을 남긴다(2026-07-29 로그 실측 확인). 여기서 또
+      // 남기면 레코더가 붙기 전 모든 복귀(`bg_s=0` 즉시 pageshow 포함)가 로그를 채워
+      // **2000개 링버퍼를 잠식한다** — `[F5]` 스펙이 "임계 미만 무발행"을 계약으로 못박은 이유다.
       const rec = recorderRef.current;
-      if (!rec) return; // 레코더 미초기화 — 비교할 경로 자체가 없다
+      if (!rec) return;
       try {
         const { label, track, status } = await rec.revalidateActiveInput();
         // 🔴 **관측 못 한 것을 '내장 마이크'로 확정하지 않는다**(라운드A 리뷰 Codex #2).
@@ -2778,20 +2798,27 @@ export function useVoiceSession() {
         const observed = status === 'ok' && label !== null && track !== 'none';
         const afterCategory = observed ? classifyInputDevice(label).text : 'unknown';
         const beforeCategory = beforeLabel === null ? null : classifyInputDevice(beforeLabel).text;
+        // 방출 게이트(경로 무변화 + 임계 미달)도 조용히 빠진다 — **의도된 침묵이다.**
+        // 같은 복귀의 `foreground_return:bg_s`가 임계 미달 사실을 남기고 있어 판독이 가능하고,
+        // 여기서 방출하면 짧은 탭 전환마다 로그가 쌓여 링버퍼를 잠식한다(위 `!rec`과 같은 이유).
         if (!shouldEmitRouteRevalidate({ beforeCategory, afterCategory, backgroundMs })) return;
-        logCell({
-          type: 'clip',
-          extra: audioRouteRevalidate({
-            before: beforeCategory ?? 'unknown',
-            after: afterCategory,
-            track,
-            status,
-            evt,
-            backgroundMs,
-          }),
+        emit({
+          before: beforeCategory ?? 'unknown',
+          after: afterCategory,
+          track,
+          status,
+          evt,
+          backgroundMs,
         });
       } catch {
-        /* best-effort 계측 — 관찰이 실패해도 복귀 경로를 막지 않는다 */
+        emit({
+          before: 'unknown',
+          after: 'unknown',
+          track: 'none',
+          status: 'error',
+          evt,
+          backgroundMs,
+        });
       }
     };
 
@@ -2876,6 +2903,29 @@ export function useVoiceSession() {
   const getActiveInputLabel = useCallback(
     () => recorderRef.current?.getActiveInput()?.label ?? null,
     [],
+  );
+
+  // 계측 G·H 공용 판독 경로. 레코더 자체를 읽을 수 없으면 `none`으로 단정하지 않고 unknown.
+  const getTrackState = useCallback(
+    (): VoiceTrackState => recorderRef.current?.getTrackState() ?? 'unknown',
+    [],
+  );
+
+  const getRuntimeSnapshot = useCallback(
+    (): VoiceRuntimeSnapshot => {
+      const recorder = recorderRef.current;
+      const controller = ctrlRef.current;
+      const suspend = uiSuspendRef.current;
+      return {
+        rec: !recorder ? 'none' : recorder.isRecording() ? 'recording' : 'idle',
+        track: getTrackState(),
+        stt:
+          suspend.reasons.size > 0 && suspend.hadController
+            ? 'suspended'
+            : controller?.getRecognitionState() ?? 'none',
+      };
+    },
+    [getTrackState],
   );
 
   // v0.34.0 B7 — 파동 레벨 getter(안정 참조, React state 금지 — 리렌더 0). rAF 소비자
@@ -3298,6 +3348,8 @@ export function useVoiceSession() {
     modifyManualAnomaly,
     lastConfidenceRef,
     getActiveInputLabel,
+    getTrackState,
+    getRuntimeSnapshot,
     getAudioLevel,
     getTimeDomainData,
     micLost,

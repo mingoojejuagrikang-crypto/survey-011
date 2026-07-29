@@ -97,26 +97,27 @@ export function recoverTimeout(reason: string, ms: number): string {
  *  `ok`가 아니면 `after`는 `unknown`이며, **그 복귀는 경로를 관측하지 못한 것**이다 — 이 구분이
  *  없으면 "재검증했는데 그대로였다"와 "재검증 자체가 실패했다"가 로그에서 같아 보인다.
  *
- *  🔴 v0.42.0 계측 F — **`status`가 조기 반환 경로까지 덮는다.** 위 문단은 이미 *"계측이 자기
- *  실패를 숨기지 않게 한다"*고 선언했는데, **정작 호출부가 그 설계를 배신하고 있었다**:
- *  `!rec`·방출 게이트·`catch` 세 갈래에서 아무것도 남기지 않고 `return`했다.
+ *  🔴 v0.42.0 계측 F — **`catch` 침묵만 메운다.** 2026-07-29에 이 이벤트가 **0건**이었는데
+ *  그 0이 무엇의 0인지 판정할 수 없었다. 조기 반환이 세 갈래였기 때문이다:
+ *  `!rec` / 방출 게이트 / `catch`.
  *
- *  그 대가가 2026-07-29 회차에서 드러났다. `audio_route_revalidate` **0건**인데 그 0이
- *  *무엇의 0인지 판정할 수 없었다*. 실측 대조: 그날 복귀 5건 중 `bg_s=256`·`7058`은
- *  `teardown=no_recorder`(레코더 null)로 설명되고 `bg_s=48`·`15`는 임계(60초) 미달로 설명되나,
- *  **`bg_s=67,teardown=completed`는 레코더도 있었고 게이트도 통과했는데 침묵했다** — 어느 갈래로
- *  빠졌는지 소스만으로 확정할 수 없다. 그래서 갈래마다 1건씩 남긴다.
+ *  실측으로 세 갈래를 갈라보니 **둘은 이미 다른 이벤트가 덮고 있었다**(07-29 복귀 5건 대조):
+ *   - `!rec` → 같은 복귀의 `foreground_return:teardown=no_recorder`가 남긴다(`bg_s=256`·`7058`)
+ *   - 게이트 → 같은 복귀의 `foreground_return:bg_s`가 임계 미달을 보여준다(`bg_s=48`·`15`)
+ *   - `catch` → **어떤 이벤트로도 남지 않는다** ← 진짜 공백
  *
- *  `gated`는 **관측은 성공했으나 방출 정책이 걸러낸** 경우다(`status='ok'`와 정보량이 같고
- *  `before`/`after`도 그대로 실린다 — 판독 측에서 `routeChanged`를 재계산할 수 있다).
- *  `ok`와 별개 값으로 두는 이유: 섞으면 *"경로가 안 바뀌어서 안 남았다"*와 *"관측 자체가
- *  실패했다"*가 다시 구분되지 않는다. 포그라운드 복귀는 세션당 5건 수준이라(07-29 실측)
- *  전수 방출해도 노이즈가 되지 않는다. */
+ *  그래서 `catch`에서만 `status='error'`로 1건 남긴다. `bg_s=67,teardown=completed`(레코더도
+ *  있었고 게이트도 통과했는데 침묵)의 정체를 다음 회차가 판정할 수 있게 하는 것이 목적이다.
+ *
+ *  ⚠️ **세 갈래를 전부 방출하려던 초안은 게이트에서 반증됐다.** `[F5]` 스펙이 *"임계 미만
+ *  복귀는 무발행"* 을 **링버퍼 잠식 방지** 계약으로 못박고 있고, 실제로 전수 방출하자 레코더가
+ *  붙기 전 복귀(`bg_s=0` 즉시 pageshow 포함)까지 4건이 쌓였다. 로그는 2000개 링버퍼다 —
+ *  **계측을 늘리면 다른 계측이 밀려난다.** 이미 관측 가능한 것을 중복으로 남기지 마라. */
 export function audioRouteRevalidate(fields: {
   before: string;
   after: string;
   track: 'none' | 'ended' | 'muted' | 'live';
-  status: 'ok' | 'gated' | 'unavailable' | 'error';
+  status: 'ok' | 'unavailable' | 'error';
   evt: string;
   backgroundMs: number;
 }): string {
@@ -275,11 +276,22 @@ export function micTeardown(fields: {
  *   - `empty`      재생할 톤이 0개 — 변형 조회가 빈 스케줄을 냈다
  *   - `error`      예외
  *
- *  `gain`은 실제 적용된 마스터 배수(소수 3자리)다. `silent` 판정의 근거를 남긴다. */
+ *  `gain`은 실제 적용된 마스터 배수(소수 3자리)다. `silent` 판정의 근거를 남긴다.
+ *
+ *  🔴 **`ctx`에 iOS 전용 `interrupted`를 별도 값으로 둔다**(구현 중 레인 질의로 드러났다).
+ *  TS DOM의 `AudioContextState`는 이 값을 포함하는데, 초안 유니온에는 없어서 `suspended`로
+ *  정규화할 뻔했다. **그러면 안 된다** — 이 앱은 농가 현장에서 아이폰으로 돌고, 전화·Siri
+ *  인터럽션은 일상이다. `suspended`(사용자 제스처 전 미개시)와 `interrupted`(개시됐다가
+ *  OS가 뺏음)는 **원인도 대응도 다른데** 뭉개면 로그에서 영원히 구분되지 않는다.
+ *  제보 #5 "알람음 안 들림"의 유력 후보라 더더욱 갈라야 한다.
+ *
+ *  `result`는 뭉개도 된다 — `interrupted`든 `suspended`든 *"스케줄해도 소리가 안 난다"*는
+ *  **결과는 같다**(`result='suspended'`). 두 필드는 직교한다: `result`=무슨 일이 벌어졌나,
+ *  `ctx`=왜 그랬나. */
 export function beepPlay(fields: {
   kind: string;
   result: 'played' | 'no_ctx' | 'suspended' | 'silent' | 'empty' | 'error';
-  ctx: 'running' | 'suspended' | 'closed' | 'none';
+  ctx: 'running' | 'suspended' | 'interrupted' | 'closed' | 'none';
   gain: number;
   tones: number;
 }): string {

@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { TabBar, type TabId } from './components/TabBar';
 import { UpdateBanner } from './components/UpdateBanner';
 import { PortraitGuard } from './components/PortraitGuard';
 import { SettingsScreen } from './screens/SettingsScreen';
-import { VoiceScreen } from './screens/VoiceScreen';
+import { VoiceScreen, type VoiceTelemetryReaders } from './screens/VoiceScreen';
 import { DataScreen } from './screens/DataScreen';
 import { T, DEVICE } from './tokens';
 import { hydrateSessions } from './lib/hydrate';
@@ -21,7 +21,7 @@ import { initAutoCapture } from './lib/screenshot';
 import { captureForFeedback, initFeedbackQueueFlush, submitFeedback } from './lib/feedback';
 import { FeedbackModal } from './components/FeedbackModal';
 import { logger } from './lib/logger';
-import { lifecycleSignal, visibilityContext } from './lib/logEvents';
+import { bgEnterSnapshot, lifecycleSignal, visibilityContext } from './lib/logEvents';
 import { useSessionStore } from './stores/sessionStore';
 import { onTokenSettled } from './lib/googleAuth';
 
@@ -36,6 +36,10 @@ export default function App() {
   // unmount하지 않기 위한 신호. 조건부 렌더(탭 전환)가 인식기·워치독을 통째로
   // teardown해 STT가 죽고 수동 pause/resume로만 회복되던 근인(07-13 로그 2/2 재현)의 해소 축.
   const sessionLive = useSessionStore((s) => s.phase !== 'ready' && s.phase !== 'done');
+  const voiceTelemetryRef = useRef<VoiceTelemetryReaders | null>(null);
+  const setVoiceTelemetryReaders = useCallback((readers: VoiceTelemetryReaders | null) => {
+    voiceTelemetryRef.current = readers;
+  }, []);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth <= 480);
@@ -135,6 +139,20 @@ export default function App() {
           evidence: awaySignals.size > 0 ? [...awaySignals].join('+') : 'none',
         }),
       });
+      if (document.visibilityState === 'hidden') {
+        const snapshot = voiceTelemetryRef.current?.getRuntimeSnapshot() ?? {
+          rec: 'none' as const,
+          track: 'unknown' as const,
+          stt: 'none' as const,
+        };
+        logger.log({
+          type: 'app',
+          extra: bgEnterSnapshot({
+            ...snapshot,
+            phase: useSessionStore.getState().phase,
+          }),
+        });
+      }
       if (document.visibilityState === 'visible') awaySignals.clear();
     };
     window.addEventListener('blur', onBlur);
@@ -233,7 +251,7 @@ export default function App() {
               minHeight: 0,
             }}
           >
-            <VoiceScreen />
+            <VoiceScreen onTelemetryReadersChange={setVoiceTelemetryReaders} />
           </div>
         )}
         {tab === 'data' && <DataScreen />}
@@ -250,6 +268,7 @@ export default function App() {
               text,
               screenshot: feedback.shot,
               context: { tab, sessionPhase: useSessionStore.getState().phase },
+              getTrackState: voiceTelemetryRef.current?.getTrackState,
             }).then(() => undefined)
           }
           onClose={() => {

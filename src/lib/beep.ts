@@ -16,6 +16,8 @@ import {
   type BeepVariant,
   type ScheduledTone,
 } from './beepVariants';
+import { logger } from './logger';
+import { beepPlay } from './logEvents';
 
 // 재노출(기존 import 경로 호환). 매핑·상한 SSOT는 beepVariants.ts(순수·단위 테스트 대상).
 export { BEEP_VOLUME_MAX };
@@ -38,6 +40,28 @@ function masterMultiplier(): number {
 
 let ctx: AudioContext | null = null;
 
+type PlaybackResult = 'played' | 'no_ctx' | 'suspended' | 'silent' | 'empty' | 'error';
+type PlaybackContext = 'running' | 'suspended' | 'interrupted' | 'closed' | 'none';
+
+interface PlaybackOutcome {
+  result: PlaybackResult;
+  ctx: PlaybackContext;
+  gain: number;
+  tones: number;
+}
+
+function contextState(): PlaybackContext {
+  return ctx?.state ?? 'none';
+}
+
+function logBeep(kind: BeepKind, outcome: PlaybackOutcome): void {
+  try {
+    logger.log({ type: 'app', extra: beepPlay({ kind, ...outcome }) });
+  } catch {
+    // Telemetry is best-effort and must never delay or block audio feedback.
+  }
+}
+
 function getCtx(): AudioContext | null {
   const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioCtx) return null;
@@ -55,19 +79,26 @@ function getCtx(): AudioContext | null {
  *  `onended` 카운팅**으로 한다. ctx가 suspended면 `ctx.currentTime`은 멈춰 있는데 setTimeout은 실시간
  *  이라, resume 지연 시 소리가 나기 전에 disconnect돼 첫 비프가 잘리거나 묵음이 됐고(백그라운드에서
  *  타이머 스로틀 시 노드 누수), onended는 실제 재생 종료에 동기화돼 그 레이스를 없앤다. */
-function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier()): void {
+function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier()): PlaybackOutcome {
+  let appliedGain = 0;
+  let scheduledTones = 0;
   try {
     const c = getCtx();
-    if (!c) return;
+    appliedGain = Math.min(Math.max(0, mult), BEEP_VOLUME_MAX);
+    if (!c) return { result: 'no_ctx', ctx: 'none', gain: appliedGain, tones: 0 };
+    const initialState = c.state;
     const now = c.currentTime;
     const master = c.createGain();
     // v0.35.0 R2-FIX-6(리뷰 라운드2, Pro) — 상한도 클램프. 종전엔 하한(Math.max(0,·))만 있어, 호출부가
     //   손상된 배수를 넘기면 클리핑/폭주 음량이 날 수 있었다. beepVolumeToMultiplier가 이미 [0,MAX]로
     //   매핑하지만, 재생기 자체에서도 최종 방어선을 둔다(defense in depth).
-    master.gain.setValueAtTime(Math.min(Math.max(0, mult), BEEP_VOLUME_MAX), now);
+    master.gain.setValueAtTime(appliedGain, now);
     master.connect(c.destination);
     let pending = tones.length;
-    if (pending === 0) { try { master.disconnect(); } catch { /* no-op */ } return; }
+    if (pending === 0) {
+      try { master.disconnect(); } catch { /* no-op */ }
+      return { result: 'empty', ctx: initialState, gain: appliedGain, tones: 0 };
+    }
     for (const tone of tones) {
       const osc = c.createOscillator();
       const gain = c.createGain();
@@ -85,31 +116,42 @@ function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier())
       gain.connect(master);
       osc.start(t0);
       osc.stop(t1 + 0.03);
+      scheduledTones += 1;
       osc.onended = () => {
         try { osc.disconnect(); gain.disconnect(); } catch { /* no-op */ }
         // 마지막 oscillator가 끝난 뒤에만 마스터 해제(재생 종료에 동기 — setTimeout 레이스 제거).
         if (--pending === 0) { try { master.disconnect(); } catch { /* no-op */ } }
       };
     }
+    const result: PlaybackResult = initialState === 'suspended' || initialState === 'interrupted'
+      ? 'suspended'
+      : appliedGain === 0
+        ? 'silent'
+        : 'played';
+    return { result, ctx: initialState, gain: appliedGain, tones: scheduledTones };
   } catch {
     // Audio feedback is non-critical; never block the voice flow.
+    return { result: 'error', ctx: contextState(), gain: appliedGain, tones: scheduledTones };
   }
 }
 
 export function playBeep(kind: BeepKind): void {
+  let outcome: PlaybackOutcome;
   try {
     if (kind === 'modify') {
-      playSchedule([MODIFY_TONE]);
-      return;
+      outcome = playSchedule([MODIFY_TONE]);
+    } else {
+      const s = useSettingsStore.getState();
+      const variant = kind === 'corrected'
+        ? getBeepVariant(s.beepPositiveId, 'positive')
+        : getBeepVariant(s.beepNegativeId, 'negative');
+      outcome = playSchedule(buildBeepSchedule(variant));
     }
-    const s = useSettingsStore.getState();
-    const variant = kind === 'corrected'
-      ? getBeepVariant(s.beepPositiveId, 'positive')
-      : getBeepVariant(s.beepNegativeId, 'negative');
-    playSchedule(buildBeepSchedule(variant));
   } catch {
     // 설정 조회 실패 등도 음성 흐름을 막지 않는다.
+    outcome = { result: 'error', ctx: contextState(), gain: 0, tones: 0 };
   }
+  logBeep(kind, outcome);
 }
 
 /** 설정탭 칩 미리듣기 — 선택 여부와 무관하게 해당 변형을 즉시 재생.

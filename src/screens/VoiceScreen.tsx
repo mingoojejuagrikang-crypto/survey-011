@@ -4,7 +4,11 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { computeTotalRows } from '../lib/autoValue';
 import { useWakeLock, lockPortrait } from '../lib/wakeLock';
-import { useVoiceSession } from '../lib/useVoiceSession';
+import {
+  useVoiceSession,
+  type VoiceRuntimeSnapshot,
+  type VoiceTrackState,
+} from '../lib/useVoiceSession';
 import { buildSessionLabel } from '../lib/sessionLabel';
 import { EdgeGlow, type GlowTone } from '../components/voice/EdgeGlow';
 import { type ReaskReason } from '../components/voice/ReaskCue';
@@ -14,7 +18,14 @@ import { ReadyState } from '../components/voice/ReadyState';
 import { ActiveState } from '../components/voice/ActiveState';
 import { MicReconnectBanner } from '../components/voice/MicReconnectBanner';
 
-export function VoiceScreen() {
+export interface VoiceTelemetryReaders {
+  getTrackState: () => VoiceTrackState;
+  getRuntimeSnapshot: () => VoiceRuntimeSnapshot;
+}
+
+export function VoiceScreen(props: {
+  onTelemetryReadersChange?: (readers: VoiceTelemetryReaders | null) => void;
+}) {
   const s = useSettingsStore();
   // interimValue는 VoiceHero가 직접 구독한다. 화면 루트가 전체 store를 구독하면 interim 한 조각마다
   // ActiveState/칩 전체가 다시 렌더되므로, 이 화면이 실제로 쓰는 수명주기 필드만 고정 구독한다.
@@ -27,6 +38,17 @@ export function VoiceScreen() {
     persistError: st.persistError,
   })));
   const voiceSession = useVoiceSession();
+  useEffect(() => {
+    props.onTelemetryReadersChange?.({
+      getTrackState: voiceSession.getTrackState,
+      getRuntimeSnapshot: voiceSession.getRuntimeSnapshot,
+    });
+    return () => props.onTelemetryReadersChange?.(null);
+  }, [
+    props.onTelemetryReadersChange,
+    voiceSession.getRuntimeSnapshot,
+    voiceSession.getTrackState,
+  ]);
   // v0.23.0 입력탭#3(쿨다운 피드백, Vance) — 재연결 버튼 탭 후 audioRecorder의 RECOVER_COOLDOWN_MS
   //   (~3s) 동안 두 번째 탭이 무반응처럼 보이던 문제. 탭 즉시 로컬 "reconnecting" 상태를 켜고
   //   쿨다운 창 동안 버튼을 비활성+"재연결 중…" 스피너로 보인다. audioRecorder 로직(복구 타이밍)은

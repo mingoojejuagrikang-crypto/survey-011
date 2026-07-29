@@ -18,7 +18,7 @@
  */
 import JSZip from 'jszip';
 import { logger } from './logger';
-import { withErr } from './logEvents';
+import { feedbackUploadMic, withErr } from './logEvents';
 import {
   enqueueFeedback,
   loadFeedbackQueue,
@@ -115,6 +115,15 @@ export async function buildFeedbackZip(input: {
 }
 
 export type FeedbackSubmitStatus = 'uploaded' | 'queued';
+type FeedbackMicTrackState = 'none' | 'ended' | 'muted' | 'live' | 'unknown';
+
+function readFeedbackMicTrack(getTrackState?: () => FeedbackMicTrackState): FeedbackMicTrackState {
+  try {
+    return getTrackState?.() ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 async function enqueueZip(
   zipBlob: Blob,
@@ -142,6 +151,7 @@ export async function submitFeedback(input: {
   text: string;
   screenshot: Blob | null;
   context: FeedbackContext;
+  getTrackState?: () => FeedbackMicTrackState;
 }): Promise<FeedbackSubmitStatus> {
   logger.log({
     type: 'app',
@@ -149,38 +159,68 @@ export async function submitFeedback(input: {
   });
   const filename = feedbackFilename();
   const zipBlob = await buildFeedbackZip(input);
+  const bytes = zipBlob.size;
+  const uploadStartedAt = Date.now();
+  const emitUploadMic = (phase: 'start' | 'uploaded' | 'queued' | 'failed') => {
+    try {
+      logger.log({
+        type: 'app',
+        extra: feedbackUploadMic({
+          phase,
+          track: readFeedbackMicTrack(input.getTrackState),
+          bytes,
+          elapsedMs: phase === 'start' ? 0 : Math.max(0, Date.now() - uploadStartedAt),
+        }),
+      });
+    } catch {
+      /* best-effort 계측 — 제출 경로의 기존 성공/실패 의미를 바꾸지 않는다 */
+    }
+  };
+  emitUploadMic('start');
 
-  // 오프라인/미로그인 — 업로드 시도 없이 곧장 큐(온라인·토큰 복귀 훅이 flush).
-  if (!navigator.onLine) {
-    await enqueueZip(zipBlob, filename, { pendingUser: true, pendingAdmin: !!FEEDBACK_FOLDER_ID }, 'offline');
-    return 'queued';
+  try {
+    // 오프라인/미로그인 — 업로드 시도 없이 곧장 큐(온라인·토큰 복귀 훅이 flush).
+    if (!navigator.onLine) {
+      await enqueueZip(zipBlob, filename, { pendingUser: true, pendingAdmin: !!FEEDBACK_FOLDER_ID }, 'offline');
+      emitUploadMic('queued');
+      return 'queued';
+    }
+    if (!getAccessToken()) {
+      await enqueueZip(zipBlob, filename, { pendingUser: true, pendingAdmin: !!FEEDBACK_FOLDER_ID }, 'not_signed_in');
+      emitUploadMic('queued');
+      return 'queued';
+    }
+
+    const r = await uploadFeedbackToBothDrives(zipBlob, filename);
+    const userOk = !!r.userDriveId;
+    const adminOk = !!r.adminDriveId;
+    logger.log({
+      type: 'app',
+      extra:
+        `feedback_uploaded:user=${userOk ? 'ok' : 'fail'},` +
+        `admin=${!r.adminConfigured ? 'skip' : adminOk ? 'ok' : 'fail'}` +
+        (r.errors.length ? `:${r.errors.join('|').slice(0, 160)}` : ''),
+    });
+
+    if (userOk && (!r.adminConfigured || adminOk)) {
+      emitUploadMic('uploaded');
+      return 'uploaded';
+    }
+
+    // 부분/전체 실패 → 남은 레그만 큐에. 사용자 레그 성공이면 성공 처리(관리자 레그는 non-fatal 재시도).
+    await enqueueZip(
+      zipBlob,
+      filename,
+      { pendingUser: !userOk, pendingAdmin: r.adminConfigured && !adminOk },
+      userOk ? 'admin_retry' : 'upload_failed',
+    );
+    const status = userOk ? 'uploaded' : 'queued';
+    emitUploadMic(status);
+    return status;
+  } catch (error) {
+    emitUploadMic('failed');
+    throw error;
   }
-  if (!getAccessToken()) {
-    await enqueueZip(zipBlob, filename, { pendingUser: true, pendingAdmin: !!FEEDBACK_FOLDER_ID }, 'not_signed_in');
-    return 'queued';
-  }
-
-  const r = await uploadFeedbackToBothDrives(zipBlob, filename);
-  const userOk = !!r.userDriveId;
-  const adminOk = !!r.adminDriveId;
-  logger.log({
-    type: 'app',
-    extra:
-      `feedback_uploaded:user=${userOk ? 'ok' : 'fail'},` +
-      `admin=${!r.adminConfigured ? 'skip' : adminOk ? 'ok' : 'fail'}` +
-      (r.errors.length ? `:${r.errors.join('|').slice(0, 160)}` : ''),
-  });
-
-  if (userOk && (!r.adminConfigured || adminOk)) return 'uploaded';
-
-  // 부분/전체 실패 → 남은 레그만 큐에. 사용자 레그 성공이면 성공 처리(관리자 레그는 non-fatal 재시도).
-  await enqueueZip(
-    zipBlob,
-    filename,
-    { pendingUser: !userOk, pendingAdmin: r.adminConfigured && !adminOk },
-    userOk ? 'admin_retry' : 'upload_failed',
-  );
-  return userOk ? 'uploaded' : 'queued';
 }
 
 // ─── 큐 재전송 (온라인/로그인 복귀 + 부팅) ─────────────────────────────────

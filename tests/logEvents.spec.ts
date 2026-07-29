@@ -182,21 +182,14 @@ test('audioRouteRevalidate — 오디오 경로 재검증 바이트 계약', () 
  * 아래 리터럴이 SOP-003 파서와의 계약이다. 고치고 싶어지면 파서도 함께 고쳐야 한다.
  * ──────────────────────────────────────────────────────────────────────────── */
 
-/** 계측 F — `audioRouteRevalidate`의 `status`가 **조기 반환 경로까지** 덮는다.
- *  07-29 `audio_route_revalidate` 0건의 정체를 갈래별로 남기려는 확장이다. */
-test('audioRouteRevalidate — 조기 반환 3갈래가 status로 갈린다 (계측 F)', () => {
-  // 갈래① 레코더 자체가 없다. before/after 둘 다 관측 못 했으므로 unknown.
-  expect(audioRouteRevalidate({
-    before: 'unknown', after: 'unknown', track: 'none', status: 'unavailable', evt: 'vis', backgroundMs: 7_058_000,
-  })).toBe('audio_route_revalidate:before=unknown,after=unknown,track=none,status=unavailable,evt=vis,bg_s=7058');
-
-  // 갈래② 관측은 성공했으나 방출 게이트가 걸렀다(경로 무변화 + 임계 미달).
-  // 🔑 status=ok와 정보량이 같고 before/after도 실린다 — 판독 측이 routeChanged를 재계산할 수 있다.
-  expect(audioRouteRevalidate({
-    before: '내장 마이크', after: '내장 마이크', track: 'live', status: 'gated', evt: 'vis', backgroundMs: 48_000,
-  })).toBe('audio_route_revalidate:before=내장 마이크,after=내장 마이크,track=live,status=gated,evt=vis,bg_s=48');
-
-  // 갈래③ 관측 중 예외. 07-29 bg_s=67(레코더 있음·게이트 통과)의 침묵이 여기였는지 다음 회차가 판정한다.
+/** 계측 F — `catch` 침묵을 메운다(조기 반환 세 갈래 중 **다른 이벤트가 안 덮는 하나**).
+ *
+ *  `!rec`과 방출 게이트는 같은 복귀의 `foreground_return`이 각각 `teardown=no_recorder`·`bg_s`로
+ *  이미 남긴다 — 07-29 복귀 5건 대조로 확인했다. 중복 방출은 2000개 링버퍼를 잠식하므로
+ *  `[F5]` 스펙이 "임계 미만 무발행"을 계약으로 못박고 있다. 그래서 `catch`만 남긴다. */
+test('audioRouteRevalidate — catch 침묵을 status=error로 메운다 (계측 F)', () => {
+  // 07-29 bg_s=67(레코더 있음·게이트 통과)의 침묵이 여기였는지 다음 회차가 판정한다.
+  // 관측 자체가 실패했으므로 before/after는 unknown, track은 none이다 — 추정으로 채우지 않는다.
   expect(audioRouteRevalidate({
     before: 'unknown', after: 'unknown', track: 'none', status: 'error', evt: 'vis', backgroundMs: 67_000,
   })).toBe('audio_route_revalidate:before=unknown,after=unknown,track=none,status=error,evt=vis,bg_s=67');
@@ -223,6 +216,13 @@ test('beepPlay — 알람음 재생 결과 바이트 계약 (계측 A)', () => {
   expect(beepPlay({
     kind: 'negative', result: 'no_ctx', ctx: 'none', gain: 0.6, tones: 0,
   })).toBe('beep_play:kind=negative,result=no_ctx,ctx=none,gain=0.6,tones=0');
+
+  // 🔴 iOS 전용 interrupted — 전화·Siri가 오디오 세션을 뺏은 상태. 농가 현장에선 일상이다.
+  // `suspended`(제스처 전 미개시)로 정규화하면 원인이 로그에서 영원히 구분되지 않는다.
+  // result는 같아도(소리 안 남) ctx가 이유를 가른다 — 두 필드는 직교한다.
+  expect(beepPlay({
+    kind: 'negative', result: 'suspended', ctx: 'interrupted', gain: 0.6, tones: 3,
+  })).toBe('beep_play:kind=negative,result=suspended,ctx=interrupted,gain=0.6,tones=3');
 
   // gain은 소수 3자리로 반올림한다 — 부동소수 꼬리가 파서 대조를 깨지 않도록.
   expect(beepPlay({

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { logger } from '../lib/logger';
+import { orientationChange } from '../lib/logEvents';
 
 /**
  * v0.38.2 F2 — 가로 회전 시 **세로로 돌려달라는 안내를 덮는다.**
@@ -64,17 +66,54 @@ export function PortraitGuard() {
   useEffect(() => {
     // matchMedia 미지원(구형 WebView)이면 아무것도 하지 않는다 — 안내가 안 뜰 뿐 앱은 정상 동작한다.
     if (typeof window.matchMedia !== 'function') return;
-    const mq = window.matchMedia('(orientation: landscape) and (pointer: coarse)');
-    const apply = () => setLandscape(mq.matches);
-    apply();
+    const guardMq = window.matchMedia('(orientation: landscape) and (pointer: coarse)');
+    const orientationMq = window.matchMedia('(orientation: landscape)');
+    const applyGuard = () => setLandscape(guardMq.matches);
+    // 빌더에 초기 관측 discriminator가 없으므로 마운트 상태는 기준값으로만 잡고 방출하지 않는다.
+    let previousOrientation: 'portrait' | 'landscape' = orientationMq.matches ? 'landscape' : 'portrait';
+    const reportOrientation = () => {
+      const nextOrientation = orientationMq.matches ? 'landscape' : 'portrait';
+      if (nextOrientation === previousOrientation) return;
+      previousOrientation = nextOrientation;
+      applyGuard();
+      try {
+        logger.log({
+          type: 'app',
+          extra: orientationChange({
+            to: nextOrientation,
+            guard: guardMq.matches ? 'shown' : 'hidden',
+            w: Math.round(window.innerWidth),
+            h: Math.round(window.innerHeight),
+          }),
+        });
+      } catch {
+        // Telemetry is best-effort and must never affect the orientation guard.
+      }
+    };
+    applyGuard();
     // Safari 14 미만은 addEventListener 미지원 → addListener 폴백(TabBar의 ResizeObserver 폴백과 동일 원칙).
-    if (typeof mq.addEventListener === 'function') {
-      mq.addEventListener('change', apply);
-      return () => mq.removeEventListener('change', apply);
+    if (typeof guardMq.addEventListener === 'function') {
+      guardMq.addEventListener('change', applyGuard);
+      orientationMq.addEventListener('change', reportOrientation);
+      return () => {
+        guardMq.removeEventListener('change', applyGuard);
+        orientationMq.removeEventListener('change', reportOrientation);
+      };
     }
-    const legacy = mq as MediaQueryList & { addListener?: (cb: () => void) => void; removeListener?: (cb: () => void) => void };
-    legacy.addListener?.(apply);
-    return () => legacy.removeListener?.(apply);
+    const legacyGuard = guardMq as MediaQueryList & {
+      addListener?: (cb: () => void) => void;
+      removeListener?: (cb: () => void) => void;
+    };
+    const legacyOrientation = orientationMq as MediaQueryList & {
+      addListener?: (cb: () => void) => void;
+      removeListener?: (cb: () => void) => void;
+    };
+    legacyGuard.addListener?.(applyGuard);
+    legacyOrientation.addListener?.(reportOrientation);
+    return () => {
+      legacyGuard.removeListener?.(applyGuard);
+      legacyOrientation.removeListener?.(reportOrientation);
+    };
   }, []);
 
   if (!landscape) return null;

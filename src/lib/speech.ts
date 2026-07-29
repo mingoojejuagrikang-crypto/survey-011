@@ -214,6 +214,11 @@ export class SpeechController {
     return this.ttsMuted;
   }
 
+  /** 계측 H — 현재 인식기 인스턴스가 실제 start 이벤트를 받은 상태인지 읽는다. */
+  getRecognitionState(): 'idle' | 'listening' {
+    return this.active && this.recRunning ? 'listening' : 'idle';
+  }
+
   start() {
     if (this.active) return;
     this.rec = createRecognition();
