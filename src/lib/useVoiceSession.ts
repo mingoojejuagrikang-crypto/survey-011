@@ -14,7 +14,13 @@ import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
 import { AudioRecorder, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
-import { audioRouteRevalidate, micAutoReconnect, rowMarked } from './logEvents';
+import {
+  anomalyAlertCleared,
+  audioRouteRevalidate,
+  clipArmBlocked,
+  micAutoReconnect,
+  rowMarked,
+} from './logEvents';
 import { resolveForegroundReturnEvent } from './foregroundReturnTelemetry';
 import { resolveFinal } from './voiceFinalResolver';
 import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
@@ -140,6 +146,9 @@ export function useVoiceSession() {
   // [CLIP-WINDOW-1] UI suspend가 끊은 셀. 모달 전 조각은 저장하지 않고, 모든 중첩 UI가 닫힌 뒤
   // 여전히 같은 셀의 값을 기다릴 때만 새 녹음창을 연다(모달 대기 구간 splice/보존 금지).
   const uiSuspendedClipRef = useRef<{ row: number; colId: string } | null>(null);
+  // [CLIP-WINDOW-2] suspend 중 arm 요청의 단일 보류 슬롯. 가장 최근 요청이 이전 활성 슬롯보다
+  // 현재 awaiting에 가까운 의도이므로 resume에서 우선 소비하고, 세션 경계 clear에서는 폐기한다.
+  const uiBlockedClipArmRef = useRef<{ row: number; colId: string } | null>(null);
   // rowIndex → colId → IDB key; accumulated in-memory until persistSession writes to dataStore
   const pendingClipsRef = useRef<Record<number, Record<string, string>>>({});
   // Snapshot of a persisted row being cascade-corrected; included in persistSession if stop()
@@ -205,6 +214,33 @@ export function useVoiceSession() {
   const logCell = (entry: Omit<Parameters<typeof logger.log>[0], 'sessionId'>): void => {
     logger.log({ sessionId: sessionIdRef.current, ...entry } as Parameters<typeof logger.log>[0]);
   };
+  const clearAnomalyAlert = useCallback((reason: string) => {
+    const sess = useSessionStore.getState();
+    const alert = sess.anomalyAlert;
+    if (!alert) return;
+    // 신규 음성 알람은 아래 발화 지점에서 colId를 직접 싣고, 수동 알람도 이미 colId를 가진다.
+    // 그래도 공통 코어/구버전 형태처럼 optional인 객체를 받을 수 있으므로, 알람을 해제하기 **전**
+    // 아직 같은 셀을 가리키는 awaiting(row+name 일치)을 신뢰 가능한 1차 폴백으로 쓴다.
+    // awaiting이 이미 바뀐 방어 상황에서는 세션 컬럼의 이름 역인덱스로 마지막 폴백한다.
+    const awaiting = awaitingFieldRef.current;
+    const colId = alert.colId
+      ?? (
+        awaiting?.row === alert.row && awaiting.name === alert.colName
+          ? awaiting.colId
+          : undefined
+      )
+      ?? getSessionColumns().find((col) => col.name === alert.colName)?.id;
+    logCell({
+      type: 'trend',
+      extra: anomalyAlertCleared({
+        reason,
+        hadStatus: alert.status ?? 'pending',
+      }),
+      row: alert.row,
+      ...(colId ? { colId } : {}),
+    });
+    sess.setAnomalyAlert(null);
+  }, []);
   const say = useCallback(async (text: string, interrupt = true) => {
     if (!text) return;
     const ttsStart = Date.now();
@@ -510,6 +546,21 @@ export function useVoiceSession() {
    *  the latter two used to re-ask via say() WITHOUT restarting the slot, so the re-spoken
    *  value was deterministically never recorded (06-11 v0.6.0 row8: "155.5" → clip_empty). */
   const armClipForCell = useCallback((row: number, colId: string) => {
+    const suspendReasons = uiSuspendRef.current.reasons;
+    if (suspendReasons.size > 0) {
+      uiBlockedClipArmRef.current = { row, colId };
+      logCell({
+        type: 'clip',
+        extra: clipArmBlocked({
+          reason: [...suspendReasons].join('+') || 'unknown',
+          row,
+          col: colId,
+        }),
+        row,
+        colId,
+      });
+      return;
+    }
     clipStartRowRef.current = row;
     clipStartColIdRef.current = colId;
     recorderRef.current?.startClip();
@@ -520,7 +571,7 @@ export function useVoiceSession() {
     async (col: Column, opts?: { isModify?: boolean; previousValue?: string }) => {
       const row = useSessionStore.getState().activeRow;
       // v0.9.0 — 다음 필드로 진입하면 이전 이상치 알람 팝업은 해제(해소된 것으로 간주).
-      useSessionStore.getState().setAnomalyAlert(null);
+      clearAnomalyAlert('announce_field');
       // v0.12.0 AREA2 V4 — 수정 재안내면 '수정 값' 인디케이터를 켜고, 일반 안내면 해제한다.
       useSessionStore.getState().setModifyIndicator(
         opts?.isModify ? { name: col.name, colId: col.id } : null,
@@ -541,7 +592,7 @@ export function useVoiceSession() {
       useSessionStore.getState().setLastTts(hint);
       await say(opts?.isModify ? `수정. ${col.name}.` : `${col.name}.`, false);
     },
-    [armClipForCell, say],
+    [armClipForCell, clearAnomalyAlert, say],
   );
 
   // ── end-of-table (v0.5.0 NAV-1 / 요청3) ────────────────────
@@ -566,6 +617,7 @@ export function useVoiceSession() {
    *  새 행 커밋 대신 종료 재안내로 흡수한다. 종료는 '종료' 음성 명령 또는 종료 버튼으로만 일어난다. */
   const announceEndReached = useCallback(async () => {
     const sess = useSessionStore.getState();
+    clearAnomalyAlert('end_reached');
     const vc = voiceColsList();
     const total = computeTotalRows(getSessionColumns());
     const empties = listEmptyRows(total, vc);
@@ -594,7 +646,7 @@ export function useVoiceSession() {
       extra: empties.length > 0 ? `end_reached_waiting:empty=${empties.join(',')}` : 'end_reached_waiting',
     });
     await say(msg);
-  }, [say]);
+  }, [clearAnomalyAlert, say]);
 
   // ── v0.33.0 백로그 A(민구 결정 3): 완료 행 착지 → "값 읽어주기 + 명령 대기" ─────
   /** 완료 행에 착지('이전' 음성/◀ 버튼/행 점프)하면 그 행의 음성입력 기록값을 TTS로 읽어주고
@@ -607,6 +659,7 @@ export function useVoiceSession() {
    *  착지 필드가 '듣는 중'처럼 보이지 않게 하고 early-commit(active 전용)도 함께 멈춘다(atEnd 패턴). */
   const enterReviewWait = useCallback(async (row: number) => {
     const sess = useSessionStore.getState();
+    clearAnomalyAlert('review_wait');
     const vc = voiceColsList();
     const values = sess.getRowValues(row);
     const parts = vc
@@ -632,7 +685,7 @@ export function useVoiceSession() {
     const msg = `${row}행 완료됨. ${parts.join(', ')}.`;
     sess.setLastTts(msg);
     await say(msg);
-  }, [say]);
+  }, [clearAnomalyAlert, say]);
 
   // ── progression ────────────────────────────────────────────
   /** Move to next voice col in current row, or finalize row + jump to next target. */
@@ -1240,6 +1293,7 @@ export function useVoiceSession() {
     const prev = [...latch.reasons].join('+') || 'unknown';
     uiSuspendRef.current = { hadController: false, reasons: new Set<string>() };
     uiSuspendedClipRef.current = null;
+    uiBlockedClipArmRef.current = null;
     // 기존 ui_resume/ui_suspend와 같은 command 레인 — 신규 이벤트 타입 무첨가(log-replay 호환).
     logCell({
       type: 'command',
@@ -1487,7 +1541,7 @@ export function useVoiceSession() {
     // 해제하고 정상 dispatch된다.
     if (action.act === 'trendResolve' && cmd && awaiting.kind === 'trendConfirm') {
       cancelTts();
-      useSessionStore.getState().setAnomalyAlert(null); // 팝업 해제
+      clearAnomalyAlert('trend_resolve'); // 팝업 해제
       logCell({
         type: 'trend', extra: 'trend_alert_confirmed', parsed: cmd,
         row: awaiting.row, colId: awaiting.colId,
@@ -1498,7 +1552,7 @@ export function useVoiceSession() {
       return;
     }
     if (action.act === 'dispatch' && action.trendDemoted && awaiting.kind === 'trendConfirm') {
-      useSessionStore.getState().setAnomalyAlert(null); // 타 명령으로 해제 → 팝업 닫음
+      clearAnomalyAlert('trend_dismissed'); // 타 명령으로 해제 → 팝업 닫음
       logCell({
         type: 'trend', extra: `trend_alert_dismissed:${cmd}`,
         row: awaiting.row, colId: awaiting.colId,
@@ -1847,7 +1901,7 @@ export function useVoiceSession() {
     const commitLatencyMs = Date.now() - handleFinalAt;
     // v0.15.0 A4 — 이상치→정정→정상 흐름 중복 팝업 억제. 추세 알림에 새 값으로 응답한 정정 커밋
     // (trendConfirm)은 아래에서 anomalyAlert 팝업을 초록(corrected)으로 전환해 이미 같은 값을 크게
-    // 보여준다. 그 뒤 advance→announceField가 팝업을 닫으면(setAnomalyAlert(null)), VoiceScreen의
+    // 보여준다. 그 뒤 진행 착지점의 clearAnomalyAlert가 팝업을 닫으면, VoiceScreen의
     // `valueBurst && !anomalyAlert` 조건이 참이 되며 같은 값이 CenterValueBurst로 한 번 더 떠
     // "정상 입력 내용이 한 번 더 팝업"되던 중복(민구 제보)이 발생한다. 정정-출처 커밋에선 burst를
     // 건너뛰어 중앙 팝업이 1회(초록 corrected)만 뜨게 한다. 일반(비-정정) 커밋의 burst는 그대로 유지.
@@ -2094,6 +2148,9 @@ export function useVoiceSession() {
       // 시각 팝업: 이전값→현재값과 변화량을 띄운다(발화만으론 스쳐 지나가 확인이 어렵다는 요청).
       useSessionStore.getState().setAnomalyAlert({
         ...alert,
+        // buildAnomalyAlert의 공통 코어는 colId를 의도적으로 모르므로, 음성 호출부의 정확한 awaiting
+        // 좌표를 얹는다. 이후 clear 계측이 이름 추정 없이 같은 셀을 식별하는 주 출처다.
+        colId: awaiting.colId,
         // v0.33.0 항목7 — 응답 대기 알람: 팝업이 [확인][수정] 터치 버튼을 그린다(음성 명령과 동일
         // 동작·동일 로그, 07-10 QA P1 #2). 수동 커밋의 정보성 팝업(확인 루프 없음)과 구분.
         awaitingResponse: true,
@@ -2111,8 +2168,8 @@ export function useVoiceSession() {
     // (위 trendViolation 분기를 타지 않고 여기 도달 = 정정값이 정상 범위.) 화면에 떠 있던 빨강 이상치
     // 팝업을 초록(corrected)으로 전환하고 next를 정정값으로 즉시 반영한다. 이전엔 이 경로에서 팝업을
     // 전혀 갱신하지 않아 옛 이상치 값이 남은 채 echo TTS("수정 …")만 새 값을 말해 시각/청각이 어긋났다.
-    // 팝업 닫힘은 기존대로 advance()→announceField의 setAnomalyAlert(null)이 담당하므로, echo TTS가
-    // 발화되는 동안 초록 팝업이 노출된다(별도 타이머 없이 '초록 전환 + 즉시 반영' 성립).
+    // 팝업 닫힘은 advance()의 착지점(다음 필드·끝 도달·검토 대기)이 clearAnomalyAlert로 담당하므로,
+    // echo TTS가 발화되는 동안 초록 팝업이 노출되고 착지 직전에 전수 계측과 함께 내려간다.
     if (awaiting.kind === 'trendConfirm') {
       const cur = useSessionStore.getState().anomalyAlert;
       if (cur) {
@@ -2168,7 +2225,7 @@ export function useVoiceSession() {
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
     await advance();
-  }, [advance, enterModifyMode, say, goNextRow, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell]);
+  }, [advance, enterModifyMode, say, goNextRow, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
 
   // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
   const handleInterim = useCallback((text: string) => {
@@ -2262,12 +2319,17 @@ export function useVoiceSession() {
       hadController &&
       (phase === 'active' || phase === 'complete' || phase === 'paused') &&
       isSpeechSupported();
-    const suspendedClip = uiSuspendedClipRef.current;
+    const blockedClip = uiBlockedClipArmRef.current;
+    const suspendedClip = blockedClip ?? uiSuspendedClipRef.current;
+    uiBlockedClipArmRef.current = null;
     uiSuspendedClipRef.current = null;
     if (!shouldRestore) return;
 
     // 값 대기 좌표가 그대로일 때만 재무장한다. 모달 안의 터치 처리 등으로 타깃이 바뀌었다면
     // announceField가 새 좌표의 녹음창을 소유하므로 오래된 셀을 되살리지 않는다.
+    // [CLIP-WINDOW-2] 선택 (b): 위에서 마지막 suspend source를 먼저 삭제해 reasons가 빈 뒤에만
+    // armClipForCell을 호출한다. 이 순서를 뒤집으면 복원 arm도 게이트에 재차 막혀 영원히 보류된다.
+    // suspend 중 들어온 최신 arm 요청은 모달 전 활성 슬롯보다 우선해 같은 기존 복원 경로로 합류한다.
     const awaiting = awaitingFieldRef.current;
     if (
       suspendedClip &&
@@ -3024,7 +3086,7 @@ export function useVoiceSession() {
         // 직전 값으로 롤백하고 보류 UI를 닫아 reload 전후가 동일한 확정값을 가리키게 한다.
         sess.setRowValue(row, colId, pendingValidation.previousValue);
         sess.setRecognized(pendingValidation.previousValue);
-        useSessionStore.getState().setAnomalyAlert(null);
+        clearAnomalyAlert('persist_rollback');
         const current = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
         if (current) useDataStore.getState().upsertSession(withoutPendingCandidate({ ...current, pendingValidation }));
       }
@@ -3050,7 +3112,7 @@ export function useVoiceSession() {
         useDataStore.getState().upsertSession(confirmed);
       }
       // 성공적인 정상 재커밋만 보류를 해소한다. 시트 취소는 이 함수에 들어오지 않으므로 유지된다.
-      useSessionStore.getState().setAnomalyAlert(null);
+      clearAnomalyAlert('manual_recommit');
     }
     if (awaiting?.kind === 'reviewWait') {
       epochRef.current++;
@@ -3064,7 +3126,7 @@ export function useVoiceSession() {
     // (awaiting이 다른 셀이면 흐름 불변 — 값만 반영되고 현재 안내 상태 유지.)
 
     if (violation) fireManualAlert(violation, false);
-  }, [archiveCellClip, evaluateTrend, getAnomalyAlertData, persistCellValue, persistSession, proceedAfterCommit]);
+  }, [archiveCellClip, clearAnomalyAlert, evaluateTrend, getAnomalyAlertData, persistCellValue, persistSession, proceedAfterCommit]);
 
   // ── v0.33.0 항목7 — 이상치 응답 대기(trendConfirm) 중 터치 버튼: 음성 명령과 동일 동작·동일 로그 ──
   /** [확인] 버튼 — 음성 '확인'과 동일: 커밋된 값 확정 + 팝업 해제 + advance 1회. attribution은
@@ -3078,7 +3140,7 @@ export function useVoiceSession() {
       type: 'command', parsed: 'confirm', extra: 'touch',
       row: awaiting.row, colId: awaiting.colId,
     });
-    useSessionStore.getState().setAnomalyAlert(null);
+    clearAnomalyAlert('touch_confirm');
     logCell({
       type: 'trend', extra: 'trend_alert_confirmed', parsed: 'confirm',
       row: awaiting.row, colId: awaiting.colId,
@@ -3086,7 +3148,7 @@ export function useVoiceSession() {
     });
     awaitingFieldRef.current = null;
     await advance();
-  }, [advance]);
+  }, [advance, clearAnomalyAlert]);
 
   /** [수정] 버튼 — 음성 '수정'(trendConfirm 해제 → isModify 재청취)과 동일 착지: 같은 필드에서
    *  대기하며 기존값은 새 발화가 덮어쓰기 전까지 보존된다. 터치에는 보존할 명령 발화가 없으므로
@@ -3100,7 +3162,7 @@ export function useVoiceSession() {
       type: 'command', parsed: 'modify', extra: 'touch',
       row: awaiting.row, colId: awaiting.colId,
     });
-    useSessionStore.getState().setAnomalyAlert(null);
+    clearAnomalyAlert('touch_modify');
     logCell({
       type: 'trend', extra: 'trend_alert_dismissed:modify',
       row: awaiting.row, colId: awaiting.colId,
@@ -3109,7 +3171,7 @@ export function useVoiceSession() {
     awaitingFieldRef.current = demoteTrendConfirm(awaiting);
     armClipForCell(awaiting.row, awaiting.colId);
     await say(`${awaiting.name} 다시 말씀해 주세요.`);
-  }, [armClipForCell, say]);
+  }, [armClipForCell, clearAnomalyAlert, say]);
 
   // ── v0.34.0 A1 — 수동 입력 이상치 **보류**(manualHold) 팝업의 터치 버튼 ──
   //   위 confirmAnomalyTouch/modifyAnomalyTouch는 trendConfirm 가드라 음성 경로 전용 — 수동 보류는
@@ -3152,7 +3214,7 @@ export function useVoiceSession() {
         return;
       }
     }
-    useSessionStore.getState().setAnomalyAlert(null);
+    clearAnomalyAlert('manual_hold_confirm');
     logCell({
       type: 'trend', extra: 'trend_alert_confirmed', parsed: 'confirm',
       row: alert.row, ...(alert.colId ? { colId: alert.colId } : {}),
@@ -3166,7 +3228,7 @@ export function useVoiceSession() {
     // 보류 시 재무장을 미뤘던 진행 재개 — reviewWait 출신은 검토 대기 재진입, 그 외 advance
     // (commitManualValue와 동일 착지, proceedAfterCommit SSOT).
     await proceedAfterCommit(awaitingFieldRef.current);
-  }, [proceedAfterCommit]);
+  }, [clearAnomalyAlert, proceedAfterCommit]);
 
   /** [수정] — 팝업 해제만 수행. 해당 셀 ManualValueSheet 재오픈은 시트 open 상태를 소유한
    *  VoiceScreen이 조립한다(이 콜백 직후 alert.colId로 openManualSheet). awaiting은

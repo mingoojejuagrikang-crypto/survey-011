@@ -113,7 +113,7 @@ interface SessionState {
    *  재질문 진입 시 정수부로 설정, 그 외 모든 재질문·성공 커밋·리셋에서 null(setReaskReason이 함께
    *  정리 → 스테일 방지). 단일 작성 경로 = setDecimalReason. */
   reaskDecimalWhole: string | null;
-  /** 와이어프레임 §[4] complete — **조사 전체가 끝났는지**(마지막 행까지 입력 완료 = announceEndReached).
+  /** 와이어프레임 §[4] complete — **끝에 도달했는지**(빈 행 안내를 포함한 announceEndReached).
    *  phase 'complete'는 두 가지를 겸한다: ① 완료 행 **검토 대기**(enterReviewWait — '이전'/점프로 이미
    *  끝난 행에 착지) ② **끝 도달**(announceEndReached). 화면은 이 둘을 다르게 그려야 한다 —
    *  ①은 와이어프레임 [1] active 레이아웃 그대로(hero가 ✓+방금값을 보인다, v035-hero-confirm 동작
@@ -122,6 +122,10 @@ interface SessionState {
    *  단일 작성 경로 = useVoiceSession(announceEndReached=true / enterReviewWait=false) + setPhase가
    *  'complete'를 벗어날 때 자동 해제. */
   endReached: boolean;
+  /** [EXIT-PERSIST-1] 이번 세션에서 끝 도달 안내를 한 번이라도 거쳤는지.
+   *  endReached는 완료 행 검토에서 false로 내려가지만, 종료 수단은 세션 경계까지 남아야 한다.
+   *  setEndReached(true)만 이 래치를 세우고 false/setPhase는 건드리지 않는다. */
+  endReachedOnce: boolean;
   /** All row values, keyed by row index → col id → value */
   allRowValues: Record<number, Record<string, string>>;
   /** Row indices that have been fully completed */
@@ -185,6 +189,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   reaskReason: null,
   reaskDecimalWhole: null,
   endReached: false,
+  endReachedOnce: false,
   allRowValues: {},
   completedRows: [],
   skippedRows: [],
@@ -194,7 +199,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // phase가 'complete'를 벗어나면 endReached는 의미를 잃는다 — 단일 지점에서 자동 해제해
   // 호출부마다 짝 맞춰 끄는 실수를 구조적으로 없앤다(스테일 '완료' 화면 방지).
   setPhase: (phase) => set(phase === 'complete' ? { phase } : { phase, endReached: false }),
-  setEndReached: (endReached) => set({ endReached }),
+  // [EXIT-PERSIST-1] false는 현재 완료 화면만 내리고 세션 래치는 보존한다.
+  setEndReached: (endReached) =>
+    set(endReached ? { endReached: true, endReachedOnce: true } : { endReached: false }),
   setSessionMeta: ({ sessionId, startedAt, label }) =>
     set({ sessionId, startedAt, sessionLabel: label }),
   setRecognized: (recognizedValue) => set({ recognizedValue }),
@@ -275,6 +282,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       skippedRows: session.rows.filter((r) => !r.complete).map((r) => r.index),
       anomalyAlert: pending.alert,
       endReached: false,
+      endReachedOnce: false,
     });
   },
 
@@ -300,6 +308,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       reaskReason: null,
       reaskDecimalWhole: null,
       endReached: false,
+      endReachedOnce: false,
       allRowValues: {},
       completedRows: [],
       skippedRows: [],

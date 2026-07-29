@@ -86,7 +86,7 @@ export function StateDots({
 }: {
   glyph: DotGlyph;
   color: string;
-  /** 격자 높이(px). 셀은 이 높이에서 역산되고, 폭은 정사각 셀 × 13열이다. */
+  /** 격자 높이 상한(px). 실제 높이는 부모 밴드 예산 안에서 더 작아질 수 있다. */
   size: number;
   /** 오디오 반응 여부(일시정지/완료는 false → 정적 글리프). */
   active?: boolean;
@@ -98,6 +98,7 @@ export function StateDots({
   // 셀은 정사각. 세로 기준으로 잡아 밴드 높이를 넘지 않게 한다(가로는 항상 더 여유롭다).
   const cell = Math.max(3, Math.floor(size / FIELD_ROWS));
   const dot = Math.max(2, Math.round(cell * 0.72));
+  const gridHeight = cell * FIELD_ROWS;
 
   useEffect(() => {
     const cells = cellsRef.current;
@@ -269,8 +270,16 @@ export function StateDots({
       aria-hidden
       style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${FIELD_COLS}, ${cell}px)`,
-        gridTemplateRows: `repeat(${FIELD_ROWS}, ${cell}px)`,
+        // StateIndicator의 명목 높이가 부모 하단 트랙보다 클 수 있다(완료/검토 상태의 짧은 화면).
+        // 고정 px 트랙을 그대로 두면 부모만 줄고 7행 격자는 남아 밴드 밖 버튼 영역을 침범한다.
+        // 실제 부모 높이를 상한으로 삼고 13:7 정사각 격자를 함께 축소한다 — overflow clip이나
+        // transform이 아니라 레이아웃 박스 자체가 밴드 안에 들어가는 계약이다.
+        height: `min(${gridHeight}px, 100%)`,
+        width: 'auto',
+        maxWidth: '100%',
+        aspectRatio: `${FIELD_COLS} / ${FIELD_ROWS}`,
+        gridTemplateColumns: `repeat(${FIELD_COLS}, minmax(0, 1fr))`,
+        gridTemplateRows: `repeat(${FIELD_ROWS}, minmax(0, 1fr))`,
         justifyItems: 'center',
         alignItems: 'center',
         color,
@@ -288,8 +297,9 @@ export function StateDots({
             style={{
               gridColumn: c + 1,
               gridRow: r + 1,
-              width: dot,
-              height: dot,
+              width: `min(${dot}px, 72%)`,
+              maxHeight: '72%',
+              aspectRatio: '1 / 1',
               borderRadius: '50%',
               background: 'currentColor',
               boxShadow: `0 0 ${Math.round(dot * 0.9)}px currentColor`,

@@ -33,16 +33,20 @@ export function StateIndicator({
   levelActive: boolean;
   getAudioLevel: () => number;
   getTimeDomainData: (out: Uint8Array) => boolean;
-  /** 있으면 인디케이터 전체가 버튼이 된다(와이어프레임에 일시정지 터치 경로가 없어 여기로 통합).
-   *  없으면 표시 전용(완료 상태 — 일시정지 버튼이 존재하지 않아야 한다). */
-  control?: { title: string; label: string; status: string; onClick: () => void; hint?: string };
+  /** 있으면 인디케이터 전체가 버튼이 된다. 기본은 도트 일시정지 경로이고,
+   *  visibleLabel이 있으면 고정 밴드 안에서 도트를 숨긴 채 라벨 컨트롤이 자리를 승계한다. */
+  control?: {
+    title: string;
+    label: string;
+    status: string;
+    onClick: () => void;
+    visibleLabel?: string;
+    accent?: string;
+    accentBg?: string;
+  };
 }) {
   const height = useBandHeight();
   const color = TONE_COLOR[tone];
-  const hintHeight = control?.hint ? 15 : 0;
-  // [EXIT-REACH-1] 라벨이 밴드 높이를 키우지 않게 같은 고정 높이 안에서 도트 몫만 줄인다.
-  // panelOpen이면 부모 nav row 전체가 렌더되지 않는 기존 게이트도 그대로 유지된다.
-  const dotsSize = control?.hint ? Math.max(28, height - hintHeight - 8) : height;
 
   // 격자 하나. 도트와 파형이 **같은 셀 집합**을 공유하므로 겹쳐 보이는 상태가 존재하지 않는다.
   const stack = (
@@ -50,31 +54,39 @@ export function StateIndicator({
       style={{
         width: '100%', height: '100%', maxHeight: '100%', minWidth: 0,
         display: 'grid', placeItems: 'center',
-        ...(control?.hint
-          ? { gridTemplateRows: `minmax(0, 1fr) ${hintHeight}px`, overflow: 'hidden' }
-          : {}),
       }}
     >
-      <StateDots
-        glyph={glyph}
-        color={color}
-        size={dotsSize}
-        active={waveActive && levelActive}
-        getLevel={getAudioLevel}
-        getTimeDomainData={getTimeDomainData}
-      />
-      {control?.hint && (
+      {/* 상태 전환에도 StateDots는 계속 마운트한다([STT-16]). 종료가 자리를 승계할 때만 숨긴다. */}
+      <div
+        aria-hidden={control?.visibleLabel ? true : undefined}
+        style={{
+          gridArea: '1 / 1',
+          width: '100%', height: '100%',
+          display: 'grid', placeItems: 'center',
+          visibility: control?.visibleLabel ? 'hidden' : 'visible',
+        }}
+      >
+        <StateDots
+          glyph={glyph}
+          color={color}
+          size={height}
+          active={waveActive && levelActive}
+          getLevel={getAudioLevel}
+          getTimeDomainData={getTimeDomainData}
+        />
+      </div>
+      {control?.visibleLabel && (
         <span
-          data-testid="review-pause-hint"
           style={{
-            color: T.textDim,
-            fontSize: 11,
-            fontWeight: 800,
-            lineHeight: `${hintHeight}px`,
+            gridArea: '1 / 1',
+            color: control.accent ?? T.textDim,
+            fontSize: 'clamp(18px, 5vw, 24px)',
+            fontWeight: 900,
+            letterSpacing: -0.3,
             whiteSpace: 'nowrap',
           }}
         >
-          {control.hint}
+          {control.visibleLabel}
         </span>
       )}
     </div>
@@ -101,7 +113,10 @@ export function StateIndicator({
           aria-label={control.label}
           style={{
             width: '100%', minWidth: 0, height: '100%',
-            border: 'none', background: 'transparent', padding: 0,
+            border: control.accent ? `2px solid ${control.accent}` : 'none',
+            borderRadius: control.accent ? 16 : 0,
+            background: control.accentBg ?? 'transparent',
+            padding: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             cursor: 'pointer', touchAction: 'manipulation',
           }}

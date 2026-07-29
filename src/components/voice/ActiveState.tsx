@@ -92,6 +92,7 @@ export function ActiveState({
       anomalyAlert: s.anomalyAlert,
       modifyIndicator: s.modifyIndicator,
       completedRows: s.completedRows,
+      endReachedOnce: s.endReachedOnce,
       getRowValues: s.getRowValues,
     })),
   );
@@ -319,10 +320,12 @@ export function ActiveState({
         tone={tone}
         mode={edgeMode}
         glyph={glyph}
-        // §[3]·§[4]에서는 인디케이터가 버튼이 아니다 — 일시정지는 `<`(재개), 완료는 중앙 `종료`가
-        // 그 상태의 행동을 이미 갖는다(같은 행동의 중복 타깃·중복 셀렉터를 만들지 않는다).
+        // 현재 끝 도달 전에는 도트 전체가 일시정지 터치 경로다. 끝 도달 화면에서는 false지만,
+        // 바로 아래 indicatorExit가 같은 자리를 종료 컨트롤로 승계한다.
         indicatorInteractive={!endReached && !paused}
-        showPauseHint={completing && !endReached && !paused && edgeMode === 'nav'}
+        // [EXIT-PERSIST-1] 끝 도달 뒤에는 현재 행과 무관하게 도트 자리를 종료가 승계한다.
+        // 응답 대기 알람의 확인/수정과 일시정지의 재시작/종료가 더 높은 우선순위다.
+        indicatorExit={sess.endReachedOnce && !paused && !anomalyActionable}
         waveActive={!paused}
         getAudioLevel={getAudioLevel}
         getTimeDomainData={getTimeDomainData}

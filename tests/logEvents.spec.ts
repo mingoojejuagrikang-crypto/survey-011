@@ -20,6 +20,9 @@ import {
   visibilityContext,
   lifecycleSignal,
   inputControlPanelOpened,
+  endReachedRender,
+  anomalyAlertCleared,
+  clipArmBlocked,
   micTeardown,
 } from '../src/lib/logEvents';
 
@@ -94,6 +97,20 @@ test('SCREEN-LOCK-1 — visibility 문맥과 원시 lifecycle 신호 바이트 �
 test('inputControlPanelOpened — 조절판 펼침 분모 바이트 계약', () => {
   expect(inputControlPanelOpened('touch')).toBe('input_control_panel:action=open,source=touch');
   expect(inputControlPanelOpened('voice')).toBe('input_control_panel:action=open,source=voice');
+});
+
+test('[EXIT-PERSIST-1] 종료 렌더·알람 해제 신규 바이트 계약', () => {
+  expect(endReachedRender({ branch: 'end', alertStatus: 'none' }))
+    .toBe('end_reached_render:branch=end,alertStatus=none');
+  expect(endReachedRender({ branch: 'anomaly', alertStatus: 'corrected' }))
+    .toBe('end_reached_render:branch=anomaly,alertStatus=corrected');
+  expect(anomalyAlertCleared({ reason: 'end_reached', hadStatus: 'corrected' }))
+    .toBe('trend_alert_cleared:reason=end_reached,hadStatus=corrected');
+});
+
+test('[CLIP-WINDOW-2] suspend 중 신규 녹음창 차단 바이트 계약', () => {
+  expect(clipArmBlocked({ reason: 'feedback_modal', row: 3, col: 'c9' }))
+    .toBe('clip_arm_blocked:reason=feedback_modal,row=3,col=c9');
 });
 
 /** v0.38.1 [MIC-B2] 실기기 판정 바이트 — 이 문자열이 SOP-003 파서와의 계약이다.

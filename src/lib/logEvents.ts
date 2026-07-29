@@ -193,6 +193,31 @@ export function inputControlPanelOpened(source: 'touch' | 'voice'): string {
   return `input_control_panel:${kv({ action: 'open', source })}`;
 }
 
+/** [EXIT-PERSIST-1] 끝 도달 상태에서 CenterStage가 실제 선택한 렌더 분기. */
+export function endReachedRender(fields: {
+  branch: 'paused' | 'anomaly' | 'end' | 'modify' | 'hero';
+  alertStatus: 'none' | 'pending' | 'corrected';
+}): string {
+  return `end_reached_render:${kv(fields)}`;
+}
+
+/** [EXIT-PERSIST-1] 이상치 알람 객체가 화면에서 내려간 경로와 직전 상태. */
+export function anomalyAlertCleared(fields: {
+  reason: string;
+  hadStatus: 'pending' | 'corrected';
+}): string {
+  return `trend_alert_cleared:${kv(fields)}`;
+}
+
+/** [CLIP-WINDOW-2] UI suspend 래치가 신규 셀 녹음창 개시를 차단한 요청. */
+export function clipArmBlocked(fields: {
+  reason: string;
+  row: number;
+  col: string;
+}): string {
+  return `clip_arm_blocked:${kv(fields)}`;
+}
+
 export function micTeardown(fields: {
   found: string;
   closed: 'ok' | 'timeout' | 'error';

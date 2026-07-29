@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 import { AnomalyAlertPopup } from './AnomalyAlertPopup';
 import { CompleteSummary } from './CompleteSummary';
 import { ModifyIndicatorPill } from './ModifyIndicatorPill';
@@ -7,6 +7,8 @@ import { type ReaskReason } from './ReaskCue';
 import type { GlowTone } from './EdgeGlow';
 import type { Column } from '../../types';
 import type { AnomalyAlert } from '../../stores/sessionStore';
+import { logger } from '../../lib/logger';
+import { endReachedRender } from '../../lib/logEvents';
 
 /** 와이어프레임 §공통규칙1·2·3 — **중앙 50%**.
  *  "정보는 가로+세로 중앙정렬(빈 공간에 따라 유동)", "폭 감안해 최대한 키운 뒤, 위/아래 여백
@@ -45,10 +47,13 @@ export function CenterStage({
   modifyCurrentValue: string;
   onExit: () => void;
 }) {
+  let branch: 'paused' | 'anomaly' | 'end' | 'modify' | 'hero' = 'hero';
   let content: ReactNode = null;
   if (paused) {
+    branch = 'paused';
     content = null; // §[3] 중앙 비움
   } else if (anomalyAlert) {
+    branch = 'anomaly';
     content = (
       <div
         data-central-state="alarm"
@@ -64,6 +69,7 @@ export function CenterStage({
       </div>
     );
   } else if (endReached) {
+    branch = 'end';
     content = (
       <CompleteSummary
         completedCount={completedCount}
@@ -73,6 +79,7 @@ export function CenterStage({
       />
     );
   } else if (modifyIndicator) {
+    branch = 'modify';
     content = (
       <ModifyIndicatorPill
         name={modifyIndicator.name}
@@ -81,6 +88,7 @@ export function CenterStage({
       />
     );
   } else if (currentCol) {
+    branch = 'hero';
     content = (
       <VoiceHero
         col={currentCol}
@@ -92,6 +100,24 @@ export function CenterStage({
       />
     );
   }
+
+  const telemetryRef = useRef<{
+    alertStatus: 'none' | 'pending' | 'corrected';
+    row: number;
+  }>({ alertStatus: 'none', row });
+  telemetryRef.current = {
+    alertStatus: anomalyAlert ? (anomalyAlert.status ?? 'pending') : 'none',
+    row,
+  };
+  useEffect(() => {
+    if (!endReached) return;
+    const snapshot = telemetryRef.current;
+    logger.log({
+      type: 'session',
+      extra: endReachedRender({ branch, alertStatus: snapshot.alertStatus }),
+      row: snapshot.row,
+    });
+  }, [endReached, branch]);
 
   return (
     <div

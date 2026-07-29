@@ -22,11 +22,11 @@ import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
  *  🔴 와이어프레임 [1] active에는 일시정지 터치 버튼이 없다. 음성만으로 일시정지 가능한 상태를
  *  만들면 "화면 버튼과 동등" 계약이 깨지므로(HANDOFF 이월 [Medium] 항목과 같은 축) **인디케이터
  *  자체를 일시정지 컨트롤로 겸용**했다 — 자리를 새로 만들지 않으면서 터치 경로를 유지한다.
- *  단 §[4] complete에서는 인디케이터가 버튼이 아니다(그 상태의 유일한 행동은 중앙의 `종료`다). */
+ *  끝 도달 뒤에는 [EXIT-PERSIST-1]에 따라 같은 자리를 상시 `종료` 컨트롤이 승계한다. */
 export type EdgeMode = 'nav' | 'anomaly' | 'paused';
 
 export function ActiveControlBar({
-  tone, mode, glyph, indicatorInteractive, showPauseHint, waveActive,
+  tone, mode, glyph, indicatorInteractive, indicatorExit, waveActive,
   getAudioLevel, getTimeDomainData, uiCommand,
   onPrevRow, onNextRow, onTogglePause, onExit, onAnomalyConfirm, onAnomalyModify,
 }: {
@@ -35,12 +35,11 @@ export function ActiveControlBar({
   /** 양끝 버튼의 역할 전환(§공통규칙5 "상태별로 라벨·기능 전환"). */
   mode: EdgeMode;
   glyph: DotGlyph;
-  /** false면 인디케이터가 표시 전용. 일시정지 상태에선 `<`가 이미 재개 버튼이라 인디케이터까지
-   *  버튼으로 두면 같은 행동이 두 개가 되고(셀렉터 계약도 중복), 완료 상태에선 유일한 행동이
-   *  중앙 `종료`다. 즉 인디케이터가 버튼인 상태는 **입력 중/완료 행 검토/이상치**다. */
+  /** 끝 도달 전 도트의 일시정지 터치 경로. 일시정지 상태에선 `<`가 이미 재시작 버튼이라 false,
+   *  끝 도달 뒤에는 indicatorExit가 이 값보다 우선해 종료 터치 경로를 제공한다. */
   indicatorInteractive: boolean;
-  /** [EXIT-REACH-1] 끝 도달 뒤 완료 행 검토에서만 도트의 일시정지 기능을 보이게 한다. */
-  showPauseHint: boolean;
+  /** [EXIT-PERSIST-1] 끝 도달 뒤 도트 자리를 승계하는 상시 종료 컨트롤. */
+  indicatorExit: boolean;
   waveActive: boolean;
   getAudioLevel: () => number;
   getTimeDomainData: (out: Uint8Array) => boolean;
@@ -107,13 +106,22 @@ export function ActiveControlBar({
           getAudioLevel={getAudioLevel}
           getTimeDomainData={getTimeDomainData}
           control={
-            indicatorInteractive
+            indicatorExit
+              ? {
+                  title: '종료',
+                  label: '종료',
+                  status: 'exit',
+                  onClick: onExit,
+                  visibleLabel: '종료',
+                  accent: T.red,
+                  accentBg: T.redGlowFaint,
+                }
+              : indicatorInteractive
               ? {
                   title: '일시정지',
                   label: '일시정지',
                   status: tone === 'red' ? 'alert' : 'listening',
                   onClick: onTogglePause,
-                  ...(showPauseHint ? { hint: '눌러 일시정지' } : {}),
                 }
               : undefined
           }

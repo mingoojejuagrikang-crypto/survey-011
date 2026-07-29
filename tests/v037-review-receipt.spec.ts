@@ -72,6 +72,23 @@ async function fireStt(page: Page, transcript: string, waitMs = 400) {
   await page.waitForTimeout(waitMs);
 }
 
+async function loadLogEvents(page: Page) {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase | null>((resolve) => {
+      const req = indexedDB.open('survey-011');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    });
+    if (!db || !db.objectStoreNames.contains('logEvents')) return [];
+    return new Promise<Array<{ type: string; extra?: string }>>((resolve) => {
+      const tx = db.transaction('logEvents', 'readonly');
+      const req = tx.objectStore('logEvents').getAll();
+      req.onsuccess = () => resolve(req.result as Array<{ type: string; extra?: string }>);
+      req.onerror = () => resolve([]);
+    });
+  });
+}
+
 async function waitForActiveChip(page: Page, colName: string, timeout = 5000) {
   await page.waitForFunction(
     (name) => {
@@ -167,6 +184,26 @@ function twoRowSettings() {
   return settings;
 }
 
+function oneRowVoiceCorrectionSettings() {
+  return {
+    state: {
+      googleConnected: true, userEmail: 'tester@example.com',
+      sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_EXIT_PERSIST/edit', sheetTab: 'Sheet1',
+      columnsSheetId: 'SHEET_EXIT_PERSIST', columnsSheetTab: 'Sheet1',
+      columns: [
+        { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
+        { id: 'c3', name: '농가명', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' }, sampleKey: true },
+        { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 1 }, sampleKey: true },
+        { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+        { id: 'c9', name: '종경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false, trendRule: 'increase' },
+      ],
+      tableGenerated: true, totalRows: 1, ttsRate: 1.05, sessionLabelColId: null,
+      sessionAutoLabel: 'exit-persist-corrected', preferredVoiceName: '', roundDateColId: null,
+    },
+    version: 12,
+  };
+}
+
 async function waitForRow(page: Page, targetRow: number, timeout = 5000) {
   await page.waitForFunction(
     (row) => {
@@ -219,10 +256,10 @@ test('[MODIFY-TARGET-1] atEnd "수정 <첫컬럼명>" → 명시한 첫 항목�
   await expect(last).toContainText('—');
 });
 
-// ─── [EXIT-REACH-1] 조사 완료 종료 노출과 완료 행 검토 ────────────────────────
-test('[EXIT-REACH-1] 최초 끝 도달만 중앙 종료 — 완료 행 검토·재진입은 숨김, 일시정지로 종료 도달', async ({ page }) => {
+// ─── [EXIT-PERSIST-1] 조사 완료 뒤 종료 수단 상시 노출 ────────────────────────
+test('[EXIT-PERSIST-1] 끝 도달 뒤 완료 행을 이동해도 도트 자리 종료가 남는다', async ({ page }) => {
   await bootAndStart(page, twoRowSettings());
-  // 짧은 현장폰 높이에서도 라벨 추가가 도트를 기존 하단 밴드 밖으로 밀지 않아야 한다.
+  // 짧은 현장폰 높이에서도 종료 승계가 기존 하단 밴드 높이를 바꾸지 않아야 한다.
   // 부트 뒤 축소해 이 과제와 무관한 기존 탭바↔시작버튼 겹침은 테스트 경로에서 분리한다.
   await page.setViewportSize({ width: 390, height: 568 });
   await waitForActiveChip(page, '횡경');
@@ -237,35 +274,40 @@ test('[EXIT-REACH-1] 최초 끝 도달만 중앙 종료 — 완료 행 검토·�
   await waitForActiveChip(page, '종경');
   await fireStt(page, '41.3', 600);
 
-  const exit = page.getByRole('button', { name: '종료', exact: true });
+  const centralExit = page.locator('[data-testid="complete-summary"] button[title="입력 종료"]');
+  const persistentExit = page.locator('[data-testid="voice-status-control"][data-status="exit"]');
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
-  await expect(exit).toBeVisible();
+  await expect(centralExit).toBeVisible();
+  await expect(persistentExit).toBeVisible();
+  await expect(persistentExit).toHaveText('종료');
 
-  // 끝 도달 뒤 다른 완료 행을 보면 중앙 종료가 사라지고 검토 화면을 유지한다.
+  // 끝 도달 뒤 다른 완료 행을 보면 중앙 요약은 사라지지만 하단 종료는 남는다.
   await page.getByRole('button', { name: '이전', exact: true }).click();
   await waitForRow(page, 1);
   await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
-  await expect(exit).toHaveCount(0);
-  const pauseHint = page.locator('[data-testid="review-pause-hint"]');
-  await expect(pauseHint).toHaveText('눌러 일시정지');
+  await expect(centralExit).toHaveCount(0);
+  await expect(persistentExit).toBeVisible();
+  await expect(page.locator('[data-testid="review-pause-hint"]')).toHaveCount(0);
 
   // 완료 행에서 [다음]으로 완료 행에 재진입해도 announceEndReached가 재발화하지 않는다.
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await waitForRow(page, 2);
   await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
-  await expect(exit).toHaveCount(0);
-  await expect(pauseHint).toBeVisible();
+  await expect(centralExit).toHaveCount(0);
+  await expect(persistentExit).toBeVisible();
 
-  // 라벨을 위해 도트를 키우거나 새 행을 만들지 않는다 — 도트·라벨 모두 기존 고정 밴드 안에 있다.
+  // 종료 라벨을 위해 밴드나 새 행을 만들지 않는다 — 승계 버튼은 기존 고정 밴드 안에 있다.
   const bandMetrics = await page.evaluate(() => {
     const band = document.querySelector('[data-testid="live-listen-band"]')?.getBoundingClientRect();
     const dots = document.querySelector('[data-testid="state-dots"]')?.getBoundingClientRect();
-    const hint = document.querySelector('[data-testid="review-pause-hint"]')?.getBoundingClientRect();
-    if (!band || !dots || !hint) return null;
+    const exitControl = document.querySelector(
+      '[data-testid="voice-status-control"][data-status="exit"]',
+    )?.getBoundingClientRect();
+    if (!band || !dots || !exitControl) return null;
     return {
       band: { top: band.top, bottom: band.bottom, height: band.height },
       dots: { top: dots.top, bottom: dots.bottom, height: dots.height },
-      hint: { top: hint.top, bottom: hint.bottom, height: hint.height },
+      exit: { top: exitControl.top, bottom: exitControl.bottom, height: exitControl.height },
     };
   });
   const contained = (() => {
@@ -273,28 +315,27 @@ test('[EXIT-REACH-1] 최초 끝 도달만 중앙 종료 — 완료 행 검토·�
     const epsilon = 1;
     return bandMetrics.dots.top >= bandMetrics.band.top - epsilon &&
       bandMetrics.dots.bottom <= bandMetrics.band.bottom + epsilon &&
-      bandMetrics.hint.top >= bandMetrics.band.top - epsilon &&
-      bandMetrics.hint.bottom <= bandMetrics.band.bottom + epsilon;
+      bandMetrics.exit.top >= bandMetrics.band.top - epsilon &&
+      bandMetrics.exit.bottom <= bandMetrics.band.bottom + epsilon;
   })();
   expect(
     contained,
-    `검토 도트/일시정지 라벨이 기존 밴드 밖으로 넘침: ${JSON.stringify(bandMetrics)}`,
+    `검토 도트/종료 컨트롤이 기존 밴드 밖으로 넘침: ${JSON.stringify(bandMetrics)}`,
   ).toBe(true);
 
-  // 기존 안전 게이트: 조절판이 열리면 라벨을 포함한 하단 행동 행 전체가 사라지고, 닫으면 복귀한다.
+  // 기존 안전 게이트: 조절판이 열리면 종료를 포함한 하단 행동 행 전체가 사라지고, 닫으면 복귀한다.
   const controlsToggle = page.locator('[data-testid="input-control-toggle"]');
   await controlsToggle.click();
   await expect(controlsToggle).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('[data-testid="voice-nav-row"]')).toHaveCount(0);
-  await expect(pauseHint).toHaveCount(0);
+  await expect(persistentExit).toHaveCount(0);
   await controlsToggle.click();
   await expect(controlsToggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(pauseHint).toBeVisible();
+  await expect(persistentExit).toBeVisible();
 
-  // 검토 상태의 가운데 컨트롤로 일시정지하면 계약된 좌/우 재시작·종료에 도달한다.
-  await page.locator('[data-testid="voice-status-control"]').click();
-  await expect(page.getByRole('button', { name: '재시작', exact: true })).toBeVisible();
-  await expect(exit).toBeVisible();
+  // 검토 상태의 가운데 종료도 기존 확인 다이얼로그를 재사용한다.
+  await persistentExit.click();
+  await expect(page.locator('button[title="종료 확인"]')).toBeVisible();
 });
 
 // ─── (a) 마지막 셀 = 수동 입력 ────────────────────────────────────────────────
@@ -370,6 +411,31 @@ test('(b) 마지막 셀 이상치 정정 [확인] → 검토는 확정된 정정
   await expect(primary).toHaveText('77.7');
   await expect(primary).not.toHaveText('30.7');
   await expect(primary).not.toHaveText('50');
+});
+
+test('[EXIT-PERSIST-1] 마지막 행 corrected 정정은 알람을 해제하고 종료 분기·계측 B/C를 방출한다', async ({ page }) => {
+  const prev = localISO(new Date(Date.now() - 86_400_000));
+  await bootAndStart(page, oneRowVoiceCorrectionSettings(), {
+    prevRow: [prev, '이원창', '1', '10.0', '50.0'],
+  });
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '30.7');
+  await waitForActiveChip(page, '종경');
+
+  // 직전 50.0보다 큰 77.7은 increase 알람, 이어 말한 40.0은 정상 정정값이다.
+  await fireStt(page, '77.7');
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible({ timeout: 3000 });
+  await fireStt(page, '40.0', 800);
+
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
+
+  await expect.poll(async () => (await loadLogEvents(page)).map((event) => event.extra), {
+    timeout: 4000,
+  }).toContain('trend_alert_cleared:reason=end_reached,hadStatus=corrected');
+  await expect.poll(async () => (await loadLogEvents(page)).map((event) => event.extra), {
+    timeout: 4000,
+  }).toContain('end_reached_render:branch=end,alertStatus=none');
 });
 
 // ─── (d) '이전'으로 완료행 재방문 → 중립 "N행 완료" 폴백(새 영수증 없음) ─────────
