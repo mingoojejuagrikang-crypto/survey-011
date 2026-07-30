@@ -1390,7 +1390,7 @@
 
 ---
 
-## 2026-07-29 v0.41.0 실기기 회차 판정 (회차 SSOT: `workspace_myAITKA/Deliverables/2026-07-29-survey-011-log-analysis.md`)
+## 2026-07-29 v0.41.0 실기기 회차 판정 (회차 SSOT: `workspace_teamops/deliverables/2026-07-29-survey-011-log-analysis.md`)
 
 ### 기존 항목 상태 갱신 (실기기 첫 판정)
 
