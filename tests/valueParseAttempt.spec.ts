@@ -45,15 +45,14 @@ test.describe('기본 파싱 — 성공/실패', () => {
     expect(attempt('삼십오 점 일').parsed).toBe('35.1');
   });
 
-  test('숫자가 없는 발화는 실패한다 — 다만 사유가 비어 있다(#3-2의 대상)', () => {
+  test('숫자가 없는 발화는 no_number 사유와 함께 실패한다(#3-2)', () => {
     // 🔑 #3의 반증 짝 — `담백`(conf 0.887, 고신뢰)이 여전히 파싱 실패로 걸러지는 축.
-    // ⚠️ 그런데 **failReason이 null이다.** 07-30 실기기 로그에서 stt_parse_failed 22건 중
-    //    14건이 사유 없이 실패한 원인이 여기다 — `담배`(숫자 없음)와 `Siri 점에`(숫자 오인식)는
-    //    대책이 다른데 로그에서 구별되지 않는다. **#3-2가 이 공백을 메운다**(plan §2-6).
-    //    지금은 현행 동작을 정직하게 고정하고, #3-2가 이 단언을 뒤집는다.
+    // ✅ v0.43.0 #3-2로 사유가 붙었다. 07-30 실기기 `stt_parse_failed` 22건 중 14건이 사유
+    //    없이 실패한 원인이 이 경로였다 — `담배`(숫자 없음)와 `Siri 점에`(숫자 오인식)는
+    //    대책이 다른데 로그에서 구별되지 않았다(plan §2-6).
     const r = attempt('담백');
     expect(r.parsed).toBeNull();
-    expect(r.failReason).toBeNull();
+    expect(r.failReason).toBe('no_number');
     expect(r.events).toHaveLength(0);
   });
 

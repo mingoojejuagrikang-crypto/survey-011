@@ -501,3 +501,57 @@ test.describe('decimal_fraction_lost — 점요 변형 (v0.34.0 O3)', () => {
     expect(parseKoreanNumber('266 점 오', 1)).toBe('266.5');
   });
 });
+
+// ─── v0.43.0 #3-2 — 모든 실패 경로가 기계 판독 사유를 남긴다 (plan §2-6) ──────────────
+// 07-30 실기기 로그에서 `stt_parse_failed` 22건 중 **14건이 사유 공백**이었다. `담배`(숫자가
+// 아예 없음)와 `Siri 점에`(숫자 오인식)는 대책이 다른데 같은 줄로 보였고, 값 입력 실패율
+// 32.6%의 출처를 가를 수 없었다. 사유 부착은 **다음 회차의 판정력 그 자체**라 회귀로 고정한다.
+test.describe('#3-2 — 파싱 실패 사유 전 경로 부착', () => {
+  const CASES: Array<[string, string]> = [
+    ['', 'empty'],
+    ['   ', 'empty'],
+    // 🔑 공백 14건의 주범 — 숫자로 읽히는 토큰이 하나도 없다.
+    ['담백', 'no_number'],
+    ['담배', 'no_number'],
+    ['상대', 'no_number'],
+    ['하악', 'no_number'],
+    // 소수 구조인데 정수부가 정수로 안 읽힌다. `Siri 점에`가 `담배`와 갈리는 축이다.
+    ['세대 점 칠', 'decimal_whole_invalid'],
+    ['33.5 점 칠', 'decimal_whole_invalid'],
+    ['Siri 점에', 'decimal_whole_invalid'],
+    ['칠십사 점 칠 점 팔', 'multi_decimal'],
+    ['105시 5.5', 'digit_token_unparsed'],
+    ['105시5.5', 'multi_arabic_chunk'],
+    ['구천구백구십구 점 구', 'overflow'],
+    ['가나 점 다라 점 마바', 'unparsed'],
+    // 기존 3종은 의미가 바뀌지 않았다(A층은 동작 불변 — 사유 이름 재배치 금지).
+    ['이 166.7', 'multi_numeric'],
+    ['266 점요', 'decimal_fraction_lost'],
+    ['현백 33.3', 'extraneous_token'],
+  ];
+  for (const [input, reason] of CASES) {
+    test(`"${input}" → null + ${reason}`, () => {
+      expect(parseKoreanNumber(input, 1)).toBeNull();
+      expect(getLastParseFailReason()).toBe(reason);
+    });
+  }
+
+  // 🔴 이게 진짜 회귀 가드다 — 개별 이름보다 **"사유 없는 실패가 하나도 없다"** 는 불변식이
+  //   #3-2의 계약이다. 새 실패 경로를 `return null`로 추가하면 여기서 잡힌다.
+  test('불변식: 파싱에 실패한 모든 입력은 사유를 남긴다(사유 null 금지)', () => {
+    const blind: string[] = [];
+    for (const [input] of CASES) {
+      if (parseKoreanNumber(input, 1) === null && getLastParseFailReason() === null) blind.push(input);
+    }
+    expect(blind, `사유 없이 실패한 입력: ${JSON.stringify(blind)}`).toEqual([]);
+  });
+
+  // 성공 경로는 사유를 남기지 않는다(직전 실패의 잔류가 성공 로그를 오염시키지 않는다).
+  test('성공하면 사유는 비워진다 — 직전 실패의 잔류 금지', () => {
+    expect(parseKoreanNumber('담백', 1)).toBeNull();
+    expect(getLastParseFailReason()).toBe('no_number');
+    expect(parseKoreanNumber('33.3', 1)).toBe('33.3');
+    expect(getLastParseFailReason()).toBeNull();
+    expect(getLastParseFailWhole()).toBeNull();
+  });
+});

@@ -145,13 +145,37 @@ function parseFractionDigits(text: string): string {
 
 /** v0.5.0 W4/W5: machine-readable reason for the most recent parseKoreanNumber() null.
  *  Set fresh on every call; read by the caller (handleFinal) to tag stt_parse_failed.
+ *
+ *  🔴 **v0.43.0 #3-2 — 모든 실패 경로가 사유를 남긴다**(plan §2-6). 종전에는 아래 3개만
+ *  실렸고 나머지 `return null`은 사유 없이 빠져나갔다 — 07-30 실기기 `stt_parse_failed`
+ *  22건 중 **14건이 사유 공백**이었고, `담배`(숫자가 아예 없음)와 `Siri 점에`(숫자 오인식)가
+ *  로그에서 구별되지 않았다. **대책이 다른데 같은 줄로 보인다** → 값 입력 실패율 32.6%의
+ *  출처를 못 가른다. 그래서 모든 실패는 `fail(...)`을 거친다 — 새 실패 경로를 추가할 때도
+ *  `return null` 대신 `return fail('<사유>')`를 써라. 사유 없는 실패는 다시 눈이 먼다.
+ *
  *  - 'multi_numeric'          — ≥2 independent valid numeric tokens ("이 166.7") → ambiguous (STT-A)
  *  - 'decimal_fraction_lost'  — "<정수> 점 <비숫자>" — decimal intent, fraction lost (STT-B)
  *  - 'extraneous_token'       — single number + unrelated non-numeric token(s) ("제17.7",
- *                               "현백 33.3") → ambiguous, re-ask (STT-C, v0.7.0) */
+ *                               "현백 33.3") → ambiguous, re-ask (STT-C, v0.7.0)
+ *  - 'no_number'              — 숫자로 읽히는 토큰이 하나도 없다 ("담백" · "담배" · "상대").
+ *                               🔑 **공백 14건의 주범.** 대책은 파서가 아니라 STT 문법/재질문 문구다
+ *  - 'decimal_whole_invalid'  — 소수 구조인데 정수부가 정수로 안 읽힌다 ("세대 점 칠" · "33.5 점 칠")
+ *  - 'multi_decimal'          — 점/쩜이 2개 이상이고 마지막이 소수부다 ("칠십사 점 칠 점 팔")
+ *  - 'digit_token_unparsed'   — 공백 분리 토큰이 숫자를 품었는데 깨끗이 안 읽힌다 ("105시 5.5", T-1)
+ *  - 'multi_arabic_chunk'     — 붙어 있는 아라비아 숫자 덩어리가 2개 이상 ("105시5.5", T-1 형제)
+ *  - 'overflow'               — 값이 범위를 넘거나 유한수가 아니다
+ *  - 'empty'                  — 발화가 비었다
+ *  - 'unparsed'               — 위 어디에도 안 걸린 잔여. 🔴 이게 로그에서 늘면 분류를 쪼갤 신호다 */
 let _lastParseFailReason: string | null = null;
 export function getLastParseFailReason(): string | null {
   return _lastParseFailReason;
+}
+
+/** 실패 사유를 기록하고 null을 돌려준다. `return fail('no_number')` 형태로만 실패한다(#3-2). */
+function fail(reason: string, whole?: number): null {
+  _lastParseFailReason = reason;
+  if (whole !== undefined) _lastParseFailWhole = String(whole);
+  return null;
 }
 
 /** v0.10.0 A1: decimal_fraction_lost일 때(소수 의도인데 소수부 유실) 파싱된 정수부 문자열.
@@ -191,9 +215,9 @@ function isHarmlessResidual(tok: string): boolean {
 export function parseKoreanNumber(raw: string, maxDecimals?: number): string | null {
   _lastParseFailReason = null;
   _lastParseFailWhole = null;
-  if (!raw) return null;
+  if (!raw) return fail('empty');
   const s = raw.replace(/[, 　]/g, ' ').trim();
-  if (!s) return null;
+  if (!s) return fail('empty');
 
   // Fast path: pure arabic.
   const direct = tryArabic(s);
@@ -242,12 +266,12 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       // Codex MEDIUM-3: reject a non-integer whole ("33.5 점 칠" → parseKoreanInt("33.5")=33.5
       // via tryArabic). Combining 33.5 + "." + 7 would silently drop the spoken fraction.
       // Only a clean integer whole may carry a spoken decimal fraction.
-      if (whole === null || !Number.isInteger(whole)) return null;
+      if (whole === null || !Number.isInteger(whole)) return fail('decimal_whole_invalid');
       const combined = parseFloat(`${whole}.${frac}`);
       if (Number.isFinite(combined) && Math.abs(combined) <= OVERFLOW_THRESHOLD) {
         return formatNum(combined, maxDecimals);
       }
-      return null;
+      return fail('overflow');
     }
     // v0.5.0 W5 (STT-B): decimal INTENT with a LOST fraction — "111 점 에" (STT garbled the
     // fraction syllable). Discriminators: the head parses as a clean integer AND the tail
@@ -263,9 +287,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
           // v0.10.0 A1 (민구 결정: 타깃 재질문): "에→1" 같은 값 추측은 하지 않는다 — 같은
           // "111 점 에"가 111.1(06-16)·111.5(06-10) 양쪽에서 나와 추측은 조용한 오커밋이 된다.
           // 대신 정수부를 노출해 호출자(useVoiceSession)가 "소수점 아래만 다시"로 타깃 재질문하게 한다.
-          _lastParseFailReason = 'decimal_fraction_lost';
-          _lastParseFailWhole = String(whole);
-          return null;
+          return fail('decimal_fraction_lost', whole);
         }
       }
     }
@@ -275,7 +297,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
     // fraction digit, committing only the trailing token would be a silent wrong commit → null
     // so the caller re-asks. Otherwise ("점" is a literal word) fall through to the per-token loop.
     const last = decimalParts[decimalParts.length - 1].trim().replace(/\s+/g, '');
-    if (last && parseFractionDigits(last)) return null;
+    if (last && parseFractionDigits(last)) return fail('multi_decimal');
     // else fall through.
   }
 
@@ -305,7 +327,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       // Treat the whole utterance as AMBIGUOUS → return null so the caller
       // (useVoiceSession handleFinal) logs stt_parse_failed and re-asks,
       // exactly like the Codex HIGH-2 / MEDIUM-3 multi-token guards above.
-      if (/\d/.test(tok)) return null;
+      if (/\d/.test(tok)) return fail('digit_token_unparsed');
       residuals.push(tok);
     }
     // v0.5.0 W4 (STT-A): ≥2 independently-valid numeric tokens (e.g. "이 166.7" — STT split
@@ -314,10 +336,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
     // recombination paths above consume them. Whatever survives to here with two valid numbers
     // is genuinely ambiguous → null so the caller logs stt_parse_failed:multi_numeric and re-asks.
     // No auto-correction is attempted (민구/Trace decision — observe via telemetry first).
-    if (validCount >= 2) {
-      _lastParseFailReason = 'multi_numeric';
-      return null;
-    }
+    if (validCount >= 2) return fail('multi_numeric');
     // v0.7.0 STT-C: exactly ONE valid number accompanied by unrelated non-numeric token(s)
     // ("현백 33.3" — intended 333.3, STT mangled the leading "삼백" into a noun; cumulative ×4
     // across 3 field sessions). The dot-bearing siblings are caught by W4/W5 above, but this
@@ -325,8 +344,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
     // digit lost. Unless EVERY residual token is a known-harmless unit/particle ("33.3 밀리",
     // "35 입니다" still commit), treat as ambiguous → re-ask, tagged 'extraneous_token'.
     if (lastValid !== null && residuals.length > 0 && !residuals.every(isHarmlessResidual)) {
-      _lastParseFailReason = 'extraneous_token';
-      return null;
+      return fail('extraneous_token');
     }
     if (lastValid !== null) return formatNum(lastValid, maxDecimals);
   }
@@ -343,7 +361,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
     // Multiple disjoint numeric chunks in an unclean utterance → cannot reduce
     // to a single unambiguous value. Re-ask instead of last-wins. (Pure
     // decimals like "33.5" never reach here — handled by the top fast path.)
-    return null;
+    return fail('multi_arabic_chunk');
   }
 
   // Look for arabic chunks inside text (e.g. STT mixed "33.3이요").
@@ -363,8 +381,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       const pre = s.slice(0, idx);
       const post = s.slice(idx + chunk.length);
       if (!isHarmlessResidual(pre) || !isHarmlessResidual(post)) {
-        _lastParseFailReason = 'extraneous_token';
-        return null;
+        return fail('extraneous_token');
       }
       const n = parseFloat(chunk);
       if (Number.isFinite(n)) return formatNum(n, maxDecimals);
@@ -376,21 +393,24 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
 
   if (parts.length === 1) {
     const n = parseKoreanInt(parts[0]);
-    if (n === null) return null;
+    // 🔑 #3-2: 여기가 "숫자가 아예 없는 발화"("담백"·"담배"·"상대")의 종착지다 — 07-30 사유
+    //   공백 14건의 주범. 숫자 오인식(digit_token_unparsed·extraneous_token)과 대책이 다르므로
+    //   반드시 갈라서 남긴다.
+    if (n === null) return fail('no_number');
     return formatNum(n, maxDecimals);
   }
 
   if (parts.length === 2) {
     const whole = parseKoreanInt(parts[0]);
-    if (whole === null) return null;
+    if (whole === null) return fail('decimal_whole_invalid');
     const frac = parseFractionDigits(parts[1]);
     if (!frac) return formatNum(whole, maxDecimals);
     const combined = parseFloat(`${whole}.${frac}`);
-    if (!Number.isFinite(combined)) return null;
+    if (!Number.isFinite(combined)) return fail('overflow');
     return formatNum(combined, maxDecimals);
   }
 
-  return null;
+  return fail('unparsed');
 }
 
 function formatNum(n: number, maxDecimals?: number): string {
