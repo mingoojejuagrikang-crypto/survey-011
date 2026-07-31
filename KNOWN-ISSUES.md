@@ -1424,6 +1424,9 @@
   → **판정이 막힌 이유는 계측 부재가 아니라 그날 데이터에 화면 끔 사례가 없었던 것뿐이다.**
   🔑 `[MIC-BG-STOP-1]`의 선행 검증(화면 끔 ↔ 앱 이탈 구별)은 **현재 배포본으로 이미 가능하다** —
   새 계측을 기다릴 필요가 없다. 다음 실기기 회차에 시나리오만 찍으면 된다.
+  ⚠️ **후행 정정(2026-07-31):** 그 선행 검증은 **결국 실행되지 않았다.** plan §3-1에서
+  `visibility_context` 11건이 전부 `evidence=blur`로 나와 갈리지 않았고, 민구가 **구분하지 않고
+  둘 다 중지**하기로 지시했다. v0.43.0 #4는 그 지시대로 구현했다 → `[MIC-BG-STOP-1]` 참조.
   🔑 **교훈: 이벤트 "이름"으로 계측 유무를 판정하지 마라.** 소스에서 실제 방출 지점을 확인하라.
 
 ### [EXIT-PERSIST-1] 마지막 행 완료 후 종료 수단이 사라진다 — `corrected` 알람이 종료 화면을 가린다
@@ -1537,17 +1540,45 @@
   15초 이탈에는 `muted:vis`+`unmuted`가 찍혔으나(**OS가 꺼준 것**) **7,058초 이탈에는 전무**하다.
 - **근인 ①** `speech.ts:382-403` — 워치독이 주기적으로 인식기를 부활시킨다.
   **의도적으로 `visibilitychange` 리스너를 두지 않았다**(주석 명시). 세션 활성이면 화면 상태와 무관.
-- **근인 ②** `useVoiceSession.ts:2736-2789` — **백그라운드 진입 시 마이크를 중지하는 코드가 없다.**
+- **근인 ②** *(v0.43.0 #4에서 해소 — 아래 「구현」 참조)* 당시 `useVoiceSession.ts`에는
+  **백그라운드 진입 시 마이크를 중지하는 코드가 없었다.**
   `mic_track:muted`는 앱이 끈 기록이 아니라 **OS가 껐다는 것을 복귀 시 관찰한 계측**이다
   (주석: *"UA 일시 정지(통화/Siri/라우트 변경)"*).
 - **영향:** 프라이버시(통화 음성이 인식 엔진으로 전송될 수 있음) · 배터리 · 오입력 위험.
   ✅ **이번 회차 실피해는 없다** — 해당 구간 value 커밋 0건·clip_saved 0건.
 - **설계 제약:** ⛔ **`track.stop()` 금지** — iOS는 재획득에 사용자 제스처가 필요해(`[IOS-5]`)
   복귀 시 자동 재개가 불가능해진다. **`track.enabled` 토글**을 쓴다.
-- **🔴 선행 검증 필수:** 화면 끔과 앱 이탈은 웹에서 **둘 다 `hidden`**이다. 구분 기반은 있으나
-  (`App.tsx:92` `awaySignals` = blur/pagehide/freeze, 로그 `evidence=blur`) **실측 검증이 안 됐다**
-  (오늘 데이터에 화면 끔 사례가 없다). 구분이 안 되면 정상 사용(화면 끄고 입력)이 막힌다.
-- **현재 상태:** 🔴 **OPEN** — 우선순위 4번. 착수 전 실기기 구분 검증 선행.
+- **🔴 선행 검증 필수였던 것 → 민구 지시로 해소:** 화면 끔과 앱 이탈은 웹에서 **둘 다 `hidden`**이다.
+  구분 기반은 있으나(`App.tsx` `awaySignals` = blur/pagehide/freeze, 로그 `evidence=blur`)
+  plan §3-1 재분석 결과 `visibility_context` **11건이 전부 `evidence=blur`** 라 실측으로 갈리지
+  않았다. → 민구 지시로 **구분하지 않고 둘 다 비활성화**한다(화면 끔도 중지 대상이 됐다).
+  ⚠️ 원 단서(*"전원 버튼으로 화면 끄고 입력하는 건 문제없다"*)와 **다른 선택**이다.
+  실기기에서 화면 끄고 입력하는 사용감이 나빠지면 이 결정부터 다시 본다.
+- **구현 (v0.43.0 #4, 2026-07-31):**
+  - `src/App.tsx` `onVis` — `visibilitychange`의 유일한 호출자.
+    `hidden` → `suspendForBackground()` · `visible` → `resumeFromBackground()`.
+  - `src/lib/useVoiceSession.ts` `suspendForBackground`/`resumeFromBackground` —
+    🔴 **순서가 계약이다.** 진입은 suspend(STT·클립) **먼저**, 그 다음 캡처 off.
+    뒤집으면 진행 중 클립이 **무음으로 채워진 채** 닫혀 `clip_too_small`/`clip_empty`가 재발한다.
+    복귀는 그 역순(캡처 on 먼저 → STT 복원). 캡처 복구는 **무조건** 돈다.
+  - `src/lib/audioRecorder.ts` `setCaptureEnabled` — **`track.enabled` 토글.**
+    설계 제약대로 `track.stop()`은 쓰지 않았다.
+  - 복귀 안내(*"자리를 비운 동안 입력이 중지됐습니다. 다시 시작합니다."*)는 복원된 인식기의
+    `onStart`에 **one-shot**으로 건다 — "시도"가 아니라 "재개 성공"에 건다(`[MIC-B2]` 전례).
+  - 계측 `bg_mic`(`logEvents.ts` `bgMicAction`) — `edge`/`stt`/`capture` 3축.
+    `stt` 축의 의미 오염은 리뷰 지적으로 같은 날 후속 수정했다(`9603d77`).
+  - 자동화 범위: `tests/v043-background-mic.spec.ts` A~F 6건 + `v037-suspend-latch` F/G.
+- **🔴 남은 실기기 확인 (iOS Safari, `docs/REAL-DEVICE-TEST.md` 절차):**
+  데스크톱 mock으로는 판정 불가다. ⛔ **아래를 통과하기 전에는 `RESOLVED`로 올리지 마라.**
+  1. 복귀 후 캡처·STT가 실제로 재개되고 안내 TTS가 **1회** 들리는가.
+  2. `bg_mic:return` → `lifecycle:start` → 첫 `raw_confidence`/`value`가 이어지는가
+     (`[MIC-B2]`: 복귀 32.5초 뒤 지연 `audio-capture` 오류 전례 — `onStart` 뒤를 함께 봐야 한다).
+  3. 짧은 왕복 / 긴 백그라운드 / **화면 잠금** / 앱 이탈 4갈래.
+  4. 이탈 구간에 `raw_confidence` 0건 · `clip_too_small`/`clip_empty` 0건인가.
+- **당시 상태(2026-07-29):** 🔴 OPEN — 우선순위 4번, 착수 전. 백그라운드 중지 코드 자체가 없었다.
+- **현재 상태:** 🟡 **MONITORING** — v0.43.0 #4로 구현·데스크톱 자동화 완료.
+  🔴 **아직 배포 전이다**(버전 bump·배포 없음, `main` 커밋만). iOS 실기기 판정 대기.
+- **실기기 상태:** ⚠️ **미확인** — 위 4항목을 통과하기 전에는 `RESOLVED` 금지.
 
 ### [BT-STT-1] 블루투스 입력 시 음성 인식이 되지 않는다
 - **민구 진술(2026-07-29):** *"첫 세션은 블루투스로 시작했는데 음성 인식이 되질 않아서 스피커폰으로
