@@ -259,8 +259,15 @@ test('D — 세션 미가동 왕복에는 안내가 없다(stt=noop). 캡처 복
   await expect.poll(() => trackEnabled(page), { timeout: 4000 }).toBe(false);
   await setVisibility(page, 'visible');
 
+  // 🔴 v0.43.0 리뷰(Codex 사소#1, 2026-07-31 수용) — **여기가 제목과 반대를 고정하고 있었다.**
+  //   제목은 `stt=noop`인데 단언은 `edge=enter,stt=stopped`였다. 근인은 앱 쪽:
+  //   `suspendRecognitionForUi`의 반환 boolean이 "실제로 STT를 멈췄나"가 아니라 **래치 전이**만
+  //   뜻했고, 그걸 그대로 `stt`에 실었다. 세션이 안 돌던 이 회차엔 멈출 인식기가 없었으므로
+  //   `stopped`는 거짓 기록이다 — 실제 중지 횟수를 집계하면 유휴/prewarm 왕복이 분자에 섞인다.
+  //   반환을 `{latched, sttStopped}`로 가르고 `stt`는 `sttStopped`를 쓰게 고쳤다. 이제 계약대로다.
+  //   ⚠️ `latched`(복원 의무·안내 예약)는 **종전 그대로**다 — 1c의 시작-TTS race 복원이 걸려 있다.
   await expect.poll(() => bgMicExtras(page), { timeout: 4000 })
-    .toEqual(['edge=enter,stt=stopped,capture=off', 'edge=return,stt=noop,capture=on']);
+    .toEqual(['edge=enter,stt=noop,capture=off', 'edge=return,stt=noop,capture=on']);
   // 🔑 복원할 인식기가 없었으므로 "다시 시작합니다"는 거짓말이다 — 나가면 안 된다.
   expect(await announceCount(page)).toBe(0);
   // 🔴 캡처 복구는 STT 복원 여부와 **무관하게** 돈다. 안 그러면 트랙이 꺼진 채 남아

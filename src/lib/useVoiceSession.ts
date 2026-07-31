@@ -1351,20 +1351,32 @@ export function useVoiceSession() {
     });
   }, []);
 
-  /** @returns **실제로 STT를 중지했는가**(빈 집합 → 비빈 집합 전이를 이 호출이 수행했는가).
-   *  v0.43.0 #4가 쓴다 — 백그라운드 복귀 안내는 *"중지를 실제로 수행했을 때만"* 나가야 하는데,
-   *  멱등 재진입·중첩 소스에서는 아무것도 멈추지 않았으므로 안내 대상이 아니다(plan §3-3). */
-  const suspendRecognitionForUi = useCallback((reason = 'ui_modal') => {
+  /** @returns 두 사실을 **분리해서** 돌려준다. 하나의 boolean으로 겸하면 안 된다 —
+   *  v0.43.0 리뷰(Codex 사소#1, 2026-07-31 수용)가 지적한 계측 의미 오염이 정확히 그것이었다.
+   *
+   *   - `latched`     빈 집합 → 비빈 집합 **전이를 이 호출이 수행했는가.** 래치 부기의 사실이다.
+   *                   🔴 **복원 의무(1c)는 이 값에 걸어야 한다** — 시작 TTS 중 suspend가 들어오면
+   *                   아직 인식기가 없어도(`sttStopped=false`) 뒤이은 `start()`가 가드에 막히며
+   *                   `hadController`를 true로 승격시키고, resume이 **실제로 복원**한다.
+   *                   여기서 예약을 세우지 않으면 그 복원이 조용해진다([TEST-CLIP-F-1] 계열).
+   *   - `sttStopped`  **돌고 있던 인식기를 실제로 멈췄는가.** `bg_mic`의 `stt` 축이 이걸 쓴다.
+   *                   종전에는 `latched`를 그대로 `stt=stopped`로 썼기 때문에, 세션이 아예 안 돌던
+   *                   유휴 왕복까지 "STT를 중지했다"로 기록돼 실제 중지 횟수의 분자가 오염됐다. */
+  const suspendRecognitionForUi = useCallback((reason = 'ui_modal'): { latched: boolean; sttStopped: boolean } => {
     const latch = uiSuspendRef.current;
-    if (latch.reasons.has(reason)) return false; // 같은 소스 재진입 — 멱등(중복 add·중복 로그 방지)
+    // 같은 소스 재진입 — 멱등(중복 add·중복 로그 방지)
+    if (latch.reasons.has(reason)) return { latched: false, sttStopped: false };
     const wasActive = latch.reasons.size > 0;
     latch.reasons.add(reason);
     // 이미 다른 소스가 suspend 중이면(중첩) 집합에만 추가하고 실제 STT 상태는 건드리지 않는다.
     //   ui_suspend/ui_resume 로그는 **실제 STT 상태 전이**(빈집합↔비빈집합)에만 남겨(단일 소스 계약
     //   바이트 불변), 중첩 add/remove는 조용한 래치 부기다. hadController는 첫 suspend에서만 스냅샷하고,
     //   그 뒤 start()가 가드에 막히면 :2541이 true로 승격한다(v0.43.0 1c — 복원 의무 플래그).
-    if (wasActive) return false;
+    if (wasActive) return { latched: false, sttStopped: false };
+    // 🔑 이 스냅샷이 곧 "돌고 있던 인식기를 실제로 멈췄는가"다 — 아래 `ctrlRef.current?.stop()`이
+    //   실제로 무언가를 멈추는 경우와 정확히 일치한다. 그대로 `sttStopped`로 반환한다.
     latch.hadController = !!ctrlRef.current;
+    const sttStopped = latch.hadController;
     logCell({
       type: 'command',
       parsed: 'ui_suspend',
@@ -1395,7 +1407,7 @@ export function useVoiceSession() {
         });
       });
     }
-    return true;
+    return { latched: true, sttStopped };
   }, []);
 
   // ── final result handler ───────────────────────────────────
@@ -2415,13 +2427,18 @@ export function useVoiceSession() {
    *  ⚠️ 화면 끄기와 앱 이탈은 **구분할 수 없다**(plan §3-1: `visibility_context` 11건이 전부
    *  `evidence=blur`). 민구 지시대로 **둘 다 비활성화**한다. */
   const suspendForBackground = useCallback(() => {
-    const stopped = suspendRecognitionForUi('app_background');
-    if (stopped) bgAnnouncePendingRef.current = true;
+    // v0.43.0 리뷰 사소#1 — **두 축을 갈라 쓴다.**
+    //   `latched`    → 복원 의무(안내 예약). 1c의 시작-TTS race에서는 아직 인식기가 없어도
+    //                  뒤이은 `start()`가 `hadController`를 승격시켜 resume이 실제로 복원한다.
+    //                  종전 동작 그대로다 — 여기를 `sttStopped`로 좁히면 그 복원이 조용해진다.
+    //   `sttStopped` → 계측의 `stt` 축. "돌던 인식기를 실제로 멈췄나"만 기록한다.
+    const { latched, sttStopped } = suspendRecognitionForUi('app_background');
+    if (latched) bgAnnouncePendingRef.current = true;
     const captureOff = recorderRef.current?.setCaptureEnabled(false) ?? false;
     logCell({
       type: 'command',
       parsed: 'bg_mic',
-      extra: bgMicAction({ edge: 'enter', stt: stopped ? 'stopped' : 'noop', capture: captureOff ? 'off' : 'noop' }),
+      extra: bgMicAction({ edge: 'enter', stt: sttStopped ? 'stopped' : 'noop', capture: captureOff ? 'off' : 'noop' }),
       row: useSessionStore.getState().activeRow,
     });
   }, [suspendRecognitionForUi]);
