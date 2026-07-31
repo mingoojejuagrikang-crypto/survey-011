@@ -10,11 +10,13 @@
  *      **파싱 성공일 때만** 방출한다. #3 이후 파싱은 거절될 발화에도 실행되므로,
  *      여기서 상태를 만지면 저신뢰 거절 경로가 오염된다([STT-15] 회귀 축).
  *   2. **판정 순서 = 우선순위 계약.** 소수부 합성 → primary → (실패 사유 캡처) → alts.
- *      실패 사유 캡처가 alts 루프보다 **앞**이어야 한다 — koreanNum의 `_lastParseFail*`은
- *      모듈 상태라 alts의 parseValueForCol이 덮어쓴다(v0.5.0 W4/W5 · v0.10.0 A1).
+ *      실패 사유는 primary 판정의 **반환값**이다(v0.43.0 #3-2 B층) — 종전엔 koreanNum의
+ *      모듈 상태를 alts보다 먼저 읽는 순서 규약이었고, 파서를 안 부르는 컬럼층 실패에는
+ *      직전 발화의 사유가 실렸다(v0.5.0 W4/W5 · v0.10.0 A1).
  */
 import { test, expect } from '@playwright/test';
 import { attemptParseValue, parseValueForCol } from '../src/lib/valueParseAttempt';
+import { parseKoreanNumber } from '../src/lib/koreanNum';
 import type { Column } from '../src/types';
 
 const FLOAT_COL: Column = {
@@ -28,6 +30,10 @@ const INT_COL: Column = {
 const OPTIONS_COL: Column = {
   id: 'c5', name: '등급', type: 'options', input: 'voice', ttsAnnounce: true,
   auto: { kind: 'options', available: ['상', '중', '하'], selected: [] },
+};
+const TEXT_COL: Column = {
+  id: 'c9', name: '비고', type: 'text', input: 'voice', ttsAnnounce: true,
+  auto: { kind: 'fixed', value: '' },
 };
 
 const attempt = (text: string, opts?: { col?: Column | null; alts?: string[]; fractionWhole?: string | null }) =>
@@ -57,18 +63,83 @@ test.describe('기본 파싱 — 성공/실패', () => {
   });
 
   test('컬럼을 못 찾으면(col=null) 파싱하지 않는다', () => {
-    expect(attempt('33.3', { col: null }).parsed).toBeNull();
+    const r = attempt('33.3', { col: null });
+    expect(r.parsed).toBeNull();
+    expect(r.failReason).toBe('no_column'); // #3-2 B층 — 종전엔 직전 발화 사유가 실렸다
   });
 
   test('int 컬럼은 소수 발화를 거부한다(엄격)', () => {
     expect(attempt('33.3', { col: INT_COL }).parsed).toBeNull();
+    expect(attempt('33.3', { col: INT_COL }).failReason).toBe('int_decimal_rejected');
     expect(attempt('삼십삼 점 삼', { col: INT_COL }).parsed).toBeNull();
     expect(attempt('33', { col: INT_COL }).parsed).toBe('33');
   });
 
   test('options 컬럼은 허용 목록에 매칭한다', () => {
     expect(attempt('상', { col: OPTIONS_COL }).parsed).toBe('상');
-    expect(attempt('없는등급', { col: OPTIONS_COL }).parsed).toBeNull();
+    const r = attempt('없는등급', { col: OPTIONS_COL });
+    expect(r.parsed).toBeNull();
+    expect(r.failReason).toBe('option_no_match');
+  });
+
+  test('text 컬럼의 공백 발화는 empty_text로 실패한다', () => {
+    const r = attempt('   ', { col: TEXT_COL });
+    expect(r.parsed).toBeNull();
+    expect(r.failReason).toBe('empty_text');
+  });
+});
+
+// ─── v0.43.0 #3-2 B층 — 실패 사유가 직전 발화에 오염되지 않는다 ──────────────────────────
+// 🔴 이 describe가 B층의 회귀 축이다. 07-31 실측에서 **같은 발화의 커밋 결과가 직전 발화
+//    이력에 따라 갈렸다** — 파서를 안 부르는 컬럼층 실패가 koreanNum의 모듈 상태를 그대로
+//    읽었기 때문이다. 아래 두 프라이밍은 그 두 상태를 재현한다.
+test.describe('#3-2 B층 — 컬럼층 실패 사유는 잔류값이 아니다', () => {
+  /** 직전 발화가 사유를 남긴 상태를 만든다. */
+  const primeWithReason = () => { parseKoreanNumber('현백 33.3'); };
+  /** 직전 발화가 성공해 사유가 비워진 상태를 만든다. */
+  const primeClean = () => { parseKoreanNumber('33.3'); };
+
+  test('🔴 int 컬럼 + 소수 발화 — 직전 이력과 무관하게 항상 int_decimal_rejected', () => {
+    for (const prime of [primeWithReason, primeClean]) {
+      prime();
+      const r = attempt('33.3', { col: INT_COL, alts: ['33.3', '33'] });
+      expect(r.failReason).toBe('int_decimal_rejected');
+    }
+  });
+
+  test('🔴 int 컬럼 + 소수 발화 — 소수부를 버린 alt(`33`)를 커밋하지 않는다', () => {
+    // 사용자가 "33.3"이라 말했는데 alt `33`을 받으면 소수부가 조용히 사라진다(O3와 동형).
+    // 소수를 담은 alt는 int 컬럼이 어차피 거절하므로, 수용 가능한 alt는 존재하지 않는다 → 재질문.
+    // ⚠️ primeClean() 상태가 종전에 `33`을 커밋하던 경로다 — 이 단언이 그 회귀를 막는다.
+    for (const prime of [primeWithReason, primeClean]) {
+      prime();
+      expect(attempt('33.3', { col: INT_COL, alts: ['33.3', '33'] }).parsed).toBeNull();
+      prime();
+      expect(attempt('33.3', { col: INT_COL, alts: ['33.3', '33.4'] }).parsed).toBeNull();
+    }
+  });
+
+  test('options 미매칭은 alts 폴백을 유지한다 — 이력과 무관하게 동일 결과', () => {
+    // 판단: options의 alt 매칭은 STT 변형 복구로 **정당하다**(숫자를 버리는 문제가 없다).
+    // 종전엔 잔류 사유가 multi_numeric이면 이 구제가 우연히 막혔다 — 그것이 결함이었다.
+    for (const prime of [primeWithReason, primeClean]) {
+      prime();
+      expect(attempt('없는등급', { col: OPTIONS_COL, alts: ['없는등급', '상'] }).parsed).toBe('상');
+    }
+  });
+
+  test('col=null 사유도 이력에 오염되지 않는다', () => {
+    for (const prime of [primeWithReason, primeClean]) {
+      prime();
+      expect(attempt('33.3', { col: null, alts: ['33.3'] }).failReason).toBe('no_column');
+    }
+  });
+
+  test('float 컬럼의 파서 사유는 종전 그대로다(B층은 파서 경로를 안 건드린다)', () => {
+    primeWithReason();
+    expect(attempt('담백').failReason).toBe('no_number');
+    primeClean();
+    expect(attempt('360 6000', { alts: ['360 6000'] }).failReason).toBe('multi_numeric');
   });
 });
 

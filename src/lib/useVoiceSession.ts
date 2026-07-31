@@ -1830,6 +1830,9 @@ export function useVoiceSession() {
       // (colName)과 직전 컨텍스트(소수부 재질문 중이면 정수부 fractionWhole)를 더해 "주로 실패하는
       // 숫자/항목"을 다음 세션부터 정량화한다. (런타임에 '기대값'은 알 수 없어 추가하지 않는다 —
       // 실세션은 정답이 없는 자유 측정이므로 transcript+context로 패턴을 집계하는 것이 정직하다.)
+      // v0.43.0 #3-2 — `extra`(사유)는 이제 **항상 실린다.** 종전엔 파서의 3개 경로에서만
+      // 나왔고 07-30 실기기 22건 중 14건이 공백이었다(plan §2-6). 사유가 비어 보이면 그건
+      // 새 실패 경로가 사유 없이 추가된 것이다 — koreanNum의 `fail()` 규약을 확인해라.
       logCell({
         type: 'stt_parse_failed', text, altsCount: alts.length,
         extra: parseFailReason ?? undefined,
