@@ -190,8 +190,14 @@ export function useVoiceSession() {
   // v0.37.0 리뷰(3모델 공통, 민구 인가) — **소스 집합(reference-count) 래치**. 종전 단일 boolean
   //   래치는 두 suspend 소스(예: 수동 시트 + 개선요청 모달)가 겹칠 때, 하나만 닫혀도 래치가 풀려
   //   나머지 오버레이 뒤에서 STT가 조기 재개됐다(데이터무결성). 이제 **모든 소스가 해제될 때만**
-  //   실제 재개한다. hadController는 **첫 suspend 시점** 스냅샷(집합이 빌 때까지 유지). active 여부는
-  //   reasons.size>0로 파생(별도 boolean 없음).
+  //   실제 재개한다. active 여부는 reasons.size>0로 파생(별도 boolean 없음).
+  // 🔴 v0.43.0 1c([TEST-CLIP-F-1] 판정) — **hadController의 의미가 넓어졌다.**
+  //   종전: *"첫 suspend 시점에 인식기가 있었나"* (순수 스냅샷).
+  //   현재: *"마지막 소스가 해제될 때 인식기를 복원해야 하나"* (복원 의무 플래그).
+  //   첫 suspend 스냅샷이 기본값이지만, suspend가 걸린 동안 start()가 인식기를 만들려다
+  //   :2541 가드에 막히면 **그 사실을 여기 true로 남긴다** — 그래야 resume이 복원한다.
+  //   생존 범위는 종전과 동일: reasons가 비는 두 경로(resumeRecognitionForUi / clearUiSuspendLatch)가
+  //   모두 false로 되돌리므로 세션 밖으로 새지 않는다.
   const uiSuspendRef = useRef<{ hadController: boolean; reasons: Set<string> }>({
     hadController: false,
     reasons: new Set<string>(),
@@ -1318,7 +1324,8 @@ export function useVoiceSession() {
     latch.reasons.add(reason);
     // 이미 다른 소스가 suspend 중이면(중첩) 집합에만 추가하고 실제 STT 상태는 건드리지 않는다.
     //   ui_suspend/ui_resume 로그는 **실제 STT 상태 전이**(빈집합↔비빈집합)에만 남겨(단일 소스 계약
-    //   바이트 불변), 중첩 add/remove는 조용한 래치 부기다. hadController는 첫 suspend에서만 스냅샷.
+    //   바이트 불변), 중첩 add/remove는 조용한 래치 부기다. hadController는 첫 suspend에서만 스냅샷하고,
+    //   그 뒤 start()가 가드에 막히면 :2541이 true로 승격한다(v0.43.0 1c — 복원 의무 플래그).
     if (wasActive) return;
     latch.hadController = !!ctrlRef.current;
     logCell({
@@ -2522,13 +2529,26 @@ export function useVoiceSession() {
     await say('음성 입력을 시작합니다.');
     await announceRowDiff(null, 1);
 
-    ctrlRef.current = new SpeechController({
-      onFinal: handleFinal,
-      onInterim: handleInterim,
-      onError: () => {},
-    });
-    setActiveController(ctrlRef.current);
-    ctrlRef.current.start();
+    // 🔴 v0.43.0 1c [TEST-CLIP-F-1] — **start()가 UI suspend 래치를 존중한다.**
+    //   위 두 await(시작 TTS·행 안내)는 실기기에서 수 초다. 그 창에 오버레이(개선요청·수동입력·
+    //   도움말·종료확인)가 열리면 suspendRecognitionForUi가 이미 돌아 래치가 걸려 있는데,
+    //   종전 코드는 그걸 확인하지 않고 인식기를 새로 만들어 기동했다 — **모달 뒤에서 STT가 살아
+    //   배경 발화가 셀에 커밋되는 데이터 무결성 결함**(판정: v037-suspend-latch A의 오라클 위반).
+    //   덤으로 hadController가 false로 스냅샷돼 모달을 닫아도 재무장이 죽었다(F가 red였던 이유).
+    //   → 래치가 걸려 있으면 **인식기를 만들지 않고 복원 의무만 남긴다.** 마지막 소스가 해제되면
+    //   resumeRecognitionForUi가 :2358에서 인식기를 만들고 :2355가 pending 좌표로 재무장한다.
+    //   **새 경로를 만들지 않는다 — 기존 복원 경로에 그대로 합류한다.**
+    if (uiSuspendRef.current.reasons.size > 0) {
+      uiSuspendRef.current.hadController = true;
+    } else {
+      ctrlRef.current = new SpeechController({
+        onFinal: handleFinal,
+        onInterim: handleInterim,
+        onError: () => {},
+      });
+      setActiveController(ctrlRef.current);
+      ctrlRef.current.start();
+    }
 
     await announceField(vc[0]);
     return true;
