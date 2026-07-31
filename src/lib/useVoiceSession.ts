@@ -19,6 +19,7 @@ import { logger } from './logger';
 import {
   anomalyAlertCleared,
   audioRouteRevalidate,
+  bgMicAction,
   clipArmBlocked,
   lowConfidenceParsed,
   micAutoReconnect,
@@ -120,6 +121,27 @@ const EARLY_COMMIT_STABLE_MS = 400;
  *  의도적 차등 — stop() 5초(세션 종료, 최대 보존), 아카이브 flush 1.5초(백그라운드, UX 무영향). */
 const PAUSE_FLUSH_GRACE_MS = 3000;
 
+/** v0.43.0 #4 — 백그라운드 복귀 안내 문구(plan §3-3, 민구 확정).
+ *
+ *  🔴 **중지 안내와 복귀 안내가 한 문장으로 합쳐져 있다.** iOS는 백그라운드 TTS를 막으므로
+ *  `hidden` 진입 순간의 `say()`는 소리가 안 나거나 큐에 쌓였다가 복귀 때 터진다 — 실질적으로
+ *  둘 다 복귀 시점에만 나갈 수 있다. 그래서 "중지됐다 + 다시 시작한다"를 한 번에 말한다. */
+const BG_RESUME_MESSAGE = '자리를 비운 동안 입력이 중지됐습니다. 다시 시작합니다.';
+
+/** #4 — **정확히 한 번만** 발화하는 `onStart` 핸들러를 만든다.
+ *
+ *  `SpeechController`의 `onStart`는 인식기 **인스턴스마다** 온다 — 워치독 재시작·EOS 후
+ *  자동 재시작에서도 발화하므로(speech.ts가 매 `start` 이벤트에 건다), 클로저 안의 once
+ *  가드가 없으면 백그라운드 복귀 뒤 **재시작할 때마다** 같은 안내를 반복한다. */
+function bgResumeAnnouncerOnce(say: (text: string) => Promise<void>): () => void {
+  let announced = false;
+  return () => {
+    if (announced) return;
+    announced = true;
+    void say(BG_RESUME_MESSAGE);
+  };
+}
+
 export type VoiceTrackState = AudioTrackState | 'unknown';
 
 export interface VoiceRuntimeSnapshot {
@@ -205,6 +227,11 @@ export function useVoiceSession() {
     hadController: false,
     reasons: new Set<string>(),
   });
+  /** v0.43.0 #4 — 백그라운드 복귀 안내가 **예약돼 있는가**(원샷).
+   *  `suspendForBackground`가 **실제로 중지했을 때만** 세우고, `resumeRecognitionForUi`가 첫
+   *  전이에서 소비한다. 이 플래그가 없으면 resume의 컨트롤러 생성부를 공유하는 다른 소스
+   *  (`feedback_modal`·`manual_input`·`command_help`·`exit_confirm`)에서도 안내가 나간다. */
+  const bgAnnouncePendingRef = useRef(false);
   // v0.22.0 P0 — 클립 레코더 스트림이 실제로 죽었을 때만 true. v0.38.0 #5는 이 전이에서 기존
   // reconnectMic→recoverStream 경로를 자동으로 딱 1회 호출하고, 실패했을 때만 수동 배너를 노출한다.
   const [micLost, setMicLost] = useState(false);
@@ -1304,6 +1331,10 @@ export function useVoiceSession() {
    *  커밋하거나 행을 이동시킬 수 있었다(데이터 무결성). */
   const clearUiSuspendLatch = useCallback((reason: string) => {
     const latch = uiSuspendRef.current;
+    // 🔴 v0.43.0 #4 — 래치를 통째로 비우면 resume이 **조기 반환**한다(reasons에 소스가 없으니
+    //   no-op). 그러면 백그라운드 안내 플래그를 소비할 주체가 사라져, 세션 경계를 넘어 살아남았다가
+    //   **다음 세션의 첫 모달을 닫을 때 엉뚱하게 발화**한다. 래치와 같은 수명으로 묶는다.
+    bgAnnouncePendingRef.current = false;
     if (latch.reasons.size === 0) return;
     // 세션 경계 — 남은 **모든** suspend 소스를 통째로 비운다(복원 없음). 중첩 소스가 있었으면
     //   was=a+b로 함께 남겨 어떤 소스들이 걸려 있었는지 로그로 판별한다(단일 소스는 종전과 동일).
@@ -1320,16 +1351,19 @@ export function useVoiceSession() {
     });
   }, []);
 
+  /** @returns **실제로 STT를 중지했는가**(빈 집합 → 비빈 집합 전이를 이 호출이 수행했는가).
+   *  v0.43.0 #4가 쓴다 — 백그라운드 복귀 안내는 *"중지를 실제로 수행했을 때만"* 나가야 하는데,
+   *  멱등 재진입·중첩 소스에서는 아무것도 멈추지 않았으므로 안내 대상이 아니다(plan §3-3). */
   const suspendRecognitionForUi = useCallback((reason = 'ui_modal') => {
     const latch = uiSuspendRef.current;
-    if (latch.reasons.has(reason)) return; // 같은 소스 재진입 — 멱등(중복 add·중복 로그 방지)
+    if (latch.reasons.has(reason)) return false; // 같은 소스 재진입 — 멱등(중복 add·중복 로그 방지)
     const wasActive = latch.reasons.size > 0;
     latch.reasons.add(reason);
     // 이미 다른 소스가 suspend 중이면(중첩) 집합에만 추가하고 실제 STT 상태는 건드리지 않는다.
     //   ui_suspend/ui_resume 로그는 **실제 STT 상태 전이**(빈집합↔비빈집합)에만 남겨(단일 소스 계약
     //   바이트 불변), 중첩 add/remove는 조용한 래치 부기다. hadController는 첫 suspend에서만 스냅샷하고,
     //   그 뒤 start()가 가드에 막히면 :2541이 true로 승격한다(v0.43.0 1c — 복원 의무 플래그).
-    if (wasActive) return;
+    if (wasActive) return false;
     latch.hadController = !!ctrlRef.current;
     logCell({
       type: 'command',
@@ -1361,6 +1395,7 @@ export function useVoiceSession() {
         });
       });
     }
+    return true;
   }, []);
 
   // ── final result handler ───────────────────────────────────
@@ -2292,14 +2327,22 @@ export function useVoiceSession() {
     void handleFinal(t, [t], 0);
   }, [handleFinal]);
 
+  /** @returns **실제로 인식기를 복원했는가.** #4의 복귀 안내가 이 값에 걸린다. */
   const resumeRecognitionForUi = useCallback((reason = 'ui_modal') => {
     const latch = uiSuspendRef.current;
-    if (!latch.reasons.has(reason)) return; // 이 소스는 suspend 중이 아님 — no-op(스퓨리어스 resume 방어)
+    if (!latch.reasons.has(reason)) return false; // 이 소스는 suspend 중이 아님 — no-op(스퓨리어스 resume 방어)
     latch.reasons.delete(reason);
     // v0.37.0 리뷰(3모델 공통) — **다른 suspend 소스가 아직 남아 있으면 실제 재개하지 않는다.**
     //   수동 시트 + 개선요청 모달 중첩 시, 개선요청만 닫혀도 시트 뒤에서 STT가 살아나던 레이스의 차단축.
     //   집합이 완전히 빌 때만 인식기를 복원한다(모든 오버레이 해제 확인).
-    if (latch.reasons.size > 0) return;
+    if (latch.reasons.size > 0) return false;
+    // 🔴 v0.43.0 #4 — 안내 플래그는 **여기서 무조건 소비한다.** 이 지점 아래의 모든 경로
+    //   (복원 안 함 / 이미 컨트롤러 있음 / 정상 복원)가 소비된 상태로 진행해야, 복원되지 않은
+    //   회차의 플래그가 살아남아 **다음 모달을 닫을 때 발화**하는 일이 없다.
+    //   ⚠️ 이 콜백의 컨트롤러 생성부는 `feedback_modal`·`manual_input` 등과 **공유된다** —
+    //   onStart를 무조건 걸면 모달을 닫을 때마다 "다시 시작합니다"가 나간다.
+    const announceBgResume = bgAnnouncePendingRef.current;
+    bgAnnouncePendingRef.current = false;
     const hadController = latch.hadController;
     latch.hadController = false;
     logCell({
@@ -2317,7 +2360,7 @@ export function useVoiceSession() {
     const suspendedClip = blockedClip ?? uiSuspendedClipRef.current;
     uiBlockedClipArmRef.current = null;
     uiSuspendedClipRef.current = null;
-    if (!shouldRestore) return;
+    if (!shouldRestore) return false;
 
     // 값 대기 좌표가 그대로일 때만 재무장한다. 모달 안의 터치 처리 등으로 타깃이 바뀌었다면
     // announceField가 새 좌표의 녹음창을 소유하므로 오래된 셀을 되살리지 않는다.
@@ -2339,11 +2382,58 @@ export function useVoiceSession() {
         onFinal: handleFinal,
         onInterim: handleInterim,
         onError: () => {},
+        // v0.43.0 #4 5번 — **"재개 시도"가 아니라 "재개 성공"에 건다**(plan §3-3). `onStart`는
+        //   인식기가 실제로 기동한 신호다. [MIC-B2] 전례(복귀 32.5초 뒤 `audio-capture` 오류)라
+        //   시도 시점에 "다시 시작합니다"라고 말하면 거짓말이 된다.
+        //   ⚠️ `onStart`는 **워치독 재시작마다** 온다(speech.ts가 매 인스턴스 `start` 이벤트에
+        //   건다) — 그래서 클로저 안에 once 가드가 필요하다. 플래그만으로는 부족하다.
+        ...(announceBgResume ? { onStart: bgResumeAnnouncerOnce(say) } : {}),
       });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
     }
-  }, [armClipForCell, handleFinal, handleInterim]);
+    return true;
+  }, [armClipForCell, handleFinal, handleInterim, say]);
+
+  // ── v0.43.0 #4 — 앱 이탈 시 마이크(plan §3-3) ──────────────────────────────
+  /** 백그라운드 진입: STT·클립 중지 + 캡처 off. `visibilitychange`(hidden)의 유일한 호출자는
+   *  `App.tsx onVis`다.
+   *
+   *  🔴 **순서가 계약이다.** suspend가 먼저다 — 그게 진행 중 클립을 `stopClip()`으로 닫고
+   *  재개용으로 보관한다. 뒤집어서 트랙부터 끄면 클립이 **무음으로 채워진 채** 닫혀
+   *  `clip_too_small`/`clip_empty`가 그대로 재발한다(07-30 백그라운드 구간 5건의 형태 —
+   *  `enabled=false`는 녹음을 멈추는 게 아니라 무음을 흘린다, MDN).
+   *
+   *  ⚠️ 화면 끄기와 앱 이탈은 **구분할 수 없다**(plan §3-1: `visibility_context` 11건이 전부
+   *  `evidence=blur`). 민구 지시대로 **둘 다 비활성화**한다. */
+  const suspendForBackground = useCallback(() => {
+    const stopped = suspendRecognitionForUi('app_background');
+    if (stopped) bgAnnouncePendingRef.current = true;
+    const captureOff = recorderRef.current?.setCaptureEnabled(false) ?? false;
+    logCell({
+      type: 'command',
+      parsed: 'bg_mic',
+      extra: bgMicAction({ edge: 'enter', stt: stopped ? 'stopped' : 'noop', capture: captureOff ? 'off' : 'noop' }),
+      row: useSessionStore.getState().activeRow,
+    });
+  }, [suspendRecognitionForUi]);
+
+  /** 포그라운드 복귀: 캡처 on + STT 복원. 안내는 여기서 하지 않는다 — 복원된 인식기의
+   *  `onStart`가 낸다(위 `announceBgResume`).
+   *
+   *  🔴 캡처를 **먼저** 켠다(진입의 역순). 복원된 인식기·클립이 무음을 먹지 않게 한다.
+   *  🔑 캡처 복구는 **무조건** 돈다 — 백그라운드 중 세션이 끝나 래치가 비어도(`clearUiSuspendLatch`)
+   *  트랙이 꺼진 채 남으면 다음 세션이 조용히 무음을 녹음한다. */
+  const resumeFromBackground = useCallback(() => {
+    const captureOn = recorderRef.current?.setCaptureEnabled(true) ?? false;
+    const restored = resumeRecognitionForUi('app_background');
+    logCell({
+      type: 'command',
+      parsed: 'bg_mic',
+      extra: bgMicAction({ edge: 'return', stt: restored ? 'restored' : 'noop', capture: captureOn ? 'on' : 'noop' }),
+      row: useSessionStore.getState().activeRow,
+    });
+  }, [resumeRecognitionForUi]);
 
   // ── v0.34.0 A2 — 개선요청(피드백) 팝업 열림 중 STT 일시정지 ──
   // App.tsx가 sessionStore.uiModalOpen('feedback')을 올리고/내리는 단일 신호를 구독한다.
@@ -2478,6 +2568,10 @@ export function useVoiceSession() {
     // Init audio recorder fire-and-forget — mic permission is independent of STT startup.
     // Awaiting getUserMedia can block indefinitely in headless/denied-permission environments.
     if (!recorderRef.current) recorderRef.current = new AudioRecorder();
+    // 🔴 v0.43.0 #4 — 레코더는 **세션 간 재사용된다**(위 조건이 null일 때만 새로 만든다). 그래서
+    //   백그라운드에서 캡처를 끈 뒤 복귀 이벤트를 못 받고 세션이 끝나면(탭 unmount 등) 트랙이
+    //   꺼진 채 남아 **다음 세션이 조용히 무음을 녹음한다.** 세션 경계에서 무조건 되돌린다.
+    recorderRef.current.setCaptureEnabled(true);
     // v0.34.0 D11b — 파동 통계 리셋: prewarm(입력탭 마운트)이 세션 전부터 캡처를 돌리므로
     // 세션 밖 구간이 wave_stats에 섞이지 않게 시작 시점에 0으로 되돌린다.
     recorderRef.current.resetWaveStats();
@@ -3339,6 +3433,9 @@ export function useVoiceSession() {
     resume,
     suspendRecognitionForUi,
     resumeRecognitionForUi,
+    // v0.43.0 #4 — App.tsx의 visibilitychange 핸들러가 유일한 호출자다(VoiceScreen 경유 브리지).
+    suspendForBackground,
+    resumeFromBackground,
     commitTouchValue,
     commitManualValue,
     confirmAnomalyTouch,

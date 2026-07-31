@@ -406,3 +406,28 @@ export function orientationChange(fields: {
     h: fields.h,
   })}`;
 }
+
+/** v0.43.0 #4 — **백그라운드 진입/복귀에서 앱이 실제로 한 일.**
+ *
+ *  `bg_enter_snapshot`이 *"그 순간 무엇이 돌고 있었나"* 라면 이건 *"그래서 무엇을 껐나"* 다.
+ *  둘을 앞뒤로 대조해야 07-30 관측(백그라운드에서 `rec=recording`·`stt=listening`인데 트랙만
+ *  `muted` → 클립 에러 5건이 그 구간에 몰림, plan §3-2)이 닫혔는지 판정할 수 있다.
+ *
+ *  🔴 `capture`는 **`getTrackState()`로 읽을 수 없다.** `track.enabled=false`여도 `readyState`는
+ *  `'live'`라 트랙 상태는 그대로 `live`로 보인다(MDN). 이 축이 없으면 "껐다"는 사실이 로그에
+ *  남지 않는다. `AudioTrackState`를 넓히는 대신 여기서 별도로 노출한다(바이트 계약 보존).
+ *
+ *  값의 의미:
+ *   - `stt`     `stopped`/`restored` = 실제로 수행. `noop` = 중지·복원할 것이 없었다
+ *               (세션 미가동, 또는 다른 소스가 이미 suspend 중인 중첩).
+ *   - `capture` `off`/`on` = 트랙 토글 실제 전환. `noop` = 트랙이 없거나 이미 그 상태.
+ *
+ *  🔑 **`stt=noop`이면 복귀 안내도 나가지 않는다** — 안내는 "재개 성공"에만 걸린다([MIC-B2]:
+ *  복귀 32.5초 뒤 `audio-capture` 오류가 난 전례라 "시도" 시점 안내는 거짓말이 된다). */
+export function bgMicAction(fields: {
+  edge: 'enter' | 'return';
+  stt: 'stopped' | 'restored' | 'noop';
+  capture: 'off' | 'on' | 'noop';
+}): string {
+  return kv({ edge: fields.edge, stt: fields.stt, capture: fields.capture });
+}

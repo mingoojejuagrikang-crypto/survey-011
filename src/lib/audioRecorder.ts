@@ -301,6 +301,34 @@ export class AudioRecorder {
     return this.active?.recorder.state === 'recording' && !this.active.finalized;
   }
 
+  /** v0.43.0 #4 — **마이크 캡처를 끄고 켠다(장치는 놓지 않는다).** 백그라운드 진입/복귀 전용.
+   *
+   *  ⛔ **`track.stop()` 절대 금지**([IOS-5]). iOS는 재획득에 사용자 제스처를 요구하므로 복귀
+   *  자동 재개가 **구조적으로 불가능**해진다. 반드시 `enabled` 토글이다.
+   *
+   *  계약(MDN `MediaStreamTrack.enabled`, 2026-07-31 확인): `enabled=false`인 트랙은 장치를
+   *  점유한 채 **무음 프레임만**(every sample 0) 흘린다. 그래서:
+   *   - `readyState`는 `'live'` 그대로다 → `getTrackState()`도 **여전히 `'live'`**를 보고한다.
+   *     🔴 `AudioTrackState`를 넓히지 마라 — `bg_enter_snapshot`의 바이트 계약이다. 캡처 상태는
+   *     별도 로그(`bg_mic`)로 노출한다.
+   *   - `muted`(UA가 기술적 이유로 미디어를 멈춘 상태)와는 **다른 축**이다. iOS가 백그라운드에서
+   *     트랙을 `muted`로 만드는 것(plan §3-2 관측)과 앱이 `enabled=false`로 끄는 것은 독립이다.
+   *   - MediaRecorder는 계속 돌며 **무음을 쌓는다.** 그래서 호출자는 진행 중 클립을 먼저 정리한
+   *     뒤에 이걸 꺼야 한다(useVoiceSession.suspendForBackground의 순서 계약).
+   *
+   *  @returns 실제로 상태가 바뀌었으면 true. 트랙이 없거나 이미 그 상태면 false. */
+  setCaptureEnabled(enabled: boolean): boolean {
+    const track = this.stream?.getAudioTracks()[0] ?? null;
+    if (!track || track.enabled === enabled) return false;
+    track.enabled = enabled;
+    return true;
+  }
+
+  /** 현재 캡처가 켜져 있는가. 트랙이 없으면 false(= 잡을 소리가 없다). 관찰 전용. */
+  isCaptureEnabled(): boolean {
+    return this.stream?.getAudioTracks()[0]?.enabled ?? false;
+  }
+
   /** v0.38.2 F5 — 포그라운드 복귀 시 **오디오 경로 재검증**(관찰 전용).
    *
    *  기존 `refreshActiveInputLabel()`(private)은 `devicechange`·트랙 이벤트가 발화했을 때만 돌았다.

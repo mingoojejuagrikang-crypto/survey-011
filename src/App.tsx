@@ -152,8 +152,17 @@ export default function App() {
             phase: useSessionStore.getState().phase,
           }),
         });
+        // 🔴 v0.43.0 #4 — 스냅샷을 **남긴 뒤에** 중지한다. 순서를 뒤집으면 bg_enter_snapshot이
+        //   앱이 방금 만든 상태를 찍어(`stt=suspended`) "진입 순간 무엇이 돌고 있었나"라는 이
+        //   이벤트의 존재 이유가 사라진다 — 복귀 스냅샷과 대조할 축을 잃는다.
+        //   세션이 안 돌고 있으면 suspendForBackground가 자연 no-op이다(bg_mic:stt=noop).
+        voiceTelemetryRef.current?.suspendForBackground();
       }
-      if (document.visibilityState === 'visible') awaySignals.clear();
+      if (document.visibilityState === 'visible') {
+        // #4 — 캡처 복구 + STT 복원. 복원에 성공하면 인식기의 onStart가 안내를 1회 발화한다.
+        voiceTelemetryRef.current?.resumeFromBackground();
+        awaySignals.clear();
+      }
     };
     window.addEventListener('blur', onBlur);
     window.addEventListener('focus', onFocus);

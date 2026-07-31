@@ -18,9 +18,19 @@ import { ReadyState } from '../components/voice/ReadyState';
 import { ActiveState } from '../components/voice/ActiveState';
 import { MicReconnectBanner } from '../components/voice/MicReconnectBanner';
 
+/** App.tsx ↔ useVoiceSession 브리지. VoiceScreen은 세션 훅을 소유하지만 `visibilitychange`는
+ *  문서 단위라 App.tsx가 듣는다 — 그 사이를 잇는 유일한 채널이다.
+ *
+ *  ⚠️ 이름은 `Readers`지만 v0.43.0 #4부터 **조치 2건**이 함께 탄다. 이름을 바꾸지 않은 것은
+ *  의도적이다: v0.43.0 UI 재설계 레인이 같은 파일들을 동시에 만지고 있어 광범위 rename이
+ *  충돌을 만든다. 새 채널을 파지 않는 것도 같은 이유다(브리지는 하나로 유지). */
 export interface VoiceTelemetryReaders {
   getTrackState: () => VoiceTrackState;
   getRuntimeSnapshot: () => VoiceRuntimeSnapshot;
+  /** #4 — `hidden` 진입: STT·클립 중지 + 마이크 캡처 off. */
+  suspendForBackground: () => void;
+  /** #4 — `visible` 복귀: 캡처 on + STT 복원(복원 성공 시 음성 안내 1회). */
+  resumeFromBackground: () => void;
 }
 
 export function VoiceScreen(props: {
@@ -42,12 +52,16 @@ export function VoiceScreen(props: {
     props.onTelemetryReadersChange?.({
       getTrackState: voiceSession.getTrackState,
       getRuntimeSnapshot: voiceSession.getRuntimeSnapshot,
+      suspendForBackground: voiceSession.suspendForBackground,
+      resumeFromBackground: voiceSession.resumeFromBackground,
     });
     return () => props.onTelemetryReadersChange?.(null);
   }, [
     props.onTelemetryReadersChange,
     voiceSession.getRuntimeSnapshot,
     voiceSession.getTrackState,
+    voiceSession.suspendForBackground,
+    voiceSession.resumeFromBackground,
   ]);
   // v0.23.0 입력탭#3(쿨다운 피드백, Vance) — 재연결 버튼 탭 후 audioRecorder의 RECOVER_COOLDOWN_MS
   //   (~3s) 동안 두 번째 탭이 무반응처럼 보이던 문제. 탭 즉시 로컬 "reconnecting" 상태를 켜고
