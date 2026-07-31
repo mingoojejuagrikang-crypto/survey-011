@@ -13,18 +13,43 @@ export function heroFontSize(value: string): string {
   return 'clamp(34px, min(11vw, 6.5vh), 50px)';
 }
 
-/** v0.36.0 코덱스 시안 보정(2026-07-20, 민구 확정) — hero 타이포 SSOT. 절대 px 단독 금지:
- *  전부 `clamp(최소, vw/vh 비례, 최대)` 뷰포트 비례(코덱스 스펙 38~44px/80~100px은 402×874 목표치).
+/** UI-a 타이포 하한과 scale=1 기준값. 최소 가독값은 미확정이라 현행값을 한 상수에 보존한다. */
+export const HERO_MIN_FONT_PX = { name: 22, value: 26, interim: 24 } as const;
+export const HERO_BASE_FONT_PX = { name: 34, value: 64, interim: 44 } as const;
+
+/** 🔴 프로덕션 라벨 예약용 잠정 하한 — ui-standard §7-2의 민구 확정값이 오면 이 한 곳을 대체한다.
+ *  ba87426 402px 실측 61.67px의 90%를 보존하며, 상한이 아니므로 fit은 더 커질 수 있다. */
+export const HERO_LABEL_PROVISIONAL_RESERVE_PX = 55;
+
+/** 회귀 대조용 실측 기준선. compact는 테스트 오라클 전용이며 fit 기제 입력이 아니다. */
+export const HERO_LABEL_BASELINE_PX = {
+  standard: HERO_LABEL_PROVISIONAL_RESERVE_PX,
+  compact: 48,
+} as const;
+export const HERO_LABEL_RESERVE_SCALE =
+  HERO_LABEL_PROVISIONAL_RESERVE_PX / HERO_BASE_FONT_PX.name;
+
+/** ba87426 슬롯식 `max(72px, …)`의 첫 항을 보존한다. 당시 빈 슬롯 실측 높이는 72px가 아니라
+ *  402에서 161px·375에서 142px였고 둘째 항이 이겼다. content-sizing에서는 긴 interim의 실제
+ *  line box가 72px보다 작을 때 이 floor가 물려 값 변화의 중심 이동을 흡수한다. 폰트 목표/상한은 아니다. */
+export const HERO_VALUE_SLOT_MIN_PX = 72;
+
+/** fit 배율과 함께 열리는 hero 행간. ba87426의 clamp(8px,1.6vh,18px)(402에서 13.98px)를
+ *  대체한다. vw/vh 제거로 기준이 8px가 되어 402에서 약 6px 좁아졌으며, 이 값을 SSOT로 둔다. */
+export const HERO_GAP_PX = { min: 4, base: 8 } as const;
+
+const fittedHeroType = (minPx: number, basePx: number, variable: string) =>
+  `max(${minPx}px, calc(${basePx}px * var(${variable}, 1)))`;
+
+/** v0.43.0 UI-a — hero 타이포 SSOT. 사람은 하한과 기준값만 정하고, 배정 영역이 실제 크기를 정한다.
+ *  하드코딩 최대 px와 vw/vh 비례항은 없다. useFitGroup이 실제 렌더 폭·전체 높이로 scale을 찾는다.
  *  **항목명 크기는 모든 상태(listening/confirm/review/reask)에서 동일**해야 한다 — 민구 지적:
  *  "상태에 따라 식별이 불가할 만큼 작아지는 경우가 존재". 상태별 인라인 정의 금지, 여기 상수만 소비.
- *  `--fit-lo/--fit-hi`(useFitScale)는 오버플로 시에만 개입 — 상태 간 기본 크기 차이는 없다. */
+ *  그룹별 변수는 같은 계열 멤버가 한 배율을 공유하게 한다. */
 export const HERO_TYPE = {
-  /** 항목명 — 중앙에 남는 높이를 쓰되 긴 이름은 useFitScale이 실제 영역에 맞춘다. */
-  name: 'max(22px, calc(clamp(34px, min(13vw, 6.8vh), 58px) * var(--fit-lo, 1)))',
-  /** 확정값(원거리 판독용 tabular hero) — GL-005 가독 하한 26px. */
-  value: 'max(26px, calc(clamp(64px, min(28vw, 16vh), 132px) * var(--fit-hi, 1)))',
-  /** 인식 중 원문 문자열 — 확정값과 같은 슬롯에서 긴 발화를 수용한다. */
-  interim: 'max(24px, calc(clamp(44px, min(19vw, 11vh), 96px) * var(--fit-hi, 1)))',
+  name: fittedHeroType(HERO_MIN_FONT_PX.name, HERO_BASE_FONT_PX.name, '--fit-label'),
+  value: fittedHeroType(HERO_MIN_FONT_PX.value, HERO_BASE_FONT_PX.value, '--fit-value'),
+  interim: fittedHeroType(HERO_MIN_FONT_PX.interim, HERO_BASE_FONT_PX.interim, '--fit-value'),
 } as const;
 
 /** 칩 내부 타이포 SSOT. HERO_TYPE과 같은 뷰포트 양축 + fit 배율 계약을 따른다.
@@ -45,7 +70,7 @@ export const CHIP_TYPE = {
  *  (설정/입력/데이터/개선)는 `[하단 25%]` 안에 그려져 있지만 실제 nav는 App 레벨(TabBar)이라
  *  ActiveState 박스 밖이다. 따라서 `auto`(스트립) + 1:2:1(=25:50:25)이 유일하게 자기모순 없는
  *  해석이다. 테스트도 `window.innerHeight`가 아니라 이 박스 높이를 분모로 써야 한다. */
-export const ACTIVE_ZONE_ROWS = 'auto 1fr 2fr 1fr';
+export const ACTIVE_ZONE_ROWS = 'auto 1fr minmax(0, 2fr) 1fr';
 
 /** 와이어프레임 §[2]·§[4] — 중앙 50%가 hero 말고 다른 정보를 그릴 때 쓰는 타이포 SSOT.
  *  HERO_TYPE과 같은 계약: 절대 px 단독 금지(전부 clamp + min(vw,vh) 비례 + --fit 배율),

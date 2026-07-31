@@ -87,10 +87,14 @@ export const MOCK_INIT_SCRIPT = `
 })();
 `;
 
-export async function stubSheets(page: Page) {
+export async function stubSheets(
+  page: Page,
+  headers: readonly string[] = HEADERS,
+  sheetRows: readonly (readonly string[])[] = SHEET_ROWS,
+) {
   await page.route('**://sheets.googleapis.com/**', async (route) => {
     if (route.request().method() === 'GET') {
-      await route.fulfill({ json: { values: [HEADERS, ...SHEET_ROWS] } });
+      await route.fulfill({ json: { values: [headers, ...sheetRows] } });
       return;
     }
     await route.fulfill({ status: 404, body: 'unexpected' });
@@ -100,10 +104,15 @@ export async function stubSheets(page: Page) {
 export async function boot(
   page: Page,
   viewport = PHONE_402,
-  opts?: { preserveAnimations?: boolean },
+  opts?: {
+    preserveAnimations?: boolean;
+    settings?: typeof SETTINGS;
+    headers?: readonly string[];
+    sheetRows?: readonly (readonly string[])[];
+  },
 ) {
   await page.setViewportSize(viewport);
-  await stubSheets(page);
+  await stubSheets(page, opts?.headers, opts?.sheetRows);
   await installVoiceMocks(page, opts);
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
@@ -115,7 +124,7 @@ export async function boot(
       }));
       localStorage.setItem(storeKey, JSON.stringify(settings));
     },
-    { settings: SETTINGS, storeKey: STORE_KEY },
+    { settings: opts?.settings ?? SETTINGS, storeKey: STORE_KEY },
   );
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(500);

@@ -1,8 +1,15 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { T } from '../../tokens';
 import { useSessionStore } from '../../stores/sessionStore';
-import { HERO_FIT_STEPS, useFitScale } from './useFitScale';
-import { STATE_TYPE, HERO_TYPE } from './heroLayout';
+import { useFitGroup } from './useFitGroup';
+import {
+  STATE_TYPE,
+  HERO_BASE_FONT_PX,
+  HERO_GAP_PX,
+  HERO_LABEL_RESERVE_SCALE,
+  HERO_TYPE,
+  HERO_VALUE_SLOT_MIN_PX,
+} from './heroLayout';
 import { ReaskCue, type ReaskReason } from './ReaskCue';
 import type { GlowTone } from './EdgeGlow';
 import type { Column } from '../../types';
@@ -56,10 +63,24 @@ export function VoiceHero({
 
   // 렌더 우선순위(명시적 — 타이머 레이스 무관): review > confirm > listening.
   const showConfirm = !review && confirmed !== null;
-  const fitRef = useFitScale<HTMLDivElement>(
+  const labelFitRef = useRef<HTMLSpanElement>(null);
+  const valueFitRef = useRef<HTMLSpanElement>(null);
+  const fitRef = useFitGroup<HTMLDivElement>(
     [review, showConfirm, col.name, row, reaskReason, confirmed?.value, reviewCommit?.value, interim],
-    HERO_FIT_STEPS,
-    0,
+    [
+      {
+        variable: '--fit-value',
+        members: [valueFitRef],
+        // 같은 변수의 value(64px)·interim(44px) 중 작은 쪽으로 첫 probe를 넉넉하게 유도한다.
+        searchBasePx: HERO_BASE_FONT_PX.interim,
+      },
+      {
+        variable: '--fit-label',
+        members: [labelFitRef],
+        searchBasePx: HERO_BASE_FONT_PX.name,
+        reserveScale: HERO_LABEL_RESERVE_SCALE,
+      },
+    ],
   );
   const reduced = prefersReducedMotion();
   const checked = review || showConfirm;
@@ -93,7 +114,7 @@ export function VoiceHero({
         width: '100%', maxWidth: 'min(560px, 94vw)',
         height: '100%', maxHeight: '100%', minHeight: 0, overflowY: 'auto',
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        gap: 'max(4px, calc(clamp(8px, 1.6vh, 18px) * var(--fit-lo, 1)))',
+        gap: `max(${HERO_GAP_PX.min}px, calc(${HERO_GAP_PX.base}px * var(--fit-label, 1)))`,
         textAlign: 'center', minWidth: 0,
       }}
     >
@@ -114,6 +135,7 @@ export function VoiceHero({
           accent={accent}
           reduced={reduced}
           primary={labelIsPrimary}
+          fitRef={labelFitRef}
         >
           {label}
         </HeroNameLine>
@@ -121,8 +143,8 @@ export function VoiceHero({
       <HeroValueSlot>
         {value && (
           interimValue
-            ? <InterimLine value={value} />
-            : <HeroPrimaryLine value={value} reduced={reduced} live={!review} />
+            ? <InterimLine value={value} fitRef={valueFitRef} />
+            : <HeroPrimaryLine value={value} reduced={reduced} live={!review} fitRef={valueFitRef} />
         )}
       </HeroValueSlot>
       {interimValue && <ReaskCue reason={reaskReason} />}
@@ -199,17 +221,24 @@ const HERO_NAME_STYLE: React.CSSProperties = {
 
 /** 모든 상태가 공유하는 항목명 슬롯. 확인 표시는 항목명과 같은 행에 둔다. */
 function HeroNameLine({
-  children, checked, accent, reduced, primary,
+  children, checked, accent, reduced, primary, fitRef,
 }: {
   children: ReactNode;
   checked: boolean;
   accent: string;
   reduced: boolean;
   primary: boolean;
+  fitRef: RefObject<HTMLSpanElement>;
 }) {
   return (
     <span
-      style={{ ...HERO_NAME_STYLE, display: 'inline-flex', alignItems: 'baseline', justifyContent: 'center', gap: '0.22em' }}
+      ref={fitRef}
+      data-fit-group="label"
+      style={{
+        ...HERO_NAME_STYLE,
+        display: 'inline-flex', alignItems: 'baseline', justifyContent: 'center', gap: '0.22em',
+        width: '100%', whiteSpace: 'nowrap', overflow: 'hidden', flexShrink: 0,
+      }}
     >
       {checked && (
         <span
@@ -224,12 +253,13 @@ function HeroNameLine({
   );
 }
 
-/** interim과 확정값이 공유하는 고정 높이 슬롯. 빈 listening 상태에도 공간을 예약해 점프를 막는다. */
+/** interim과 확정값이 공유하는 content-sized 슬롯. 실제 line box가 높이를 정하고, 72px floor는
+ *  긴 interim처럼 line box가 그보다 작아질 때만 남는 공간을 완충한다. */
 function HeroValueSlot({ children }: { children?: ReactNode }) {
   return (
     <div style={{
       width: '100%',
-      height: 'max(72px, calc(clamp(104px, min(34vw, 18vh), 184px) * var(--fit-hi, 1)))',
+      height: 'auto', minHeight: HERO_VALUE_SLOT_MIN_PX,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       minWidth: 0, flexShrink: 0,
     }}>
@@ -240,15 +270,18 @@ function HeroValueSlot({ children }: { children?: ReactNode }) {
 
 /** 확정값 대표 라인(data-testid="hero-primary", tabular hero). */
 function HeroPrimaryLine({
-  value, reduced, live = true,
+  value, reduced, live = true, fitRef,
 }: {
   value: string;
   reduced?: boolean;
   live?: boolean;
+  fitRef: RefObject<HTMLSpanElement>;
 }) {
   return (
     <span
       key={value}
+      ref={fitRef}
+      data-fit-group="value"
       data-testid="hero-primary"
       aria-live={live ? 'polite' : undefined}
       style={{
@@ -258,9 +291,9 @@ function HeroPrimaryLine({
         color: T.text,
         letterSpacing: -2,
         fontVariantNumeric: 'tabular-nums',
-        wordBreak: 'keep-all',
-        overflowWrap: 'anywhere',
-        maxWidth: '100%',
+        display: 'block', width: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        wordBreak: 'normal',
+        overflowWrap: 'normal',
         textAlign: 'center',
         animation: reduced ? undefined : 'chip-pop 320ms ease-out',
       }}
@@ -310,10 +343,12 @@ export function AlarmInterimStrip() {
 
 /** 미확정 인식 원문(FB#2) — "지금 이렇게 들었다(틀렸을 수 있음)"를 STT 원문 그대로 크게(56~72px).
  *  확정값(✓ + tabular 100px)과는 심볼(mic)·크기·흐린 톤으로 구분된다. */
-function InterimLine({ value }: { value: string }) {
+function InterimLine({ value, fitRef }: { value: string; fitRef: RefObject<HTMLSpanElement> }) {
   return (
     <span
       data-testid="interim-value"
+      ref={fitRef}
+      data-fit-group="value"
       aria-label={`인식 중: ${value}`}
       style={{
         fontSize: HERO_TYPE.interim,
@@ -322,9 +357,9 @@ function InterimLine({ value }: { value: string }) {
         color: T.text,
         opacity: 0.92,
         letterSpacing: -1.2,
-        wordBreak: 'keep-all',
-        overflowWrap: 'anywhere',
-        maxWidth: '100%',
+        display: 'block', width: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        wordBreak: 'normal',
+        overflowWrap: 'normal',
         textAlign: 'center',
       }}
     >
