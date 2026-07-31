@@ -423,7 +423,14 @@ export function orientationChange(fields: {
  *   - `capture` `off`/`on` = 트랙 토글 실제 전환. `noop` = 트랙이 없거나 이미 그 상태.
  *
  *  🔑 **`stt=noop`이면 복귀 안내도 나가지 않는다** — 안내는 "재개 성공"에만 걸린다([MIC-B2]:
- *  복귀 32.5초 뒤 `audio-capture` 오류가 난 전례라 "시도" 시점 안내는 거짓말이 된다). */
+ *  복귀 32.5초 뒤 `audio-capture` 오류가 난 전례라 "시도" 시점 안내는 거짓말이 된다).
+ *
+ *  ⚠️ **아무 일도 안 한 회차(`stt=noop,capture=noop`)도 남긴다** — `[ORCH-47]`(링버퍼 2000 압박)
+ *  검토 결과 **유지**로 판단했다. 지우면 *"발동하지 않았다"* 와 *"배선이 안 붙었다"* 가 로그에서
+ *  **똑같이 0건**으로 보인다 — `[FG-RETURN-LOG-1]`이 기록한 바로 그 함정이다. plan §3-2의
+ *  가설(앱이 헛도는 녹음·STT를 멈춘다)이 실제로 발동했는지는 noop 회차가 **분모를 만들어야**
+ *  판정된다. 비용은 왕복당 2건 — 07-30 실측(세션당 `visibility_context` 12건) 기준 세션당
+ *  ~24건으로 2000 링버퍼에 무해하다. */
 export function bgMicAction(fields: {
   edge: 'enter' | 'return';
   stt: 'stopped' | 'restored' | 'noop';

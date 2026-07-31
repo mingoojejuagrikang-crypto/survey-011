@@ -292,3 +292,27 @@ test('E — 백그라운드 중 세션 시작(clearUiSuspendLatch)이 안내 예
   await page.waitForTimeout(800);
   expect(await announceCount(page), '세션 경계를 넘어 살아남은 예약이 있으면 여기서 터진다').toBe(0);
 });
+
+// ─── F: 짧은 전환 — 현행 동작을 정직하게 고정한다(해석 (a)) ─────────────────────────────
+test('F — 세션 중 짧은 왕복에도 안내가 나간다(해석 (a) 고정 — (b)를 원하면 시간 임계가 필요하다)', async ({ page }) => {
+  // 🔴 **검수 기준의 두 번째 반증 축이다** — 브리핑 §3: *"짧은 전환에는 안내가 안 나가는지."*
+  //   그런데 처방(plan §3-3)이 말하는 억제 조건은 *"중지를 **실제로 수행**했을 때만 안내한다"*
+  //   뿐이다. 이 둘은 갈린다:
+  //     (a) **수행 여부** 기준 — 세션이 돌고 있었으면 200ms 왕복에도 suspend가 실제로 도므로
+  //         안내가 나간다. 원샷 플래그로 자연히 충족되고 **임계값이 필요 없다**.
+  //     (b) **체류 시간** 기준 — 그걸 막으려면 시간 임계(예: 1.5초 미만 무안내)가 필요한데
+  //         **처방에 없다.** 임의로 넣으면 처방 이탈이다.
+  //   → 처방에 있는 것만 집행해 (a)로 갔다(코더→Larry 질의, 2026-07-31, 미회신).
+  //   이 테스트는 그 선택의 **결과를 명시적으로 박제**한다 — 침묵하면 리뷰어가 "짧은 전환
+  //   억제가 구현됐다"고 오독한다. (b)가 확정되면 **이 단언을 0으로 뒤집고** 임계를 얹으면 된다.
+  //   (#3-2 착수 전 `failReason.toBeNull()`을 고정해 둔 것과 같은 패턴.)
+  await boot(page);
+
+  await setVisibility(page, 'hidden');
+  await expect.poll(() => trackEnabled(page), { timeout: 4000 }).toBe(false);
+  await setVisibility(page, 'visible'); // 체류 시간 사실상 0 — 최단 왕복
+
+  await expect.poll(() => bgMicExtras(page), { timeout: 4000 })
+    .toEqual(['edge=enter,stt=stopped,capture=off', 'edge=return,stt=restored,capture=on']);
+  await expect.poll(() => announceCount(page), { timeout: 5000 }).toBe(1);
+});
