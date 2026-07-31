@@ -90,7 +90,13 @@ const MOCK_INIT_SCRIPT = `
     speak: function(utterance) {
       window.__ttsLog.push(utterance.text);
       try { if (utterance.onstart) utterance.onstart(new Event('start')); } catch(e) {}
-      try { if (utterance.onend)   utterance.onend(new Event('end'));     } catch(e) {}
+      // 기본 0 = 종전과 **완전히 동일한 동기 onend**. 실제 발화처럼 지속시간이 필요한 테스트만
+      // window.__ttsOnendDelayMs를 올려 쓴다(아래 [시각] 초록 팝업 캡처). 다른 11개는 무영향.
+      var fireEnd = function() {
+        try { if (utterance.onend) utterance.onend(new Event('end')); } catch(e) {}
+      };
+      var delay = window.__ttsOnendDelayMs || 0;
+      if (delay > 0) setTimeout(fireEnd, delay); else fireEnd();
     },
     cancel: function() {},
     pause: function() {},
@@ -696,12 +702,23 @@ test('fetch 실패(500) → 알림 없이 조용히 진행 + trend_skip:no_index
 });
 
 // v0.13.0 R2 시각검증: 이상치(빨강) → 정상값 정정 → corrected(초록) 팝업 캡처(414px). 비단언.
-// corrected 팝업은 echo TTS 동안만 노출되고 advance로 닫히므로, data-status='corrected'를 폴링으로
-// 잡아 그 순간 스크린샷한다. mock TTS는 onend 즉발이라 짧으나 toBeVisible 폴링이 그 창을 잡는다.
+// corrected 팝업은 echo TTS 동안만 노출되고 advance로 닫힌다(useVoiceSession의 setAnomalyAlert
+// status:'corrected' → await speak(echo) → advance → clearAnomalyAlert).
+//
+// 🔴 2026-07-31 게이트 실패 판정 — **회귀 아니라 원래 있던 테스트측 레이스다.**
+//   a018d68(기능 5건 이전) 단독 --repeat-each=10 → 5실패 / HEAD 단독 x10 → 5실패. 동률이다.
+//   근인: mock의 onend가 **동기**라 echo TTS의 지속시간이 0이다. 그러면 초록 노출창이 앱의
+//   비동기 continuation 한 틱까지로 줄어, toBeVisible 폴링이 절반쯤 그 창을 놓친다.
+//   🔑 **노출창을 넓혀 통과시키는 게 아니다** — 초록 전환은 코드 경로에서 무조건 일어나고,
+//   실제 브라우저의 TTS는 지속시간이 있다. 창을 0으로 만든 쪽이 mock 인공물이다. 그것만 걷어낸다.
+//   지연은 알람 TTS가 끝난 뒤 켠다 — 셋업·알람 구간은 종전 동기 동작 그대로 둔다.
 test('[시각] 정정 완료 초록 팝업 캡처', async ({ page }) => {
   await setupAndStart(page);
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '120.5', 300); // 빨강 알람
+  await page.evaluate(() => {
+    (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = 400;
+  });
   await fireStt(page, '80.5', 0);    // 정상값 정정 → corrected(초록) 전환 직후 즉시 캡처 시도
   const green = page.locator('[data-testid="anomaly-alert"][data-status="corrected"]');
   await expect(green).toBeVisible({ timeout: 2000 });
