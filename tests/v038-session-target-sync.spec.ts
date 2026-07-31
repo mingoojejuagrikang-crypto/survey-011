@@ -205,12 +205,22 @@ test('업로드 이력 legacy를 다른 시트로 선택 — B 42행 update 없�
     call.url.includes(SHEET_B) && call.url.includes(':append')).length).toBe(1);
   expect(calls.filter((call) => call.url.includes(SHEET_B) && call.url.includes(':batchUpdate')))
     .toHaveLength(0);
-  const stored = await readSession(page, 'sess-legacy-uploaded') as {
-    target?: unknown;
-    rows?: Array<{ sheetRow?: number; syncState?: string }>;
-  } | null;
+  // 🔴 IDB는 **2단으로** 쓰인다 — 한 번 읽어선 안 된다(2026-07-31 게이트 실패 판정).
+  //   1단 `assignLegacySessionTarget(_, _, 'different-sheet')`: target을 박고 **기존 좌표를 지운다**
+  //        (`sessionSync.ts:96-101` — sheetRow·syncState delete). 여기서 이미 저장된다.
+  //   2단 `syncSessions`: append **응답**을 받은 뒤 43/synced를 병합해 다시 저장(`sync.ts:349-374`).
+  //   위 `expect.poll`은 append **요청**이 나간 순간 풀린다(라우트 핸들러가 fulfill 전에 push한다).
+  //   그래서 종전처럼 곧바로 1회 읽으면 **1단 상태**(좌표 없음)를 잡는다 — 실제로 그렇게 실패했다.
+  //   실패 diff의 received가 `42`/`dirty`가 아니라 좌표 자체가 **없었던** 것이 그 증거다.
+  //   → 2단이 착지할 때까지 폴링한다. 앱 동작은 그대로고, 테스트가 부수효과를 기다리게 한 것뿐이다.
+  await expect.poll(async () => {
+    const s = await readSession(page, 'sess-legacy-uploaded') as {
+      rows?: Array<{ sheetRow?: number; syncState?: string }>;
+    } | null;
+    return { sheetRow: s?.rows?.[0]?.sheetRow, syncState: s?.rows?.[0]?.syncState };
+  }, { timeout: 5000 }).toEqual({ sheetRow: 43, syncState: 'synced' });
+  const stored = await readSession(page, 'sess-legacy-uploaded') as { target?: unknown } | null;
   expect(stored?.target).toEqual({ spreadsheetId: SHEET_B, sheetTab: '농가' });
-  expect(stored?.rows?.[0]).toMatchObject({ sheetRow: 43, syncState: 'synced' });
 });
 
 test('활성 A 세션 중 B 전환 — persist는 시작 시 target·columns 스냅샷을 유지', async ({ page }) => {
