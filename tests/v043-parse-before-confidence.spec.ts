@@ -72,6 +72,16 @@ async function loadLogEvents(page: Page): Promise<LogEv[]> {
   });
 }
 
+/** 🔴 `value` 로그는 **echo TTS가 끝난 뒤** 남는다(useVoiceSession: `await speak(echo)` → logCell).
+ *  고정 대기(fireStt의 waitMs) 하나로 그 부수효과를 재면 느린 회차에 `commit === undefined`가
+ *  된다 — 2026-07-31 게이트 판정 중 T4가 실제로 그렇게 깨졌다(단독 재실행은 5/5 통과).
+ *  값의 **부재**를 보는 T2·T3은 고정 대기가 옳은 오라클이라 그대로 둔다. 여기는 **존재**를 보므로
+ *  착지까지 기다린다. `[ORCH-50]` — 격리 통과를 flake 면죄부로 쓰지 않고 대기 축을 고쳤다. */
+async function waitForValueEvent(page: Page, timeout = 6000): Promise<void> {
+  await expect.poll(async () => (await loadLogEvents(page)).some((e) => e.type === 'value'), { timeout })
+    .toBe(true);
+}
+
 async function activeChipName(page: Page): Promise<string> {
   return page.evaluate(() => {
     const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
@@ -117,6 +127,7 @@ test('T1 — `300`(conf 0.097): 저신뢰지만 파싱되므로 커밋된다 + l
   // 07-30 09:38:50 실기기 재현 — 민구가 실제로 말했고 화면에도 떴다가 앱이 버린 그 발화.
   await fireStt(page, '300', 800, 0.097);
 
+  await waitForValueEvent(page);
   const events = await loadLogEvents(page);
   const commit = events.find((e) => e.type === 'value');
   expect(commit, '파싱되는 숫자는 신뢰도와 무관하게 커밋돼야 한다').toBeTruthy();
@@ -168,6 +179,7 @@ test('T4 — 고신뢰 정상 커밋에는 low_conf_parsed 마커가 없다(마�
   await boot(page);
   await fireStt(page, '35.1', 800, 0.95);
 
+  await waitForValueEvent(page);
   const events = await loadLogEvents(page);
   const commit = events.find((e) => e.type === 'value');
   expect(commit?.parsed).toBe('35.1');
