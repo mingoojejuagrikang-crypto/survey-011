@@ -20,6 +20,7 @@ import {
   anomalyAlertCleared,
   audioRouteRevalidate,
   clipArmBlocked,
+  lowConfidenceParsed,
   micAutoReconnect,
   rowMarked,
 } from './logEvents';
@@ -1756,13 +1757,35 @@ export function useVoiceSession() {
       }
     }
 
-    // Low confidence — re-ask
-    if (confidence > 0 && confidence < minConfidence) {
+    // Plain value — with alts fallback on parse failure (item 11)
+    const col = getColById(awaiting.colId);
+    const fractionWhole = fractionWholeOf(awaiting);
+    // [ENV-12] v0.43.0 #3 — 파싱 판정은 valueParseAttempt(순수)가 소유한다. 여기서는 호출하고
+    //   부수효과(문맥 해제·로그 방출)만 적용한다. 판정 순서·alt 스킵 규칙은 그 모듈의 계약이다.
+    //
+    // 🔴 **v0.43.0 #3 — 신뢰도 게이트보다 파싱이 먼저다.** (민구 확정, plan §2-5)
+    //   종전에는 저신뢰 거절이 파서보다 **앞에** 있어, `300`(conf 0.097)처럼 완벽히 파싱되는
+    //   숫자가 **파싱 시도조차 없이** 버려졌다. 07-30 실기기에서 6건이 그렇게 죽었고 재질문이
+    //   21초를 태웠다. 다이얼로는 못 푼다 — `190`(conf 0.021)을 통과시키려면 임계를 2%까지
+    //   내려야 하고, 그건 게이트를 없애는 것과 같다.
+    //   🔑 **판별자는 신뢰도가 아니라 "파싱되는가"다.** 같은 로그가 양방향으로 보여줬다:
+    //   고신뢰인데 쓰레기(`담백` 0.887 · `담배` 0.715), 저신뢰인데 정확(`300` 0.097 · `190` 0.021).
+    //   BT 마이크 환경에서 Web Speech의 confidence는 **신호 품질**을 재지 텍스트의 옳음을 재지 않는다.
+    //   → 파싱되면 신뢰도와 무관하게 커밋한다. **확인 단계는 넣지 않는다** — 에코 TTS(:800 계열)가
+    //   이미 매 커밋마다 값을 읽어주므로 귀로 듣는 확인이 이미 있다(민구: "확인 질문은 중복").
+    //   파싱 실패 시에만 기존 저신뢰 게이트가 그대로 돈다(게이트를 없앤 것이 아니다).
+    const attempt = attemptParseValue({ col, text, alts, fractionWhole: fractionWhole ?? null });
+    const lowConfidence = confidence > 0 && confidence < minConfidence;
+
+    // Low confidence — re-ask. **파싱에 실패했을 때만** 여기로 온다(#3 이후).
+    if (attempt.parsed === null && lowConfidence) {
       // v0.23.0 입력탭#2 — 저신뢰 재질문을 명시 이벤트로 로깅(이전엔 무로깅). confidence + 다이얼 값 +
       // 실제 게이트를 함께 박제해 차기 분석이 "설정값 vs 실제 신뢰도"를 정량 대조하게 한다(갭 해소).
       // v0.25.0 F1 — 다이얼 값(tolerance)과 반전된 실제 임계(minConf)를 둘 다 싣는다. 반전 이후엔
       // `confidence < minConf` 불변식이 이벤트 자체로 읽혀야 하고(예 conf 0.65 < minConf 0.70), 다이얼
       // 값만 두면 "0.65인데 tolerance 0.60에서 거부"처럼 모순으로 보인다(Trace가 반전식을 몰라도 명료).
+      // v0.43.0 #3 — 이 이벤트의 **의미가 좁아졌다**: 종전 "저신뢰라 버림" → 현재 "저신뢰이고
+      //   파싱도 안 돼서 버림". 거절률 분모로 쓸 때 그 차이를 알고 써야 한다.
       logCell({
         type: 'stt_rejected_low_confidence', text, confidence,
         row: awaiting.row, colId: awaiting.colId,
@@ -1775,12 +1798,18 @@ export function useVoiceSession() {
       return;
     }
 
-    // Plain value — with alts fallback on parse failure (item 11)
-    const col = getColById(awaiting.colId);
-    const fractionWhole = fractionWholeOf(awaiting);
-    // [ENV-12] v0.43.0 #3 — 파싱 판정은 valueParseAttempt(순수)가 소유한다. 여기서는 호출하고
-    //   부수효과(문맥 해제·로그 방출)만 적용한다. 판정 순서·alt 스킵 규칙은 그 모듈의 계약이다.
-    const attempt = attemptParseValue({ col, text, alts, fractionWhole: fractionWhole ?? null });
+    // 🔴 계측(plan §2-5-b 4번) — **저신뢰인데 파싱돼서 통과한 건.** 다음 회차에 이 판단이
+    //   옳았는지 가릴 유일한 모수다. 신규 이벤트 타입 없이 아래 `value` 커밋 이벤트에 싣는다.
+    const lowConfParsedExtra = attempt.parsed !== null && lowConfidence
+      ? lowConfidenceParsed({
+        conf: confidence,
+        minConf: minConfidence,
+        tolerance: recognitionTolerance,
+        via: attempt.events.some((e) => e.kind === 'alt_used')
+          ? 'alt'
+          : attempt.events.some((e) => e.kind === 'decimal_fraction_recovered') ? 'frac' : 'primary',
+      })
+      : null;
     let parsed = attempt.parsed;
     const parseFailReason = attempt.failReason;
     const parseFailWhole = attempt.failWhole;
@@ -2172,6 +2201,8 @@ export function useVoiceSession() {
       parsed,
       confidence,
       durationMs: commitLatencyMs, // v0.20.0 Phase 5 #4 — 발화 확정→커밋 반응속도(ms)
+      // v0.43.0 #3 계측 — 저신뢰인데 파싱돼서 통과한 커밋만 마커가 붙는다(정상 커밋은 없음).
+      ...(lowConfParsedExtra ? { extra: lowConfParsedExtra } : {}),
       // #3 error-vs-intent: present only when this value re-commits a corrected cell.
       // previousValue (pre-modify) vs parsed (final) discriminates STT prefix-drop from re-entry.
       ...(isModifyLike(awaiting) && previousValueOf(awaiting) != null

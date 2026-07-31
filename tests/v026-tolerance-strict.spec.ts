@@ -157,7 +157,13 @@ async function loadLogEvents(page: Page): Promise<LogEv[]> {
 // ─── T1: 다이얼 높음(0.9) = 엄격 — 적당한 신뢰도(0.85)도 거부 ───────────────────
 test('T1 — tolerance 0.9(엄격): conf 0.85 발화 거부 + extra tolerance:0.9,minConf:0.9', async ({ page }) => {
   await setupAndStart(page, 0.9);
-  await fireSttConf(page, '105.0', 0.85, 700);
+  // 🔴 v0.43.0 #3 — 발화를 `105.0`(파싱 가능)에서 `담백`(파싱 불가)으로 바꿨다.
+  //   순서 반전 이후 저신뢰 게이트는 **파싱에도 실패했을 때만** 돈다. `105.0`은 이제 다이얼과
+  //   무관하게 커밋되므로 이 spec의 주제(다이얼→minConf **직접 매핑**)를 검사할 수 없다.
+  //   파싱 불가 발화로 바꾸면 신뢰도가 유일한 판별자로 남아 매핑 방향이 그대로 관측된다.
+  //   ⚠️ 이 spec이 지키는 것은 여전히 **매핑 방향**이다 — 깨지면 방향이 또 뒤집힌 것이니
+  //   settingsStore.ts 주석의 민구 결정 이력부터 확인하라(#3 때문이라고 넘겨짚지 마라).
+  await fireSttConf(page, '담백', 0.85, 700);
 
   const cue = page.locator('[data-testid="reask-cue"]');
   await expect(cue).toBeVisible({ timeout: 2500 });
@@ -182,6 +188,24 @@ test('T2 — tolerance 0.4(관대): conf 0.45 발화 수용(거부 이벤트 0)'
   const events = await loadLogEvents(page);
   expect(events.some((e) => e.type === 'stt_rejected_low_confidence')).toBe(false);
   expect(events.some((e) => e.type === 'value')).toBe(true); // 값 커밋 실재
+});
+
+// ─── T2b: 매핑의 관대 방향을 **게이트로** 확인 — #3 이후 T2만으로는 부족하다 ───────────
+test('T2b — tolerance 0.4(관대): 파싱 불가 발화도 conf 0.45면 저신뢰 거절이 아니다(파싱 실패로 간다)', async ({ page }) => {
+  // 🔴 v0.43.0 #3 이후 T2는 매핑을 검사하지 못한다. `105.0`은 파싱되므로 다이얼이 0.9였어도
+  //   커밋됐을 것이다 — 즉 T2의 green은 **매핑과 무관해졌다.** T1과 같은 발화(`담백`)로
+  //   신뢰도만 게이트 위/아래로 바꿔, 다이얼이 실제로 임계를 움직인다는 것을 양방향으로 고정한다.
+  //   (T1: 0.85 < minConf 0.9 → 저신뢰 거절 / 여기: 0.45 > minConf 0.4 → 게이트 통과)
+  await setupAndStart(page, 0.4);
+  await fireSttConf(page, '담백', 0.45, 700);
+
+  const events = await loadLogEvents(page);
+  expect(events.some((e) => e.type === 'stt_rejected_low_confidence'), '0.45 > minConf 0.4 — 게이트를 통과해야 한다').toBe(false);
+  expect(events.some((e) => e.type === 'stt_parse_failed'), '게이트를 통과했으니 파싱 실패로 재질문된다').toBe(true);
+
+  const cue = page.locator('[data-testid="reask-cue"]');
+  await expect(cue).toBeVisible({ timeout: 2500 });
+  expect(await cue.getAttribute('data-reason')).toBe('parse_failed');
 });
 
 // ─── T3: 방향 문구 가드 — 스탭퍼 설명이 "높을수록 엄격" 명시 ──────────────────────

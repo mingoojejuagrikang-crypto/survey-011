@@ -226,6 +226,29 @@ export function anomalyAlertCleared(fields: {
   return `trend_alert_cleared:${kv(fields)}`;
 }
 
+/** v0.43.0 #3 — **저신뢰인데 파싱돼서 커밋된 값.** 종전에는 신뢰도 게이트가 파서보다 앞에 있어
+ *  이 발화들이 파싱 시도조차 없이 버려졌다(07-30 실기기: `300` conf 0.097 · `190` conf 0.021).
+ *  순서를 뒤집었으니 이제 통과한다 — **그 판단이 옳았는지 다음 회차에 가릴 모수가 필요하다.**
+ *
+ *  🔴 **왜 `value` 이벤트에 붙이는가**(plan §2-5-b 4번 · [ORCH-47]):
+ *   - 신규 LogEntry 타입을 안 만든다 → log-replay 호환. 링버퍼 2000개 압박도 **0 증가**
+ *     (이미 발행되는 커밋 이벤트에 문자열 하나를 더할 뿐, 별도 이벤트를 늘리지 않는다).
+ *   - ⛔ **기존 `stt_rejected_low_confidence`를 확장하지 않는다.** 커밋된 건에 "rejected"
+ *     이벤트를 내면 **거절률의 분모가 오염된다** — 이 계측이 만들려는 바로 그 모수가 망가진다.
+ *
+ *  판정 방법: 이 마커가 달린 커밋값을 `SOP-003 §3` 클립 감사로 시트값과 대조한다.
+ *  어긋나면 확정안(파싱되면 신뢰도 무관 커밋)이 오인식을 통과시킨 것이고, 맞으면 옳았던 것이다. */
+export function lowConfidenceParsed(fields: {
+  conf: number;
+  minConf: number;
+  /** 다이얼 위치(recognitionTolerance). minConf와 함께 실어 반전식을 몰라도 읽히게 한다. */
+  tolerance: number;
+  /** 어느 경로로 파싱됐나 — primary 그대로인지, alt 폴백인지, 소수부 합성인지. */
+  via: 'primary' | 'alt' | 'frac';
+}): string {
+  return `low_conf_parsed:${kv(fields)}`;
+}
+
 /** [CLIP-WINDOW-2] UI suspend 래치가 신규 셀 녹음창 개시를 차단한 요청. */
 export function clipArmBlocked(fields: {
   reason: string;

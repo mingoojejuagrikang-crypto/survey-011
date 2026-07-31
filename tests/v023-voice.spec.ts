@@ -477,8 +477,14 @@ test('R2-FIX-2 — 종료 확인 다이얼로그 동안 STT suspend, 취소 시 
 // ─── B2 (재질문 사유 큐 실동작) ──────────────────────────────────────────────
 test('B2 — 저신뢰도(conf<허용범위) 발화 → 사유 큐 low_confidence + stt_rejected_low_confidence(tolerance 동봉), 성공 시 해제', async ({ page }) => {
   await setupAndStart(page);
+  // 🔴 v0.43.0 #3 — 발화를 `105.0`(파싱 가능)에서 `담백`(파싱 불가)으로 바꿨다.
+  //   순서 반전 이후 저신뢰 게이트는 **파싱에도 실패했을 때만** 돈다. `105.0`은 이제
+  //   신뢰도와 무관하게 커밋되므로(그게 #3의 목적이다) 이 테스트의 주제인 "저신뢰 재질문 +
+  //   extra 바이트"를 더 이상 검사하지 못한다 — **green인데 아무것도 안 보는 상태**가 된다.
+  //   `담백`(07-30 실기기 실제 발화, conf 0.887)은 파서를 통과하지 못하므로 신뢰도가
+  //   유일한 판별자로 남아 주제가 보존된다. 짝 테스트(아래 파싱 실패 건)와 대조축도 그대로다.
   // row1 c8에 conf 0.3(<tolerance 0.6) → 저신뢰 재질문.
-  await fireSttConf(page, '105.0', 0.3, 700);
+  await fireSttConf(page, '담백', 0.3, 700);
 
   const cue = page.locator('[data-testid="reask-cue"]');
   await expect(cue).toBeVisible({ timeout: 2500 });

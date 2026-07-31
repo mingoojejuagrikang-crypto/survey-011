@@ -28,6 +28,7 @@ import {
   feedbackUploadMic,
   bgEnterSnapshot,
   orientationChange,
+  lowConfidenceParsed,
 } from '../src/lib/logEvents';
 
 test('settingChanged — 기존 4개 콜사이트 산출과 바이트 동일', () => {
@@ -115,6 +116,21 @@ test('[EXIT-PERSIST-1] 종료 렌더·알람 해제 신규 바이트 계약', ()
 test('[CLIP-WINDOW-2] suspend 중 신규 녹음창 차단 바이트 계약', () => {
   expect(clipArmBlocked({ reason: 'feedback_modal', row: 3, col: 'c9' }))
     .toBe('clip_arm_blocked:reason=feedback_modal,row=3,col=c9');
+});
+
+/** 🔴 v0.43.0 #3 — 저신뢰인데 파싱돼서 통과한 커밋의 마커.
+ *  이 마커가 다음 회차에 "순서 반전이 옳았는가"를 가릴 **유일한 모수**다(plan §2-5-b 4번).
+ *  ⛔ 기존 `stt_rejected_low_confidence`를 확장하지 않았다 — 커밋된 건에 "rejected" 이벤트를
+ *  내면 거절률의 분모가 오염돼, 이 계측이 만들려는 바로 그 모수가 망가진다.
+ *  `value` 이벤트의 extra에 실리므로 **신규 LogEntry 타입 0개 · 링버퍼 증가 0**이다. */
+test('v0.43.0 #3 — low_conf_parsed 바이트 계약(신규 이벤트 타입 없이 value.extra에 실린다)', () => {
+  expect(lowConfidenceParsed({ conf: 0.097, minConf: 0.6, tolerance: 0.6, via: 'primary' }))
+    .toBe('low_conf_parsed:conf=0.097,minConf=0.6,tolerance=0.6,via=primary');
+  // via는 어느 경로로 파싱됐는지 — alt 폴백·소수부 합성은 원인 분석이 달라진다.
+  expect(lowConfidenceParsed({ conf: 0.021, minConf: 0.4, tolerance: 0.4, via: 'alt' }))
+    .toBe('low_conf_parsed:conf=0.021,minConf=0.4,tolerance=0.4,via=alt');
+  expect(lowConfidenceParsed({ conf: 0.5, minConf: 0.9, tolerance: 0.9, via: 'frac' }))
+    .toBe('low_conf_parsed:conf=0.5,minConf=0.9,tolerance=0.9,via=frac');
 });
 
 /** v0.38.1 [MIC-B2] 실기기 판정 바이트 — 이 문자열이 SOP-003 파서와의 계약이다.
