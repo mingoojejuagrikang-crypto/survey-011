@@ -174,3 +174,99 @@ test('T4 — 고신뢰 정상 커밋에는 low_conf_parsed 마커가 없다(마�
   expect(commit?.extra ?? null).toBeNull();
   expect(events.some((e) => typeof e.extra === 'string' && e.extra.startsWith('low_conf_parsed:'))).toBe(false);
 });
+
+// ─── T5: 🔴 이상치 알람으로 분기한 저신뢰 커밋도 모수에 든다 (리뷰 중간#1 회귀) ──────────
+//
+// 리뷰(Codex, 2026-07-31) 지적: 커밋 경로는 **둘**인데 마커는 하나에만 실려 있었다.
+//   정상 커밋   `useVoiceSession.ts` echo 뒤 value 로그  ← T1이 이미 고정
+//   이상치 알람 `evaluateTrend` 위반 시의 value 로그     ← **여기가 비어 있었다**
+// plan §2-5-b의 모수는 *"저신뢰인데 파싱돼 통과한 건 **전부**"* 다. 이상치로 분기한 값도
+// store에 커밋되고 persist까지 간다 — 그리고 **저신뢰 오인식이 이상치로 보이는 것이 정확히
+// 우리가 찾는 형태**라, 이 표본을 빼면 다음 회차의 판단 근거가 편향된다.
+//
+// T1~T4는 시트 인덱스가 없어(googleConnected:false) 알람 분기를 **한 번도 밟지 않는다** —
+// 그래서 이 공백이 초록 스위트 뒤에 숨어 있었다. 아래는 직전 회차 값을 실제로 물려
+// `trend_alert_fired`가 난 것을 확인한 **뒤에** 같은 커밋의 마커를 본다.
+const PREV_ROUND = (() => {
+  const d = new Date(Date.now() - 86_400_000); // 직전 회차 = 어제(로컬). previousRound는 '오늘 미만'.
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+})();
+
+/** trend-alert.spec.ts와 같은 형태 — 샘플키(농가명+조사나무+조사과실)로 직전 회차 행을 물린다.
+ *  c8 횡경 `trendRule:'increase'` = 커지면 알람. 직전 100.0 → 오늘 120.5 발화 → 위반. */
+const SETTINGS_TREND = {
+  state: {
+    googleConnected: true, userEmail: 'tester@example.com',
+    sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_V043_TREND/edit', sheetTab: 'Sheet1',
+    columnsSheetId: 'SHEET_V043_TREND', columnsSheetTab: 'Sheet1',
+    columns: [
+      { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
+      { id: 'c3', name: '농가명', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' }, sampleKey: true },
+      { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 2 }, sampleKey: true },
+      { id: 'c7', name: '조사과실', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 5 }, sampleKey: true },
+      { id: 'c8', name: '횡경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false, trendRule: 'increase' },
+      { id: 'c9', name: '종경', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+    ],
+    tableGenerated: true, totalRows: 10,
+    ttsRate: 1.05, recognitionTolerance: 0.6, // ← 마커의 minConf/tolerance가 T1과 같은 값이 되도록 고정
+    sessionLabelColId: null, sessionAutoLabel: 'v043-trend-lowconf', noisyMode: false,
+    speakerphoneMode: false, preferredVoiceName: '', roundDateColId: null,
+  },
+  version: 12,
+};
+
+const TREND_HEADERS = ['조사일자', '농가명', '조사나무', '조사과실', '횡경', '종경'];
+const TREND_SHEET_ROWS = [[PREV_ROUND, '이원창', '1', '1', '100.0', '50.0']];
+
+async function bootTrend(page: Page) {
+  await page.route('**://sheets.googleapis.com/**', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ json: { values: [TREND_HEADERS, ...TREND_SHEET_ROWS] } });
+      return;
+    }
+    await route.fulfill({ status: 404, body: 'unexpected: ' + route.request().url() });
+  });
+  await installVoiceMocks(page);
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(
+    ({ s, storeKey }) => {
+      localStorage.clear();
+      localStorage.setItem('gs10_google_token', JSON.stringify({
+        access_token: 'test-token', expires_at: Date.now() + 3_600_000, email: 'tester@example.com',
+      }));
+      localStorage.setItem(storeKey, JSON.stringify(s));
+      indexedDB.deleteDatabase('survey-011');
+    },
+    { s: SETTINGS_TREND, storeKey: STORE_KEY },
+  );
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(500);
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(200);
+  await page.locator('text=음성 입력 시작').first().click();
+  await page.waitForTimeout(800); // start() 프리페치(시트 GET) 정착 여유
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
+  await waitForActiveChip(page, '횡경');
+}
+
+test('T5 — 저신뢰 파싱 성공 + 이상치 알람 분기에도 low_conf_parsed 마커가 정확히 1회 남는다', async ({ page }) => {
+  await bootTrend(page);
+  // 직전 회차 100.0 → 120.5(increase 위반) 이면서 conf 0.097(저신뢰). #3이 커밋하고, 추세가 알람낸다.
+  await fireStt(page, '120.5', 1200, 0.097);
+
+  await expect.poll(async () => {
+    const evs = await loadLogEvents(page);
+    return evs.some((e) => (e.extra ?? '').startsWith('trend_alert_fired'));
+  }, { timeout: 5000 }).toBe(true);
+
+  const events = await loadLogEvents(page);
+  const commits = events.filter((e) => e.type === 'value');
+  expect(commits, '이상치여도 값은 커밋된다(롤백 없음) — value는 정확히 1건').toHaveLength(1);
+  expect(commits[0]?.parsed).toBe('120.5');
+  expect(commits[0]?.confidence).toBe(0.097);
+
+  // 🔴 본체 — 정상 커밋(T1)과 **같은** 마커가 같은 형식으로 실려야 한다.
+  expect(commits[0]?.extra).toBe('low_conf_parsed:conf=0.097,minConf=0.6,tolerance=0.6,via=primary');
+  // 신규 이벤트를 늘리지 않았다는 축 — 마커는 전 이벤트를 통틀어 **딱 1건**이다(중복 방출 금지).
+  expect(events.filter((e) => (e.extra ?? '').startsWith('low_conf_parsed:'))).toHaveLength(1);
+});

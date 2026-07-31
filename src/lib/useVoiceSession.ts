@@ -2159,6 +2159,14 @@ export function useVoiceSession() {
         row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
         text, parsed, confidence,
         durationMs: commitLatencyMs, // v0.20.0 Phase 5 #4 — 발화 확정→커밋 반응속도(ms)
+        // 🔴 v0.43.0 리뷰(Codex 중간#1, 2026-07-31 수용) — **이 줄이 빠져 있었다.**
+        //   plan §2-5-b가 요구한 모수는 *"저신뢰인데 파싱돼 통과한 건 **전부**"* 인데, 종전엔
+        //   아래 정상 커밋 분기에만 마커가 실려 **이상치 알람으로 분기한 커밋이 모수에서 빠졌다.**
+        //   이 값도 :1918에서 store에 커밋되고 :1978에서 persist가 시작되므로 관찰 대상이 맞고,
+        //   무엇보다 **이상치 값이야말로** 새 정책의 오인식 위험을 판단할 때 빼면 안 되는 표본이다
+        //   (저신뢰 오인식이 이상치로 보이는 게 정확히 우리가 찾는 형태다).
+        //   신규 이벤트는 안 늘어난다 — 아래와 **같은** extra를 같은 value 이벤트에 싣는다.
+        ...(lowConfParsedExtra ? { extra: lowConfParsedExtra } : {}),
         ...(isModifyLike(awaiting) && previousValueOf(awaiting) != null
           ? { previousValue: previousValueOf(awaiting) }
           : {}),
