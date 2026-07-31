@@ -14,6 +14,14 @@
  *   D(종료 확인 취소) 끝 도달 뒤 행 검토의 상시 종료 열고 닫기 → 래치가 비어 재오픈도 suspend.
  *   E(CLIP-WINDOW-2) suspend 중 신규 arm 차단·계측 + 마지막 source 해제 시 pending 복원.
  *   F(CLIP-WINDOW-2) resume 없는 세션 경계 clear가 pending을 폐기해 다음 세션 복원을 오염시키지 않음.
+ *   G(TEST-CLIP-F-1) 세션 시작 TTS 구간에 모달이 열리면 인식기가 기동되지 않고 배경 발화도 커밋되지 않음.
+ *
+ * 🔴 v0.43.0 1d — F·G가 함께 가야 하는 이유(판정 §5-C, 측정으로 확정):
+ *   F는 신설 이후 **자기 주제(stale pending 폐기)를 한 번도 검사한 적이 없다.** 세션2 무장 완료를
+ *   기다리지 않아, 세션2 자신의 차단된 무장이 pending 슬롯을 덮어써 stale 슬롯이 노출되지 않았기
+ *   때문이다(폐기를 고의로 깨고 돌려도 PASS였다). 대신 F는 **다른 결함**(시작 TTS 중 인식기 기동)을
+ *   우연히 잡고 있었다. 그래서 수정은 두 갈래다 — F에 무장 완료 대기를 넣어 자기 주제를 검사하게
+ *   하고(수정2), F가 우연히 덮던 오커밋 결함은 G로 독립시킨다(수정3).
  *
  * STT 목은 tests/fixtures/stt.ts SSOT 사용(Codex Medium #4 — 인라인 목 금지).
  * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
@@ -150,6 +158,30 @@ async function boot(page: Page, settings = SETTINGS) {
   await page.waitForTimeout(200);
   await page.locator('text=음성 입력 시작').first().click();
   await page.waitForTimeout(700);
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
+  await waitForActiveChip(page, '횡경');
+}
+
+/** G 전용 boot — **boot()의 `waitForTimeout(700)`을 뺀다.**
+ *  그 700ms가 A~E를 green으로 유지해 온 이유이자, [TEST-CLIP-F-1]이 판정될 때까지 시작 TTS
+ *  구간의 오커밋 결함이 스위트 어디에도 안 잡혔던 이유다. 여기서는 칩이 활성이 되는 즉시
+ *  (=start()가 아직 :2522 시작 TTS를 await 중인 상태에서) 호출자에게 제어를 돌려준다. */
+async function bootNoArmWait(page: Page, settings = SETTINGS) {
+  await installVoiceMocks(page);
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(
+    ({ s, storeKey }) => {
+      localStorage.clear();
+      localStorage.setItem(storeKey, JSON.stringify(s));
+      indexedDB.deleteDatabase('survey-011');
+    },
+    { s: settings, storeKey: STORE_KEY },
+  );
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(500);
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(200);
+  await page.locator('text=음성 입력 시작').first().click();
   await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
   await waitForActiveChip(page, '횡경');
 }
@@ -339,13 +371,83 @@ test('F [CLIP-WINDOW-2] — suspend 중 arm 후 종료 clear는 pending을 버�
   // 아래 feedback resume에서 최신 pending(c9)이 모달 전 활성 c8을 가려 복원이 발생하지 않는다.
   await page.locator('[data-testid="feedback-cancel"]').click();
   await expect(page.locator('[data-testid="feedback-modal"]')).toHaveCount(0);
+  const startsBeforeSession2 = await clipStartAttemptCount(page);
   await page.locator('text=음성 입력 시작').first().click();
   await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
   await waitForActiveChip(page, '횡경');
+
+  // 🔴 v0.43.0 1d(수정2) — **세션2의 첫 무장이 끝날 때까지 기다린다.**
+  //   waitForActiveChip은 start()의 setActiveCol(0)만 보므로, start()가 아직 시작 TTS를 await
+  //   중인 구간에 통과한다. 그 상태로 아래 모달을 열면 세션2 자신의 차단된 무장이
+  //   uiBlockedClipArmRef를 {row:1,col:c8}로 덮어써, resume의 `blockedClip ?? uiSuspendedClipRef`가
+  //   stale 슬롯까지 내려가지 않는다 → **stale pending이 남아 있어도 이 테스트가 통과한다.**
+  //   측정으로 확인된 사실이다(판정 §5-C): pending 폐기(clearUiSuspendLatch)를 고의로 깨고
+  //   돌려도 대기 없는 F는 PASS였다. 즉 F는 신설 이후 자기 주제를 한 번도 검사한 적이 없었다.
+  //   TTS idle 대신 **무장 자체(clip start 시도 총계)** 를 본다 — reachEnd:166-168이 경고한
+  //   "TTS 시작 전에 통과하는 창"이 없는 축이다. clip_no_stream은 좌표를 안 실으므로(audioRecorder
+  //   :672) 좌표가 아니라 총계로 센다.
+  await expect.poll(() => clipStartAttemptCount(page), { timeout: 5000 }).toBe(startsBeforeSession2 + 1);
 
   await page.locator('[data-testid="tab-feedback"]').click();
   await expect(page.locator('[data-testid="feedback-modal"]')).toBeVisible({ timeout: 15_000 });
   const startsBeforeResume = await clipStartAttemptCount(page);
   await page.locator('[data-testid="feedback-cancel"]').click();
   await expect.poll(() => clipStartAttemptCount(page), { timeout: 3000 }).toBe(startsBeforeResume + 1);
+});
+
+// ─── G: 시작 TTS 구간에 모달이 열리면 인식기가 기동되지 않는다(오커밋 차단) ────────────────────
+test('G [TEST-CLIP-F-1] — 세션 시작 TTS 중 모달이 열리면 STT가 기동되지 않고 배경 발화도 커밋되지 않는다', async ({ page }) => {
+  // 🔴 v0.43.0 1d(수정3) — F에 의존하지 않는 **직접** 회귀 테스트.
+  //   F는 이 결함을 우연히 잡았고, 위 수정2(무장 완료 대기)를 넣는 순간 못 잡게 된다.
+  //   여기가 그 오라클의 새 집이다. A(:202-205)가 같은 속성을 단언하지만 A는 boot()의 700ms
+  //   대기가 있어 **이 경로를 영원히 안 밟는다** — 그 700ms를 뺀 것이 이 테스트의 전부다.
+  //
+  //   결함(수정 전): start()가 `await say('음성 입력을 시작합니다.')` 뒤에 래치 확인 없이
+  //   SpeechController를 만들어 기동했다. 실기기에서 이 TTS는 수 초이고, 개선요청(나비)은
+  //   상시 탭 가능하다(sessionStore.ts:85). 장갑 낀 손으로 "시작 누르고 바로 개선요청"은
+  //   현실적 조작이며, mock 400ms보다 실기기의 창이 **더 넓다**.
+  await bootNoArmWait(page);
+
+  // 칩이 활성이 된 즉시(=start()가 아직 시작 TTS를 await 중) 개선요청 모달을 연다.
+  await page.locator('[data-testid="tab-feedback"]').click();
+  await expect(page.locator('[data-testid="feedback-modal"]')).toBeVisible({ timeout: 15_000 });
+  await expect
+    .poll(async () => (await loadLogEvents(page)).filter((e) => e.parsed === 'ui_suspend').length, { timeout: 3000 })
+    .toBe(1);
+
+  // start()의 남은 구간(TTS 종료 → 인식기 생성 지점 → announceField)이 다 지나가게 둔다.
+  await waitForTtsIdle(page);
+  await page.waitForTimeout(500);
+
+  // ① 기동 자체가 없어야 한다. ui_suspend 이후 `lifecycle:start`가 하나라도 있으면 결함이다.
+  const afterSuspend = await loadLogEvents(page);
+  const idxSuspend = afterSuspend.findIndex((e) => e.parsed === 'ui_suspend');
+  expect(idxSuspend, 'ui_suspend가 기록돼야 한다').toBeGreaterThanOrEqual(0);
+  expect(
+    afterSuspend.slice(idxSuspend).filter((e) => e.type === 'stt' && e.extra === 'lifecycle:start'),
+    'suspend 뒤에 인식기가 기동되면 안 된다(모달 뒤 STT 생존)',
+  ).toHaveLength(0);
+
+  // ② 배경 발화가 커밋되면 안 된다 — 이것이 데이터 무결성 오라클이다.
+  //    (결함 시: value parsed=33.3 row=1 col=c8 이 모달이 열린 채 찍혔다.)
+  await fireStt(page, '33.3', 600);
+  const afterSpeech = await loadLogEvents(page);
+  expect(
+    afterSpeech.filter((e) => e.type === 'value'),
+    '모달이 열린 채 값이 커밋되면 안 된다',
+  ).toHaveLength(0);
+  expect(await activeChipName(page), '발화가 커밋되지 않아 활성 칩 불변').toContain('횡경');
+
+  // ③ 무장도 전진하면 안 된다 — 결함 시 다음 필드(c9)로 clip_arm_blocked가 한 번 더 찍혔다.
+  expect(
+    afterSpeech.filter((e) => e.extra === 'clip_arm_blocked:reason=feedback_modal,row=1,col=c9'),
+    '커밋이 없으므로 다음 필드로 전진하지 않는다',
+  ).toHaveLength(0);
+
+  // ④ 모달을 닫으면 기존 복원 경로가 살아난다(가드가 기능을 죽이지 않았다는 반대 방향 증거).
+  await page.locator('[data-testid="feedback-cancel"]').click();
+  await expect(page.locator('[data-testid="feedback-modal"]')).toHaveCount(0);
+  await waitForTtsIdle(page);
+  await fireStt(page, '35.1', 600);
+  await waitForActiveChip(page, '종경');
 });
