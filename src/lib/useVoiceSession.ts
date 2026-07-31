@@ -4,7 +4,9 @@ import { useSettingsStore, minConfidenceForTolerance } from '../stores/settingsS
 import { useSessionStore } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { recountSynced } from './sessionSync';
-import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, isBareResponseWord, getLastParseFailReason, getLastParseFailWhole } from './koreanNum';
+import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, isBareResponseWord } from './koreanNum';
+// [ENV-12] v0.43.0 #3 — 값 파싱 시도는 순수 모듈이 소유한다(부수효과 없음). 이 파일은 호출만.
+import { attemptParseValue, parseValueForCol } from './valueParseAttempt';
 import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiCommandSignal } from './voiceCommands';
 import { decimalReaskPrompt } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices, resumeTtsEngine } from './speech';
@@ -1775,80 +1777,23 @@ export function useVoiceSession() {
 
     // Plain value — with alts fallback on parse failure (item 11)
     const col = getColById(awaiting.colId);
-    let parsed: string | null = null;
-    // v0.10.0 A1 타깃 재질문 후속: 소수부만 기다리는 중이면(직전 발화가 decimal_fraction_lost) 이번
-    // 발화를 소수부로 합성 시도. 모드는 한 번만 적용하고 즉시 해제한다 — 합성 실패 시 아래 평소 파싱이
-    // 전체 발화로 처리하므로, 사용자가 "111.5" 전체를 다시 말한 경우도 그대로 커밋된다.
     const fractionWhole = fractionWholeOf(awaiting);
+    // [ENV-12] v0.43.0 #3 — 파싱 판정은 valueParseAttempt(순수)가 소유한다. 여기서는 호출하고
+    //   부수효과(문맥 해제·로그 방출)만 적용한다. 판정 순서·alt 스킵 규칙은 그 모듈의 계약이다.
+    const attempt = attemptParseValue({ col, text, alts, fractionWhole: fractionWhole ?? null });
+    let parsed = attempt.parsed;
+    const parseFailReason = attempt.failReason;
+    const parseFailWhole = attempt.failWhole;
     if (fractionWhole != null) {
-      // 여기 도달 시 kind는 value|modify|trendConfirm — atEnd/reviewWait는 위 가드가 return(내로잉 증명).
+      // 여기 도달 시 kind는 value|modify|trendConfirm — 위 가드가 atEnd/reviewWait를 return(내로잉 증명).
+      // 소수부 문맥은 **한 번만** 적용하고 즉시 해제한다(합성 실패 시 아래 실패 분기가 다시 세운다).
       awaitingFieldRef.current = { ...awaiting, fractionWhole: undefined };
-      if (col) {
-        const frac = parseKoreanNumber(text);
-        // 소수 한 자리(0~9)만 말한 경우에만 정수부와 합성. 2자리 이상·소수점 포함은 전체 값을 다시
-        // 말한 것으로 보고 합성하지 않는다(아래 평소 파싱이 처리).
-        if (frac !== null && /^[0-9]$/.test(frac)) {
-          parsed = parseValueForCol(col, `${fractionWhole}.${frac}`);
-          if (parsed !== null) {
-            logCell({ type: 'stt', extra: 'decimal_fraction_recovered', text: `${fractionWhole}.${frac}`, originalText: text, row: awaiting.row, colId: awaiting.colId });
-          }
-        }
-      }
     }
-    if (parsed === null) {
-      parsed = col ? parseValueForCol(col, text) : null;
-    }
-    // v0.5.0 W4/W5: capture the parser's machine-readable fail reason from the PRIMARY
-    // transcript (before the alts loop overwrites it) — tags stt_parse_failed below so the
-    // next log analysis can split multi_numeric / decimal_fraction_lost re-asks from generic ones.
-    const parseFailReason = parsed === null ? getLastParseFailReason() : null;
-    // v0.10.0 A1: decimal_fraction_lost 시 파싱된 정수부 — 타깃 재질문에 쓴다(PRIMARY 직후 캡처;
-    // alts 루프의 parseValueForCol이 _lastParseFailWhole을 덮어쓰기 전에).
-    const parseFailWhole = parsed === null ? getLastParseFailWhole() : null;
-    if (parsed === null && alts.length > 1) {
-      for (let ai = 1; ai < Math.min(alts.length, 3); ai++) {
-        const alt = alts[ai];
-        if (!alt || alt === text) continue;
-        // primary가 독립 숫자 복수/무관 토큰을 잡았다면 alternative의 숫자만 골라 커밋하지 않는다.
-        // `현백 33.3`→alt `33.3`, `이 166.7`→alt `166.7`은 STT가 잃은 자리값/숫자 의미를
-        // 복구한 것이 아니라 위험 신호를 삭제한 후보이므로 전체 발화를 다시 받는 것이 유일하게 안전하다.
-        if (parseFailReason === 'multi_numeric' || parseFailReason === 'extraneous_token') continue;
-        // v0.34.0 O2 [STT-17] — 응답어 alt 차단: primary가 응답어면 위 가드가 이미 재질문했지만,
-        // primary가 다른 잡음("예에" 등)이고 **alt가 "네"**면 native 4로 커밋되는 07-14 실사례
-        // 경로가 남는다. 숫자 컬럼에선 응답어 alt를 건너뛴다(text/options는 "네"가 정당한 값일
-        // 수 있어 제외 — primary 가드와 동일 스코프).
-        if (col && (col.type === 'int' || col.type === 'float') && isBareResponseWord(alt)) continue;
-        // v0.33.0 [STT-15] — 소수부 재질문 문맥에서는 alt도 **소수부 파서(정수부 합성)로만** 해석한다.
-        // 07-13 실기기: "211 점 의" 재질문 → primary "하악" 파싱 실패 → alts 루프가 "하나"를
-        // fractionWhole=211 문맥을 모른 채 **전체값 "1"로 커밋**(무알람 시트 동기화). 조각(단자리)은
-        // 정수부와 합성해 복구하고, 합성 불가 alt는 건너뛴다 — 전체값 폴백 금지(:1502 주석의
-        // "값 추측/조용한 오커밋 방지" 민구 결정을 alts 경로에도 동일 적용).
-        if (fractionWhole != null) {
-          const altFrac = parseKoreanNumber(alt);
-          if (altFrac !== null && /^[0-9]$/.test(altFrac)) {
-            const composed = col ? parseValueForCol(col, `${fractionWhole}.${altFrac}`) : null;
-            if (composed !== null) {
-              parsed = composed;
-              logCell({ type: 'stt_alt_used', altIdx: ai, text: alt, originalText: text, row: awaiting.row, colId: awaiting.colId, extra: `frac_ctx:${fractionWhole}` });
-              logCell({ type: 'stt', extra: 'decimal_fraction_recovered', text: `${fractionWhole}.${altFrac}`, originalText: alt, row: awaiting.row, colId: awaiting.colId });
-              break;
-            }
-          }
-          continue;
-        }
-        // v0.34.0 O3 — 소수 의도 보존: primary가 decimal_fraction_lost("266 점요" — 소수 의도인데
-        // 소수부 유실 → 타깃 재질문 예정)인데 alt가 **정수**("266")면, alt 폴백이 소수 의도를 버린
-        // 침묵 커밋이 된다(07-14 09:25:49 실사례 — 사전은 이미 점요를 잡지만 alt가 우회). 정수 alt는
-        // 건너뛰어 아래 타깃 재질문으로 넘기고, 소수를 온전히 담은 alt("266.2")만 수용한다.
-        if (parseFailReason === 'decimal_fraction_lost' && !alt.includes('.') && !/[점쩜]/.test(alt)) continue;
-        const altParsed = col ? parseValueForCol(col, alt) : null;
-        if (altParsed !== null) {
-          // (O3 방어 2선) 정수로 파싱된 alt도 동일 사유로 거부 — "266 점" 류 alt가 정수로 환원되는 경우.
-          if (parseFailReason === 'decimal_fraction_lost' && !altParsed.includes('.')) continue;
-          parsed = altParsed;
-          logCell({ type: 'stt_alt_used', altIdx: ai, text: alt, originalText: text, row: awaiting.row, colId: awaiting.colId });
-          break;
-        }
+    for (const ev of attempt.events) {
+      if (ev.kind === 'decimal_fraction_recovered') {
+        logCell({ type: 'stt', extra: 'decimal_fraction_recovered', text: ev.text, originalText: ev.originalText, row: awaiting.row, colId: awaiting.colId });
+      } else {
+        logCell({ type: 'stt_alt_used', altIdx: ev.altIdx, text: ev.text, originalText: ev.originalText, row: awaiting.row, colId: awaiting.colId, ...(ev.extra ? { extra: ev.extra } : {}) });
       }
     }
     if (parsed === null) {
@@ -3407,41 +3352,3 @@ function localTodayISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function parseValueForCol(col: Column, raw: string): string | null {
-  if (col.type === 'options' && col.auto.kind === 'options') {
-    return matchOption(raw, col.auto.selected.length ? col.auto.selected : col.auto.available);
-  }
-  if (col.type === 'text' || col.type === 'name') {
-    const t = raw.trim();
-    return t || null;
-  }
-  if (col.type === 'date') {
-    const m = raw.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
-    if (m) {
-      const [, y, mo, d] = m;
-      return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`;
-    }
-    return raw.trim() || null;
-  }
-  // int: strict — reject if the user pronounced a decimal
-  if (col.type === 'int') {
-    if (/[점쩜.]/.test(raw)) return null;
-    return parseKoreanNumber(raw, 0);
-  }
-  // float
-  const decimals = col.decimals ?? 1;
-  return parseKoreanNumber(raw, decimals);
-}
-
-function matchOption(text: string, allowed: string[]): string | null {
-  if (allowed.length === 0) return null;
-  const norm = text.trim().toLowerCase().replace(/\s+/g, '');
-  for (const v of allowed) {
-    if (v.toLowerCase().replace(/\s+/g, '') === norm) return v;
-  }
-  for (const v of allowed) {
-    const vn = v.toLowerCase().replace(/\s+/g, '');
-    if (norm.includes(vn) || vn.includes(norm)) return v;
-  }
-  return null;
-}
