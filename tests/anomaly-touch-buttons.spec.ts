@@ -416,7 +416,8 @@ test('v0.34.0 A1 — 수동 커밋 이상치 [수정]: 팝업 해제 + 해당 �
   await expect(popup).toHaveCount(0);
   const sheet = page.locator('[data-testid="manual-value-sheet"]');
   await expect(sheet).toBeVisible({ timeout: 3000 });
-  await expect(sheet).toContainText('횡경');
+  // UI-e3에서 가시 제목은 삭제됐다. 같은 셀의 시트인지 정규 SR 채널의 리터럴로 확인한다.
+  await expect(sheet).toHaveAttribute('aria-label', '횡경 수정 입력, 값 입력 중');
 
   // 정상값(99.5 — increase 규칙 무알람) 재커밋 → 종경으로 진행.
   for (const k of ['9', '9', '.', '5']) {
