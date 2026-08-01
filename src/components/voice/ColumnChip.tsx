@@ -51,12 +51,12 @@ export function ColumnChip({
   let textColor: string = T.textDim;
   if (isActive) {
     const redActive = activeTone === T.red;
-    bg = redActive ? 'rgba(255,82,82,0.16)' : 'rgba(0,200,83,0.18)';
+    bg = redActive ? 'rgba(255,23,68,0.16)' : 'rgba(57,255,20,0.18)';
     border = activeTone;
     textColor = T.text;
   } else if (isDone) {
-    bg = 'rgba(0,200,83,0.10)';
-    border = 'rgba(0,200,83,0.30)';
+    bg = 'rgba(57,255,20,0.10)';
+    border = 'rgba(57,255,20,0.30)';
     textColor = T.text;
   }
   if (isEditing) {

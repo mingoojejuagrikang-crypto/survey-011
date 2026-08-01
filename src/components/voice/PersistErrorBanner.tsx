@@ -83,7 +83,7 @@ export function PersistErrorBanner({
             opacity: retrying ? 0.85 : 1,
             fontSize: 19, fontWeight: 900, letterSpacing: -0.3,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-            boxShadow: retrying ? 'none' : '0 4px 14px rgba(255,82,82,0.4)',
+            boxShadow: retrying ? 'none' : '0 4px 14px rgba(255,23,68,0.4)',
           }}
           title={retrying ? '저장 중…' : '다시 저장'}
         >

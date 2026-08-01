@@ -207,7 +207,7 @@ export function TablePreviewModal({
                   flex: 2, height: 48, borderRadius: 14, border: 'none',
                   background: T.green, color: '#06200F',
                   fontSize: 15, fontWeight: 800, cursor: 'pointer',
-                  boxShadow: '0 4px 14px rgba(0,200,83,0.32)',
+                  boxShadow: '0 4px 14px rgba(57,255,20,0.32)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                 }}
               >

@@ -91,7 +91,7 @@ export function FeedbackModal({
               data-testid="feedback-thumbnail-missing"
               style={{
                 padding: '10px 12px', borderRadius: 12,
-                background: 'rgba(255,179,0,0.08)', border: `1px solid ${T.amber}`,
+                background: 'rgba(255,234,0,0.08)', border: `1px solid ${T.amber}`,
                 fontSize: 13, color: T.amber, fontWeight: 700, lineHeight: 1.5,
               }}
             >

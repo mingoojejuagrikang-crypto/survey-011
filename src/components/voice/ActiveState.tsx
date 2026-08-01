@@ -150,7 +150,7 @@ export function ActiveState({
   }
 
   const chipAccent = anomalyPending ? T.red : T.green;
-  const progressAccent = anomalyPending ? T.red : completing ? T.green : paused ? T.amber : T.blue;
+  const progressAccent = anomalyPending ? T.red : paused ? T.amber : T.green;
 
   const openCommandHelp = useCallback(() => {
     if (!cmdHelpSuspendedRef.current) {

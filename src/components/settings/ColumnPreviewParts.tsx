@@ -80,7 +80,7 @@ export function ColumnDetailRow({ col }: { col: Column }) {
         <span
           style={{
             fontSize: 10, fontWeight: 800, color: T.amber, flexShrink: 0,
-            padding: '1px 7px', borderRadius: 999, background: 'rgba(255,179,0,0.12)',
+            padding: '1px 7px', borderRadius: 999, background: 'rgba(255,234,0,0.12)',
           }}
         >
           추세 {trendText}
@@ -90,7 +90,7 @@ export function ColumnDetailRow({ col }: { col: Column }) {
         <span
           style={{
             fontSize: 10, fontWeight: 800, color: T.red, flexShrink: 0,
-            padding: '1px 7px', borderRadius: 999, background: 'rgba(255,82,82,0.12)',
+            padding: '1px 7px', borderRadius: 999, background: 'rgba(255,23,68,0.12)',
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
           }}
         >

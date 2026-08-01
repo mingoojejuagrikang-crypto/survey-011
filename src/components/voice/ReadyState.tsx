@@ -37,7 +37,7 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
             style={{
               width: '100%', maxWidth: 320,
               padding: '12px 16px', borderRadius: 12,
-              background: 'rgba(255,179,0,0.10)', border: `1px solid ${T.amber}`,
+              background: 'rgba(255,234,0,0.10)', border: `1px solid ${T.amber}`,
               color: T.amber, fontSize: 15, fontWeight: 600,
               lineHeight: 1.5, letterSpacing: -0.1, textAlign: 'center',
             }}

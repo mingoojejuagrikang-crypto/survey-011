@@ -48,7 +48,7 @@ function ReadyCheckBadge() {
         flexShrink: 0, width: 18, height: 18, borderRadius: '50%',
         background: T.green,
         // v0.35.0 FIX-8(리뷰 라운드1) — glow 반경 축소(8→4px): Dynamic Type 확대 시 윗행 겹침 방지.
-        boxShadow: '0 0 4px rgba(0,200,83,0.55)',
+        boxShadow: '0 0 4px rgba(57,255,20,0.55)',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}
     >

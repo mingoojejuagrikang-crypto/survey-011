@@ -104,8 +104,8 @@ function FailureItem({ f }: { f: SyncFailure }) {
     <div
       style={{
         padding: 12, borderRadius: 10,
-        background: 'rgba(255,82,82,0.08)',
-        border: `1px solid rgba(255,82,82,0.20)`,
+        background: 'rgba(255,23,68,0.08)',
+        border: `1px solid rgba(255,23,68,0.20)`,
       }}
     >
       <div style={{ fontSize: 14, color: T.text, fontWeight: 700, marginBottom: 4 }}>

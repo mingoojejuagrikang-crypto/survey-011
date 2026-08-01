@@ -77,7 +77,7 @@ export function ChipZone({
         justifyContent: 'flex-start',
         alignItems: 'stretch',
         gap: CHIP_GAP,
-        borderBottom: `1px solid ${anomalyPending ? 'rgba(255,82,82,0.42)' : T.line}`,
+        borderBottom: `1px solid ${anomalyPending ? 'rgba(255,23,68,0.42)' : T.line}`,
         transition: 'border-color 180ms ease',
       }}
     >

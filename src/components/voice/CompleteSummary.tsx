@@ -127,7 +127,7 @@ export function CompleteSummary({
           padding: '0 clamp(20px, 6vw, 40px)',
           borderRadius: 18,
           border: `2px solid ${T.green}`,
-          background: 'rgba(0,200,83,0.12)',
+          background: 'rgba(57,255,20,0.12)',
           color: T.text,
           fontSize: 'max(18px, calc(clamp(20px, min(6vw, 3.2vh), 30px) * var(--fit-lo, 1)))',
           fontWeight: 900,

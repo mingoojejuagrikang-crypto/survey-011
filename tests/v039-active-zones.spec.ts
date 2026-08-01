@@ -691,7 +691,7 @@ test('§[2] anomaly — 경보행 + 2열 비교(직전/현재) + 하단 `<`=확�
   await expect(page.locator('[data-testid="voice-status-control"]')).toHaveAttribute('data-tone', 'red');
   const activeChipBorder = await page.locator('[data-testid="column-chip"][data-active="true"]')
     .evaluate((el) => getComputedStyle(el as HTMLElement).borderTopColor);
-  expect(activeChipBorder, '활성칸 빨강 강조').toBe('rgb(255, 82, 82)');
+  expect(activeChipBorder, '활성칸 빨강 강조').toBe('rgb(255, 23, 68)');
 });
 
 test('fb-27-8 — 정정 후에는 `정상 : 복귀` 헤드라인을 렌더하지 않는다(하단 아이콘·글로우가 대신 말한다)', async ({ page }) => {

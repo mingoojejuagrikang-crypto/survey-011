@@ -16,7 +16,7 @@ export function LoadErrorState({ error, onRetry }: { error: string; onRetry: () 
       <div
         style={{
           width: 110, height: 110, borderRadius: '50%',
-          background: 'rgba(255,82,82,0.06)',
+          background: 'rgba(255,23,68,0.06)',
           border: `1px dashed ${T.red}`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: T.red, fontSize: 44, fontWeight: 800,

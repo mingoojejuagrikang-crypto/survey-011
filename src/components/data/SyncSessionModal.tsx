@@ -150,7 +150,7 @@ export function SyncSessionModal({
               style={{
                 width: 20, height: 20, borderRadius: 4, flexShrink: 0,
                 border: `2px solid ${autoDelete ? T.red : T.lineStrong}`,
-                background: autoDelete ? 'rgba(255,82,82,0.15)' : 'transparent',
+                background: autoDelete ? 'rgba(255,23,68,0.15)' : 'transparent',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
             >

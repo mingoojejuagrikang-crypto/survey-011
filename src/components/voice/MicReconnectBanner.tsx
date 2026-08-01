@@ -82,7 +82,7 @@ export function MicReconnectBanner({
             opacity: reconnecting ? 0.85 : 1,
             fontSize: 18, fontWeight: 900, letterSpacing: -0.3,
             display: 'flex', alignItems: 'center', gap: 8,
-            boxShadow: reconnecting ? 'none' : '0 4px 14px rgba(255,82,82,0.4)',
+            boxShadow: reconnecting ? 'none' : '0 4px 14px rgba(255,23,68,0.4)',
           }}
           title={reconnecting ? '재연결 중…' : '재연결'}
         >

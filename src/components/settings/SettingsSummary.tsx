@@ -25,7 +25,7 @@ export function SettingsSummary({ columns, totalRows, sessionLabel }: {
           style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '7px 12px', borderRadius: 10,
-            background: 'rgba(0,200,83,0.10)', border: '1px solid rgba(0,200,83,0.30)',
+            background: 'rgba(57,255,20,0.10)', border: '1px solid rgba(57,255,20,0.30)',
           }}
         >
           <span style={{ fontSize: 12, fontWeight: 700, color: T.textDim, flexShrink: 0 }}>

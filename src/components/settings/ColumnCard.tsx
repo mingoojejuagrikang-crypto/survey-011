@@ -123,7 +123,7 @@ export function ColumnCard({
           onClick={onRemove}
           style={{
             width: 36, height: 36, borderRadius: 10,
-            border: 'none', background: 'rgba(255,82,82,0.10)',
+            border: 'none', background: 'rgba(255,23,68,0.10)',
             color: T.red, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}

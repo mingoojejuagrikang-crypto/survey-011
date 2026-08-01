@@ -61,7 +61,7 @@ export function ExportDoneModal({ result, onClose }: { result: ExportResult; onC
         <div
           style={{
             width: 56, height: 56, borderRadius: 999,
-            background: 'rgba(0,200,83,0.14)', border: `2px solid ${T.green}`,
+            background: 'rgba(57,255,20,0.14)', border: `2px solid ${T.green}`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}
         >

@@ -78,9 +78,9 @@ input::placeholder {
 }
 
 @keyframes flash-green {
-  0% { background: rgba(0,200,83,0); }
-  30% { background: rgba(0,200,83,0.35); }
-  100% { background: rgba(0,200,83,0); }
+  0% { background: rgba(57,255,20,0); }
+  30% { background: rgba(57,255,20,0.35); }
+  100% { background: rgba(57,255,20,0); }
 }
 
 @keyframes check-pop {
@@ -191,17 +191,17 @@ input::placeholder {
 /* v0.20.0 입력탭#5 — VoiceHero listening 패널 자체의 은은한 점멸(점3개 대체). transform 미사용
    (94vw 패널이 overflow:hidden 1fr 구역에서 scale 시 잘림) — opacity + box-shadow 호흡만 한다. */
 @keyframes panel-pulse {
-  0%, 100% { opacity: 0.92; box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 0 rgba(0,200,83,0.0); }
-  50% { opacity: 1; box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 22px 2px rgba(0,200,83,0.30); }
+  0%, 100% { opacity: 0.92; box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 0 rgba(57,255,20,0.0); }
+  50% { opacity: 1; box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 22px 2px rgba(57,255,20,0.30); }
 }
 
 @keyframes card-breathe-red {
-  0%, 100% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 rgba(255,82,82,0.18); filter: saturate(1); }
-  50% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 24px rgba(255,82,82,0.45); filter: saturate(1.22); }
+  0%, 100% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 rgba(255,23,68,0.18); filter: saturate(1); }
+  50% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 24px rgba(255,23,68,0.45); filter: saturate(1.22); }
 }
 @keyframes card-breathe-green {
-  0%, 100% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 rgba(0,200,83,0.16); filter: saturate(1); }
-  50% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 24px rgba(0,200,83,0.42); filter: saturate(1.18); }
+  0%, 100% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 rgba(57,255,20,0.16); filter: saturate(1); }
+  50% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 24px rgba(57,255,20,0.42); filter: saturate(1.18); }
 }
 @keyframes card-breathe-amber {
   0%, 100% { box-shadow: 0 10px 36px rgba(0,0,0,0.5), 0 0 0 rgba(255,193,7,0.16); filter: saturate(1); }

@@ -46,8 +46,8 @@ export function SheetConnectSection({
               disabled={loading !== null}
               style={{
                 height: 56, borderRadius: 14,
-                border: `1px solid ${s.googleConnected ? 'rgba(0,200,83,0.35)' : T.lineStrong}`,
-                background: s.googleConnected ? 'rgba(0,200,83,0.10)' : '#2A2D32',
+                border: `1px solid ${s.googleConnected ? 'rgba(57,255,20,0.35)' : T.lineStrong}`,
+                background: s.googleConnected ? 'rgba(57,255,20,0.10)' : '#2A2D32',
                 color: T.text, fontSize: 17, fontWeight: 700,
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
                 cursor: loading ? 'wait' : 'pointer', letterSpacing: -0.2,
@@ -141,7 +141,7 @@ export function SheetConnectSection({
                           style={{
                             height: 52, padding: '0 16px', borderRadius: 12,
                             border: 'none',
-                            background: applied ? 'rgba(0,200,83,0.18)' : canConfirm ? T.blue : '#2A2D32',
+                            background: applied ? 'rgba(57,255,20,0.18)' : canConfirm ? T.blue : '#2A2D32',
                             color: applied ? T.green : canConfirm ? '#fff' : T.textMute,
                             fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
                             cursor: canConfirm ? 'pointer' : 'default',
@@ -189,7 +189,7 @@ export function SheetConnectSection({
                       style={{
                         height: 52, padding: '0 16px', borderRadius: 12,
                         border: 'none',
-                        background: applied ? 'rgba(0,200,83,0.18)' : canConfirm ? T.blue : '#2A2D32',
+                        background: applied ? 'rgba(57,255,20,0.18)' : canConfirm ? T.blue : '#2A2D32',
                         color: applied ? T.green : canConfirm ? '#fff' : T.textMute,
                         fontSize: 14, fontWeight: 800, letterSpacing: -0.2,
                         cursor: canConfirm ? 'pointer' : 'default',
@@ -252,8 +252,8 @@ export function SheetConnectSection({
                         key={sheet.sheetId}
                         style={{
                           display: 'flex', alignItems: 'center', gap: 8,
-                          background: active ? 'rgba(0,200,83,0.10)' : T.inputBg,
-                          border: `1px solid ${active ? 'rgba(0,200,83,0.4)' : T.line}`,
+                          background: active ? 'rgba(57,255,20,0.10)' : T.inputBg,
+                          border: `1px solid ${active ? 'rgba(57,255,20,0.4)' : T.line}`,
                           borderRadius: 12, padding: '8px 10px', minWidth: 0,
                         }}
                       >

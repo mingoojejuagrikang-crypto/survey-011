@@ -23,9 +23,9 @@ export function VoiceActionButton({
         minWidth: 0,
         minHeight: 64,
         borderRadius: 18,
-        border: danger ? `2px solid rgba(255,82,82,0.55)` : '1px solid transparent',
+        border: danger ? `2px solid rgba(255,23,68,0.55)` : '1px solid transparent',
         background: danger
-          ? 'rgba(255,82,82,0.08)'
+          ? 'rgba(255,23,68,0.08)'
           : `linear-gradient(180deg, #5A9BFF 0%, ${T.blue} 58%, #1859D5 100%)`,
         color: danger ? T.red : '#fff',
         fontSize: danger ? 18 : 22,

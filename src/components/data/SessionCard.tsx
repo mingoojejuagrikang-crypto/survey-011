@@ -98,7 +98,7 @@ export function SessionCard({
               style={{
                 display: 'flex', alignItems: 'baseline', gap: 4,
                 padding: '6px 10px', borderRadius: 10,
-                background: 'rgba(255,179,0,0.10)',
+                background: 'rgba(255,234,0,0.10)',
               }}
             >
               <span style={{ fontSize: 13, color: T.amber, fontWeight: 600 }}>작성중</span>

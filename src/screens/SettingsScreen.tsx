@@ -137,7 +137,7 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
             onClick={() => setResetOpen(true)}
             style={{
               minHeight: 40, padding: '0 16px', borderRadius: 12,
-              border: '1px solid rgba(255,82,82,0.40)', background: 'rgba(255,82,82,0.08)',
+              border: '1px solid rgba(255,23,68,0.40)', background: 'rgba(255,23,68,0.08)',
               color: T.red, fontSize: 13, fontWeight: 800, letterSpacing: -0.2, cursor: 'pointer',
             }}
           >
@@ -346,8 +346,8 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
                 }}
                 style={{
                   flex: 1, height: 56, borderRadius: 28,
-                  background: 'rgba(0,200,83,0.12)',
-                  border: '1px solid rgba(0,200,83,0.35)',
+                  background: 'rgba(57,255,20,0.12)',
+                  border: '1px solid rgba(57,255,20,0.35)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
                   fontSize: 16, fontWeight: 700, color: T.green,
                   cursor: 'pointer',

@@ -13,8 +13,8 @@ function ResetOptionRow({ checked, onToggle, label, testid }: {
       style={{
         display: 'flex', alignItems: 'center', gap: 10, minHeight: 44,
         padding: '0 12px', borderRadius: 12, cursor: 'pointer',
-        background: checked ? 'rgba(255,82,82,0.10)' : T.inputBg,
-        border: `1px solid ${checked ? 'rgba(255,82,82,0.45)' : T.line}`,
+        background: checked ? 'rgba(255,23,68,0.10)' : T.inputBg,
+        border: `1px solid ${checked ? 'rgba(255,23,68,0.45)' : T.line}`,
       }}
     >
       <input
@@ -70,7 +70,7 @@ export function SettingsResetModal({ onCancel, onConfirm }: {
           <div
             style={{
               padding: '10px 12px', borderRadius: 12,
-              background: 'rgba(255,82,82,0.06)', border: '1px solid rgba(255,82,82,0.25)',
+              background: 'rgba(255,23,68,0.06)', border: '1px solid rgba(255,23,68,0.25)',
               fontSize: 13, color: T.text, lineHeight: 1.6, wordBreak: 'keep-all',
             }}
           >
@@ -83,7 +83,7 @@ export function SettingsResetModal({ onCancel, onConfirm }: {
           <div
             style={{
               padding: '10px 12px', borderRadius: 12,
-              background: 'rgba(0,200,83,0.06)', border: '1px solid rgba(0,200,83,0.25)',
+              background: 'rgba(57,255,20,0.06)', border: '1px solid rgba(57,255,20,0.25)',
               fontSize: 13, color: T.text, lineHeight: 1.6, wordBreak: 'keep-all',
             }}
           >
@@ -126,7 +126,7 @@ export function SettingsResetModal({ onCancel, onConfirm }: {
               flex: 2, height: 48, borderRadius: 14, border: 'none',
               background: T.red, color: '#fff',
               fontSize: 15, fontWeight: 800, cursor: 'pointer',
-              boxShadow: '0 4px 14px rgba(255,82,82,0.32)',
+              boxShadow: '0 4px 14px rgba(255,23,68,0.32)',
             }}
           >
             초기화 실행

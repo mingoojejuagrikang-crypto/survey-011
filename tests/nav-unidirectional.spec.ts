@@ -323,7 +323,7 @@ test('NAV-1 — "다음" 행 skip → 후속 행 완료 시 완료 행 복귀 �
   const amberRowNum = await page.evaluate(() => {
     const cells = Array.from(document.querySelectorAll('div'))
       .filter((d) => d.children.length === 0 && d.textContent?.trim() === '2');
-    return cells.some((c) => getComputedStyle(c).color === 'rgb(255, 179, 0)');
+    return cells.some((c) => getComputedStyle(c).color === 'rgb(255, 234, 0)');
   });
   expect(amberRowNum).toBe(true);
 });

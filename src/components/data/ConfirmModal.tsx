@@ -65,7 +65,7 @@ export function ConfirmModal({
               background: danger ? T.red : T.blue,
               color: '#fff', fontSize: 15, fontWeight: 800, letterSpacing: -0.2,
               cursor: 'pointer',
-              boxShadow: danger ? '0 4px 14px rgba(255,82,82,0.32)' : `0 4px 14px ${T.blueGlow}`,
+              boxShadow: danger ? '0 4px 14px rgba(255,23,68,0.32)' : `0 4px 14px ${T.blueGlow}`,
             }}
           >
             {confirmLabel}
