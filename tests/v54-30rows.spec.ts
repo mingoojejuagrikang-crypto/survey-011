@@ -374,7 +374,7 @@ test('30행 음성 입력 — TTS/칩/값/순서/수정/스킵/일시정지 종�
       // 종경 대기 중 "일시정지" 발화 (STT 명령)
       await fireStt(page, '일시정지', 400);
 
-      // 일시정지 상태 확인 (v0.15.0 A5: 상단 PAUSE 표시 제거 → 중앙 대형 카드 paused-card)
+      // 일시정지 상태 확인 (UI-c: 시각 상태어 없이 aria-only paused surface 유지)
       const isPaused = await page.locator('[data-testid="paused-card"]').first()
         .isVisible({ timeout: 2000 }).catch(() => false);
       console.log(`  일시정지 후 카드 표시: ${isPaused ? '✓' : '✗'}`);
@@ -743,7 +743,7 @@ test('[음성] 일시정지 → 재개 → 종료 UI 상태 검증', async ({ pa
   await pauseBtn.click({ force: true, timeout: 5000 });
   await page.waitForTimeout(400);
 
-  // v0.15.0 A5: 상단 PAUSE 표시 제거 → 중앙 대형 카드(paused-card)로 일시정지 안내.
+  // UI-c: 시각 상태어 없이 aria-only paused surface로 상태를 판정한다.
   await expect(page.locator('[data-testid="paused-card"]').first()).toBeVisible({ timeout: 2000 });
   console.log('✓ 일시정지 후 카드 표시');
 

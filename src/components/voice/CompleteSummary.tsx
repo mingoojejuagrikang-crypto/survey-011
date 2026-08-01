@@ -1,19 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { T } from '../../tokens';
-import { STATE_TYPE } from './heroLayout';
-import { useFitScale } from './useFitScale';
+import { COMPLETE_SUMMARY_BASE_FONT_PX, STATE_TYPE } from './heroLayout';
+import { useFitGroup } from './useFitGroup';
 
 /** 마지막 커밋 영수증을 완료 화면에 띄워 두는 시간(민구 확정 2026-07-25).
  *  이후에는 와이어프레임 §[4] 그대로(요약 + 종료 버튼)로 정착한다. */
 export const COMPLETE_RECEIPT_MS = 3000;
 
-/** 와이어프레임 §[4] complete — 조사 전체가 끝났을 때 중앙 50%.
+/** 조사 전체가 끝났을 때 중앙 요약.
  *
  * ```
- *           완료 : 16 / 18
+ *              16 / 18
  *           [   종료   ]
  * ```
- *  - `완료 : X / N` — X는 **실제로 값이 채워진 행 수**다. '다음' 스킵·샘플손실로 못 넣은 행은
+ *  - `X / N` — X는 **실제로 값이 채워진 행 수**다. '다음' 스킵·샘플손실로 못 넣은 행은
  *    빠지므로 항상 N 이하다(sessionStore: `markRowComplete`가 완료 행만 `completedRows`에 넣고
  *    스킵 행은 `skippedRows`로 갈라 둔다 — 두 목록은 서로 배타적이다).
  *  - `종료` 버튼: 종료 확인 다이얼로그로 이어진다(기존 위험행동 정책 그대로).
@@ -49,8 +49,17 @@ export function CompleteSummary({
   }, [reviewCommit]);
   const showReceipt = reviewCommit !== null && receiptVisible;
 
-  // 영수증이 사라지면 남는 요소 높이가 바뀌므로 fit 재계산 대상에 포함한다.
-  const fitRef = useFitScale<HTMLDivElement>([completedCount, totalRows, reviewCommit?.value, showReceipt]);
+  const countFitRef = useRef<HTMLSpanElement>(null);
+  // UI-c 규칙 1: 시각 상태어를 지운 폭은 완료 수치가 가져간다. 고정 px 상한을 올리는 대신
+  // 실제 중앙 영역과 `X / N` 렌더 폭을 읽어 열린 배율을 찾는다(GL-007 원칙 2·4).
+  const fitRef = useFitGroup<HTMLDivElement>(
+    [completedCount, totalRows, reviewCommit?.value, showReceipt],
+    [{
+      variable: '--fit-summary',
+      members: [countFitRef],
+      searchBasePx: COMPLETE_SUMMARY_BASE_FONT_PX,
+    }],
+  );
   return (
     <div
       ref={fitRef}
@@ -90,7 +99,9 @@ export function CompleteSummary({
         </span>
       )}
       <span
+        ref={countFitRef}
         data-testid="complete-count"
+        data-fit-group="summary"
         style={{
           fontSize: STATE_TYPE.completeSummary,
           fontWeight: 900,
@@ -98,10 +109,12 @@ export function CompleteSummary({
           letterSpacing: -1.2,
           color: T.text,
           fontVariantNumeric: 'tabular-nums',
-          whiteSpace: 'nowrap',
+          display: 'block', width: '100%', maxWidth: '100%',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          textAlign: 'center',
         }}
       >
-        완료 : {completedCount} / {totalRows}
+        {completedCount} / {totalRows}
       </span>
       <button
         type="button"

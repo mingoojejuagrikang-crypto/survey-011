@@ -2,20 +2,11 @@
  *  VoiceHero(VoiceScreen)와 ModifyIndicatorPill(components/voice)이 같은 타이포 스케일을 쓰도록
  *  SSOT로 분리(순환 import 방지 — VoiceScreen이 컴포넌트를 import하므로 헬퍼는 별도 모듈). */
 
-/** README 타이포 스케일(A): 값 길이로 hero 숫자 크기 자동 조절. ≤4자 150 / ≤6자 104 / 그 외 50.
- *  clamp로 작은 화면(375px 세로)에서도 안 깨지게 상한만 길이별로 둔다(min은 동일 비율 축소).
- *  v0.27.0 무스크롤(민구 07-03) — vw 단독이던 가변항을 min(vw, vh)로 결합: 세로가 짧은 화면(가로
- *  모드·짧은 기기)에서 세로 기준으로도 비례 축소돼 흡수영역을 넘치지 않는다(useFitScale 1차 CSS 단계). */
-export function heroFontSize(value: string): string {
-  const len = (value || '').length;
-  if (len <= 4) return 'clamp(64px, min(22vw, 17vh), 150px)';
-  if (len <= 6) return 'clamp(48px, min(16vw, 12.4vh), 104px)';
-  return 'clamp(34px, min(11vw, 6.5vh), 50px)';
-}
-
 /** UI-a 타이포 하한과 scale=1 기준값. 최소 가독값은 미확정이라 현행값을 한 상수에 보존한다. */
 export const HERO_MIN_FONT_PX = { name: 22, value: 26, interim: 24 } as const;
 export const HERO_BASE_FONT_PX = { name: 34, value: 64, interim: 44 } as const;
+export const COMPLETE_SUMMARY_MIN_FONT_PX = 24;
+export const COMPLETE_SUMMARY_BASE_FONT_PX = 40;
 
 /** 🔴 프로덕션 라벨 예약용 잠정 하한 — ui-standard §7-2의 민구 확정값이 오면 이 한 곳을 대체한다.
  *  ba87426 402px 실측 61.67px의 90%를 보존하며, 상한이 아니므로 fit은 더 커질 수 있다. */
@@ -141,8 +132,12 @@ export const STATE_TYPE = {
   compareLabel: 'max(12px, calc(clamp(14px, min(4.2vw, 2.2vh), 21px) * var(--fit-lo, 1)))',
   /** 2열 비교의 값 — 원거리에서 두 값을 한눈에 대조한다(GL-005 가독 하한 22px). */
   compareValue: 'max(22px, calc(clamp(30px, min(16vw, 8vh), 62px) * var(--fit-hi, 1)))',
-  /** 완료 요약 `완료 : X / N`(§[4]). */
-  completeSummary: 'max(24px, calc(clamp(30px, min(10vw, 5.4vh), 56px) * var(--fit-hi, 1)))',
+  /** 완료 요약 `X / N`. UI-c에서 상태어를 지운 폭을 값이 회수한다 — 고정 최대 px 없이 열린 fit. */
+  completeSummary: fittedHeroType(
+    COMPLETE_SUMMARY_MIN_FONT_PX,
+    COMPLETE_SUMMARY_BASE_FONT_PX,
+    '--fit-summary',
+  ),
   /** 🔴 알람 중 **실시간 인식값**(fb-27-7 5항 "정상 진행될때의 수준만큼 커야 함").
    *  종전 `AlarmInterimStrip`이 이 값을 **인라인 하드코딩**(`clamp(24px, min(8vw,4.8vh), 42px)`)해
    *  실기기에서 32.16px로 렌더됐다 — 정상 진행 InterimLine(90.13px)의 36%. [TYPO-CONTRACT-1]이

@@ -652,7 +652,8 @@ test('R1-2 — 발화 도중 일시정지 → 재개 시 interim 표시가 비�
   await expect(page.locator('[data-testid="interim-value"]')).toHaveText('사십이 점');
 
   await page.locator('button[title="일시정지"]').click();
-  await expect(page.locator('[data-testid="paused-card"]')).toBeVisible();
+  await expect(page.locator('[data-testid="paused-card"]')).toHaveAttribute('aria-label', '일시정지');
+  await expect(page.locator('[data-testid="paused-card"]')).toHaveText('');
   await page.locator('button[title="재시작"]').click();
   await expect(page.locator('[data-hero-state="listening"]')).toBeVisible({ timeout: 3000 });
   await expect(page.locator('[data-testid="interim-value"]'), '재개 후 이전 발화 찌꺼기 금지').toHaveCount(0);

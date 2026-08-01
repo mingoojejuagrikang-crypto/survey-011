@@ -249,7 +249,7 @@ test('B1 — 이상치 카드가 중앙 흡수영역 안에 렌더 + 375px 긴�
   console.log('✓ 카드 표시 후에도 컨트롤바 Y 불변');
 });
 
-// 와이어프레임 §[3](2026-07-24 확정) — 일시정지는 **중앙 비움**이고 상태 표시는 상단 배지다.
+// UI-c 규칙 1 — 일시정지는 **중앙 비움**이고 상태는 도트/톤으로 보이며 텍스트는 aria에만 남는다.
 //   따라서 "일시정지 카드가 중앙 흡수영역 안"이라는 형태 단언은 성립하지 않는다. 이 테스트가
 //   지키던 **계약**(카드가 떠도 컨트롤바 Y가 안 밀린다 — v0.19.0 버그B)은 그대로 유지하고,
 //   중앙이 실제로 비었는지까지 함께 고정한다.
@@ -263,7 +263,8 @@ test('B1 — 일시정지 전환에도 컨트롤바 Y 불변 + 중앙 비움(§[
   await page.waitForTimeout(400);
   const paused = page.locator('[data-testid="paused-card"]');
   await expect(paused).toBeVisible();
-  await expect(paused, '§[3] 상단 "일시정지" 표시').toHaveText('일시정지');
+  await expect(paused, '시각 상태어 대신 접근 가능한 상태명').toHaveAttribute('aria-label', '일시정지');
+  await expect(paused, '일시정지 시각 텍스트 미렌더').toHaveText('');
 
   // §[3] 중앙 비움 — 값도 "일시정지됨" 문구도 없다.
   expect((await page.locator('[data-testid="voice-center-stage"]').innerText()).trim()).toBe('');
@@ -363,7 +364,7 @@ test('B4 — 마지막 행 완료 후 자동 종료 안 함(대기) · 값 발�
   //    v0.37.0 FB-E(민구 확정) — 검토 표시가 대형 **행 번호**('2')에서 **방금 입력한 값**으로 바뀌었다
   //    (hero-primary = 행의 마지막 음성 컬럼 c8 커밋값 '106'). 행 번호 의미는 aria-label로 보존.
   //    "마지막 행 뒤 자동 종료 없이 대기한다"는 메커니즘 검증은 동일하다.
-  // 와이어프레임 §[4](2026-07-24 확정) — 마지막 행까지 끝나면 중앙은 `완료 : X / N` + 종료다.
+  // UI-c 규칙 1 — 마지막 행까지 끝나면 중앙은 시각 상태어 없이 `X / N` + 종료다.
   //   방금 커밋한 값(커밋 영수증, v0.37.0 리뷰#1)은 그 위 얇은 확인 줄로 살아 있다. 검증하는
   //   계약은 동일 — "자동 종료 없이 대기하고, 방금 넣은 값을 보여준다".
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 3000 });

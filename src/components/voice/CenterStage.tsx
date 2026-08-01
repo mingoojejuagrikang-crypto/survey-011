@@ -15,11 +15,10 @@ import { endReachedRender } from '../../lib/logEvents';
  *  고려해 화면 중앙 정렬".
  *
  *  상호배타 분기(정확히 하나만 렌더):
- *   1) paused  → **비움**(§[3] "중앙 비움 — 값·'일시정지됨' 없음"). 상태는 상단 배지 + 하단 도트
- *      + 엣지글로우가 말한다.
+ *   1) paused  → **시각 비움**. 상태는 하단 도트 + 엣지글로우가 말하고 텍스트는 aria에만 남는다.
  *   2) anomaly → 경보행 + 2열 비교(§[2]).
- *   3) endReached → `완료 : X / N` + 종료(§[4]).
- *   4) modify  → 정정 재안내 카드.
+ *   3) endReached → `X / N` + 종료. 완료 상태명은 aria·체크 도트·진행바가 맡는다.
+ *   4) modify  → 중앙 값 surface. 항목명은 활성 칩, 상태명은 aria가 맡는다.
  *   5) hero    → 실시간 인식값 대형(§[1]).
  *
  *  🔴 이 분기는 **표시 전환**이다. ActiveState(=세션 트리)는 언제나 마운트돼 있고 여기서 자식만
@@ -51,7 +50,17 @@ export function CenterStage({
   let content: ReactNode = null;
   if (paused) {
     branch = 'paused';
-    content = null; // §[3] 중앙 비움
+    // 시각적으로는 완전히 빈 중앙이다. 이 100% surface는 레이아웃·픽셀을 추가하지 않고
+    // 스크린리더와 안정적인 상태 testid에만 "일시정지"를 남긴다(UI-c 규칙 1/3).
+    content = (
+      <div
+        data-testid="paused-card"
+        role="status"
+        aria-label="일시정지"
+        aria-live="polite"
+        style={{ width: '100%', height: '100%' }}
+      />
+    );
   } else if (anomalyAlert) {
     branch = 'anomaly';
     content = (

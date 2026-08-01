@@ -119,7 +119,7 @@ export const CASES: StateCase[] = [
     group: '입력화면 현재상태',
     title: '일시정지',
     feedback: '§[3] 기준선',
-    why: '중앙 비움 + 상단 배지 + 하단 `<`=재시작 / `>`=종료.',
+    why: '중앙·상단 상태어 비움 + aria 상태 + 하단 도트와 `<`=재시작 / `>`=종료.',
     drive: async (page) => {
       await page.locator('button[title="일시정지"]').click({ force: true });
       await expect(page.locator('[data-testid="paused-card"]')).toBeVisible({ timeout: 3000 });
@@ -131,7 +131,7 @@ export const CASES: StateCase[] = [
     group: '입력화면 현재상태',
     title: '완료',
     feedback: '§[4] 기준선',
-    why: '`완료 : X / N` 요약 + 종료 버튼으로 정착한 상태(영수증이 걷힌 뒤).',
+    why: '시각 상태어 없이 `X / N` 수치 + 종료 버튼으로 정착한 상태(영수증이 걷힌 뒤).',
     drive: async (page) => {
       await fillAllRows(page);
       await expect(page.locator('[data-testid="complete-receipt"]')).toHaveCount(0, { timeout: 8000 });

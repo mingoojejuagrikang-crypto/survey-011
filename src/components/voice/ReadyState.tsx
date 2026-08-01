@@ -128,6 +128,5 @@ function SummaryRow({ label, value, unit, accent }: { label: string; value: numb
 }
 
 // ─── A-hero helpers (v0.17.0) ─────────────────────────────────
-// v0.23.0 입력탭#1 — heroFontSize는 components/voice/heroLayout 로 분리(ModifyIndicatorPill과 공유
-//   SSOT — 그쪽이 직접 import). v0.34.0 A4 — hero가 '듣는 중' 전용이 되며 mono 값 표시가 사라져
-//   이 파일에서는 더 이상 참조하지 않는다(heroLayout.ts 자체는 보존).
+// 입력 화면 타이포 계약은 components/voice/heroLayout에서 공유한다. v0.34.0 A4 이후
+// ReadyState 자체는 hero 숫자 크기를 소유하지 않는다.

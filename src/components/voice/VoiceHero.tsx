@@ -18,15 +18,15 @@ import type { Column } from '../../types';
  *  v0.38.0 #2·#8·#9·#10: 상태 아이콘을 없애고 [항목명 슬롯] + [값 슬롯]을 모든 상태가 공유한다.
  *  확인 표시는 항목명 왼쪽에 인라인으로 붙고, interim→확정 전환에도 값의 중심은 움직이지 않는다.
  *
- *  1) 대기(listening): 항목명. **인식 중이면 STT 원문 문자열(interimValue)을 크게**(56~72px,
+ *  1) 대기(listening): 중앙 항목명 없음. **인식 중이면 STT 원문 문자열(interimValue)을 크게**,
  *     "사십이 점…" 스타일 — FB#2). "듣는 중" 같은 중복 문구 없음(파형 밴드가 생존 신호).
  *  2) 커밋 직후(~1.5s): ✓ 항목명 + **확정값(80~100px, tabular)**. store `valueBurst`의 seq
  *     변화로 진입, CONFIRM_MS 뒤 대기 복귀.
  *     ⚠️ 반드시 valueBurst.name/value에서만 읽는다 — advance()가 TTS 전에 포인터를 다음 항목으로
  *     옮기므로 currentCol을 쓰면 "다음 항목 값"으로 오해된다(v0.34.0 A4가 값 표시를 없앤 이유).
- *  3) 검토(phase 'complete'): ✓ 항목명 + **방금 입력한 값**(대형, v0.37.0 FB-E — 종전의 대형 행 번호를
- *     제거). 값 출처는 행의 마지막 음성 컬럼 실제 커밋값(ActiveState 파생). 행 번호 의미는
- *     aria-label("N행 완료, 명령 대기")로 보존. completing이 확인 플래시보다 우선(렌더 순서로 강제).
+ *  3) 검토(phase 'complete'): **방금 입력한 값**. 활성 칩이 같은 항목을 가리키면 중앙 항목명은
+ *     중복이라 숨기고, 검토 중 다른 항목을 수정해 활성 칩과 영수증 항목이 다를 때만 항목명을 남긴다.
+ *     행 완료 상태는 aria-label("N행 완료, 명령 대기")로 보존한다.
  *
  *  재질문 프롬프트(ReaskCue)는 TTS say()와 글자까지 일치(voicePrompts SSOT, FB#4) — hero 한 영역에서
  *  인식값과 상호 배타로 표시하고 별도 echo strip은 두지 않는다(§10).
@@ -92,7 +92,19 @@ export function VoiceHero({
   const value = review ? reviewCommit?.value : showConfirm ? confirmed?.value : interim;
   const interimValue = !review && !showConfirm;
   const labelIsPrimary = interimValue || !value;
+  // GL-007은 상태 이름이 아니라 실제 정보 채널로 판별한다. 일반 행 완료 review는 활성 칩(col)과
+  // 영수증 항목이 같으므로 숨긴다. 완료행 검토 중 다른 항목을 직접 수정하면 enterReviewWait가
+  // 활성 칩을 첫 컬럼으로 되돌리므로, 영수증 항목과 다를 때는 정보 유실을 막기 위해 남긴다.
+  // 영수증 없는 완료행 재방문의 `${row}행 완료` 시각 문구도 톤·진행·aria와 중복이라 숨긴다.
+  const reviewLabelNeeded = review && reviewCommit !== null && reviewCommit.name !== col.name;
   const accent = tone === 'red' ? T.red : tone === 'amber' ? T.amber : T.green;
+  const accessibleState = review
+    ? `${row}행 완료, 명령 대기`
+    : showConfirm && confirmed
+      ? `${confirmed.name} ${confirmed.value} 입력 완료`
+      : interim
+        ? `${col.name} 인식 중: ${interim}`
+        : `${col.name} 듣는 중`;
 
   return (
     // 리뷰 라운드1(Codex, 수용) — 루트 aria-live 제거: interim이 매 인식 결과마다 바뀌어 스크린리더
@@ -102,10 +114,10 @@ export function VoiceHero({
       ref={fitRef}
       data-hero-state={review ? 'review' : showConfirm ? 'confirm' : 'listening'}
       data-testid={review ? 'hero-review-status' : undefined}
-      role={review ? 'status' : undefined}
+      role={review ? 'status' : 'group'}
       aria-live={review ? 'polite' : undefined}
       aria-atomic={review ? 'true' : undefined}
-      aria-label={review ? `${row}행 완료, 명령 대기` : undefined}
+      aria-label={accessibleState}
       style={{
         // 카드 chrome 없음 — 배경·테두리·그림자 없이 화면 자체가 상태판(코덱스 §6.1).
         // height:100% — 흡수영역 트랙을 꽉 채운다(콘텐츠는 justifyContent로 중앙). 콘텐츠 높이에
@@ -124,12 +136,10 @@ export function VoiceHero({
           보이고 활성 칩이 하이라이트되므로, 중앙의 같은 글자는 중복이다. 비운 공간은 인식값을
           크게 쓰는 데 쓴다.
 
-          ⚠️ **조건부로 지우는 것은 listening뿐이다.** confirm(커밋 직후 `✓ 항목명` + 확정값)과
-          review(검토 대기)에서는 그대로 남는다 — 그 상태에서 항목명은 "지금 무엇을 입력하나"가
-          아니라 **"방금 무엇을 확정했나"** 이고, 커밋 직후엔 활성 칩이 이미 다음 항목으로 옮겨가
-          칩존이 그 정보를 주지 못한다. 값이 없는 review의 `N행 완료`도 항목명이 아니라 상태 문구다.
-          (렌더를 통째로 건너뛰므로 빈 줄 간격도 남지 않는다 — 슬롯을 비우는 방식이 아니다.) */}
-      {!interimValue && (
+          ⚠️ confirm은 활성 칩이 이미 다음 항목으로 옮겨가므로 반드시 남긴다. review는 상태별로
+          다시 판별해 활성 칩과 영수증 항목이 다를 때만 남긴다. 렌더를 통째로 건너뛰므로 빈 줄
+          간격도 남지 않는다. */}
+      {!interimValue && (!review || reviewLabelNeeded) && (
         <HeroNameLine
           checked={checked}
           accent={accent}

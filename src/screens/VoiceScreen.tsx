@@ -163,7 +163,7 @@ export function VoiceScreen(props: {
         completing={sess.phase === 'complete'}
         // 와이어프레임 §[4] — phase 'complete'는 완료 행 **검토 대기**와 **끝 도달**을 겸한다.
         //   검토 대기는 [1] active 레이아웃(hero ✓+방금값 — v035-hero-confirm 동작 계약)을 쓰고,
-        //   끝 도달만 [4] complete(`완료 : X / N` + 종료)를 쓴다.
+        //   끝 도달만 complete(UI-c: 시각 상태어 없는 `X / N` + 종료)를 쓴다.
         endReached={sess.phase === 'complete' && sess.endReached}
         paused={sess.phase === 'paused'}
         anomalyPending={anomalyPending}

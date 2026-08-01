@@ -227,8 +227,9 @@ test('무스크롤 — 375x812: 일시정지 상태에서 재개/종료가 잘�
   await page.locator('button[title="일시정지"]').click({ force: true });
   await page.waitForTimeout(400);
 
-  // 상단 "일시정지" 표시(§[3]).
-  await expect(page.locator('[data-testid="paused-card"]')).toHaveText('일시정지');
+  // UI-c 규칙 1: 상태 텍스트는 시각 삭제하고 aria에만 남긴다.
+  await expect(page.locator('[data-testid="paused-card"]')).toHaveAttribute('aria-label', '일시정지');
+  await expect(page.locator('[data-testid="paused-card"]')).toHaveText('');
   // 중앙 50%는 비어 있다(§[3] "값·'일시정지됨' 없음").
   expect((await page.locator('[data-testid="voice-center-stage"]').innerText()).trim()).toBe('');
 

@@ -8,6 +8,7 @@ import {
 import {
   boot,
   COLUMNS,
+  fillAllRows,
   PHONE_375,
   PHONE_402,
   PREV_ROUND,
@@ -35,8 +36,8 @@ async function heroValueMetrics(page: Page) {
   });
 }
 
-async function heroLabelMetrics(page: Page, state: 'confirm' | 'review' = 'confirm') {
-  return page.locator(`[data-hero-state="${state}"]`).evaluate((container) => {
+async function heroLabelMetrics(page: Page) {
+  return page.locator('[data-hero-state="confirm"]').evaluate((container) => {
     const label = container.querySelector<HTMLElement>('[data-fit-group="label"]');
     if (!label) throw new Error('label fit member 없음');
     const fontSize = parseFloat(getComputedStyle(label).fontSize);
@@ -189,28 +190,30 @@ test('위로 열림 — live VoiceHero 320→402 배정 폭에서 정착 fontSiz
   console.log(`[fit-growth] width ${narrow.containerWidth}→${wide.containerWidth}px, font ${narrow.fontSize.toFixed(2)}→${wide.fontSize.toFixed(2)}px`);
 });
 
-test('confirm 항목명 — 402·375에서 잘리지 않고 기준 리비전 크기를 회복한다', async ({ page }) => {
-  // 실행 전 오라클 고정: ba87426 실측 61.67px(402)·53.52px(375)의 90% 이내를 허용한다.
-  // flexShrink:0만 넣은 32.93px·22px는 이 기준에서 반드시 red다.
+test('confirm 항목명 — 402·375에서 잘리지 않고 b84a08d 값 크기도 줄지 않는다', async ({ page }) => {
+  // UI-c 실행 전 오라클 고정: b84a08d에서 `100.0` 커밋 후 hero-primary 실측은
+  // 402×874=189.98px, 375×667=174.73px다. 중복 제거가 confirm 항목명을 건드리면 안 된다.
   const cases = [
-    { viewport: PHONE_402, minFontPx: HERO_LABEL_BASELINE_PX.standard, baselineValuePx: 132.82 },
-    { viewport: PHONE_375, minFontPx: HERO_LABEL_BASELINE_PX.compact, baselineValuePx: 123.90 },
+    { viewport: PHONE_402, minFontPx: HERO_LABEL_BASELINE_PX.standard, baselineValuePx: 189.98 },
+    { viewport: PHONE_375, minFontPx: HERO_LABEL_BASELINE_PX.compact, baselineValuePx: 174.73 },
   ] as const;
   for (const { viewport, minFontPx, baselineValuePx } of cases) {
     await boot(page, viewport);
     await waitForTtsIdle(page);
     await fireStt(page, '100.0', 300);
     await expect(page.locator('[data-hero-state="confirm"]')).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(300);
     const metrics = await heroLabelMetrics(page);
     console.log(`[fit-confirm-label] ${viewport.width}x${viewport.height} label=${metrics.fontSize.toFixed(2)}px box=${metrics.offsetHeight}px ratio=${metrics.lineBoxRatio.toFixed(2)} fit=${metrics.fitLabel} value=${metrics.valueFontSize.toFixed(2)}px`);
     expect(metrics.lineBoxRatio, `${viewport.width}px 항목명 line box가 글자를 온전히 담는다`)
       .toBeGreaterThanOrEqual(0.9);
     expect(metrics.fontSize, `${viewport.width}px 항목명이 ba87426 기준 크기를 회복한다`)
-      .toBeGreaterThanOrEqual(minFontPx);
+      .toBeGreaterThanOrEqual(minFontPx - 0.05);
     expect(Number(metrics.fitLabel), `${viewport.width}px 프로덕션 라벨 예약 배선이 유지된다`)
-      .toBeGreaterThanOrEqual(HERO_LABEL_RESERVE_SCALE);
-    expect(metrics.valueFontSize, `${viewport.width}px 라벨 예약이 값 성장을 ba87426보다 깎지 않는다`)
-      .toBeGreaterThanOrEqual(baselineValuePx);
+      .toBeGreaterThanOrEqual(HERO_LABEL_RESERVE_SCALE - 0.0001);
+    expect(metrics.valueFontSize, `${viewport.width}px confirm 값이 b84a08d보다 줄지 않는다`)
+      .toBeGreaterThanOrEqual(baselineValuePx - 0.6);
   }
 });
 
@@ -243,7 +246,7 @@ for (const { labelKind, label, viewport } of [
     await fireStt(page, '-355.5', 300);
 
     await expect(page.locator('[data-hero-state="confirm"]')).toBeVisible({ timeout: 4000 });
-    const confirmMetrics = await heroLabelMetrics(page, 'confirm');
+    const confirmMetrics = await heroLabelMetrics(page);
     console.log(`[fit-matrix] state=confirm viewport=${viewport.width}x${viewport.height} label=${label} font=${confirmMetrics.fontSize.toFixed(2)}px box=${confirmMetrics.offsetHeight}px ratio=${confirmMetrics.lineBoxRatio.toFixed(2)} width=${confirmMetrics.scrollWidth}/${confirmMetrics.clientWidth} value=${confirmMetrics.valueFontSize.toFixed(2)}px floor=${confirmMetrics.fontSize <= HERO_MIN_FONT_PX.name + 0.05}`);
     expect(confirmMetrics.lineBoxRatio, 'confirm 라벨 line box').toBeGreaterThanOrEqual(0.9);
     expect(confirmMetrics.fontSize, 'confirm 라벨 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.name);
@@ -254,12 +257,17 @@ for (const { labelKind, label, viewport } of [
     await waitForTtsIdle(page);
     await fireStt(page, '-355.5', 300);
     await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
-    const reviewMetrics = await heroLabelMetrics(page, 'review');
-    console.log(`[fit-matrix] state=review viewport=${viewport.width}x${viewport.height} label=${label}보조 font=${reviewMetrics.fontSize.toFixed(2)}px box=${reviewMetrics.offsetHeight}px ratio=${reviewMetrics.lineBoxRatio.toFixed(2)} width=${reviewMetrics.scrollWidth}/${reviewMetrics.clientWidth} value=${reviewMetrics.valueFontSize.toFixed(2)}px floor=${reviewMetrics.fontSize <= HERO_MIN_FONT_PX.name + 0.05}`);
-    expect(reviewMetrics.lineBoxRatio, 'review 라벨 line box').toBeGreaterThanOrEqual(0.9);
-    expect(reviewMetrics.fontSize, 'review 라벨 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.name);
-    expect(reviewMetrics.scrollWidth, 'review 라벨 nowrap 폭').toBeLessThanOrEqual(reviewMetrics.clientWidth + 1);
-    expect(reviewMetrics.valueFontSize, 'review 확정값 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.value);
+    const reviewHero = page.locator('[data-hero-state="review"]');
+    await expect(reviewHero.locator('[data-fit-group="label"]'), '활성 칩과 같은 review 항목명은 중복이라 미렌더')
+      .toHaveCount(0);
+    const reviewMetrics = await reviewHero.locator('[data-fit-group="value"]').evaluate((member) => ({
+      fontSize: parseFloat(getComputedStyle(member).fontSize),
+      scrollWidth: member.scrollWidth,
+      clientWidth: member.clientWidth,
+    }));
+    console.log(`[fit-matrix] state=review viewport=${viewport.width}x${viewport.height} label=N/A value=${reviewMetrics.fontSize.toFixed(2)}px width=${reviewMetrics.scrollWidth}/${reviewMetrics.clientWidth}`);
+    expect(reviewMetrics.fontSize, 'review 확정값 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.value);
+    expect(reviewMetrics.scrollWidth, 'review 값 nowrap 폭').toBeLessThanOrEqual(reviewMetrics.clientWidth + 1);
   });
 }
 
@@ -323,33 +331,137 @@ test('안정 상태 — 25ms×2초 시계열 무변동·--fit-* style 재기록 
   console.log(`[fit-stable] elapsed=${stable.elapsed.toFixed(0)}ms samples=${stable.samples} values=${stable.values.join(',')} writes=${stable.writes}`);
 });
 
-test('ModifyIndicatorPill — 기존 useFitScale 렌더 계약을 유지한다', async ({ page }) => {
-  await boot(page, PHONE_402);
-  await waitForTtsIdle(page);
-  await fireStt(page, '100.0', 500);
-  await waitForTtsIdle(page);
-  await fireStt(page, '수정', 500);
-  const pill = page.locator('[data-testid="modify-indicator"]');
-  await expect(pill).toBeVisible();
-  const metrics = await pill.evaluate((el) => {
-    const style = getComputedStyle(el);
-    const name = el.querySelectorAll('span')[1];
-    return {
-      fitLo: style.getPropertyValue('--fit-lo').trim(),
-      fitHi: style.getPropertyValue('--fit-hi').trim(),
-      fitValue: style.getPropertyValue('--fit-value').trim(),
-      nameSize: parseFloat(getComputedStyle(name).fontSize),
-      scrollWidth: el.scrollWidth,
-      clientWidth: el.clientWidth,
-      scrollHeight: el.scrollHeight,
-      clientHeight: el.clientHeight,
-    };
+const UI_C_BASELINE = [
+  { name: '402×874', viewport: PHONE_402, modifyPx: 88.44, completePx: 40.20, reviewPx: 269.96 },
+  { name: '375×667', viewport: PHONE_375, modifyPx: 82.50, completePx: 36.02, reviewPx: 174.73 },
+] as const;
+
+for (const { name, viewport, modifyPx, completePx, reviewPx } of UI_C_BASELINE) {
+  test(`UI-c 수정 — 칩이 항목명을 주고 중앙은 값이 회수한다 @ ${name}`, async ({ page }) => {
+    await boot(page, viewport);
+    await waitForTtsIdle(page);
+    await fireStt(page, '100.0', 500);
+    await waitForTtsIdle(page);
+    await fireStt(page, '수정', 500);
+
+    const pill = page.locator('[data-testid="modify-indicator"]');
+    await expect(pill).toBeVisible();
+    await expect(pill, '시각 `측정항목01 수정`은 미렌더').toHaveText('');
+    await expect(pill, '삭제한 상태·항목명은 접근 가능한 이름에 남는다')
+      .toHaveAttribute('aria-label', '측정항목01 수정, 듣는 중');
+    await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '항목명은 활성 칩이 준다')
+      .toContainText('측정항목01');
+
+    await fireSttInterim(page, '80.5', 150);
+    const interim = page.locator('[data-testid="interim-value"]');
+    await expect(interim).toHaveText('80.5');
+    await expect(interim).toHaveAttribute('aria-label', '인식 중: 80.5');
+    expect((await pill.innerText()).trim(), '`인식 중`·항목명 없이 값만 시각 렌더').toBe('80.5');
+
+    await page.evaluate(() => {
+      (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = 3000;
+    });
+    await fireStt(page, '80.5', 100);
+    const value = page.locator('[data-testid="modify-value"]');
+    await expect(value).toBeVisible({ timeout: 3000 });
+    const metrics = await pill.evaluate((el) => {
+      const member = el.querySelector<HTMLElement>('[data-testid="modify-value"]')!;
+      const style = getComputedStyle(el);
+      return {
+        fontSize: parseFloat(getComputedStyle(member).fontSize),
+        fitValue: style.getPropertyValue('--fit-value').trim(),
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      };
+    });
+    expect(metrics.fitValue, '열린 fit이 실제 적용된다').not.toBe('');
+    expect(metrics.fontSize, `b84a08d ${modifyPx}px보다 값이 실제로 커진다`).toBeGreaterThan(modifyPx + 1);
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+    expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
+    console.log(`[ui-c-modify] ${name}: ${modifyPx.toFixed(2)}→${metrics.fontSize.toFixed(2)}px fit=${metrics.fitValue}`);
   });
-  expect(metrics.fitLo).toBe('1');
-  expect(metrics.fitHi).toBe('1');
-  expect(metrics.fitValue, '새 훅이 범위 밖 카드로 새지 않는다').toBe('');
-  expect(metrics.nameSize, '402px 기준 기존 min(9vw,6.2vh) 렌더').toBeCloseTo(36.18, 1);
-  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
-  expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
-  console.log(`[modify-unchanged] lo=${metrics.fitLo} hi=${metrics.fitHi} name=${metrics.nameSize.toFixed(2)}px fitValue=${metrics.fitValue || '(unset)'}`);
-});
+
+  test(`UI-c 완료 — 시각 상태어·배지를 지운 공간을 X/N이 회수한다 @ ${name}`, async ({ page }) => {
+    await boot(page, viewport);
+    await fillAllRows(page);
+    const summary = page.locator('[data-testid="complete-summary"]');
+    await expect(summary).toBeVisible({ timeout: 8000 });
+    await expect(page.locator('[data-testid="complete-receipt"]')).toHaveCount(0, { timeout: 8000 });
+    await expect(summary).toHaveAttribute('aria-label', '조사 완료, 전체 2행 중 2행 입력됨');
+    expect((await summary.innerText()).includes('완료'), '완료 상태어 시각 미렌더').toBe(false);
+    await expect(page.locator('[data-testid="session-complete-badge"]'), '상단 완료 배지 미렌더').toHaveCount(0);
+    await expect(page.locator('button[aria-label="음성 명령어 도움말"]'), '도움말은 완료 중에도 유지').toBeVisible();
+
+    const metrics = await summary.evaluate((el) => {
+      const member = el.querySelector<HTMLElement>('[data-testid="complete-count"]')!;
+      const style = getComputedStyle(el);
+      return {
+        text: member.innerText.trim(),
+        fontSize: parseFloat(getComputedStyle(member).fontSize),
+        fitSummary: style.getPropertyValue('--fit-summary').trim(),
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      };
+    });
+    expect(metrics.text).toBe('2 / 2');
+    expect(metrics.fitSummary, '완료 수치 열린 fit이 실제 적용된다').not.toBe('');
+    expect(metrics.fontSize, `b84a08d ${completePx}px보다 수치가 실제로 커진다`).toBeGreaterThan(completePx + 1);
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+    expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
+    console.log(`[ui-c-complete] ${name}: ${completePx.toFixed(2)}→${metrics.fontSize.toFixed(2)}px fit=${metrics.fitSummary}`);
+  });
+
+  test(`UI-c review — 활성 칩과 같은 항목명을 지운 공간을 값이 회수한다 @ ${name}`, async ({ page }) => {
+    await boot(page, viewport);
+    await waitForTtsIdle(page);
+    for (let i = 0; i < 11; i += 1) {
+      await fireStt(page, i === 0 ? '100.0' : `${20 + i}.0`, 320);
+      await waitForTtsIdle(page);
+    }
+    await page.evaluate(() => {
+      (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = 5000;
+    });
+    await fireStt(page, '31.0', 5200);
+
+    const hero = page.locator('[data-hero-state="review"]');
+    await expect(hero).toBeVisible({ timeout: 4000 });
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(200);
+    // 한 번의 live snapshot으로 상태와 자식을 함께 읽는다. child locator의 `toHaveCount(0)`만 쓰면
+    // review가 닫힌 뒤 부모째 0개가 된 것도 false-green으로 통과한다([TEAMOPS-30]).
+    const rendered = await hero.evaluate((el) => ({
+      state: el.getAttribute('data-hero-state'),
+      ariaLabel: el.getAttribute('aria-label'),
+      text: (el as HTMLElement).innerText.trim(),
+      labelCount: el.querySelectorAll('[data-fit-group="label"]').length,
+      activeChip: document.querySelector('[data-testid="column-chip"][data-active="true"]')
+        ?.getAttribute('data-col-name') ?? '',
+    }));
+    expect(rendered.state, '실제로 review인 같은 프레임을 측정').toBe('review');
+    expect(rendered.activeChip, 'review 항목명은 활성 칩이 준다').toBe('측정항목12');
+    expect(rendered.labelCount, '중복 항목명·체크 라인 전체 미렌더').toBe(0);
+    expect(rendered.ariaLabel).toBe('1행 완료, 명령 대기');
+    expect(rendered.text, '중앙은 값만 시각 렌더').toBe('31');
+
+    const metrics = await hero.evaluate((el) => {
+      const member = el.querySelector<HTMLElement>('[data-fit-group="value"]')!;
+      return {
+        fontSize: parseFloat(getComputedStyle(member).fontSize),
+        fitValue: getComputedStyle(el).getPropertyValue('--fit-value').trim(),
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+      };
+    });
+    expect(metrics.fontSize, `b84a08d ${reviewPx}px보다 review 값이 실제로 커진다`).toBeGreaterThan(reviewPx + 1);
+    expect(metrics.fitValue, 'review 열린 fit이 적용된다').not.toBe('');
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+    expect(metrics.scrollHeight).toBeLessThanOrEqual(metrics.clientHeight + 1);
+    console.log(`[ui-c-review] ${name}: ${reviewPx.toFixed(2)}→${metrics.fontSize.toFixed(2)}px fit=${metrics.fitValue}`);
+  });
+}

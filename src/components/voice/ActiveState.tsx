@@ -263,8 +263,6 @@ export function ActiveState({
         totalRows={totalRows}
         progressPct={pct}
         progressAccent={progressAccent}
-        paused={paused}
-        endReached={endReached}
         onOpenHelp={openCommandHelp}
       />
 

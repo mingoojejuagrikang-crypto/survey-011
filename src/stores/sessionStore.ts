@@ -117,7 +117,7 @@ interface SessionState {
    *  phase 'complete'는 두 가지를 겸한다: ① 완료 행 **검토 대기**(enterReviewWait — '이전'/점프로 이미
    *  끝난 행에 착지) ② **끝 도달**(announceEndReached). 화면은 이 둘을 다르게 그려야 한다 —
    *  ①은 와이어프레임 [1] active 레이아웃 그대로(hero가 ✓+방금값을 보인다, v035-hero-confirm 동작
-   *  계약) 이고, ②만 [4] complete(`완료 : X / N` + 종료 버튼)다. ref(awaitingFieldRef)로는 리렌더가
+   *  계약) 이고, ②만 complete(UI-c: 시각 상태어 없는 `X / N` + 종료 버튼)다. ref(awaitingFieldRef)로는 리렌더가
    *  일어나지 않으므로 화면이 읽을 수 있는 store 상태로 둔다.
    *  단일 작성 경로 = useVoiceSession(announceEndReached=true / enterReviewWait=false) + setPhase가
    *  'complete'를 벗어날 때 자동 해제. */

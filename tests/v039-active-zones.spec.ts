@@ -18,7 +18,7 @@ import {
   PHONE_402, PHONE_375,
   boot, injectLevel, zoneMetrics, triggerAnomaly, fillAllRows, PREV_ROUND,
 } from './fixtures/activeZones';
-import { fireStt } from './fixtures/stt';
+import { fireStt, fireSttInterim } from './fixtures/stt';
 /** 🔴 v0.43.0 UI-b — 배분이 **25/50/25 → 20/50/30**으로 바뀌었다(ui-standard §2, 민구 확정).
  *
  *  🔴 **여기 숫자는 제품 상수에서 읽지 않는다. 설계 계약을 테스트에 직접 고정한다.**
@@ -307,6 +307,9 @@ test('fb-27-2 — 대기 중엔 중앙 항목명을 렌더하지 않는다(칩�
   await boot(page);
   const hero = page.locator('[data-hero-state="listening"]');
   await expect(hero).toBeVisible();
+  await expect(hero, '시각 삭제한 상태어는 접근 가능한 이름에 남는다')
+    .toHaveAttribute('aria-label', '측정항목01 듣는 중');
+  await expect(hero, '`듣는 중`은 파형/도트와 중복이므로 시각 미렌더').not.toContainText('듣는 중');
   // 항목명이 화면 어디에도 **중앙에는** 없다. 칩존에는 있어야 한다(정보 자체를 잃은 게 아니다).
   await expect(page.locator('[data-testid="hero-primary"]'), '대기 중 중앙 항목명 미렌더').toHaveCount(0);
   const activeChip = page.locator('[data-testid="column-chip"][data-active="true"]');
@@ -335,7 +338,7 @@ test('fb-27-2 — 대기 중엔 중앙 항목명을 렌더하지 않는다(칩�
   expect(m.valueSlotHeight, '인식값 슬롯은 유지된다(발화 시 레이아웃 점프 방지)').toBeGreaterThan(40);
 });
 
-test('fb-27-2 대비 — 커밋 직후·검토에서는 항목명이 **남는다**(무차별 삭제가 아니다)', async ({ page }) => {
+test('UI-c 대비 — 커밋 직후에는 항목명이 **남는다**(칩이 이미 다음 항목이라 정보 유실 방지)', async ({ page }) => {
   // 🔴 이 대조군이 없으면 "항목명을 전부 지웠다"와 구별되지 않는다. 커밋 직후의 항목명은
   //    "지금 무엇을 입력하나"가 아니라 **"방금 무엇을 확정했나"** 이고, 그 시점엔 활성 칩이
   //    이미 다음 항목으로 옮겨가 칩존이 그 정보를 주지 못한다.
@@ -345,6 +348,9 @@ test('fb-27-2 대비 — 커밋 직후·검토에서는 항목명이 **남는다
   await expect(confirmHero, '커밋 직후 확인 카드').toBeVisible({ timeout: 3000 });
   await expect(confirmHero, '확정한 항목명이 보인다').toContainText('측정항목01');
   await expect(confirmHero, '확정값도 함께').toContainText('25');
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'),
+    '칩은 이미 다음 항목을 가리켜 방금 확정한 항목명을 대신할 수 없다')
+    .toContainText('측정항목02');
 });
 
 test('§공통규칙2·3 — 중앙 정보가 중앙 50% 안에서 가로+세로 중앙정렬', async ({ page }) => {
@@ -599,15 +605,18 @@ async function indicatorMode(page: Page): Promise<string> {
 }
 
 // ─── §[3] paused ────────────────────────────────────────────────────────────
-test('§[3] paused — 중앙 비움 + 상단 "일시정지" + 하단 `<`=재개 / `>`=종료 + 도트 `||`', async ({ page }) => {
+test('UI-c paused — 중앙·상단 상태어 비움 + aria 상태 + 하단 재개/종료 + 도트 `||`', async ({ page }) => {
   await boot(page);
   await page.locator('button[title="일시정지"]').click({ force: true });
   await page.waitForTimeout(400);
 
-  // 상단 "일시정지" 표시(§[3]).
+  // 도트·톤과 중복인 시각 배지는 없고, 스크린리더 상태명만 중앙의 무시각 surface에 남는다.
   const badge = page.locator('[data-testid="paused-card"]');
   await expect(badge).toBeVisible();
-  await expect(badge).toHaveText('일시정지');
+  await expect(badge).toHaveAttribute('aria-label', '일시정지');
+  await expect(badge).toHaveText('');
+  await expect(page.locator('[data-testid="session-complete-badge"]')).toHaveCount(0);
+  await expect(page.locator('button[aria-label="음성 명령어 도움말"]'), '도움말은 상태와 무관하게 유지').toBeVisible();
 
   // 중앙 비움 — 값도, "일시정지됨" 문구도 없다.
   const centerText = await page.locator('[data-testid="voice-center-stage"]').innerText();
@@ -702,20 +711,34 @@ test('fb-27-8 — 정정 후에는 `정상 : 복귀` 헤드라인을 렌더하�
   await expect(page.locator('[data-testid="anomaly-next-value"]')).toHaveText('80.5');
 });
 
+test('UI-c 알람 — `인식 중`은 시각 미렌더, aria 상태와 실제 값만 남는다', async ({ page }) => {
+  await boot(page);
+  await triggerAnomaly(page);
+  const activeChip = page.locator('[data-testid="column-chip"][data-active="true"]');
+  await expect(activeChip, '알람 중에도 항목명은 칩존이 준다').toContainText('측정항목01');
+  await fireSttInterim(page, '118.2', 200);
+  const interim = page.locator('[data-testid="interim-value"]');
+  await expect(interim).toHaveText('118.2');
+  await expect(interim).toHaveAttribute('aria-label', '인식 중: 118.2');
+  expect((await interim.innerText()).includes('인식 중'), '상태어는 도트·파형과 중복이라 시각 미렌더').toBe(false);
+});
+
 // ─── §[4] complete ──────────────────────────────────────────────────────────
-test('§[4] complete — 중앙 `완료 : X / N` + 종료 버튼, 체크 도트, 일시정지 버튼 없음', async ({ page }) => {
+test('UI-c complete — 중앙 `X / N` + aria 완료 상태, 체크 도트, 시각 상태 배지 없음', async ({ page }) => {
   await boot(page);
   await fillAllRows(page);
   const summary = page.locator('[data-testid="complete-summary"]');
   await expect(summary).toBeVisible({ timeout: 8000 });
 
-  // 완료 : X / N — X는 실제로 채워진 행 수(스킵·샘플손실 반영, ≤ N).
-  await expect(page.locator('[data-testid="complete-count"]')).toHaveText('완료 : 2 / 2');
+  // X / N — X는 실제로 채워진 행 수(스킵·샘플손실 반영, ≤ N). 상태어는 aria에 남는다.
+  await expect(page.locator('[data-testid="complete-count"]')).toHaveText('2 / 2');
+  await expect(summary).toHaveAttribute('aria-label', '조사 완료, 전체 2행 중 2행 입력됨');
   // 종료 버튼(중앙) — 데이터 영향 행동이라 확인 다이얼로그로 이어진다.
   const exit = summary.locator('button[title="입력 종료"]');
   await expect(exit).toBeVisible();
-  // 상단 "완료" 배지(§[4]).
-  await expect(page.locator('[data-testid="session-complete-badge"]')).toHaveText('완료');
+  // 상단 "완료" 배지는 체크 문양·진행바와 중복이라 시각 미렌더.
+  await expect(page.locator('[data-testid="session-complete-badge"]')).toHaveCount(0);
+  await expect(page.locator('button[aria-label="음성 명령어 도움말"]'), '완료 중에도 도움말 유지').toBeVisible();
   // 하단 `<` `>` **유지**(§[4] "하단 `<` `>` 유지").
   await expect(page.locator('button[aria-label="이전"]')).toBeVisible();
   await expect(page.locator('button[aria-label="다음"]')).toBeVisible();
@@ -727,7 +750,7 @@ test('§[4] complete — 중앙 `완료 : X / N` + 종료 버튼, 체크 도트,
   await expect(page.locator('button[title="종료 확인"]')).toBeVisible();
 });
 
-test('§[4] — `완료 : X / N`의 X는 실제로 채워진 행 수다(스킵 행은 빠진다)', async ({ page }) => {
+test('§[4] — `X / N`의 X는 실제로 채워진 행 수다(스킵 행은 빠진다)', async ({ page }) => {
   await boot(page);
   // 1행을 값 없이 '다음'으로 건너뛴다 → skippedRows로 갈라져 completedRows에 들어가지 않는다.
   await page.locator('button[aria-label="다음"]').click();
@@ -736,7 +759,7 @@ test('§[4] — `완료 : X / N`의 X는 실제로 채워진 행 수다(스킵 �
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 10_000 });
   // 🔴 여기가 §[4]의 고유 의미다 — 총행 수를 그대로 찍으면 통과하는 단언이 아니어야 한다.
   await expect(page.locator('[data-testid="complete-count"]'), '스킵 행은 완료 수에서 빠진다')
-    .toHaveText('완료 : 1 / 2');
+    .toHaveText('1 / 2');
 });
 
 test('§[4] 대비 — 완료 **행 검토 대기**는 [1] active 레이아웃을 유지한다(완료 화면으로 오인 금지)', async ({ page }) => {

@@ -374,6 +374,14 @@ test('검토 대기(항목2)와 상호작용 — 완료 행 검토 중 칩 수�
   expect(rereads.length, `검토 대기 재낭독 없음. tts=${JSON.stringify(tts.slice(-6))}`).toBeGreaterThanOrEqual(2);
   expect(rereads[rereads.length - 1]).toContain('30.7');
 
+  // UI-c 상태별 판별: enterReviewWait는 활성 칩을 첫 컬럼(횡경)으로 되돌리지만 방금 수정한 항목은
+  // 종경이다. 두 채널이 다를 때까지 항목명을 지우면 정보 유실이므로 중앙 영수증 항목은 유지한다.
+  const review = page.locator('[data-hero-state="review"]');
+  await expect(review).toBeVisible({ timeout: 4000 });
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]')).toContainText('횡경');
+  await expect(review).toContainText('종경');
+  await expect(review).toContainText('30.7');
+
   // bare 값 발화는 여전히 흡수(덮어쓰기 금지 계약 유지).
   await fireStt(page, '99.9', 500);
   await waitForRow(page, 1);

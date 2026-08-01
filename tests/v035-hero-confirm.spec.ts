@@ -2,8 +2,8 @@
  * v0.35.0 FB-A/C/F(Vance) — 중앙 카드 확인 플래시 검증.
  *
  *  깨끗한 값 커밋(추세/이상치 아님) 시 store `valueBurst`(v0.35.0 소비자 부활)의 seq가 바뀌고,
- *  VoiceHero가 ~1.5초간 확인 카드(✓ + 인식값, data-hero-state="confirm")를 보여준 뒤 대기 카드
- *  (항목명 + 파형, data-hero-state="listening")로 자동 복귀한다.
+ *  VoiceHero가 ~1.5초간 확인 카드(✓ + 인식값, data-hero-state="confirm")를 보여준 뒤 중앙을 비운
+ *  대기 상태(data-hero-state="listening", 항목명은 활성 칩)로 자동 복귀한다.
  *  ⚠️ 확인 카드는 valueBurst.name/value에서만 읽는다(currentCol이 이미 다음 항목이므로 — v0.34.0
  *     A4가 값 표시를 없앤 이유). 그래서 대기 카드와 시각적으로 구분(밝은 초록 채움 + ✓)된다.
  *
@@ -12,7 +12,7 @@
  *  advance()가 phase를 'complete'로 올리고 "N행 완료"를 안내한 뒤 다음 행에서 'active'로 복귀한다
  *  (useVoiceSession advance). 즉 확인 플래시가 CONFIRM_MS(1500ms)를 다 못 채우고 **echo TTS 길이만큼만**
  *  떴다가 review로 잘린다 — 실측 타임라인(1 음성컬럼, async TTS 200ms):
- *      t=0 listening(당도) → t=9 confirm(30.7) → t=263 review(1행 완료) → t=477 listening
+ *      t=0 listening → t=9 confirm(30.7) → t=263 review(30.7) → t=477 listening
  *  종전 테스트는 confirm이 "떴다"는 것과 이후 "listening으로 돌아왔다"만 봤기에 통과했지만, 그
  *  복귀는 **1.5초 타이머가 아니라 advance()의 행 이동**이 만든 것이었다(테스트가 이름과 다른 것을
  *  검증 = 공허). 또 그 사이 review 상태를 조용히 통과해 아무도 안 봤다.
@@ -22,7 +22,7 @@
  *
  *  그래서 아래로 분리한다(**동작 변경 없음** — 테스트만 스펙을 정직하게 반영):
  *   1) 행 **중간** 음성 컬럼 커밋 → ✓ + 값이 뜨고 CONFIRM_MS 동안 유지된 뒤 다음 항목 대기로 복귀.
- *   2) 행 **마지막** 음성 컬럼 커밋 → ✓ 대신 "N행 완료"(review). 민구가 (a)로 확정한 스펙이며
+ *   2) 행 **마지막** 음성 컬럼 커밋 → confirm 뒤 값 전용 review. 민구가 (a)로 확정한 전이이며
  *      통일하려면 advance/phase 순서 재작업이 필요해 범위 밖이다([TEST-UI-3] 파생 항목).
  *
  *  서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
@@ -206,7 +206,7 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
   console.log('✓ 행 중간 커밋: ✓+값 → ~1.5s 유지 → 다음 항목(산도) 대기 복귀');
 });
 
-// v0.35.0 R3-FIX-5 — 행 **마지막** 음성 컬럼은 ✓가 아니라 "N행 완료"가 뜬다.
+// v0.35.0 R3-FIX-5 — 행 **마지막** 음성 컬럼은 confirm 뒤 review 상태로 전환한다.
 //   ⚠️ 이건 버그가 아니라 **민구가 (a)로 확정한 스펙**이다([TEST-UI-3] 파생). advance()가 phase를
 //   'complete'로 올리고 VoiceHero의 렌더 우선순위(review > confirm)가 확인 플래시를 억제한다.
 //   통일하려면 advance/phase 순서 재작업이 필요해 범위 밖 — 이 테스트는 그 스펙을 **고정**한다
@@ -217,23 +217,25 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
  *  같은 취지 — 순간을 겨냥해 찍지 말고 기록을 본다. */
 async function recordHeroTimeline(page: Page) {
   await page.evaluate(() => {
-    const w = window as unknown as { __heroTl?: Array<{ st: string; prim: string }> };
+    const w = window as unknown as { __heroTl?: Array<{ st: string; prim: string; chip: string }> };
     w.__heroTl = [];
     const tick = () => {
       const st = document.querySelector('[data-hero-state]')?.getAttribute('data-hero-state') ?? 'none';
       const prim = document.querySelector('[data-testid="hero-primary"]')?.textContent ?? '';
+      const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]')
+        ?.getAttribute('data-col-name') ?? '';
       const tl = w.__heroTl!;
       const last = tl[tl.length - 1];
-      if (!last || last.st !== st || last.prim !== prim) tl.push({ st, prim });
+      if (!last || last.st !== st || last.prim !== prim || last.chip !== chip) tl.push({ st, prim, chip });
       requestAnimationFrame(tick);
     };
     tick();
   });
 }
 const readHeroTimeline = (page: Page) =>
-  page.evaluate(() => (window as unknown as { __heroTl: Array<{ st: string; prim: string }> }).__heroTl);
+  page.evaluate(() => (window as unknown as { __heroTl: Array<{ st: string; prim: string; chip: string }> }).__heroTl);
 
-test('R3-FIX-5 — 행 마지막 음성 컬럼 커밋: ✓ 대신 "N행 완료"(review) — 민구 확정 스펙 (a)', async ({ page }) => {
+test('R3-FIX-5 — 행 마지막 음성 컬럼 커밋: confirm 뒤 값 전용 review — 민구 확정 스펙 (a)', async ({ page }) => {
   await boot(page);
   await startSession(page);
 
@@ -250,22 +252,21 @@ test('R3-FIX-5 — 행 마지막 음성 컬럼 커밋: ✓ 대신 "N행 완료"(
   const tl = await readHeroTimeline(page);
   console.log('hero timeline(행 마지막 커밋):', JSON.stringify(tl));
 
-  // 스펙 (a): 행 마지막 커밋엔 review(✓ + 방금 입력한 값)가 뜬다.
-  //   v0.37.0 FB-E(민구 확정) — review 표시가 대형 **행 번호**('1')에서 **방금 입력한 값**으로
-  //   바뀌었다(hero-primary=행 마지막 음성 컬럼 '산도'의 커밋값 '4.2'). 행 번호 의미는 aria-label로
-  //   보존. 오라클을 행번호→입력값으로 교체 — "행 마지막은 confirm이 아니라 review" 메커니즘은 동일.
+  // 스펙 (a): 행 마지막 커밋엔 방금 입력한 값 전용 review가 뜬다. UI-c는 활성 칩과 중복인
+  // 항목명·체크 라인을 지우되 hero-primary 값과 aria 행 완료 상태는 유지한다.
   const reviewAt = tl.findIndex((f) => f.st === 'review' && f.prim === '4.2');
-  expect(reviewAt, '행 마지막 컬럼은 review(✓+입력값 "4.2")를 낸다').toBeGreaterThanOrEqual(0);
+  expect(reviewAt, '행 마지막 컬럼은 review 입력값 "4.2"를 낸다').toBeGreaterThanOrEqual(0);
+  expect(tl[reviewAt].chip, 'review 순간 활성 칩 항목명도 함께 기록한다').not.toBe('');
 
   // 정밀화(실측): ✓ 확인 플래시가 **아예 안 뜨는 게 아니라**, echo TTS 동안 잠깐 떴다가 advance()가
   //   phase를 'complete'로 올리는 순간 review가 **덮어쓴다**(렌더 우선순위 review > confirm). 즉
-  //   행 마지막 값은 CONFIRM_MS(1.5s)를 못 채운다 — 이것이 "✓ 대신 N행 완료"의 실제 메커니즘이다.
+  //   행 마지막 값은 CONFIRM_MS(1.5s)를 못 채우고 값 전용 review가 승계한다.
   //   따라서 오라클은 "confirm이 없다"가 아니라 **"confirm이 review로 승계된다"(순서)**여야 한다.
   const confirmAt = tl.findIndex((f) => f.st === 'confirm' && f.prim === '4.2');
   if (confirmAt >= 0) {
     expect(
       confirmAt,
-      '행 마지막의 ✓는 잠깐 떴다가 review("N행 완료")로 대체된다 — 1.5초를 채우지 못한다(민구 확정 (a))',
+      '행 마지막 confirm은 잠깐 떴다가 값 전용 review로 대체된다 — 1.5초를 채우지 못한다',
     ).toBeLessThan(reviewAt);
   }
   // 확인 플래시가 review **이후**까지 살아남아선 안 된다(그러면 (a) 스펙이 깨진 것).
@@ -282,7 +283,7 @@ test('R3-FIX-5 — 행 마지막 음성 컬럼 커밋: ✓ 대신 "N행 완료"(
   expect(tl[listeningAt].prim, '대기 복귀 시 중앙 항목명이 되살아나지 않는다').toBe('');
   await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '다음 행 포인터=당도')
     .toContainText('당도');
-  console.log('✓ 행 마지막 커밋: review "1행 완료" (✓ 아님 — 확정 스펙 고정)');
+  console.log('✓ 행 마지막 커밋: 활성 칩 항목명 + 중앙 값 전용 review');
 });
 
 // v0.37.0 리뷰 #2(Codex, 민구 Option 1) — skip-완료 검토 오표시 회귀 ─────────────────────────

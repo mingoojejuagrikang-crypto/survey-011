@@ -8,7 +8,7 @@
  *   "방금 입력한 값"으로 오표시했다.
  * 수정: 모든 커밋 경로(음성·수동·이상치 정정)가 store commitReceipt를 발행하고, 검토 파생은 이 영수증을
  *   소비한다. 아래 오라클은 "마지막 셀을 어떤 경로로 채웠든 검토는 그 셀의 실제 커밋값을 보인다"이다.
- *   (d) '이전'으로 완료행을 재방문(새 영수증 없음)하면 여전히 중립 "N행 완료"로 폴백한다(값 오표시 금지).
+ *   (d) '이전'으로 완료행을 재방문(새 영수증 없음)하면 중앙 값·상태어를 비우고 aria 상태만 남긴다.
  *
  * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  * Mock/fixture 패턴은 manual-input.spec.ts와 동일(_aborted 가드 + __ttsLog).
@@ -354,7 +354,7 @@ test('(a) 앞 셀 음성 + 마지막 셀 수동 입력 → 검토는 수동값(4
   await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
 
   // 와이어프레임 §[4](2026-07-24 확정) — 마지막 행의 마지막 셀을 채우는 순간이 곧 **조사 완료**라
-  //   중앙은 `완료 : X / N` + 종료로 바뀐다. 커밋 영수증(이 스펙의 계약: "방금 확정된 셀의 값을
+  //   중앙은 UI-c의 시각 상태어 없는 `X / N` + 종료로 바뀐다. 커밋 영수증(이 스펙의 계약: "방금 확정된 셀의 값을
   //   보여준다, stale·거부값 오표시 금지")은 그 위 확인 줄(complete-receipt)로 살아 있다.
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
   // 핵심: 방금 수동 입력한 종경(4.2)을 보인다 — 종전 valueBurst 파생은 앞 음성 셀 30.7을 오표시했다.
@@ -403,7 +403,7 @@ test('(b) 마지막 셀 이상치 정정 [확인] → 검토는 확정된 정정
   await expect(popup).toHaveCount(0, { timeout: 4000 });
 
   // 와이어프레임 §[4](2026-07-24 확정) — 마지막 행의 마지막 셀을 채우는 순간이 곧 **조사 완료**라
-  //   중앙은 `완료 : X / N` + 종료로 바뀐다. 커밋 영수증(이 스펙의 계약: "방금 확정된 셀의 값을
+  //   중앙은 UI-c의 시각 상태어 없는 `X / N` + 종료로 바뀐다. 커밋 영수증(이 스펙의 계약: "방금 확정된 셀의 값을
   //   보여준다, stale·거부값 오표시 금지")은 그 위 확인 줄(complete-receipt)로 살아 있다.
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
   // 핵심: 정정 [확인]으로 확정된 종경(77.7)을 보인다 — 앞 음성 셀 30.7도, 비교 직전값 50.0도 아니다.
@@ -438,8 +438,8 @@ test('[EXIT-PERSIST-1] 마지막 행 corrected 정정은 알람을 해제하고 
   }).toContain('end_reached_render:branch=end,alertStatus=none');
 });
 
-// ─── (d) '이전'으로 완료행 재방문 → 중립 "N행 완료" 폴백(새 영수증 없음) ─────────
-test('(d) 완료행을 "이전"으로 재방문(새 커밋 없음) → 검토는 값이 아니라 중립 "1행 완료"로 폴백', async ({ page }) => {
+// ─── (d) '이전'으로 완료행 재방문 → 시각 비움 + aria 상태(새 영수증 없음) ─────────
+test('(d) 완료행을 "이전"으로 재방문(새 커밋 없음) → 중앙은 비우고 aria 완료 상태만 남긴다', async ({ page }) => {
   const settings = {
     state: {
       googleConnected: false, userEmail: null, sheet: null,
@@ -465,11 +465,13 @@ test('(d) 완료행을 "이전"으로 재방문(새 커밋 없음) → 검토는
     return m && parseInt(m[1]) === 2;
   }, undefined, { timeout: 6000 });
 
-  // '이전' → 완료행(1) 재방문 = enterReviewWait(새 영수증 없음). 검토는 stale 값 대신 중립 라벨.
+  // '이전' → 완료행(1) 재방문 = enterReviewWait(새 영수증 없음). stale 값도 시각 상태어도 없다.
   await fireStt(page, '이전', 600);
   await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
-  await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('1행 완료');
+  await expect(page.locator('[data-testid="hero-primary"]'), 'stale 값·`1행 완료` 시각 문구 미렌더').toHaveCount(0);
   await expect(page.getByRole('status', { name: '1행 완료, 명령 대기' })).toBeVisible();
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '검토 포인터 항목은 칩존이 준다')
+    .toContainText('횡경');
 });
 
 // ─── (e) 검토 중 터치 컬럼 인라인 편집 → 검토는 터치값을 보인다(Codex Medium #2, 터치 영수증) ─────
@@ -499,7 +501,7 @@ test('(e) 검토 중 터치 컬럼 인라인 편집 → 검토는 터치값(88)�
   // 유일 음성 컬럼(횡경) 커밋 → 행 완료(터치 컬럼은 완료 판정에 무관) → 검토 머묾, 값=30.7.
   await fireStt(page, '30.7');
   // 와이어프레임 §[4](2026-07-24 확정) — 마지막 행의 마지막 셀을 채우는 순간이 곧 **조사 완료**라
-  //   중앙은 `완료 : X / N` + 종료로 바뀐다. 커밋 영수증(이 스펙의 계약: "방금 확정된 셀의 값을
+  //   중앙은 UI-c의 시각 상태어 없는 `X / N` + 종료로 바뀐다. 커밋 영수증(이 스펙의 계약: "방금 확정된 셀의 값을
   //   보여준다, stale·거부값 오표시 금지")은 그 위 확인 줄(complete-receipt)로 살아 있다.
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
   await expect(page.locator('[data-testid="complete-receipt-value"]')).toHaveText('30.7');
