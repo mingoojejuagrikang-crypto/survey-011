@@ -314,18 +314,19 @@ test('D [EXIT-PERSIST-1] — 검토 행 상시 종료 취소 후 suspend 래치�
 test('E [CLIP-WINDOW-2] — 피드백 모달 중 신규 arm은 차단·기록되고 닫으면 같은 awaiting에 복원된다', async ({ page }) => {
   await boot(page);
 
-  // 수동 시트 뒤에 피드백 모달을 겹친다. 뒤쪽 시트의 실제 voice-retry 핸들러를 호출하면
-  // manual_input은 해제되지만 feedback_modal은 남은 채 restartFromCol→announceField→arm이 돈다.
+  // 수동 입력 뒤에 피드백 모달을 겹친다. 뒤쪽 키패드로 현재값을 커밋하면 manual_input은
+  // 해제되지만 feedback_modal은 남은 채 다음 필드 announceField→arm이 돈다.
   await page.locator('[data-testid="column-chip"][data-active="true"]').click();
   await expect(page.locator('[data-testid="manual-value-sheet"]')).toBeVisible();
   await page.locator('[data-testid="tab-feedback"]').click();
   await expect(page.locator('[data-testid="feedback-modal"]')).toBeVisible({ timeout: 15_000 });
 
   const startsBeforeBlockedArm = await clipStartAttemptCount(page);
-  await clickMounted(page, '[data-testid="manual-voice-retry"]');
+  for (const key of ['3', '5', '.', '1']) await clickMounted(page, `[data-testid="manual-key-${key}"]`);
+  await clickMounted(page, '[data-testid="manual-commit"]');
   await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
 
-  const blockedExtra = 'clip_arm_blocked:reason=feedback_modal,row=1,col=c8';
+  const blockedExtra = 'clip_arm_blocked:reason=feedback_modal,row=1,col=c9';
   await expect.poll(
     async () => (await loadLogEvents(page)).filter((e) => e.extra === blockedExtra).length,
     { timeout: 3000 },
@@ -340,29 +341,30 @@ test('E [CLIP-WINDOW-2] — 피드백 모달 중 신규 arm은 차단·기록되
   await expect(page.locator('[data-testid="feedback-modal"]')).toHaveCount(0);
   await expect.poll(() => clipStartAttemptCount(page), { timeout: 3000 }).toBe(startsBeforeBlockedArm + 1);
   expect((await loadLogEvents(page)).filter((e) => e.extra === blockedExtra)).toHaveLength(1);
-  await waitForActiveChip(page, '횡경');
+  await waitForActiveChip(page, '종경');
 });
 
 // ─── F: resume 없이 clear하는 세션 경계는 pending arm도 함께 폐기 ───────────────────────────
 test('F [CLIP-WINDOW-2] — suspend 중 arm 후 종료 clear는 pending을 버려 다음 세션 복원을 막지 않는다', async ({ page }) => {
   await boot(page, TWO_ROW_SETTINGS);
-  await reachEnd(page);
 
-  // 완료 행 c9의 재녹음 요청을 feedback suspend 뒤에서 발생시켜 c9를 pending 슬롯에 둔다.
-  await page.locator('[data-testid="column-chip"][data-col-name="종경"]').click();
+  // 현재 c8 수동 커밋을 feedback suspend 뒤에서 수행한다. 다음 필드 c9의 announceField가 arm을
+  // 요청하므로, 제거된 voice-retry 전용 경로 없이도 실제 사용자 커밋 경로로 pending을 만든다.
+  await page.locator('[data-testid="column-chip"][data-active="true"]').click();
   await expect(page.locator('[data-testid="manual-value-sheet"]')).toBeVisible();
   await page.locator('[data-testid="tab-feedback"]').click();
   await expect(page.locator('[data-testid="feedback-modal"]')).toBeVisible({ timeout: 15_000 });
-  await clickMounted(page, '[data-testid="manual-voice-retry"]');
+  for (const key of ['1', '1', '.', '1']) await clickMounted(page, `[data-testid="manual-key-${key}"]`);
+  await clickMounted(page, '[data-testid="manual-commit"]');
   await expect.poll(
     async () => (await loadLogEvents(page))
-      .filter((e) => e.extra === 'clip_arm_blocked:reason=feedback_modal,row=2,col=c9').length,
+      .filter((e) => e.extra === 'clip_arm_blocked:reason=feedback_modal,row=1,col=c9').length,
     { timeout: 3000 },
   ).toBe(1);
 
-  // 작업1의 persistent exit를 모달 뒤에서 실제 호출한다. 확인 경로는 resume 없이 stop()으로 가며
+  // 일반 활성 화면의 종료를 모달 뒤에서 실제 호출한다. 확인 경로는 resume 없이 stop()으로 가며
   // clearUiSuspendLatch가 suspended/pending 두 슬롯을 함께 폐기해야 한다.
-  await clickMounted(page, '[data-testid="voice-status-control"][data-status="exit"]');
+  await clickMounted(page, '[data-testid="voice-control-stop"]');
   await expect(page.locator('button[title="종료 확인"]')).toBeAttached();
   await clickMounted(page, 'button[title="종료 확인"]');
   await expect(page.locator('text=음성 입력 시작').first()).toBeAttached({ timeout: 10_000 });

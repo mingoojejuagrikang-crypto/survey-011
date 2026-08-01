@@ -1022,35 +1022,6 @@ export function useVoiceSession() {
     await announceField(target, { isModify: true, previousValue: prevTargetValue });
   }, [announceField, enterReviewWait, persistSession, say]);
 
-  // ── public: restart from a voice col (chip tap) ────────────
-  const restartFromCol = useCallback(async (colId: string) => {
-    const sess = useSessionStore.getState();
-    const vc = voiceColsList();
-    const idx = vc.findIndex((c) => c.id === colId);
-    if (idx < 0) return;
-    const row = sess.activeRow;
-    logCell({ type: 'command', parsed: 'restart', extra: 'touch', row, colId });
-    // Clear this and subsequent voice values in the current row
-    for (let i = idx; i < vc.length; i++) {
-      sess.setRowValue(row, vc[i].id, '');
-      // Clip preservation (was: delete on touch-restart). A chip-tap restart is also a correction
-      // of a (possibly misrecognised) committed value — archive the prior attempt instead of
-      // deleting, then unlink the pending pointer so the re-record writes a fresh bare key.
-      const pendingMap = pendingClipsRef.current[row];
-      if (pendingMap?.[vc[i].id]) {
-        archiveCellClip(row, vc[i].id);
-        delete pendingMap[vc[i].id];
-      }
-    }
-    sess.markRowIncomplete(row);
-    sess.setActiveCol(idx);
-    sess.setRecognized('');
-    cancelTts();
-    epochRef.current++;
-    awaitingFieldRef.current = null;
-    await announceField(vc[idx]);
-  }, [announceField]);
-
   // ── public: jump to a specific row (auto-chip change / 행 이동 공용) ──────
   const jumpToRow = useCallback(
     async (targetRow: number, options?: { setReturn?: boolean; source?: 'voice' | 'touch' }) => {
@@ -3450,7 +3421,6 @@ export function useVoiceSession() {
     stop,
     /** v0.35.0 R3-FIX-2 — 종료 저장 실패 배너의 [다시 저장] 핸들러(VoiceScreen). */
     retryFinalPersist,
-    restartFromCol,
     jumpToRow,
     gotoAdjacentRow,
     goNextRow,

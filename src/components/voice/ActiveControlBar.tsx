@@ -171,8 +171,8 @@ export function ActiveControlBar({
 }
 
 /** 하단 행동 버튼. 높이는 10% 행동행이 정하고 44px 터치 하한만 사람이 정한다(GL-007 규칙 2). */
-function EdgeButton({
-  kind, label, title, onClick, icon, accent, accentBg, testId, status, tone,
+export function EdgeButton({
+  kind, label, title, onClick, icon, accent, accentBg, testId, status, tone, disabled = false,
 }: {
   kind: 'icon' | 'text';
   label: string;
@@ -185,6 +185,7 @@ function EdgeButton({
   testId?: string;
   status?: string;
   tone?: GlowTone;
+  disabled?: boolean;
 }) {
   const color = accent ?? T.textDim;
   return (
@@ -194,6 +195,7 @@ function EdgeButton({
       data-status={status}
       data-tone={tone}
       onClick={onClick}
+      disabled={disabled}
       title={title}
       aria-label={label}
       style={{
@@ -208,11 +210,12 @@ function EdgeButton({
         border: `${accent ? 2 : 1}px solid ${accent ? accent : T.lineStrong}`,
         background: accentBg ?? T.card,
         color,
+        opacity: disabled ? 0.45 : 1,
         fontSize: 'clamp(16px, 4.6vw, 20px)',
         fontWeight: 900,
         letterSpacing: -0.3,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        cursor: 'pointer', touchAction: 'manipulation',
+        cursor: disabled ? 'default' : 'pointer', touchAction: 'manipulation',
       }}
     >
       {kind === 'icon' ? (

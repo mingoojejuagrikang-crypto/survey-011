@@ -173,7 +173,6 @@ export function VoiceScreen(props: {
         reaskReason={(sess.reaskReason ?? null) as ReaskReason}
         uiCommand={voiceSession.uiCommand}
         onEnd={() => voiceSession.stop()}
-        onRestartFromCol={(id) => voiceSession.restartFromCol(id)}
         onJumpToRow={(r) => voiceSession.jumpToRow(r)}
         onPrevRow={() => voiceSession.gotoAdjacentRow(-1)}
         onNextRow={() => voiceSession.goNextRow()}

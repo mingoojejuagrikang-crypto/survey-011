@@ -104,17 +104,23 @@ assertZoneRatios(ACTIVE_ZONE_RATIOS);
  *  합이 100임을 위에서 보장하므로 `pct / 10`은 세 트랙 합이 항상 `10fr`이 된다. */
 export const zoneTrack = (pct: number) => `minmax(0, ${pct / 10}fr)`;
 
-/** ui-standard §2의 배분 3종 중 **UI-b는 `base`만 배선한다** — 상태→배분 전환은 UI-e다.
- *  🔴 한 단계는 자기 몫만 깨야 차집합이 판정으로 기능한다. `modify`/`dotless`를 지금 배선하면
- *  `v039:613`(일시정지에서도 중앙 50%)이 UI-b에서 깨지는데, 그건 UI-e의 정당 파손이다.
- *
+/** ui-standard §2 배분을 상태에 맞는 그리드 트랙으로 만든다.
  *  🔴 **`ACTIVE_ZONE_RATIOS`에서 생성한다 — 손으로 적은 `2fr 5fr 3fr`이 아니다.**
  *  종전엔 둘이 따로 있어 상수와 트랙이 갈라질 수 있었고, 더 나쁘게는 **테스트가 그 상수를 읽어
  *  기대값을 만들고 있었다.** 제품과 테스트를 같은 diff로 바꾸면 25/50/25 후퇴도 green이 된다
  *  (Codex 리뷰 🔴-1이 실측으로 반증했다: 둘을 함께 되돌리자 `v039` 2/2 통과).
- *  👉 이제 배분의 SSOT는 위 상수 하나이고, **테스트는 이걸 읽지 않고 설계 계약을 직접 고정한다.** */
-export const ACTIVE_ZONE_ROWS =
-  `auto ${zoneTrack(ACTIVE_ZONE_RATIOS.base.chip)} ${zoneTrack(ACTIVE_ZONE_RATIOS.base.center)} ${zoneTrack(ACTIVE_ZONE_RATIOS.base.bottom)}`;
+ *  👉 배분의 SSOT는 위 상수 하나이고, **테스트는 이걸 읽지 않고 설계 계약을 직접 고정한다.**
+ *
+ *  UI-e3는 수동 수정 입력에 `modify`만 배선한다. `dotless`는 저장 확인 전용이며 UI-e4 범위다. */
+export type ActiveZoneMode = keyof typeof ACTIVE_ZONE_RATIOS;
+
+export const activeZoneRows = (mode: ActiveZoneMode) => {
+  const ratios = ACTIVE_ZONE_RATIOS[mode];
+  return `auto ${zoneTrack(ratios.chip)} ${zoneTrack(ratios.center)} ${zoneTrack(ratios.bottom)}`;
+};
+
+/** 기본 활성 화면의 기존 공개 계약. 상태 배선은 `activeZoneRows`를 사용한다. */
+export const ACTIVE_ZONE_ROWS = activeZoneRows('base');
 
 /** UI-e1 — 하단 트랙 안에서 버튼 행이 갖는 몫(ui-standard §2의 20:10 = `1/3`).
  *  `ActiveControlBar`가 인디케이터 행과 행동행을 세로로 분리해 이 값을 직접 물려받는다. */

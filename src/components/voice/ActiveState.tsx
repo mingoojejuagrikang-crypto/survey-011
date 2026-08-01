@@ -13,7 +13,7 @@ import { ActiveHeaderStrip } from './ActiveHeaderStrip';
 import { ChipZone } from './ChipZone';
 import { CenterStage } from './CenterStage';
 import { ActiveControlBar, type EdgeMode } from './ActiveControlBar';
-import { ACTIVE_ZONE_ROWS } from './heroLayout';
+import { activeZoneRows } from './heroLayout';
 import type { DotGlyph } from './StateDots';
 import { ExitConfirmDialog } from './ExitConfirmDialog';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
@@ -35,7 +35,7 @@ export function ActiveState({
   totalRows, columns, voiceCols, currentColId, completing, endReached, paused, anomalyPending, tone,
   getAudioLevel, getTimeDomainData,
   reaskReason, uiCommand,
-  onEnd, onRestartFromCol, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
+  onEnd, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
   onManualCommit, onManualOpen, onManualClose, onAnomalyConfirm, onAnomalyModify,
   onManualAnomalyConfirm, onManualAnomalyModify,
   onCommandHelpOpen, onCommandHelpClose,
@@ -62,7 +62,6 @@ export function ActiveState({
   /** v0.38.0 #4-③ — useVoiceSession이 최종 판정한 UI 버튼 음성 명령(단조 seq). */
   uiCommand: VoiceUiCommandSignal | null;
   onEnd: () => void;
-  onRestartFromCol: (id: string) => void;
   onJumpToRow: (row: number) => void;
   onPrevRow: () => void;
   onNextRow: () => void;
@@ -252,9 +251,8 @@ export function ActiveState({
       style={{
         flex: 1, minHeight: 0,
         display: 'grid',
-        // 와이어프레임 §공통규칙1 — auto(상단 스트립) + 칩존 20% / 중앙 50% / 하단 30%.
-        //   v0.43.0 UI-b에서 25/50/25 → 20/50/30 (ui-standard §2). SSOT는 ACTIVE_ZONE_RATIOS.
-        gridTemplateRows: ACTIVE_ZONE_ROWS,
+        // 기본 20/50/30, 인라인 수동 수정은 20/30/50. `dotless`는 UI-e4 저장 확인 전용이다.
+        gridTemplateRows: activeZoneRows(manualCol ? 'modify' : 'base'),
       }}
       data-testid="voice-active-state"
     >
@@ -297,66 +295,64 @@ export function ActiveState({
         onCancel={() => setEditingColId(null)}
       />
 
-      <CenterStage
-        paused={paused}
-        anomalyAlert={alertVisible}
-        endReached={endReached}
-        modifyIndicator={sess.modifyIndicator}
-        currentCol={currentCol}
-        completedCount={sess.completedRows.length}
-        totalRows={totalRows}
-        row={row}
-        tone={tone}
-        reaskReason={reaskReason}
-        completing={completing}
-        reviewCommit={reviewCommit}
-        modifyPrevValue={modPrev}
-        modifyCurrentValue={modCurrent}
-        onExit={openExitConfirm}
-      />
-
-      <ActiveControlBar
-        tone={tone}
-        mode={edgeMode}
-        glyph={glyph}
-        // 현재 끝 도달 전에는 도트 전체가 일시정지 터치 경로다. 끝 도달 화면에서는 false지만,
-        // 바로 아래 indicatorExit가 같은 자리를 종료 컨트롤로 승계한다.
-        indicatorInteractive={!endReached && !paused}
-        // [EXIT-PERSIST-1] 끝 도달 뒤에는 현재 행과 무관하게 도트 자리를 종료가 승계한다.
-        // 응답 대기 알람의 확인/수정과 일시정지의 재시작/종료가 더 높은 우선순위다.
-        indicatorExit={sess.endReachedOnce && !paused && !anomalyActionable}
-        waveActive={!paused}
-        getAudioLevel={getAudioLevel}
-        getTimeDomainData={getTimeDomainData}
-        uiCommand={uiCommand}
-        onPrevRow={onPrevRow}
-        onNextRow={onNextRow}
-        onTogglePause={onTogglePause}
-        onExit={openExitConfirm}
-        onAnomalyConfirm={handleAnomalyConfirm}
-        onAnomalyModify={handleAnomalyModify}
-      />
-
-      {/* fixed 오버레이(도움말/수동입력 시트/종료확인)는 grid track을 만들지 않는다. */}
-      {cmdHelpOpen && <CommandHelpPopup onClose={closeCommandHelp} />}
-      {manualCol && (
+      {manualCol ? (
         <ManualValueSheet
           col={manualCol}
-          row={row}
           currentValue={rowValues[manualCol.id] ?? ''}
+          tone={tone}
           onCommit={(v) => {
             const colId = manualCol.id;
             closeManualSheet();
             onManualCommit(row, colId, v);
           }}
-          onVoiceRetry={() => {
-            const colId = manualCol.id;
-            closeManualSheet();
-            onRestartFromCol(colId);
-          }}
           onClose={closeManualSheet}
         />
+      ) : (
+        <>
+          <CenterStage
+            paused={paused}
+            anomalyAlert={alertVisible}
+            endReached={endReached}
+            modifyIndicator={sess.modifyIndicator}
+            currentCol={currentCol}
+            completedCount={sess.completedRows.length}
+            totalRows={totalRows}
+            row={row}
+            tone={tone}
+            reaskReason={reaskReason}
+            completing={completing}
+            reviewCommit={reviewCommit}
+            modifyPrevValue={modPrev}
+            modifyCurrentValue={modCurrent}
+            onExit={openExitConfirm}
+          />
+
+          <ActiveControlBar
+            tone={tone}
+            mode={edgeMode}
+            glyph={glyph}
+            // 현재 끝 도달 전에는 도트 전체가 일시정지 터치 경로다. 끝 도달 화면에서는 false지만,
+            // 바로 아래 indicatorExit가 같은 자리를 종료 컨트롤로 승계한다.
+            indicatorInteractive={!endReached && !paused}
+            // [EXIT-PERSIST-1] 끝 도달 뒤에는 현재 행과 무관하게 도트 자리를 종료가 승계한다.
+            // 응답 대기 알람의 확인/수정과 일시정지의 재시작/종료가 더 높은 우선순위다.
+            indicatorExit={sess.endReachedOnce && !paused && !anomalyActionable}
+            waveActive={!paused}
+            getAudioLevel={getAudioLevel}
+            getTimeDomainData={getTimeDomainData}
+            uiCommand={uiCommand}
+            onPrevRow={onPrevRow}
+            onNextRow={onNextRow}
+            onTogglePause={onTogglePause}
+            onExit={openExitConfirm}
+            onAnomalyConfirm={handleAnomalyConfirm}
+            onAnomalyModify={handleAnomalyModify}
+          />
+        </>
       )}
+
+      {/* fixed 오버레이(도움말/종료확인)는 grid track을 만들지 않는다. 수동 입력은 인라인이다. */}
+      {cmdHelpOpen && <CommandHelpPopup onClose={closeCommandHelp} />}
       {confirmExitOpen && (
         <ExitConfirmDialog
           onCancel={cancelExitConfirm}

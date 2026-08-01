@@ -6,7 +6,7 @@
  *  - `manual_commit` 텔레메트리(항목3 예약분, command + extra:'touch')
  *  - awaiting 필드 커밋이면 echo 후 advance (음성 커밋과 동일 진행)
  *  - float는 col.decimals 자리수 검증(validateManual) — 초과 시 커밋 차단 + 사유 표시
- *  - "음성으로 다시 입력"은 기존 restartFromCol 경로 보존
+ *  - 취소/Escape는 값 없이 인라인 입력을 닫고 같은 항목의 음성 대기로 복귀
  *  - 검토 대기(reviewWait, 항목2) 중 커밋이면 검토 대기 재무장(재낭독)
  *  - v0.34.0 A1 — 이상치 규칙 위반 커밋(awaiting 셀)은 **진행 보류**: 팝업+[확인][수정] 버튼,
  *    활성 칩은 커밋한 칩에 유지(전진 버그 수정). [확인] 후에만 advance. 알람 TTS·음성 확인
@@ -289,18 +289,19 @@ test('float decimals 검증 — 소수 2자리(35.12) 입력 차단 + 사유 표
   expect(commits[0].text).toBe('35.1');
 });
 
-test('"음성으로 다시 입력" — 시트 닫힘 + 기존 restartFromCol 경로(재안내) 보존', async ({ page }) => {
+test('취소 — 인라인 입력 닫힘 + 같은 항목의 음성 대기·STT 재개', async ({ page }) => {
   await setupAndStart(page);
   await waitForActiveChip(page, '횡경');
 
   await openSheetFor(page, '횡경');
-  await page.locator('[data-testid="manual-voice-retry"]').click();
+  await page.locator('[data-testid="manual-cancel"]').click();
   await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
   await page.waitForTimeout(400);
 
-  // restartFromCol 로그(터치 재시작) + 여전히 횡경 대기 → 음성 커밋이 정상 동작.
+  // 취소는 값을 지우거나 별도 restart를 만들지 않는다. 기존 awaiting을 유지한 채 STT만 재개한다.
   const events = await loadLogEventsFromIDB(page);
-  expect(events.some((e) => e.type === 'command' && e.parsed === 'restart' && e.extra === 'touch')).toBe(true);
+  expect(events.some((e) => e.type === 'command' && e.parsed === 'restart' && e.extra === 'touch')).toBe(false);
+  expect(events.some((e) => e.parsed === 'ui_resume' && e.extra === 'manual_input')).toBe(true);
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '35.1', 400);
   await waitForActiveChip(page, '종경');
@@ -750,6 +751,8 @@ test('[리뷰] A1 회귀 — [수정] 후 시트 취소: 팝업·보류 유지(�
   await page.locator('[data-testid="anomaly-modify-btn"]').click();
   await page.waitForTimeout(400);
   await expect(page.locator('[data-testid="manual-commit"]')).toBeVisible();
+  await expect(page.locator('[data-testid="manual-value-sheet"]'), '보류 이상치 수정 중 붉은 톤 유지')
+    .toHaveAttribute('data-tone', 'red');
   await expect(popup).toHaveCount(0); // 시트가 덮음 — 상태가 아니라 표시만 숨김
 
   // 값을 고치지 않고 시트를 **취소** → 팝업이 그대로 다시 보이고 보류도 살아 있다.
