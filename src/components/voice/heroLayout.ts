@@ -62,15 +62,58 @@ export const CHIP_TYPE = {
   value: 'max(18px, calc(clamp(22px, min(13vw, 6.5vh), 52px) * var(--fit-hi, 1)))',
 } as const;
 
+/** 🔴 T3(레이아웃 밀도, 6회차) 7회차 방어선 — UI-b가 칩존을 25→20%로 줄이기 **전에** 박았다.
+ *  값은 `36a01b1`(UI-a 완료) 실측 fontSize다: 402×874에서 46.23px, 390×568에서 36.92px.
+ *  두 뷰포트를 다 두는 이유는 공식 `min(11.5vw, 6.5vh)`의 **이기는 항이 서로 다르기** 때문이다
+ *  (402×874는 vw, 390×568은 vh). 한쪽만 지키면 다른 축의 축소를 못 잡는다.
+ *
+ *  🔴 이 상수를 낮춰서 테스트를 통과시키지 마라. 그게 T6 6회차 재발의 형태 그 자체다
+ *  (`HANDOFF.md` UI-a 함정 2 — 상수 조정 금지). red면 **공간을 회수해서** 값을 되돌린다.
+ *  `fb-28-1`("칩 항목명이 너무 작다")이 이 축의 원 제보이고 v0.40.0 `CHIP_TYPE`이 겨우 닫았다.
+ *  **테스트 오라클 전용이다** — fit 기제의 입력이 아니다. */
+export const CHIP_LABEL_BASELINE_PX = { standard: 46.23, short: 36.92 } as const;
+
+/** 기준선 대비 허용 축소폭. 폰트 로딩·서브픽셀 라운딩 변동만 흡수하는 크기다.
+ *  🔴 배분 변경이 라벨을 깎았을 때 이 값을 키워 통과시키는 것은 위 금지의 우회다. */
+export const CHIP_LABEL_REGRESSION_TOLERANCE = 0.95;
+
 /** 와이어프레임 §공통규칙1 — 입력화면 공간 배정 **칩존 25% / 중앙 50% / 하단 25%**.
  *  (SSOT: `Deliverables/2026-07-24-survey-011-active-screen-wireframe.md`)
  *
  *  🔴 비율의 분모는 **ActiveState 자신의 높이에서 상단 행/진행 스트립을 뺀 나머지**다.
  *  와이어프레임 목업에서 `[칩존 25%]` 격벽은 행/진행 스트립 **아래**에서 시작하고, 하단 nav
  *  (설정/입력/데이터/개선)는 `[하단 25%]` 안에 그려져 있지만 실제 nav는 App 레벨(TabBar)이라
- *  ActiveState 박스 밖이다. 따라서 `auto`(스트립) + 1:2:1(=25:50:25)이 유일하게 자기모순 없는
- *  해석이다. 테스트도 `window.innerHeight`가 아니라 이 박스 높이를 분모로 써야 한다. */
-export const ACTIVE_ZONE_ROWS = 'auto 1fr minmax(0, 2fr) 1fr';
+ *  ActiveState 박스 밖이다. 테스트도 `window.innerHeight`가 아니라 이 박스 높이를 분모로 써야 한다.
+ *  ---
+ *  🔴 v0.43.0 UI-b — **20 / 50 / 30 으로 바꿨다** (ui-standard §2, 민구 확정).
+ *  하단을 30%로 올리라는 지시에 대해 **중앙을 지키려고 칩존에서 5%p를 뺐다.** 칩은 한 행 +
+ *  가로 스크롤이라 높이 손실을 흡수한다는 것이 근거이고, **그 근거가 T3 7회차 위험**이다
+ *  (`v037-chip-2row`의 잘림 가드가 기계로 지킨다 · plan §7:809-811).
+ *
+ *  ⚠️ **하단 30%는 아직 한 덩어리다.** ui-standard §2는 하단을 1행(도트·파형 20%)과
+ *  2행(버튼 10%)으로 나누지만, 현재 `ActiveControlBar`는 `[‹][도트·파형][›]`가 **한 행에
+ *  가로로** 놓인 구조라 나눌 그릇이 없다. 그 분리는 화면 6종을 짓는 **UI-e**의 몫이다.
+ *  UI-b는 30%를 확보하고, 버튼 높이가 **배분에서 나오게** 바꾸는 데까지 한다
+ *  (종전 `min(100%, 56px)`의 56px은 규칙 2가 금지하는 하드코딩 상한이었다). */
+export const ACTIVE_ZONE_ROWS = 'auto minmax(0, 2fr) minmax(0, 5fr) minmax(0, 3fr)';
+
+/** ui-standard §2의 배분 3종. **UI-b는 `base`만 배선한다** — 상태→배분 전환은 UI-e다.
+ *  🔴 한 단계는 자기 몫만 깨야 차집합이 판정으로 기능한다. `modify`/`dotless`를 지금 배선하면
+ *  `v039:613`(일시정지에서도 중앙 50%)이 UI-b에서 깨지는데, 그건 UI-e의 정당 파손이다.
+ *  숫자는 칩존 / 중앙 / 하단 백분율이고 상단 스트립은 `auto`라 분모 밖이다. */
+export const ACTIVE_ZONE_RATIOS = {
+  base: { chip: 20, center: 50, bottom: 30 },
+  /** 수정 입력 — 키패드가 4행이라 하단이 커진다(136px면 버튼 34px로 iOS 권장 44px 미달, 272px면 61px). */
+  modify: { chip: 20, center: 30, bottom: 50 },
+  /** 일시정지·저장 확인 — 하단 도트가 없으므로 **중앙이 회수한다.** */
+  dotless: { chip: 20, center: 70, bottom: 10 },
+} as const;
+
+/** ⏭ **UI-e 예약** — 하단 트랙 안에서 버튼 행이 갖는 몫(ui-standard §2의 20:10 = `1/3`).
+ *  아직 배선하지 않는다. `ActiveControlBar`의 버튼은 도트·파형과 `voice-nav-row` **한 행을
+ *  가로로** 나눠 쓰므로 세로로 나눌 행이 없고, 지금 %를 쓰면 기준이 nav row가 되어 하단 트랙
+ *  10%와 무관한 값이 나온다. UI-e가 2행을 만들 때 `EdgeButton`의 `56px` 상한과 함께 처리한다. */
+export const CONTROL_ROW_FRACTION = 1 / 3;
 
 /** 와이어프레임 §[2]·§[4] — 중앙 50%가 hero 말고 다른 정보를 그릴 때 쓰는 타이포 SSOT.
  *  HERO_TYPE과 같은 계약: 절대 px 단독 금지(전부 clamp + min(vw,vh) 비례 + --fit 배율),

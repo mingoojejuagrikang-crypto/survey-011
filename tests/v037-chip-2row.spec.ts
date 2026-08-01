@@ -14,6 +14,10 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
+import {
+  CHIP_LABEL_BASELINE_PX,
+  CHIP_LABEL_REGRESSION_TOLERANCE,
+} from '../src/components/voice/heroLayout';
 
 test.setTimeout(90_000);
 
@@ -138,6 +142,55 @@ test('FB-B — 칩 그리드가 한 행 + 초과분 가로 스크롤(전체 그�
   expect(clientH, '칩존이 화면 높이의 30%를 넘지 않는다').toBeLessThanOrEqual(874 * 0.3);
 });
 
+/** 첫 칩에서 항목명이 칩 박스 밖으로 잘려나갔는지 잰다.
+ *  칩이 `overflow:hidden` + grid `placeItems:center`라, 내용이 배정 높이를 넘으면 위아래로
+ *  동시에 삐져나가며 **잘린다**. fontSize는 그대로이므로 크기 단언으로는 절대 안 잡힌다. */
+async function chipClip(page: Page) {
+  return page.locator('[data-testid="column-chip"]').first().evaluate((el) => {
+    const chipEl = el as HTMLElement;
+    const labelEl = chipEl.querySelector('[data-testid="column-chip-label"]') as HTMLElement;
+    const cr = chipEl.getBoundingClientRect();
+    const lr = labelEl.getBoundingClientRect();
+    const cs = getComputedStyle(chipEl);
+    const kids = Array.from(chipEl.children).map((k) => {
+      const kr = (k as HTMLElement).getBoundingClientRect();
+      const ks = getComputedStyle(k as HTMLElement);
+      return `${(k as HTMLElement).dataset.testid ?? k.tagName}:h=${kr.height.toFixed(1)}/fs=${parseFloat(ks.fontSize).toFixed(1)}/lh=${ks.lineHeight}`;
+    });
+    // 값 span(라벨 다음 자식)도 같이 잰다 — 칩은 `placeItems:center`라 넘치면 **위아래 동시에**
+    // 잘리므로, 라벨만 보면 아래쪽에서 값이 잘려나가는 것을 통째로 놓친다.
+    const valueEl = Array.from(chipEl.children).find((k) => k !== labelEl) as HTMLElement | undefined;
+    const vr = valueEl?.getBoundingClientRect();
+    return {
+      labelTopInside: lr.top - cr.top,        // 음수면 칩 위로 삐져나감
+      labelBottomInside: cr.bottom - lr.bottom, // 음수면 칩 아래로 삐져나감
+      valueTopInside: vr ? vr.top - cr.top : Number.POSITIVE_INFINITY,
+      valueBottomInside: vr ? cr.bottom - vr.bottom : Number.POSITIVE_INFINITY,
+      contentOverflow: chipEl.scrollHeight - chipEl.clientHeight,
+      chipHeight: cr.height,
+      padding: cs.paddingTop,
+      kids: kids.join(' | '),
+    };
+  });
+}
+
+/** 🔑 오라클은 "칩 내용이 안 잘린다"이지 `scrollHeight === clientHeight`가 아니다.
+ *  칩은 `overflow:hidden`으로 **의도적으로** 자르므로 넘침 자체는 설계다. 문제는 **글자가**
+ *  잘리는 것이고, `placeItems:center` 때문에 넘치면 위아래 동시에 잘린다.
+ *  ⚠️ 그래서 라벨과 값을 **둘 다** 봐야 한다 — 한쪽만 보면 반대편 잘림을 놓친다. */
+function expectChipLabelNotClipped(
+  m: {
+    labelTopInside: number; labelBottomInside: number;
+    valueTopInside: number; valueBottomInside: number;
+  },
+  vp: string,
+) {
+  expect(m.labelTopInside, `${vp} 항목명이 칩 위로 잘림`).toBeGreaterThanOrEqual(-0.5);
+  expect(m.labelBottomInside, `${vp} 항목명이 칩 아래로 잘림`).toBeGreaterThanOrEqual(-0.5);
+  expect(m.valueTopInside, `${vp} 값이 칩 위로 잘림`).toBeGreaterThanOrEqual(-0.5);
+  expect(m.valueBottomInside, `${vp} 값이 칩 아래로 잘림`).toBeGreaterThanOrEqual(-0.5);
+}
+
 test('[CHIP-TYPO-1] rounded rect + 커진 항목명, 390×568에서도 세로 넘침 없음', async ({ page }) => {
   await boot(page);
   const chip = page.locator('[data-testid="column-chip"]').first();
@@ -151,9 +204,30 @@ test('[CHIP-TYPO-1] rounded rect + 커진 항목명, 390×568에서도 세로 �
       labelSize: parseFloat(getComputedStyle(labelEl).fontSize),
     };
   });
+  console.log(`[CHIP-TYPO-1] 402x874 labelSize=${metrics.labelSize.toFixed(2)} chipH=${metrics.height.toFixed(2)}`);
   expect(metrics.labelSize, 'v0.40.0 항목명 상한 22px보다 커야 한다').toBeGreaterThan(22);
+  // 🔴 T3 7회차 방어 ①/② — **선언된 크기**를 지킨다.
+  //   ⚠️ 이 단언이 잡는 것과 못 잡는 것을 정확히 적는다(UI-a 리뷰 🔴-3: 적힌 근거가 사실이어야 한다):
+  //     잡는다   — 누군가 `CHIP_TYPE.name` 공식이나 그 상한/비례항을 낮추는 것
+  //     못 잡는다 — 칩존 배분 축소. 라벨 크기는 `min(11.5vw, 6.5vh)`와 `--fit-lo`가 정하는데
+  //                **`--fit-lo`는 칩 트리에 설정되지 않는다**(항상 1). 배분을 줄여도 이 값은 안 변한다.
+  //   👉 배분 축소는 크기가 아니라 **잘림**으로 나타난다 → 아래 방어 ②가 그걸 잡는다.
+  //   기준값 SSOT는 heroLayout이다. **red일 때 상수를 낮추지 마라** — 공간을 회수해서 되돌린다
+  //   (HANDOFF UI-a 함정 2). 원 제보는 `fb-28-1`("칩 항목명이 너무 작다")이다.
+  expect(
+    metrics.labelSize,
+    `402×874 항목명이 36a01b1 실측 ${CHIP_LABEL_BASELINE_PX.standard}px에서 깎이면 안 된다`,
+  ).toBeGreaterThanOrEqual(CHIP_LABEL_BASELINE_PX.standard * CHIP_LABEL_REGRESSION_TOLERANCE);
   expect(metrics.radius, '캡슐 반지름(height / 2)이 아니어야 한다').toBeLessThan(metrics.height / 2 - 1);
   await expect(label).toBeVisible();
+
+  // 🔴 T3 7회차 방어 ②/② — **실제로 보이는가.** 여기가 배분 축소를 잡는 진짜 방어선이다.
+  //   칩은 `overflow:hidden` + `placeItems:center`라, 칩존이 줄면 fontSize는 그대로인 채
+  //   내용이 위아래로 잘려나간다. UI-a에서 375px 항목명이 **소멸**한 것과 같은 형태다
+  //   (`KNOWN-ISSUES` · HANDOFF 함정 1). 크기만 재는 단언은 이걸 통과시킨다.
+  const clip402 = await chipClip(page);
+  console.log(`[CHIP-TYPO-1] 402x874 clip top=${clip402.labelTopInside.toFixed(2)} bottom=${clip402.labelBottomInside.toFixed(2)} overflow=${clip402.contentOverflow.toFixed(2)} chipH=${clip402.chipHeight.toFixed(1)} pad=${clip402.padding} kids=[${clip402.kids}]`);
+  expectChipLabelNotClipped(clip402, '402×874');
 
   await page.setViewportSize(PHONE_390_SHORT);
   await page.waitForTimeout(250);
@@ -164,7 +238,33 @@ test('[CHIP-TYPO-1] rounded rect + 커진 항목명, 390×568에서도 세로 �
     pageClientWidth: document.documentElement.clientWidth,
     pageScrollWidth: document.documentElement.scrollWidth,
   }));
+  const narrowLabel = await chip.evaluate((el) => {
+    const labelEl = el.querySelector('[data-testid="column-chip-label"]') as HTMLElement;
+    return parseFloat(getComputedStyle(labelEl).fontSize);
+  });
+  console.log(`[CHIP-TYPO-1] 390x568 labelSize=${narrowLabel.toFixed(2)} chipZoneH=${narrow.clientHeight}`);
+  // 🔴 좁고 짧은 기기의 방어선. 여기서는 `min(11.5vw, 6.5vh)`의 **vh 항이 이긴다**(402×874는 vw).
+  //   즉 세로가 짧은 축이라 칩존 높이 축소의 영향을 먼저 받는다. 402 하나만 지키면 못 잡는다.
+  expect(
+    narrowLabel,
+    `390×568 항목명이 36a01b1 실측 ${CHIP_LABEL_BASELINE_PX.short}px에서 깎이면 안 된다`,
+  ).toBeGreaterThanOrEqual(CHIP_LABEL_BASELINE_PX.short * CHIP_LABEL_REGRESSION_TOLERANCE);
+  const clip390 = await chipClip(page);
+  console.log(`[CHIP-TYPO-1] 390x568 clip top=${clip390.labelTopInside.toFixed(2)} bottom=${clip390.labelBottomInside.toFixed(2)} overflow=${clip390.contentOverflow.toFixed(2)} chipH=${clip390.chipHeight.toFixed(1)} valTop=${clip390.valueTopInside.toFixed(2)} valBot=${clip390.valueBottomInside.toFixed(2)}`);
+  expectChipLabelNotClipped(clip390, '390×568');
   expect(narrow.scrollHeight - narrow.clientHeight, '390×568 칩존 세로 넘침').toBeLessThanOrEqual(1);
+
+  // 🔴 375×667 — plan §7:824가 실기기 점검 대상으로 지목한 좁은 기기다. 점검이 릴리스 **뒤**
+  //   1회뿐이므로(민구 확정) 여기서 기계가 먼저 본다.
+  await page.setViewportSize(PHONE_375);
+  await page.waitForTimeout(250);
+  const label375 = await chip.evaluate((el) => {
+    const labelEl = el.querySelector('[data-testid="column-chip-label"]') as HTMLElement;
+    return parseFloat(getComputedStyle(labelEl).fontSize);
+  });
+  const clip375 = await chipClip(page);
+  console.log(`[CHIP-TYPO-1] 375x667 labelSize=${label375.toFixed(2)} clip top=${clip375.labelTopInside.toFixed(2)} bottom=${clip375.labelBottomInside.toFixed(2)} overflow=${clip375.contentOverflow.toFixed(2)} chipH=${clip375.chipHeight.toFixed(1)}`);
+  expectChipLabelNotClipped(clip375, '375×667');
   expect(narrow.pageScrollWidth - narrow.pageClientWidth, '390×568 페이지 가로 넘침').toBeLessThanOrEqual(1);
 });
 

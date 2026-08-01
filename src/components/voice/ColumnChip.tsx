@@ -118,6 +118,12 @@ export function ColumnChip({
           fontSize: CHIP_TYPE.name,
           fontWeight: 700,
           whiteSpace: 'nowrap',
+          // 🔴 v0.43.0 UI-b — `normal`(≈1.27)이 폰트 크기의 27%를 **빈 라인박스**로 먹고 있었다.
+          //   402×874 실측 59.0px/fs 46.2 · 390×568 47.0px/fs 36.9. 바로 아래 값 span은 이미
+          //   `lineHeight: fontSize`(=1.0)로 조여져 있어 **라벨만 안 조여진 상태**였다.
+          //   칩존 25→20% 축소가 390×568에서 항목명을 4.64px 잘라냈을 때, 처방은 **글자를 줄이는
+          //   것이 아니라 이 빈 공간을 회수하는 것**이다(HANDOFF UI-a 함정 2 — 상수 조정 금지).
+          lineHeight: 1,
           // ⚠️ overflow:hidden을 여기 두면 span의 **내재 폭 기여가 0**이 돼서 칩이 값을 담을 만큼
           //    자라지 않는다(글자가 잘린다). 잘라내는 일은 칩(overflow:hidden)이 맡는다.
           maxWidth: '100%',

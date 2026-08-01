@@ -2,7 +2,8 @@
  * F3 입력화면 UI 재구성 — 와이어프레임 계약 회귀.
  *
  * SSOT: `Deliverables/2026-07-24-survey-011-active-screen-wireframe.md` (민구 확정 2026-07-24).
- *   §공통규칙1 공간 배정(칩존 25% / 중앙 50% / 하단 25%)
+ *   §공통규칙1 공간 배정 — 🔴 v0.43.0 UI-b가 **칩존 20% / 중앙 50% / 하단 30%**로 바꿨다
+ *     (ui-standard §2, 민구 확정). 기대값 SSOT는 `heroLayout.ACTIVE_ZONE_RATIOS`다.
  *   §공통규칙2·3 중앙 정보 가로+세로 중앙정렬
  *   §공통규칙4 칩존 한 행 + 가로 스크롤 + 활성칸 하이라이트·점멸
  *   §공통규칙5 하단 `<` `>` 양끝 + 가운데 단일 도트 격자 → 음성 입력 시 도트 파형
@@ -17,6 +18,13 @@ import {
   boot, injectLevel, zoneMetrics, triggerAnomaly, fillAllRows, PREV_ROUND,
 } from './fixtures/activeZones';
 import { fireStt } from './fixtures/stt';
+import { ACTIVE_ZONE_RATIOS } from '../src/components/voice/heroLayout';
+
+/** 🔴 v0.43.0 UI-b — 배분이 **25/50/25 → 20/50/30**으로 바뀌었다(ui-standard §2, 민구 확정).
+ *  기대값을 여기 숫자로 다시 적지 않고 제품 상수를 읽는다 — 이중 기록이면 한쪽만 고쳐도 통과한다.
+ *  🔑 **중앙 50%는 안 바뀐다.** 하단을 30%로 올리라는 지시를 칩존에서 5%p 빼서 흡수했다.
+ *  그러므로 이 파일에서 중앙이 깨지면 그건 정당 파손이 아니라 **회귀**다. */
+const Z = ACTIVE_ZONE_RATIOS.base;
 
 // 시딩·부팅·상태진입 헬퍼는 `tests/fixtures/activeZones.ts`로 이동했다(동작 불변). 두 번째 소비자
 // (`capture-current-states.spec.ts` — 실렌더 캡처)가 같은 상태로 진입해야 해서 복제를 피한 것이고,
@@ -24,12 +32,12 @@ import { fireStt } from './fixtures/stt';
 
 test.setTimeout(120_000);
 
-// ─── §공통규칙1 — 공간 배정 25 / 50 / 25 ─────────────────────────────────────
+// ─── §공통규칙1 — 공간 배정 20 / 50 / 30 (UI-b) ──────────────────────────────
 for (const vp of [
   { name: '402×874', viewport: PHONE_402 },
   { name: '375×667', viewport: PHONE_375 },
 ]) {
-  test(`§공통규칙1 — 칩존25%·중앙50%·하단25% 비례 배분 @ ${vp.name}`, async ({ page }) => {
+  test(`§공통규칙1 — 칩존${Z.chip}%·중앙${Z.center}%·하단${Z.bottom}% 비례 배분 @ ${vp.name}`, async ({ page }) => {
     await boot(page, vp.viewport);
     const m = await zoneMetrics(page);
     // 🔴 분모는 **ActiveState 박스에서 상단 행/진행 스트립을 뺀 나머지**다. 와이어프레임 목업에서
@@ -38,9 +46,9 @@ for (const vp of [
     //    스트립·탭바 때문에 어떤 배치로도 성립하지 않는다.
     const zoneTotal = m.rootHeight - m.headerHeight;
     console.log(`[${vp.name}] root=${m.rootHeight.toFixed(0)} header=${m.headerHeight.toFixed(0)} chip=${m.chipHeight.toFixed(0)} center=${m.centerHeight.toFixed(0)} bottom=${m.bottomHeight.toFixed(0)}`);
-    expect(m.chipHeight / zoneTotal, '칩존 25%').toBeCloseTo(0.25, 2);
-    expect(m.centerHeight / zoneTotal, '중앙 50%').toBeCloseTo(0.5, 2);
-    expect(m.bottomHeight / zoneTotal, '하단 25%').toBeCloseTo(0.25, 2);
+    expect(m.chipHeight / zoneTotal, `칩존 ${Z.chip}%`).toBeCloseTo(Z.chip / 100, 2);
+    expect(m.centerHeight / zoneTotal, `중앙 ${Z.center}%`).toBeCloseTo(Z.center / 100, 2);
+    expect(m.bottomHeight / zoneTotal, `하단 ${Z.bottom}%`).toBeCloseTo(Z.bottom / 100, 2);
     // 세 구역이 겹치거나 서로를 밀지 않는다(합 = 전체).
     expect(m.chipHeight + m.centerHeight + m.bottomHeight).toBeCloseTo(zoneTotal, 0);
   });
@@ -85,7 +93,11 @@ test('칩존 — 한 행 유지 + 초과 칩은 **가로** 스크롤(활성칩 �
   expect(m.scrollBehavior, 'smooth 금지 — 자동 스크롤 측정이 애니메이션 중간값을 읽는다').toBe('auto');
   // 한 행이 트랙을 통째로 쓴다 = 칩이 종전(2줄)보다 확실히 높다. 44px는 장갑 조작 하한.
   const zone = await zoneMetrics(page);
-  const expectedChipH = zone.chipHeight - 12; // 상하 패딩 6+6
+  // 🔴 패딩값을 여기 다시 적지 않는다 — 종전 `- 12`(6+6 하드코딩)는 ChipZone과 이중 기록이라
+  //   한쪽만 바뀌면 테스트가 조용히 통과한다. 실제 패딩을 DOM에서 읽는다.
+  const chipPadY = await page.locator('[data-testid="voice-chip-grid"]')
+    .evaluate((el) => parseFloat(getComputedStyle(el as HTMLElement).paddingTop));
+  const expectedChipH = zone.chipHeight - chipPadY * 2;
   for (const h of m.chipHeights) {
     expect(Math.abs(h - expectedChipH), '칩 높이는 칩존 트랙 안쪽 높이 전체').toBeLessThanOrEqual(1.5);
     expect(h, '장갑 조작 44px 하한(PRINCIPLES §2)').toBeGreaterThanOrEqual(44);
@@ -610,7 +622,7 @@ test('§[3] paused — 중앙 비움 + 상단 "일시정지" + 하단 `<`=재개
   // 구역 배분은 상태가 바뀌어도 불변(§공통규칙1).
   const m = await zoneMetrics(page);
   const zoneTotal = m.rootHeight - m.headerHeight;
-  expect(m.centerHeight / zoneTotal, '일시정지에서도 중앙 50%').toBeCloseTo(0.5, 2);
+  expect(m.centerHeight / zoneTotal, `일시정지에서도 중앙 ${Z.center}%`).toBeCloseTo(Z.center / 100, 2);
 });
 
 // ─── §[2] anomaly ───────────────────────────────────────────────────────────
@@ -766,9 +778,9 @@ test('진동 경로 차단 — 화면 높이를 쓸어도(밴드 높이가 실�
     const m = await zoneMetrics(page);
     const zoneTotal = m.rootHeight - m.headerHeight;
     console.log(`h=${h} band=${heights[heights.length - 1].toFixed(0)} chip=${m.chipHeight.toFixed(0)} center=${m.centerHeight.toFixed(0)} bottom=${m.bottomHeight.toFixed(0)}`);
-    expect(m.chipHeight / zoneTotal, `칩존 25% @${h}`).toBeCloseTo(0.25, 2);
-    expect(m.centerHeight / zoneTotal, `중앙 50% @${h}`).toBeCloseTo(0.5, 2);
-    expect(m.bottomHeight / zoneTotal, `하단 25% @${h}`).toBeCloseTo(0.25, 2);
+    expect(m.chipHeight / zoneTotal, `칩존 ${Z.chip}% @${h}`).toBeCloseTo(Z.chip / 100, 2);
+    expect(m.centerHeight / zoneTotal, `중앙 ${Z.center}% @${h}`).toBeCloseTo(Z.center / 100, 2);
+    expect(m.bottomHeight / zoneTotal, `하단 ${Z.bottom}% @${h}`).toBeCloseTo(Z.bottom / 100, 2);
   }
   // 🔴 공허 방지 — 밴드 높이가 **실제로 변했는데도** 비율이 유지된 것이어야 의미가 있다.
   //    (v019 R1 주석이 지적한 "항상 참인 상한" 토톨로지를 되풀이하지 않는다.)
@@ -810,8 +822,8 @@ test('회전 왕복 — 구역 배분·세션 표시가 그대로 살아 있다(
   await expect(page.locator('[data-testid="anomaly-confirm-btn"]')).toBeVisible();
   const m = await zoneMetrics(page);
   const zoneTotal = m.rootHeight - m.headerHeight;
-  expect(m.centerHeight / zoneTotal, '회전 왕복 후에도 중앙 50%').toBeCloseTo(0.5, 2);
-  expect(m.chipHeight / zoneTotal, '회전 왕복 후에도 칩존 25%').toBeCloseTo(0.25, 2);
+  expect(m.centerHeight / zoneTotal, `회전 왕복 후에도 중앙 ${Z.center}%`).toBeCloseTo(Z.center / 100, 2);
+  expect(m.chipHeight / zoneTotal, `회전 왕복 후에도 칩존 ${Z.chip}%`).toBeCloseTo(Z.chip / 100, 2);
 });
 
 // ─── 민구 확정 반영분 (2026-07-25 라운드 판단) ──────────────────────────────────

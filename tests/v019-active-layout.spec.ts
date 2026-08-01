@@ -14,6 +14,10 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { BASE } from './baseUrl';
+import { ACTIVE_ZONE_RATIOS } from '../src/components/voice/heroLayout';
+
+/** 칩존 배정 비율 — 제품 상수를 읽는다(이중 기록 금지). v0.43.0 UI-b에서 25→20%. */
+const CHIP_ZONE_PCT = ACTIVE_ZONE_RATIOS.base.chip;
 const PHONE = { width: 402, height: 874 };
 
 // isSpeechSupported() 통과용 최소 스텁. start() 후 onstart만 부르고 결과는 안 보냄
@@ -110,12 +114,17 @@ test('W5 — ActiveState 진입 + 컨트롤바 한자리 고정(버그B)', async
   expect(chipMetrics!.overflowY, '세로로는 넘치지 않는다').toBe('hidden');
   expect(chipMetrics!.scrollWidth, '초과분은 가로 스크롤로 남는다')
     .toBeGreaterThan(chipMetrics!.clientWidth);
-  // 와이어프레임(2026-07-24 확정, Deliverables/2026-07-24-survey-011-active-screen-wireframe.md)
-  // §공통규칙1 — 칩 구역은 픽셀 캡(옛 3줄 170px)이 아니라 **ActiveState 구역의 25%**다. 화면이
-  //   커지면 칩도 함께 커져야 하므로(§공통규칙4 "25%내 최대 크게") 상한을 고정 픽셀로 잠그지
-  //   않는다. 비례 자체의 정밀 단언은 v039-active-zones.spec.ts가 담당하고, 여기서는 이 스펙의
-  //   본래 목적(구역이 아래를 밀지 않는다)을 지키는 선에서 상한만 확인한다.
-  expect(chipMetrics!.clientHeight).toBeLessThanOrEqual(874 * 0.3);
+  // 와이어프레임 §공통규칙1 — 칩 구역은 픽셀 캡(옛 3줄 170px)이 아니라 **ActiveState 구역의
+  //   비율**이다. 비례 자체의 정밀 단언은 v039-active-zones.spec.ts가 담당하고, 여기서는 이
+  //   스펙의 본래 목적(구역이 아래를 밀지 않는다)을 지키는 선에서 상한만 확인한다.
+  // 🔴 v0.43.0 UI-b — 배분이 25→**20%**가 됐다. 종전 `874 * 0.3` 상한은 **자동 통과**라
+  //   어떤 회귀도 못 잡는다(20%는 30% 이하). 새 배분에 맞춰 조인다.
+  //   여유 2%p는 스트립 `auto` 높이가 뷰포트마다 달라 분모가 흔들리는 폭이다 —
+  //   정밀 비율은 v039가 `zoneTotal` 분모로 잰다.
+  expect(
+    chipMetrics!.clientHeight,
+    `칩존이 배정 ${CHIP_ZONE_PCT}%를 넘지 않는다(종전 30% 상한은 자동 통과라 무의미)`,
+  ).toBeLessThanOrEqual(874 * ((CHIP_ZONE_PCT + 2) / 100));
 
   // 컨트롤바 기준점 = input-control-toggle의 화면상 Y(top) — 양 상태에 공통 존재.
   const beforeBox = await controlAnchor.boundingBox();
@@ -209,7 +218,9 @@ test('R1 — 375×667: 칩 캡이 화면 30% 안에서 축소되고 초과 칩�
   expect(m).not.toBeNull();
   console.log(`375x667 chip region: chips=${m!.chips} client=${m!.clientHeight} scroll=${m!.scrollHeight}`);
   expect(m!.chips).toBeGreaterThanOrEqual(12); // 시드가 실제로 많은 칩을 만들었다(공허 방지)
-  expect(m!.clientHeight).toBeLessThanOrEqual(667 * 0.3); // 화면 높이 30% 상한이 실제로 문다
+  // 🔴 UI-b — 위와 같은 이유로 20%+2%p로 조였다. 종전 30%는 새 배분에서 자동 통과다.
+  expect(m!.clientHeight, `375×667에서도 칩존 ${CHIP_ZONE_PCT}% 상한이 실제로 문다`)
+    .toBeLessThanOrEqual(667 * ((CHIP_ZONE_PCT + 2) / 100));
   // v0.40.0 민구 확정 — 칩존은 **한 행 + 가로 스크롤**이다(종전 2줄 + 세로 스크롤에서 뒤집힘).
   // 근거: "세로 스크롤 영역이 너무 작기에". 375×667에서도 같은 계약이어야 한다.
   expect(m!.overflowX, '넘침은 가로 스크롤이 받는다').toBe('auto');

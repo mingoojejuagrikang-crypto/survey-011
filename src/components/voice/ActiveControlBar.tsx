@@ -67,6 +67,14 @@ export function ActiveControlBar({
       style={{
         borderTop: `1px solid ${T.line}`,
         height: '100%', minHeight: 0,
+        // 🔴 v0.43.0 UI-b CSS 방어 2/3 — 배정 트랙 밖으로 그리지 않는다(ui-standard §6 · GL-007).
+        //   ActiveState의 그리드 자식 4개 중 **여기만 방어가 없었다**(ChipZone·CenterStage는 있다).
+        //   하단이 25→30%가 됐고 UI-e에서 4행 키패드가 들어올 자리라, 넘치면 아래 탭바를 덮는다.
+        //   목표는 정확성이 아니라 **틀려도 영역을 못 넘게** 하는 것 — 잘리면 눈에 띈다.
+        //   🟢 UI-a 함정 1(`overflow:hidden`이 `min-height:auto`를 0으로 만들어 fit 무력화)의
+        //      사정권이 아니다: 이 컴포넌트는 `useFitScale`·`useFitGroup`을 쓰지 않는다.
+        //      **fit이 사는 CenterStage 경계에는 새로 붙이지 않았다.**
+        overflow: 'hidden',
         display: 'flex', flexDirection: 'column', gap: 4,
         padding: '4px 12px 2px',
       }}
@@ -174,6 +182,11 @@ function EdgeButton({
       style={{
         flex: '0 0 auto',
         minWidth: kind === 'text' ? 84 : 64,
+        // 🔴 56px은 규칙 2가 금지하는 하드코딩 상한이다. **UI-b에서 제거하지 않았다** —
+        //   제거하려면 버튼이 크기를 물려받을 **자기 행**이 있어야 하는데, 현재 버튼은 도트·파형과
+        //   `voice-nav-row` 한 행을 가로로 나눠 쓴다(ui-standard §2의 하단 1행/2행 분리 없음).
+        //   지금 %로 바꾸면 기준이 nav row가 되어 하단 트랙 10%와 무관한 값이 나온다.
+        //   👉 **UI-e에서 하단 2행을 만들 때 함께 제거한다.** → ui-b-design §4-1
         height: 'min(100%, 56px)',
         minHeight: 44,
         borderRadius: 16,

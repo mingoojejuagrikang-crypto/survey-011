@@ -26,7 +26,12 @@ import type { Column } from '../../types';
  *  그 훅은 "2줄 안에 우겨넣기" 전용이었다. 한 행 + 가로 스크롤에서는 넘침을 스크롤이 받으므로
  *  글자를 줄일 이유가 사라졌다 — 오히려 민구 요구(비율 사이즈업)와 정반대로 작동한다. */
 const CHIP_GAP = 8;
-const CHIP_PAD_Y = 6;
+/** 🔴 v0.43.0 UI-b — `6`에서 내렸다. 칩존을 25→20%로 줄이자 390×568에서 칩 내용이 6px 넘쳤고,
+ *  처방은 **글자를 줄이는 것이 아니라 빈 공간을 회수하는 것**이다(HANDOFF UI-a 함정 2).
+ *  이 패딩은 근거 주석이 없던 값이고, 칩존은 이미 `borderBottom`으로 경계를 그린다.
+ *  ⚠️ `v039-active-zones:88`이 `zone.chipHeight - 12`로 이 값을 이중 기록하고 있었다 —
+ *  거기도 함께 고쳤다. 다시 갈라지면 한쪽만 고쳐진 채 테스트가 통과한다. */
+const CHIP_PAD_Y = 3;
 
 export function ChipZone({
   columns, rowValues, row, currentColId, activeTone, anomalyPending, editingColId,
