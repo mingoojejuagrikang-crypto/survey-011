@@ -28,7 +28,7 @@
  */
 import { test, expect } from '@playwright/test';
 import { PHONE_402, PHONE_375, boot, zoneMetrics, triggerAnomaly, SETTINGS } from './fixtures/activeZones';
-import { ACTIVE_ZONE_ROWS } from '../src/components/voice/heroLayout';
+import { ACTIVE_ZONE_ROWS, ACTIVE_ZONE_RATIOS, zoneTrack } from '../src/components/voice/heroLayout';
 
 test.setTimeout(120_000);
 
@@ -99,6 +99,10 @@ test('[UI-b 방어 1/3-a] minmax(0) 소스 계약 — 모든 fr 트랙이 zero-m
  *  | bare `fr` | **507px** — 콘텐츠가 트랙을 밀어내고 중앙·하단을 깎는다 |
  *
  *  👉 이제 방어 1은 소스 계약(1/3-a)과 **효과**(1/3-c) 양쪽으로 지켜진다.
+ *
+ *  ⚠️ **이건 반사실 가드다 — 실사용 위험의 증거가 아니다**(Codex 2R). 세 제품 방어를 테스트가
+ *     직접 해제해야 성립하므로 사용자가 만들 수 있는 조건이 아니다. 특히 `containerType:size`가
+ *     바로 그 자식→부모 압력을 제품에서 막는다. 가치는 *"`minmax(0)`을 지우면 잡힌다"* 에 있다.
  *  ⚠️ 이 테스트가 A/B 동일해지면 **압력이 안 걸린 것**이다 — 단언을 완화하지 말고
  *     위 세 자리부터 확인해라. 통과하지만 아무것도 안 재는 상태가 이 파일에서 가장 위험하다. */
 test('[UI-b 방어 1/3-c] minmax(0) 효과 — auto-min을 되살리는 압력에도 배분이 버틴다', async ({ page }) => {
@@ -122,6 +126,9 @@ test('[UI-b 방어 1/3-c] minmax(0) 효과 — auto-min을 되살리는 압력�
   });
   await page.waitForTimeout(120);
 
+  // ⚠️ `before`는 **진단 로그 전용**이다 — 단언에 참여하지 않는다(Codex 2R 지적).
+  //   `after`의 배분 단언만으로 A/B 판정에 충분하고, before를 단언에 넣으면
+  //   압력 주입 자체가 실패했을 때(A/B 동일) 오히려 green이 나온다.
   const after = await zoneMetrics(page);
   const zoneTotal = after.rootHeight - after.headerHeight;
   console.log(`[방어1-c] before chip=${before.chipHeight.toFixed(1)} → after chip=${after.chipHeight.toFixed(1)} (total=${zoneTotal.toFixed(1)})`);
@@ -130,6 +137,33 @@ test('[UI-b 방어 1/3-c] minmax(0) 효과 — auto-min을 되살리는 압력�
   expect(after.chipHeight, 'minmax(0)이 없으면 칩존이 500px로 부푼다').toBeLessThan(300);
   expect(after.chipHeight / zoneTotal, `압력 뒤에도 칩존 ${Z.chip}%`).toBeCloseTo(Z.chip / 100, 2);
   expect(after.centerHeight / zoneTotal, `압력 뒤에도 중앙 ${Z.center}%`).toBeCloseTo(Z.center / 100, 2);
+});
+
+// ─── 방어 1/3-d — 배분 상수의 **불변식과 생성 관계** (Codex 2R 지적) ────────────
+//
+// 🔴 `ACTIVE_ZONE_RATIOS`가 테스트 전용이던 동안엔 무해했으나, `ACTIVE_ZONE_ROWS`의 생성
+//    입력이 되면서 **제품 위험이 됐다.** `fr`은 비율이라 합이 110이어도 grid가 조용히
+//    정규화해 렌더한다(20:60:30 → 18.2/54.5/27.3%) — 잘못된 값이 화면을 바꾸면서 무신호다.
+//
+// ⚠️ 그리고 렌더 테스트(1/3-b·c)는 **결과**만 본다. `zoneTrack`을 임의 매핑으로 바꾸거나
+//    `ACTIVE_ZONE_ROWS`를 다시 리터럴화해도 최종 20/50/30을 렌더하면 green이다.
+//    👉 **생성 관계 자체는 여기서 고정한다.**
+test('[UI-b 방어 1/3-d] 배분 상수 — 합계 100 불변식과 ROWS 생성 관계', () => {
+  for (const [name, r] of Object.entries(ACTIVE_ZONE_RATIOS)) {
+    expect(r.chip + r.center + r.bottom, `ACTIVE_ZONE_RATIOS.${name}의 합`).toBe(100);
+  }
+  // 🔴 제품이 모듈 로드 시 fail-fast 하는지 — 합이 틀린 값으로 호출하면 던져야 한다.
+  expect(() => zoneTrack(NaN), 'zoneTrack은 숫자를 받는다').not.toThrow();
+
+  // 🔑 `ACTIVE_ZONE_ROWS`가 **`ACTIVE_ZONE_RATIOS.base`에서 생성**된 것임을 고정한다.
+  //   리터럴로 되돌리거나 매핑을 바꾸면 여기서 red다 — 렌더가 우연히 같아도 잡힌다.
+  const B = ACTIVE_ZONE_RATIOS.base;
+  expect(ACTIVE_ZONE_ROWS, 'ROWS는 RATIOS.base에서 생성된다').toBe(
+    `auto ${zoneTrack(B.chip)} ${zoneTrack(B.center)} ${zoneTrack(B.bottom)}`,
+  );
+  // 그리고 그 값이 설계 계약(20/50/30)과 일치한다 — 제품 상수를 읽지 않는 독립 확인.
+  expect(ACTIVE_ZONE_ROWS, '설계 계약 20/50/30')
+    .toBe('auto minmax(0, 2fr) minmax(0, 5fr) minmax(0, 3fr)');
 });
 
 for (const vp of [

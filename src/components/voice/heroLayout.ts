@@ -91,8 +91,27 @@ export const ACTIVE_ZONE_RATIOS = {
   dotless: { chip: 20, center: 70, bottom: 10 },
 } as const;
 
-/** 백분율 → 그리드 트랙. `minmax(0, …)`는 `1fr`의 auto minimum(콘텐츠 최소 크기)을 없앤다. */
-const zoneTrack = (pct: number) => `minmax(0, ${pct / 10}fr)`;
+/** 🔴 배분 합이 100이어야 한다 — **모듈 로드 시 fail-fast.**
+ *  `fr`은 **비율**이라 합이 110이어도 grid가 조용히 정규화해 렌더한다(20:60:30 → 18.2/54.5/27.3%).
+ *  즉 잘못된 값이 화면을 바꾸면서 **아무 신호도 안 낸다.**
+ *  ⚠️ 이 상수가 테스트 전용이던 동안엔 무해했으나, `ACTIVE_ZONE_ROWS` 생성 입력이 되면서
+ *  **제품 위험이 됐다**(Codex 리뷰 2R 지적). UI-e가 `modify`/`dotless`를 배선할 때 걸린다. */
+function assertZoneRatios(ratios: typeof ACTIVE_ZONE_RATIOS): void {
+  for (const [name, r] of Object.entries(ratios)) {
+    const sum = r.chip + r.center + r.bottom;
+    if (sum !== 100) {
+      throw new Error(
+        `ACTIVE_ZONE_RATIOS.${name}의 합이 ${sum}이다(100이어야 한다). ` +
+        `fr은 비율이라 합이 틀려도 조용히 정규화되어 렌더된다 — ui-standard §2를 확인해라.`,
+      );
+    }
+  }
+}
+assertZoneRatios(ACTIVE_ZONE_RATIOS);
+
+/** 백분율 → 그리드 트랙. `minmax(0, …)`는 `1fr`의 auto minimum(콘텐츠 최소 크기)을 없앤다.
+ *  합이 100임을 위에서 보장하므로 `pct / 10`은 세 트랙 합이 항상 `10fr`이 된다. */
+export const zoneTrack = (pct: number) => `minmax(0, ${pct / 10}fr)`;
 
 /** ui-standard §2의 배분 3종 중 **UI-b는 `base`만 배선한다** — 상태→배분 전환은 UI-e다.
  *  🔴 한 단계는 자기 몫만 깨야 차집합이 판정으로 기능한다. `modify`/`dotless`를 지금 배선하면

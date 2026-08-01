@@ -57,7 +57,7 @@ export function ChipZone({
       data-testid="voice-chip-grid"
       ref={gridRef}
       style={{
-        // 트랙(25%)을 꽉 채우고, 초과분은 가로 스크롤.
+        // 배정 트랙(v0.43.0 UI-b 기준 20%)을 꽉 채우고, 초과분은 가로 스크롤.
         height: '100%', minHeight: 0,
         // 칩 높이 = 트랙 안쪽 높이 전체(한 행). 44px 하한은 ColumnChip이 건다.
         ['--chip-row-h' as string]: '100%',

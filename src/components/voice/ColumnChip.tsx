@@ -94,7 +94,7 @@ export function ColumnChip({
         fontWeight: isActive ? 800 : 700,
         cursor: clickable ? 'pointer' : 'default',
         letterSpacing: -0.1,
-        // 와이어프레임 §공통규칙4 "25%내 최대 크게" — 칩 높이는 칩존이 트랙에서 역산한 한 줄 높이
+        // §공통규칙4 "배정 구역 내 최대 크게" — 칩 높이는 칩존이 트랙에서 역산한 한 줄 높이
         // (--chip-row-h)를 그대로 쓴다. 44px는 장갑 조작 하한(PRINCIPLES §2)이라 고정 하한으로 남는다.
         height: 'var(--chip-row-h, 44px)',
         minHeight: 44,
