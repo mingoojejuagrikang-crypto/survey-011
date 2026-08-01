@@ -106,8 +106,8 @@ async function stubSheets(page: Page) {
 }
 
 /** 부팅 + 입력탭 진입(세션 시작 전 — ready 상태 검증용). */
-async function boot(page: Page) {
-  await page.setViewportSize(PHONE_375);
+async function boot(page: Page, viewport = PHONE_375) {
+  await page.setViewportSize(viewport);
   await stubSheets(page);
   await installVoiceMocks(page);
   await page.addInitScript(MOCK_INIT_SCRIPT);
@@ -171,8 +171,8 @@ async function glowVar(page: Page): Promise<string> {
 
 // ─── B7. 파동 — CSS 변수 반영 + 시각 변조 ──────────────────────────────────
 
-test('B7 — 대기 카드: 항목명 + 슬롯에 맞는 세로 막대 파형(13개), "듣는 중" 텍스트 제거', async ({ page }) => {
-  await boot(page);
+test('B7 — 대기 카드: 화면 2/3 폭의 세로 도트 파형(13열), "듣는 중" 텍스트 제거', async ({ page }) => {
+  await boot(page, { width: 402, height: 874 });
   await startSession(page);
 
   // v0.40.0 fb-27-2 — 대기 중 **중앙 항목명은 렌더하지 않는다**. 항목명은 칩존 활성 칩이 준다.
@@ -185,25 +185,33 @@ test('B7 — 대기 카드: 항목명 + 슬롯에 맞는 세로 막대 파형(13
   await expect(page.locator('text=듣는 중')).toHaveCount(0);
 
   // v0.40.0 — 인디케이터가 **도트 격자 하나**로 합쳐졌다([UI-WAVE-1] 구조적 해소).
-  // 계약은 그대로: 밴드 안에 인디케이터가 있고, 밴드 높이는 뷰포트 파생이며 격자가 밴드를 넘지 않는다.
+  // UI-e2 — 13×7 셀/원형 도트는 유지하고 열 피치만 화면 2/3로 넓힌다. 밴드 높이는 하단
+  // 1행이 정하며 60px 하한만 남는다. 제품 상수 import 없이 설계 리터럴을 독립 검증한다.
   const band = page.locator('[data-testid="live-listen-band"]');
   const wave = page.locator('[data-testid="state-dots"]');
   await expect(wave).toBeVisible();
   const geometry = await band.evaluate((el) => {
     const bandStyle = getComputedStyle(el);
     const waveEl = el.querySelector('[data-testid="state-dots"]') as HTMLElement;
+    const indicatorRow = el.closest('[data-testid="voice-indicator-row"]') as HTMLElement;
+    const dotRects = Array.from(waveEl.querySelectorAll('span'), (dot) => dot.getBoundingClientRect());
     return {
       availableWidth: el.clientWidth - parseFloat(bandStyle.paddingLeft) - parseFloat(bandStyle.paddingRight),
       waveWidth: waveEl.getBoundingClientRect().width,
       waveHeight: waveEl.getBoundingClientRect().height,
       bandHeight: el.getBoundingClientRect().height,
-      expectedBandHeight: Math.round(Math.min(100, Math.max(60, window.innerHeight * 0.105))),
+      indicatorRowHeight: indicatorRow.getBoundingClientRect().height,
+      expectedWaveWidth: window.innerWidth * (2 / 3),
+      maxDotSkew: Math.max(...dotRects.map((dot) => Math.abs(dot.width - dot.height))),
       cells: waveEl.querySelectorAll('span').length,
     };
   });
   console.log(`band geometry: ${JSON.stringify(geometry)}`);
   expect(geometry.cells, '13열 × 7행 격자').toBe(91);
-  expect(geometry.bandHeight, '밴드 높이는 뷰포트 파생(clamp 60~100)').toBe(geometry.expectedBandHeight);
+  expect(geometry.bandHeight, '밴드는 하단 1행 높이를 전부 쓴다').toBeCloseTo(geometry.indicatorRowHeight, 0);
+  expect(geometry.bandHeight, '밴드 가독 하한 60px').toBeGreaterThanOrEqual(60);
+  expect(geometry.waveWidth, '파형 폭은 화면의 2/3').toBeCloseTo(geometry.expectedWaveWidth, 0);
+  expect(geometry.maxDotSkew, '넓어진 것은 열 피치이며 도트는 원형').toBeLessThanOrEqual(0.5);
   expect(geometry.waveHeight, '격자가 밴드 높이를 넘지 않는다').toBeLessThanOrEqual(geometry.bandHeight + 1);
   expect(geometry.waveWidth, '격자가 가용 폭을 넘지 않는다').toBeLessThanOrEqual(geometry.availableWidth + 1);
 });

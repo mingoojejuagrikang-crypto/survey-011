@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { T } from '../../tokens';
 import { StateDots, type DotGlyph } from './StateDots';
 import type { GlowTone } from './EdgeGlow';
@@ -45,7 +45,8 @@ export function StateIndicator({
     accentBg?: string;
   };
 }) {
-  const height = useBandHeight();
+  const bandRef = useRef<HTMLDivElement | null>(null);
+  const height = useBandHeight(bandRef);
   const color = TONE_COLOR[tone];
 
   // 격자 하나. 도트와 파형이 **같은 셀 집합**을 공유하므로 겹쳐 보이는 상태가 존재하지 않는다.
@@ -94,11 +95,13 @@ export function StateIndicator({
 
   return (
     <div
+      ref={bandRef}
       data-testid="live-listen-band"
       style={{
-        // 밴드 박스 높이 = 인디케이터 높이(뷰포트 파생). 하단 트랙을 꽉 채우지 않고 가운데 정렬돼,
-        // "상태가 바뀌어도 밴드 높이 고정"이라는 기존 계약(v034/v035)이 그대로 유지된다.
-        flex: '1 1 0', minWidth: 0, height, maxHeight: '100%',
+        // ui-standard §2 — 하단 1행이 밴드 높이를 정한다. 평상시 60px 가독 하한만 남기고
+        // 상한은 두지 않는다. review가 더 짧은 슬롯을 배정한 경우에는 부모 containment가
+        // 우선해 인접 행을 침범하지 않는다(v034/v037 계약).
+        flex: '1 1 0', minWidth: 0, height: '100%', minHeight: 'min(60px, 100%)', maxHeight: '100%',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
@@ -130,16 +133,25 @@ export function StateIndicator({
   );
 }
 
-/** 짧은 화면의 중앙 50%를 보존하면서, 같은 뷰포트 안에서는 모든 상태가 같은 높이를 쓴다.
- *  ⚠️ 뷰포트 파생이다(ResizeObserver 아님) — 인디케이터 높이를 실측으로 잡으면 "밴드 높이 →
- *  파형 높이 → 밴드 높이" 순환이 생긴다([useFitScale의 진동]과 같은 계열). */
-function useBandHeight(): number {
-  const calc = () => Math.round(Math.min(100, Math.max(60, window.innerHeight * 0.105)));
-  const [height, setHeight] = useState(calc);
+/** 하단 1행이 정한 실제 높이를 도트 지름 계산에 전달한다. 밴드 높이는 부모가 정하므로
+ *  이 측정값을 밴드 스타일에 되먹이지 않는다 — 측정→레이아웃 순환이 없다. */
+function useBandHeight(bandRef: RefObject<HTMLDivElement | null>): number {
+  const [height, setHeight] = useState(60);
   useEffect(() => {
-    const onResize = () => setHeight(calc());
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+    const band = bandRef.current;
+    if (!band) return;
+    const measure = () => {
+      const measured = Math.round(band.getBoundingClientRect().height);
+      if (measured > 0) setHeight(measured);
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    observer?.observe(band);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [bandRef]);
   return height;
 }

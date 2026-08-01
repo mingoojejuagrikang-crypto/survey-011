@@ -95,7 +95,8 @@ export function StateDots({
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const cellsRef = useRef<Array<HTMLSpanElement | null>>([]);
-  // 셀은 정사각. 세로 기준으로 잡아 밴드 높이를 넘지 않게 한다(가로는 항상 더 여유롭다).
+  // 도트 크기는 세로 셀에서만 잡는다. 열 피치는 화면 2/3 폭을 따로 나눠 가지므로 넓어져도
+  // 도트 자체는 원형을 유지한다(ui-standard §3-1).
   const cell = Math.max(3, Math.floor(size / FIELD_ROWS));
   const dot = Math.max(2, Math.round(cell * 0.72));
   const gridHeight = cell * FIELD_ROWS;
@@ -273,12 +274,13 @@ export function StateDots({
         display: 'grid',
         // StateIndicator의 명목 높이가 부모 하단 트랙보다 클 수 있다(완료/검토 상태의 짧은 화면).
         // 고정 px 트랙을 그대로 두면 부모만 줄고 7행 격자는 남아 밴드 밖 버튼 영역을 침범한다.
-        // 실제 부모 높이를 상한으로 삼고 13:7 정사각 격자를 함께 축소한다 — overflow clip이나
-        // transform이 아니라 레이아웃 박스 자체가 밴드 안에 들어가는 계약이다.
+        // 실제 부모 높이를 상한으로 삼아 7행을 함께 축소한다 — overflow clip이나 transform이
+        // 아니라 레이아웃 박스 자체가 밴드 안에 들어가는 계약이다.
         height: `min(${gridHeight}px, 100%)`,
-        width: 'auto',
+        // A안: 13열·91셀과 글리프 비트맵은 그대로 두고 열 피치만 화면 2/3로 넓힌다.
+        // 도트 지름은 위의 세로 cell에서 산출하므로 가로로 늘어난 타원이 되지 않는다.
+        width: 'min(66.6667vw, 100%)',
         maxWidth: '100%',
-        aspectRatio: `${FIELD_COLS} / ${FIELD_ROWS}`,
         gridTemplateColumns: `repeat(${FIELD_COLS}, minmax(0, 1fr))`,
         gridTemplateRows: `repeat(${FIELD_ROWS}, minmax(0, 1fr))`,
         justifyItems: 'center',
