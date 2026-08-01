@@ -13,6 +13,7 @@ import {
   PHONE_402,
   PREV_ROUND,
   SETTINGS,
+  triggerAnomaly,
 } from './fixtures/activeZones';
 import { fireStt, fireSttInterim, waitForTtsIdle } from './fixtures/stt';
 
@@ -270,6 +271,40 @@ for (const { labelKind, label, viewport } of [
     expect(reviewMetrics.scrollWidth, 'review 값 nowrap 폭').toBeLessThanOrEqual(reviewMetrics.clientWidth + 1);
   });
 }
+
+/** 🔴 **fit 기제 경계 가드** — UI-a가 만든 것을 UI-c가 지웠고 리뷰가 되살린다.
+ *
+ *  종전 가드는 `ModifyIndicatorPill`에 `--fit-value`가 unset임을 단언해
+ *  *"새 훅이 범위 밖 카드로 새지 않는다"* 를 지켰다. **UI-c가 그 카드를 신 훅으로 이관**하면서
+ *  가드를 **삭제**했다 — 코드는 정상이었지만 **지키는 장치가 사라졌다.**
+ *  🔑 UI-a 리뷰 🔴-4와 같은 형태다: *"기제는 맞는데 지키는 장치가 없었다."*
+ *
+ *  **경계가 이동했으므로 새 경계로 다시 쓴다:**
+ *  | 신 훅 `useFitGroup` | 구 훅 `useFitScale` |
+ *  |---|---|
+ *  | `VoiceHero` · `ModifyIndicatorPill` · `CompleteSummary` | `AnomalyAlertPopup` · `ReaskCue` · `StateIndicator` · `TabBar` |
+ *
+ *  ⚠️ **UI-f(인라인 fontSize 전수 이관)가 이 경계를 또 옮긴다.** 그때 이 가드가 있어야
+ *  *"어디까지 옮겼는지"* 를 기계가 말해준다. **경계를 옮기면 이 표도 함께 고쳐라.** */
+test('fit 기제 경계 — 구 훅 카드에 신 훅 변수가 새지 않는다', async ({ page }) => {
+  await boot(page, PHONE_402);
+  await triggerAnomaly(page);
+  const m = await page.locator('[data-testid="anomaly-alert"]').evaluate((el) => {
+    const s = getComputedStyle(el as HTMLElement);
+    return {
+      fitLo: s.getPropertyValue('--fit-lo').trim(),
+      fitHi: s.getPropertyValue('--fit-hi').trim(),
+      fitValue: s.getPropertyValue('--fit-value').trim(),
+      fitLabel: s.getPropertyValue('--fit-label').trim(),
+    };
+  });
+  console.log(`[fit-boundary] anomaly lo=${m.fitLo || '(unset)'} hi=${m.fitHi || '(unset)'} value=${m.fitValue || '(unset)'} label=${m.fitLabel || '(unset)'}`);
+  // 🔑 구 훅 카드는 `--fit-lo/hi`로 살아 있어야 한다 — 이게 없으면 fit 자체가 안 도는 것이다.
+  expect(m.fitLo, '구 훅이 실제로 돌고 있다(공허 방지)').not.toBe('');
+  // 🔴 핵심 오라클 — 신 훅 변수가 구 훅 카드로 새지 않는다.
+  expect(m.fitValue, '신 훅 --fit-value가 구 훅 카드로 샌다').toBe('');
+  expect(m.fitLabel, '신 훅 --fit-label이 구 훅 카드로 샌다').toBe('');
+});
 
 test('nowrap 매트릭스 — listening·reask는 항목명 미렌더, 긴 interim만 하한·ellipsis 적용', async ({ page }) => {
   const fixture = twoVoiceSettings('과실가로세로둘레평균값');
