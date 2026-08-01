@@ -6,7 +6,7 @@
  * 검증 대상: v0.33.0에서 보호가 추가된 fixed 오버레이 3곳 + 탭바 —
  *   ① 데이터탭 Backdrop/SessionDetailModal (maxHeight 90vh→100%가 핵심 수정)
  *   ② 입력탭 CommandHelpPopup (하단 닫기 버튼이 홈바에 잘리지 않아야 함)
- *   ③ 입력탭 ExitConfirmDialog
+ *   ③ 입력탭 저장확인 인라인
  *   ④ TabBar (탭 버튼이 홈인디케이터 위에 있어야 함)
  * 각 오버레이가 시뮬레이션된 inset 안(safe bounds)에 완전히 들어오고, 인터랙티브 요소가
  * 잘리지 않고 실제로 탭 가능한지를 단언한다.
@@ -154,7 +154,7 @@ test('데이터탭 — 세션 상세 모달이 노치/홈바를 침범하지 않
   await expect(modal).toBeHidden({ timeout: 3000 });
 });
 
-// ── ③·④ 입력탭 — 명령어 도움말 팝업 + 종료 확인 다이얼로그 ──
+// ── ③·④ 입력탭 — 명령어 도움말 팝업 + 저장확인 인라인 ──
 // STT/TTS 목 + 설정 시드는 v023-voice.spec.ts 패턴 재사용(자족 spec 관례).
 const COLUMNS = [
   { id: 'c1', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
@@ -287,24 +287,23 @@ test('입력탭 — 명령어 도움말 팝업이 safe-area 안에 있고 하단
   await expect(popup).toBeHidden({ timeout: 3000 });
 });
 
-test('입력탭 — 종료 확인 다이얼로그가 safe-area 안에 있고 두 버튼 모두 탭 가능', async ({ page }) => {
+test('입력탭 — 저장확인 인라인과 하단 버튼이 safe-area 안에 있고 팝업은 없다', async ({ page }) => {
   await setupAndStartVoice(page);
 
-  // 일시정지 → 종료 → 확인 다이얼로그.
+  // 일시정지 → 종료 → 같은 화면의 중앙/하단 의미만 저장확인으로 전환.
   await page.locator('button[title="일시정지"]').click();
   await page.waitForTimeout(300);
   await page.locator('button[title="입력 종료"]').click();
-  const dialog = page.locator('[role="dialog"][aria-labelledby="exit-confirm-title"]');
-  await expect(dialog).toBeVisible({ timeout: 3000 });
+  const inline = page.locator('[data-testid="exit-confirm-inline"]');
+  await expect(inline).toBeVisible({ timeout: 3000 });
   await page.waitForTimeout(200);
 
-  // 다이얼로그 카드(내부 첫 div)가 safe bounds 안에 — backdrop은 inset:0이 정상이므로 카드를 잰다.
-  const card = dialog.locator('> div').first();
-  await expectWithinSafeBounds(page, card, 'exit-confirm-card');
+  await expect(page.locator('[role="dialog"]')).toHaveCount(0);
+  await expectWithinSafeBounds(page, inline, 'exit-confirm-inline');
   await expectTappable(page, page.locator('button[title="계속 입력"]'), '계속 입력');
   await expectTappable(page, page.locator('button[title="종료 확인"]'), '종료 확인');
 
-  // 잘림 없이 실동작: 계속 입력 → 다이얼로그 닫힘(세션 유지).
+  // 잘림 없이 실동작: 계속 입력 → 인라인 상태 닫힘(세션 유지).
   await page.locator('button[title="계속 입력"]').click();
-  await expect(dialog).toBeHidden({ timeout: 3000 });
+  await expect(inline).toBeHidden({ timeout: 3000 });
 });

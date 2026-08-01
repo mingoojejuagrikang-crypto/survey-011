@@ -2,7 +2,7 @@
  * v0.35.0 리뷰 라운드3(Codex gpt-5.6-sol) High 2건 회귀 — 둘 다 **데이터 무결성**.
  *
  *  R3-FIX-1 — STT suspend 래치 영구 잔존:
- *    종료 확인 다이얼로그의 [확인]은 resume 없이 stop()으로 간다(라운드2 배선: 취소만 resume).
+ *    저장확인 인라인의 [✓]는 resume 없이 stop()으로 간다(라운드2 배선: 취소만 resume).
  *    stop()도 start()도 래치를 안 풀어 uiSuspendRef가 **영구히 active**로 남았다. 그러면 다음
  *    세션에서 수동입력/도움말/피드백/종료 모달을 열 때 suspendRecognitionForUi가 조기 반환 →
  *    STT가 계속 살아 배경 발화가 값을 커밋하거나 행을 이동시킬 수 있다.
@@ -156,8 +156,8 @@ async function startSession(page: Page) {
   await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
 }
 
-/** 일시정지 패널 → 입력 종료 → 종료 확인([TEST-UI-2] 경로). 확인 경로엔 resume이 없다 = R3-FIX-1 대상. */
-async function exitViaConfirmDialog(page: Page) {
+/** 일시정지 → 입력 종료 → 저장확인 인라인. 확인 경로엔 resume이 없다 = R3-FIX-1 대상. */
+async function exitViaInlineConfirm(page: Page) {
   await page.locator('button[title="일시정지"]').click();
   await page.waitForTimeout(300);
   await page.locator('button[title="입력 종료"]').click();
@@ -171,9 +171,9 @@ async function exitViaConfirmDialog(page: Page) {
 test('R3-FIX-1 — 종료 확인 → 새 세션 → 수동입력 모달: suspend 래치가 풀려 STT가 다시 정지된다', async ({ page }) => {
   await boot(page);
 
-  // 1세션: 종료 확인 다이얼로그로 종료(= suspend('exit_confirm') 후 resume 없이 stop).
+  // 1세션: 저장확인 인라인으로 종료(= suspend('exit_confirm') 후 resume 없이 stop).
   await startSession(page);
-  await exitViaConfirmDialog(page);
+  await exitViaInlineConfirm(page);
   await expect(page.locator('text=음성 입력 시작').first()).toBeVisible({ timeout: 5000 });
 
   // 래치 해제 로그(신규) — stop()이 복원 없이 래치를 풀었다는 직접 증거.
@@ -245,7 +245,7 @@ test('R3-FIX-2 — 최종 저장 실패면 ready로 전환하지 않고 오류�
 
   // IDB 쓰기 실패 주입 → 종료 시도.
   await setPersistFailure(page, true);
-  await exitViaConfirmDialog(page);
+  await exitViaInlineConfirm(page);
 
   // 핵심: ready로 내려가지 않는다(= '음성 입력 시작' 버튼 없음 → 새 세션의 resetAll이 미저장 값을
   //   덮을 수 없다) + 실패 사유가 화면에 노출된다.
@@ -381,7 +381,7 @@ test('P1-4 — persist 실패: stopping 화면 위 차단 모달 → 저장 재�
   await fireStt(page, '28.3', 800);
 
   await setPersistFailure(page, true);
-  await exitViaConfirmDialog(page);
+  await exitViaInlineConfirm(page);
 
   await expect(page.locator('[data-testid="voice-stopping-state"]')).toBeVisible();
   await expect(page.locator('[data-testid="persist-error-banner"]')).toBeVisible();

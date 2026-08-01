@@ -341,8 +341,9 @@ export function AlarmInterimStrip() {
         lineHeight: 1.15,
         letterSpacing: -0.8,
         textAlign: 'center',
-        wordBreak: 'keep-all',
-        overflowWrap: 'anywhere',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
         visibility: interim ? 'visible' : 'hidden',
       }}
     >

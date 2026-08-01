@@ -299,7 +299,7 @@ test('[리뷰#1] 세션 A의 UI 음성명령이 세션 B 시작 시 재실행되
   await expect(page.locator('[data-testid="command-help-popup"]')).toBeVisible();
   await page.locator('[data-testid="cmd-help-close"]').click();
   await expect(page.locator('[data-testid="command-help-popup"]')).toHaveCount(0);
-  // 일시정지 → 입력 종료 → 종료 확인 (v035-r3-fixes의 exitViaConfirmDialog와 동일 경로)
+  // 일시정지 → 입력 종료 → 저장확인 인라인 (v035-r3-fixes와 동일 경로)
   await page.locator('button[title="일시정지"]').click();
   await page.waitForTimeout(300);
   await page.locator('button[title="입력 종료"]').click();

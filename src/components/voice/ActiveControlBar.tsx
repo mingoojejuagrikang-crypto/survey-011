@@ -17,15 +17,17 @@ import { CONTROL_ROW_FRACTION } from './heroLayout';
  * ```
  *  - normal/paused/complete는 같은 4버튼 `[‹][⏹][⏸][›]`를 유지한다.
  *  - 알람은 해결 전 탐색을 허용하지 않으므로 확인/수정 2버튼을 유지한다(ui-standard §3-2).
+ *  - 저장확인은 도트 없이 같은 자리를 `[‹][✕][✓][›]`로 바꾼다(ui-standard §3-6).
  *  - 상태별 **도트 인디케이터** → 음성 입력 시 **역동 세로파형**(StateIndicator).
  *  - 그 아래 옵션(인식률/안내)을 **얇게**(ActiveControlSteppers, 기본 접힘).
  *  - `title`/`aria-label`은 토글 상태에 따라 `일시정지`/`재시작`으로 바뀐다. */
-export type EdgeMode = 'nav' | 'anomaly' | 'paused';
+export type EdgeMode = 'nav' | 'anomaly' | 'paused' | 'exit';
 
 export function ActiveControlBar({
   tone, mode, glyph, indicatorInteractive, indicatorExit, waveActive,
   getAudioLevel, getTimeDomainData, uiCommand,
-  onPrevRow, onNextRow, onTogglePause, onExit, onAnomalyConfirm, onAnomalyModify,
+  onPrevRow, onNextRow, onTogglePause, onExit, onExitCancel, onExitConfirm,
+  onAnomalyConfirm, onAnomalyModify,
 }: {
   /** 상태 톤(VoiceScreen SSOT) — 도트·파형 색이 엣지글로우와 함께 상태를 말한다. */
   tone: GlowTone;
@@ -44,6 +46,8 @@ export function ActiveControlBar({
   onNextRow: () => void;
   onTogglePause: () => void;
   onExit: () => void;
+  onExitCancel: () => void;
+  onExitConfirm: () => void;
   onAnomalyConfirm: () => void;
   onAnomalyModify: () => void;
 }) {
@@ -83,37 +87,39 @@ export function ActiveControlBar({
              겹침이 남으면 `<` `>`도 같은 위험에 노출된다. 접히면 그대로 돌아온다. */}
       {!panelOpen && (
         <>
-            <div
-              data-testid="voice-indicator-row"
-              style={{
-                flex: '1 1 0', minHeight: 0,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-            >
-              <StateIndicator
-                glyph={glyph}
-                tone={tone}
-                waveActive={waveActive}
-                levelActive={waveActive}
-                getAudioLevel={getAudioLevel}
-                getTimeDomainData={getTimeDomainData}
-                control={
-                  mode === 'anomaly' && indicatorInteractive
-                    ? {
-                        title: '일시정지',
-                        label: '일시정지',
-                        status: 'alert',
-                        onClick: onTogglePause,
-                      }
-                    : undefined
-                }
-              />
-            </div>
+            {mode !== 'exit' && (
+              <div
+                data-testid="voice-indicator-row"
+                style={{
+                  flex: '1 1 0', minHeight: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                <StateIndicator
+                  glyph={glyph}
+                  tone={tone}
+                  waveActive={waveActive}
+                  levelActive={waveActive}
+                  getAudioLevel={getAudioLevel}
+                  getTimeDomainData={getTimeDomainData}
+                  control={
+                    mode === 'anomaly' && indicatorInteractive
+                      ? {
+                          title: '일시정지',
+                          label: '일시정지',
+                          status: 'alert',
+                          onClick: onTogglePause,
+                        }
+                      : undefined
+                  }
+                />
+              </div>
+            )}
 
             <div
               data-testid="voice-nav-row"
               style={{
-                flex: `0 0 ${CONTROL_ROW_FRACTION * 100}%`, minHeight: 44,
+                flex: mode === 'exit' ? '1 1 0' : `0 0 ${CONTROL_ROW_FRACTION * 100}%`, minHeight: 44,
                 display: 'grid',
                 gridTemplateColumns: mode === 'anomaly'
                   ? 'repeat(2, minmax(0, 1fr))'
@@ -121,10 +127,17 @@ export function ActiveControlBar({
                 alignItems: 'stretch', gap: 8,
               }}
             >
-              {mode === 'anomaly' ? (
+              {mode === 'exit' ? (
                 <>
-                  <EdgeButton kind="text" testId="anomaly-confirm-btn" label="확인" title="확인" onClick={onAnomalyConfirm} />
-                  <EdgeButton kind="text" testId="anomaly-modify-btn" label="수정" title="수정" onClick={onAnomalyModify} accent={T.red} accentBg={T.redGlowFaint} />
+                  <EdgeButton kind="icon" testId="voice-control-prev" label="이전" title="이전 행으로 이동" onClick={onPrevRow} icon="‹" />
+                  <EdgeButton kind="icon" testId="exit-confirm-cancel" label="계속 입력" title="계속 입력" onClick={onExitCancel} icon="✕" accent={T.red} accentBg={T.redGlowFaint} />
+                  <EdgeButton kind="icon" testId="exit-confirm-submit" label="종료" title="종료 확인" onClick={onExitConfirm} icon="✓" accent={T.green} accentBg={T.greenGlowFaint} />
+                  <EdgeButton kind="icon" testId="voice-control-next" label="다음" title="다음 행으로 이동" onClick={onNextRow} icon="›" />
+                </>
+              ) : mode === 'anomaly' ? (
+                <>
+                  <EdgeButton kind="text" testId="anomaly-modify-btn" label="수정" visualLabel="✎ 수정" title="수정" onClick={onAnomalyModify} accent={T.red} accentBg={T.redGlowFaint} />
+                  <EdgeButton kind="text" testId="anomaly-confirm-btn" label="확인" visualLabel="✓ 확인" title="확인" onClick={onAnomalyConfirm} accent={T.green} accentBg={T.greenGlowFaint} />
                 </>
               ) : (
                 <>
@@ -172,10 +185,11 @@ export function ActiveControlBar({
 
 /** 하단 행동 버튼. 높이는 10% 행동행이 정하고 44px 터치 하한만 사람이 정한다(GL-007 규칙 2). */
 export function EdgeButton({
-  kind, label, title, onClick, icon, accent, accentBg, testId, status, tone, disabled = false,
+  kind, label, visualLabel, title, onClick, icon, accent, accentBg, testId, status, tone, disabled = false,
 }: {
   kind: 'icon' | 'text';
   label: string;
+  visualLabel?: ReactNode;
   title: string;
   onClick: () => void;
   icon?: ReactNode;
@@ -230,7 +244,7 @@ export function EdgeButton({
         >
           {icon}
         </span>
-      ) : label}
+      ) : (visualLabel ?? label)}
     </button>
   );
 }

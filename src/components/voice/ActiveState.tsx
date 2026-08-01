@@ -15,7 +15,6 @@ import { CenterStage } from './CenterStage';
 import { ActiveControlBar, type EdgeMode } from './ActiveControlBar';
 import { activeZoneRows } from './heroLayout';
 import type { DotGlyph } from './StateDots';
-import { ExitConfirmDialog } from './ExitConfirmDialog';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 
 /** 우측 끝 정렬 시 칩과 트랙 오른쪽 가장자리 사이 여백(px). 칩이 가장자리에 딱 붙으면
@@ -79,7 +78,7 @@ export function ActiveState({
   onManualAnomalyModify: () => void;
   onCommandHelpOpen: () => void;
   onCommandHelpClose: () => void;
-  /** v0.35.0 R2-FIX-2 — 종료 확인 다이얼로그 열림/취소 시 STT suspend·resume. */
+  /** v0.35.0 R2-FIX-2 — 저장확인 인라인 열림/취소 시 STT suspend·resume. */
   onExitConfirmOpen: () => void;
   onExitConfirmCancel: () => void;
 }) {
@@ -105,7 +104,7 @@ export function ActiveState({
   const [cmdHelpOpen, setCmdHelpOpen] = useState(false);
   const cmdHelpSuspendedRef = useRef(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
-  // v0.35.0 R2-FIX-2 — 종료 확인 다이얼로그가 열려 있는 동안 STT 정지(취소 → resume, 확인 → stop()).
+  // v0.35.0 R2-FIX-2 — 저장확인 인라인 동안 STT 정지(취소 → resume, 확인 → stop()).
   const openExitConfirm = useCallback(() => {
     onExitConfirmOpen();
     setConfirmExitOpen(true);
@@ -114,6 +113,11 @@ export function ActiveState({
     setConfirmExitOpen(false);
     onExitConfirmCancel();
   }, [onExitConfirmCancel]);
+  const confirmExit = useCallback(() => {
+    // 확인 경로는 resume하지 않는다 — onEnd()=stop()이 인식기를 정지시킨다(R2-FIX-2).
+    setConfirmExitOpen(false);
+    onEnd();
+  }, [onEnd]);
   // v0.33.0 항목6 — 수동 입력 시트(음성 칩 탭). 열림 중 STT hard-suspend, 닫힘 시 resume.
   const [manualCol, setManualCol] = useState<Column | null>(null);
   const manualSuspendedRef = useRef(false);
@@ -229,7 +233,9 @@ export function ActiveState({
   // 와이어프레임 §[2] — 하단 `<` `>`가 확인/수정으로 바뀌는 건 **응답 대기 알람 동안만**이다.
   //   정보성 알람(수동 커밋 이상치, awaitingResponse 미지정)은 이전/다음을 유지한다.
   const anomalyActionable = !!alertVisible && alertVisible.status !== 'corrected' && !!alertVisible.awaitingResponse;
-  const edgeMode: EdgeMode = paused ? 'paused' : anomalyActionable ? 'anomaly' : 'nav';
+  const edgeMode: EdgeMode = confirmExitOpen
+    ? 'exit'
+    : paused ? 'paused' : anomalyActionable ? 'anomaly' : 'nav';
   const glyph: DotGlyph = paused ? 'pause' : anomalyPending ? 'alert' : endReached ? 'check' : 'mic';
 
   const handleAnomalyConfirm = useCallback(() => {
@@ -251,8 +257,8 @@ export function ActiveState({
       style={{
         flex: 1, minHeight: 0,
         display: 'grid',
-        // 기본 20/50/30, 인라인 수동 수정은 20/30/50. `dotless`는 UI-e4 저장 확인 전용이다.
-        gridTemplateRows: activeZoneRows(manualCol ? 'modify' : 'base'),
+        // 저장확인만 20/70/10 dotless. 일시정지는 ⏸ 도트가 상태를 말하므로 base를 유지한다.
+        gridTemplateRows: activeZoneRows(confirmExitOpen ? 'dotless' : manualCol ? 'modify' : 'base'),
       }}
       data-testid="voice-active-state"
     >
@@ -310,6 +316,7 @@ export function ActiveState({
       ) : (
         <>
           <CenterStage
+            exitConfirming={confirmExitOpen}
             paused={paused}
             anomalyAlert={alertVisible}
             endReached={endReached}
@@ -333,7 +340,7 @@ export function ActiveState({
             glyph={glyph}
             // 현재 끝 도달 전에는 도트 전체가 일시정지 터치 경로다. 끝 도달 화면에서는 false지만,
             // 바로 아래 indicatorExit가 같은 자리를 종료 컨트롤로 승계한다.
-            indicatorInteractive={!endReached && !paused}
+            indicatorInteractive={!confirmExitOpen && !endReached && !paused}
             // [EXIT-PERSIST-1] 끝 도달 뒤에는 현재 행과 무관하게 도트 자리를 종료가 승계한다.
             // 응답 대기 알람의 확인/수정과 일시정지의 재시작/종료가 더 높은 우선순위다.
             indicatorExit={sess.endReachedOnce && !paused && !anomalyActionable}
@@ -345,24 +352,16 @@ export function ActiveState({
             onNextRow={onNextRow}
             onTogglePause={onTogglePause}
             onExit={openExitConfirm}
+            onExitCancel={cancelExitConfirm}
+            onExitConfirm={confirmExit}
             onAnomalyConfirm={handleAnomalyConfirm}
             onAnomalyModify={handleAnomalyModify}
           />
         </>
       )}
 
-      {/* fixed 오버레이(도움말/종료확인)는 grid track을 만들지 않는다. 수동 입력은 인라인이다. */}
+      {/* 도움말만 fixed 오버레이다. 수동 입력과 저장확인은 인라인으로 같은 grid를 쓴다. */}
       {cmdHelpOpen && <CommandHelpPopup onClose={closeCommandHelp} />}
-      {confirmExitOpen && (
-        <ExitConfirmDialog
-          onCancel={cancelExitConfirm}
-          onConfirm={() => {
-            // 확인 경로는 resume하지 않는다 — onEnd()=stop()이 인식기를 정지시킨다(R2-FIX-2).
-            setConfirmExitOpen(false);
-            onEnd();
-          }}
-        />
-      )}
     </div>
   );
 }

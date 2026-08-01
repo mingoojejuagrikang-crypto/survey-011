@@ -688,7 +688,7 @@ test('UI-e1 paused — 중앙·상단 상태어 비움 + 하단 4심볼 토글 +
 });
 
 // ─── §[2] anomaly ───────────────────────────────────────────────────────────
-test('§[2] anomaly — 경보행 + 2열 비교(직전/현재) + 하단 `<`=확인 / `>`=수정 + 경고 도트', async ({ page }) => {
+test('§[2] anomaly — 라벨 1행·값 2행 + 하단 수정(좌)/확인(우) 2버튼 + 경고 도트', async ({ page }) => {
   await boot(page);
   await triggerAnomaly(page);
 
@@ -701,7 +701,7 @@ test('§[2] anomaly — 경보행 + 2열 비교(직전/현재) + 하단 `<`=확�
   const compareBox = (await page.locator('[data-testid="anomaly-comparison"]').boundingBox())!;
   expect(headlineBox.y + headlineBox.height, '경보행이 값 위').toBeLessThanOrEqual(compareBox.y + 1);
 
-  // fb-27-7 2·3·4항(민구 확정 2026-07-27) — **상하 2줄**, 날짜는 `mm-dd`, 라벨이 **값 앞**.
+  // ui-standard §3-2 — 1행은 두 라벨, 2행은 두 값. 날짜는 `mm-dd`다.
   const cmp = page.locator('[data-testid="anomaly-comparison"]');
   // 🔴 날짜를 리터럴로 박지 않는다 — 픽스처의 직전 회차가 `오늘 − 1일`이라 자정을 넘기면
   //    하드코딩한 값이 틀어진다(실제로 07-27→07-28 롤오버에서 이 테스트가 깨졌다).
@@ -715,12 +715,21 @@ test('§[2] anomaly — 경보행 + 2열 비교(직전/현재) + 하단 `<`=확�
   await expect(page.locator('[data-testid="anomaly-next-value"]')).toHaveText('120.5');
   const prevBox = (await page.locator('[data-testid="anomaly-prev-value"]').boundingBox())!;
   const nextBox = (await page.locator('[data-testid="anomaly-next-value"]').boundingBox())!;
-  const prevLabelBox = (await cmp.locator('span').first().boundingBox())!;
-  expect(prevBox.y + prevBox.height, '직전 줄이 현재 줄 **위**(상하 배치)').toBeLessThanOrEqual(nextBox.y + 1);
-  expect(prevLabelBox.x + prevLabelBox.width, '라벨이 값 앞(같은 줄 왼쪽)').toBeLessThanOrEqual(prevBox.x + 1);
-  expect(Math.abs(prevLabelBox.y - prevBox.y), '라벨과 값이 같은 줄').toBeLessThanOrEqual(prevBox.height);
+  const prevLabelBox = (await page.locator('[data-testid="anomaly-prev-label"]').boundingBox())!;
+  const nextLabelBox = (await page.locator('[data-testid="anomaly-next-label"]').boundingBox())!;
+  expect(Math.abs(prevLabelBox.y - nextLabelBox.y), '라벨 둘은 같은 1행').toBeLessThanOrEqual(1);
+  expect(Math.abs(prevBox.y - nextBox.y), '값 둘은 같은 2행').toBeLessThanOrEqual(1);
+  expect(prevLabelBox.y + prevLabelBox.height, '라벨 행이 값 행 위').toBeLessThanOrEqual(prevBox.y + 1);
+  expect(prevLabelBox.x, '직전 라벨은 왼쪽 열').toBeLessThan(nextLabelBox.x);
+  expect(prevBox.x, '직전 값은 왼쪽 열').toBeLessThan(nextBox.x);
+  const compareFonts = await cmp.evaluate((el) => {
+    const size = (id: string) => parseFloat(getComputedStyle(el.querySelector(`[data-testid="${id}"]`) as HTMLElement).fontSize);
+    return { label: size('anomaly-prev-label'), value: size('anomaly-prev-value') };
+  });
+  expect(compareFonts.label, '402×874 라벨 56px').toBeCloseTo(56, 0);
+  expect(compareFonts.value, '402×874 값 78px').toBeCloseTo(78, 0);
 
-  // 하단 `<` `>` → 확인 / 수정(알람 동안만). 카드 안이 아니라 **하단 양끝**이다.
+  // 알람은 2버튼을 유지하되 규칙 5에 따라 되돌리기(수정)는 좌, 진행(확인)은 우다.
   const confirm = page.locator('[data-testid="anomaly-confirm-btn"]');
   const modify = page.locator('[data-testid="anomaly-modify-btn"]');
   await expect(confirm).toBeVisible();
@@ -729,7 +738,10 @@ test('§[2] anomaly — 경보행 + 2열 비교(직전/현재) + 하단 `<`=확�
   const cBox = (await confirm.boundingBox())!;
   const mBox = (await modify.boundingBox())!;
   expect(cBox.y, '확인은 하단 바 안').toBeGreaterThanOrEqual(bar.y - 1);
-  expect(cBox.x, '확인이 왼쪽 끝').toBeLessThan(mBox.x);
+  expect(mBox.x, '수정은 왼쪽').toBeLessThan(cBox.x);
+  await expect(modify).toHaveText('✎ 수정');
+  await expect(confirm).toHaveText('✓ 확인');
+  await expect(page.locator('[data-testid="anomaly-modify-btn"], [data-testid="anomaly-confirm-btn"]'), '알람은 2버튼').toHaveCount(2);
   expect(cBox.height).toBeGreaterThanOrEqual(44);
   expect(mBox.height).toBeGreaterThanOrEqual(44);
 
@@ -739,6 +751,17 @@ test('§[2] anomaly — 경보행 + 2열 비교(직전/현재) + 하단 `<`=확�
   const activeChipBorder = await page.locator('[data-testid="column-chip"][data-active="true"]')
     .evaluate((el) => getComputedStyle(el as HTMLElement).borderTopColor);
   expect(activeChipBorder, '활성칸 빨강 강조').toBe('rgb(255, 23, 68)');
+
+  await fireSttInterim(page, '19.9');
+  const interim = page.locator('[data-testid="interim-value"]');
+  await expect(interim).toHaveText('19.9');
+  const interimMetrics = await interim.evaluate((el) => ({
+    color: getComputedStyle(el as HTMLElement).color,
+    bottom: el.getBoundingClientRect().bottom,
+  }));
+  const dotsTop = (await page.locator('[data-testid="state-dots"]').boundingBox())!.y;
+  expect(interimMetrics.color, '실시간 인식값은 흰색').toBe('rgb(245, 245, 247)');
+  expect(interimMetrics.bottom, '실시간 인식값은 파형 바로 위').toBeLessThanOrEqual(dotsTop + 1);
 });
 
 test('fb-27-8 — 정정 후에는 `정상 : 복귀` 헤드라인을 렌더하지 않는다(하단 아이콘·글로우가 대신 말한다)', async ({ page }) => {

@@ -186,8 +186,8 @@ export function VoiceScreen(props: {
         onManualAnomalyModify={() => voiceSession.modifyManualAnomaly()}
         onCommandHelpOpen={() => voiceSession.suspendRecognitionForUi('command_help')}
         onCommandHelpClose={() => voiceSession.resumeRecognitionForUi('command_help')}
-        // v0.35.0 R2-FIX-2(리뷰 라운드2, Pro High·데이터무결성) — 종료 확인 다이얼로그 동안 STT 정지.
-        //   완료 상태에선 '종료' 음성명령 대기로 인식기가 살아 있어, 다이얼로그가 떠 있는 동안 배경
+        // v0.35.0 R2-FIX-2(리뷰 라운드2, Pro High·데이터무결성) — 저장확인 인라인 동안 STT 정지.
+        //   완료 상태에선 '종료' 음성명령 대기로 인식기가 살아 있어, 저장확인 상태 동안 배경
         //   음성이 파싱돼 엉뚱한 커밋/행이동이 될 수 있었다(manual_input·command_help와 동일 배선).
         //   취소로 닫을 때만 resume — 확인 경로는 stop()이 어차피 인식기를 정지시킨다.
         onExitConfirmOpen={() => voiceSession.suspendRecognitionForUi('exit_confirm')}

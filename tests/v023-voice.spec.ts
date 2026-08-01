@@ -416,7 +416,7 @@ test('B4 — 마지막 행 대기(완료) 상태에서 하단 종료 버튼으�
   expect(ready).toBe(false);
 
   // UI-e1 — 완료 상태도 `[‹][⏹][⏸][›]`를 유지한다. 종료 심볼은
-  //   ExitConfirmDialog를 여는 영속 상태 컨트롤이다.
+  //   저장확인 인라인을 여는 영속 상태 컨트롤이다.
   await expect(page.locator('button[title="일시정지"]')).toBeVisible();
   const endBtn = page.locator('[data-testid="voice-status-control"][data-status="exit"]');
   await expect(endBtn).toBeVisible();
@@ -454,7 +454,7 @@ test('R2-FIX-1 — persistSession resolve 전엔 phase가 ready로 가지 않는
   console.log('✓ 종료: persist 완료 전 ready 미노출 → 완료 후 ready(덮어쓰기 race 창 제거)');
 });
 
-test('R2-FIX-2 — 종료 확인 다이얼로그 동안 STT suspend, 취소 시 resume(ui_suspend/ui_resume 계측)', async ({ page }) => {
+test('R2-FIX-2 — 저장확인 인라인 동안 STT suspend, 취소 시 resume(ui_suspend/ui_resume 계측)', async ({ page }) => {
   await setupAndStart(page);
   await fireStt(page, '105.0', 600);
   await fireStt(page, '106.0', 900); // 완료 대기 — 이 상태에선 '종료' 음성명령 대기로 STT가 살아있다.
@@ -462,7 +462,7 @@ test('R2-FIX-2 — 종료 확인 다이얼로그 동안 STT suspend, 취소 시 
   const countOf = async (parsed: string) =>
     (await loadLogEvents(page)).filter((e) => e.parsed === parsed && e.extra === 'exit_confirm').length;
 
-  // 다이얼로그 열기 → suspend.
+  // 저장확인 인라인 열기 → suspend.
   await page.locator('[data-testid="voice-status-control"][data-status="exit"]').click();
   await expect(page.locator('button[title="종료 확인"]')).toBeVisible();
   await expect.poll(() => countOf('ui_suspend'), { timeout: 3000 }).toBeGreaterThanOrEqual(1);
@@ -472,7 +472,7 @@ test('R2-FIX-2 — 종료 확인 다이얼로그 동안 STT suspend, 취소 시 
   await page.locator('button[title="계속 입력"]').click();
   await expect(page.locator('button[title="종료 확인"]')).toHaveCount(0);
   await expect.poll(() => countOf('ui_resume'), { timeout: 3000 }).toBeGreaterThanOrEqual(1);
-  console.log('✓ 종료 확인 다이얼로그: 열림 suspend → 취소 resume(배경 음성 오파싱 차단)');
+  console.log('✓ 저장확인 인라인: 열림 suspend → 취소 resume(배경 음성 오파싱 차단)');
 });
 
 // ─── B2 (재질문 사유 큐 실동작) ──────────────────────────────────────────────

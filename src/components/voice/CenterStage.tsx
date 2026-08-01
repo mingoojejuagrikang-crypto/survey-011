@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef } from 'react';
 import { AnomalyAlertPopup } from './AnomalyAlertPopup';
 import { CompleteSummary } from './CompleteSummary';
+import { ExitConfirmInline } from './ExitConfirmInline';
 import { ModifyIndicatorPill } from './ModifyIndicatorPill';
 import { VoiceHero, AlarmInterimStrip } from './VoiceHero';
 import { type ReaskReason } from './ReaskCue';
@@ -9,6 +10,49 @@ import type { Column } from '../../types';
 import type { AnomalyAlert } from '../../stores/sessionStore';
 import { logger } from '../../lib/logger';
 import { endReachedRender } from '../../lib/logEvents';
+import { T } from '../../tokens';
+
+/** 금지된 알람 카드 내부 구현에 레이아웃 책임을 다시 섞지 않고, 중앙 stage가 공개 testid 계약을
+ *  2열(라벨 1행 / 값 2행)로 배치한다. 인라인 style보다 우선해야 해서 이 범위 안에서만 `!important`를
+ *  쓴다. 값/라벨 타이포는 `STATE_TYPE`의 열린 폭 비례 계약이 계속 맡는다. */
+const ALARM_TWO_COLUMN_LAYOUT = `
+  [data-central-state="alarm"] [data-testid="anomaly-alert"] {
+    padding-block: 0 !important;
+    row-gap: 0 !important;
+  }
+  [data-central-state="alarm"] [data-testid="anomaly-comparison"] {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-rows: auto auto !important;
+    width: 100% !important;
+    column-gap: 0 !important;
+    row-gap: 0 !important;
+    overflow: hidden !important;
+  }
+  [data-central-state="alarm"] [data-testid="anomaly-prev-label"] {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+  }
+  [data-central-state="alarm"] [data-testid="anomaly-next-label"] {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+  }
+  [data-central-state="alarm"] [data-testid="anomaly-prev-value"] {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+  }
+  [data-central-state="alarm"] [data-testid="anomaly-next-value"] {
+    grid-column: 2 !important;
+    grid-row: 2 !important;
+  }
+  [data-central-state="alarm"] [data-testid^="anomaly-"][data-testid$="-label"],
+  [data-central-state="alarm"] [data-testid^="anomaly-"][data-testid$="-value"] {
+    justify-self: center !important;
+    text-align: center !important;
+    color: ${T.red} !important;
+    line-height: 1 !important;
+  }
+`;
 
 /** 와이어프레임 §공통규칙1·2·3 — **중앙 50%**.
  *  "정보는 가로+세로 중앙정렬(빈 공간에 따라 유동)", "폭 감안해 최대한 키운 뒤, 위/아래 여백
@@ -25,10 +69,12 @@ import { endReachedRender } from '../../lib/logEvents';
  *  갈린다 — 세션 트리 자체를 조건부로 갈아치우면 인식기·워치독·클립 레코더가 teardown된다
  *  ([STT-16] 실기기 62초 사공백). */
 export function CenterStage({
-  paused, anomalyAlert, endReached, modifyIndicator, currentCol,
+  exitConfirming, paused, anomalyAlert, endReached, modifyIndicator, currentCol,
   completedCount, totalRows, row, tone, reaskReason, completing, reviewCommit,
   modifyPrevValue, modifyCurrentValue, onExit,
 }: {
+  /** 저장확인 인라인 — 별도 레이어 없이 중앙과 하단 바의 의미만 바꾼다. */
+  exitConfirming: boolean;
   paused: boolean;
   /** 표시할 이상치 알람(수동 입력 시트가 열려 있으면 부모가 null로 내린다). */
   anomalyAlert: AnomalyAlert | null;
@@ -46,9 +92,12 @@ export function CenterStage({
   modifyCurrentValue: string;
   onExit: () => void;
 }) {
-  let branch: 'paused' | 'anomaly' | 'end' | 'modify' | 'hero' = 'hero';
+  let branch: 'exit' | 'paused' | 'anomaly' | 'end' | 'modify' | 'hero' = 'hero';
   let content: ReactNode = null;
-  if (paused) {
+  if (exitConfirming) {
+    branch = 'exit';
+    content = <ExitConfirmInline />;
+  } else if (paused) {
     branch = 'paused';
     // 시각적으로는 완전히 빈 중앙이다. 이 100% surface는 레이아웃·픽셀을 추가하지 않고
     // 스크린리더와 안정적인 상태 testid에만 "일시정지"를 남긴다(UI-c 규칙 1/3).
@@ -72,6 +121,7 @@ export function CenterStage({
           justifyItems: 'center', overflow: 'hidden',
         }}
       >
+        <style>{ALARM_TWO_COLUMN_LAYOUT}</style>
         <AnomalyAlertPopup a={anomalyAlert} />
         {/* v0.37.0 FB-F — 알람 카드 아래 미확정 인식값 스트립(정정 발화 확인). interimValue 자체 구독. */}
         <AlarmInterimStrip />
@@ -118,15 +168,18 @@ export function CenterStage({
     alertStatus: anomalyAlert ? (anomalyAlert.status ?? 'pending') : 'none',
     row,
   };
+  // 저장확인은 기존 end 화면 위의 표시 전환이다. endReached 계측에 새 branch 바이트를 만들거나
+  // 인라인 진입 때 같은 이벤트를 중복 기록하지 않는다(PRINCIPLES §4).
+  const endReachedBranch: Exclude<typeof branch, 'exit'> = branch === 'exit' ? 'end' : branch;
   useEffect(() => {
     if (!endReached) return;
     const snapshot = telemetryRef.current;
     logger.log({
       type: 'session',
-      extra: endReachedRender({ branch, alertStatus: snapshot.alertStatus }),
+      extra: endReachedRender({ branch: endReachedBranch, alertStatus: snapshot.alertStatus }),
       row: snapshot.row,
     });
-  }, [endReached, branch]);
+  }, [endReached, endReachedBranch]);
 
   return (
     <div

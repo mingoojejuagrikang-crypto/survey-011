@@ -156,6 +156,17 @@ const MOCK_INIT_SCRIPT = `
     };
     (this._ls['result'] || []).forEach(function(cb) { cb(event); });
   };
+  MockSTT.prototype.fireInterim = function(transcript, confidence) {
+    if (confidence === undefined) confidence = 0.6;
+    var event = {
+      resultIndex: 0,
+      results: {
+        length: 1,
+        0: { isFinal: false, length: 1, 0: { transcript: transcript, confidence: confidence } }
+      }
+    };
+    (this._ls['result'] || []).forEach(function(cb) { cb(event); });
+  };
   try {
     Object.defineProperty(window, 'SpeechRecognition', {
       value: MockSTT, writable: true, configurable: true, enumerable: true,
@@ -343,72 +354,79 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   expect(events.filter((e) => e.extra === 'trend_alert_corrected')).toHaveLength(0);
 });
 
-test('[ALERT-COMPARE-1] 2026-07-29 제보 #3 — 라벨 end·값 start 중앙축, 값 62px, 390×568 무넘침', async ({ page }) => {
+test('[ALERT-COMPARE-1] 라벨 56px·값 78px 2열, 넓어지면 값이 더 커지고 390×568 무넘침', async ({ page }) => {
   await page.setViewportSize({ width: 402, height: 874 });
-  await setupAndStart(page);
+  await setupAndStart(page, {
+    sheetRows: [[PREV_ROUND, '이원창', '1', '1', '100.0', '99.9']],
+  });
   await waitForActiveChip(page, '횡경');
-  await fireStt(page, '120.5', 500);
+  await fireStt(page, '80.5', 500); // decrease는 c8 increase 규칙을 통과
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '19.9', 500); // 99.9 대비 -80% → 범위 알람
 
-  // 2026-07-29 민구 제보 #3 — v0.41.0의 "각 1/2 영역 중앙(25%/75%)"은 구현 누락이 아니라
-  // 반영된 결과였으나, 큰 값 쪽으로 시각 무게가 쏠려 반려됐다. 새 계약은 날짜 라벨의 오른쪽 끝과
-  // 값의 왼쪽 시작을 화면 50% 축으로 모으는 것이다. 옛 중심 단언으로 되돌리지 마라.
+  // ui-standard §3-2 — 각 열은 화면 절반을 온전히 쓰고, 1행 라벨/2행 값으로 비교한다.
   const comparison = page.locator('[data-testid="anomaly-comparison"]');
   const metrics = await comparison.evaluate((el) => {
-    const box = el.getBoundingClientRect();
     const child = (testId: string) =>
       el.querySelector(`[data-testid="${testId}"]`) as HTMLElement;
-    const prevLabel = child('anomaly-prev-label').getBoundingClientRect();
-    const prevValueEl = child('anomaly-prev-value');
-    const prevValue = prevValueEl.getBoundingClientRect();
-    const nextLabel = child('anomaly-next-label').getBoundingClientRect();
-    const nextValue = child('anomaly-next-value').getBoundingClientRect();
-    const centerY = (r: DOMRect) => r.y + r.height / 2;
-    const axisX = box.x + box.width / 2;
-    const alignment = (label: DOMRect, value: DOMRect) => ({
-      labelEndGap: axisX - label.right,
-      valueStartGap: value.left - axisX,
-      meetAxis: ((label.right + value.left) / 2 - box.x) / box.width,
-    });
     const prevLabelEl = child('anomaly-prev-label');
     const nextLabelEl = child('anomaly-next-label');
+    const prevValueEl = child('anomaly-prev-value');
     const nextValueEl = child('anomaly-next-value');
+    const prevLabel = prevLabelEl.getBoundingClientRect();
+    const nextLabel = nextLabelEl.getBoundingClientRect();
+    const prevValue = prevValueEl.getBoundingClientRect();
+    const nextValue = nextValueEl.getBoundingClientRect();
     return {
-      width: box.width,
-      prev: alignment(prevLabel, prevValue),
-      next: alignment(nextLabel, nextValue),
-      prevCenterDeltaY: Math.abs(centerY(prevLabel) - centerY(prevValue)),
-      nextCenterDeltaY: Math.abs(centerY(nextLabel) - centerY(nextValue)),
+      labelRowDeltaY: Math.abs(prevLabel.y - nextLabel.y),
+      valueRowDeltaY: Math.abs(prevValue.y - nextValue.y),
+      labelAboveValue: prevLabel.bottom <= prevValue.y + 1 && nextLabel.bottom <= nextValue.y + 1,
+      columnOrder: prevLabel.x < nextLabel.x && prevValue.x < nextValue.x,
+      labelSize: parseFloat(getComputedStyle(prevLabelEl).fontSize),
       valueSize: parseFloat(getComputedStyle(prevValueEl).fontSize),
-      prevLabelJustify: getComputedStyle(prevLabelEl).justifySelf,
-      nextLabelJustify: getComputedStyle(nextLabelEl).justifySelf,
-      prevValueJustify: getComputedStyle(prevValueEl).justifySelf,
-      nextValueJustify: getComputedStyle(nextValueEl).justifySelf,
-      prevLabelAlign: getComputedStyle(prevLabelEl).textAlign,
-      nextLabelAlign: getComputedStyle(nextLabelEl).textAlign,
-      prevValueAlign: getComputedStyle(prevValueEl).textAlign,
-      nextValueAlign: getComputedStyle(nextValueEl).textAlign,
+      valueColors: [getComputedStyle(prevValueEl).color, getComputedStyle(nextValueEl).color],
     };
   });
-  for (const row of [metrics.prev, metrics.next]) {
-    expect(row.labelEndGap, '라벨 오른쪽 끝은 중앙축 왼쪽에 붙는다').toBeGreaterThanOrEqual(0);
-    expect(row.labelEndGap, '라벨 오른쪽 끝과 중앙축 사이 여백').toBeLessThanOrEqual(8);
-    expect(row.valueStartGap, '값 왼쪽 시작은 중앙축 오른쪽에 붙는다').toBeGreaterThanOrEqual(0);
-    expect(row.valueStartGap, '값 왼쪽 시작과 중앙축 사이 여백').toBeLessThanOrEqual(8);
-    expect(Math.abs(row.meetAxis - 0.5), '라벨 end / 값 start 사이가 화면 중앙축이다')
-      .toBeLessThan(0.01);
+  expect(metrics.labelRowDeltaY, '두 라벨은 같은 1행').toBeLessThanOrEqual(1);
+  expect(metrics.valueRowDeltaY, '두 값은 같은 2행').toBeLessThanOrEqual(1);
+  expect(metrics.labelAboveValue, '라벨 행은 값 행 위').toBe(true);
+  expect(metrics.columnOrder, '직전은 왼쪽 열, 현재는 오른쪽 열').toBe(true);
+  expect(metrics.labelSize, '402×874 라벨 56px').toBeCloseTo(56, 0);
+  expect(metrics.valueSize, '402×874 값 78px').toBeCloseTo(78, 0);
+  expect(metrics.valueColors, '비교값은 붉은 톤').toEqual(['rgb(255, 23, 68)', 'rgb(255, 23, 68)']);
+
+  await page.evaluate(() => {
+    (window as unknown as { __mockSTT?: { fireInterim: (t: string, c: number) => void } })
+      .__mockSTT?.fireInterim('19.9', 0.6);
+  });
+  await expect(page.locator('[data-testid="interim-value"]')).toHaveText('19.9');
+  const reconnectButton = page.locator('[data-testid="mic-reconnect-btn"]');
+  if (await reconnectButton.count()) {
+    await reconnectButton.evaluate((button) => {
+      const banner = button.closest('[role="alert"]') as HTMLElement | null;
+      if (banner) banner.style.display = 'none'; // 캡처 하니스의 fake-media 부재만 숨긴다.
+    });
   }
-  expect([metrics.prevLabelJustify, metrics.nextLabelJustify]).toEqual(['end', 'end']);
-  expect([metrics.prevValueJustify, metrics.nextValueJustify]).toEqual(['start', 'start']);
-  expect([metrics.prevLabelAlign, metrics.nextLabelAlign]).toEqual(['right', 'right']);
-  expect([metrics.prevValueAlign, metrics.nextValueAlign]).toEqual(['left', 'left']);
-  expect(metrics.prevCenterDeltaY, '직전 행 라벨/값 세로 중앙').toBeLessThanOrEqual(1);
-  expect(metrics.nextCenterDeltaY, '현재 행 라벨/값 세로 중앙').toBeLessThanOrEqual(1);
-  expect(metrics.valueSize, '402×874에서 compareValue 62px 상한 도달').toBeGreaterThanOrEqual(61.5);
+  await page.screenshot({ path: 'Deliverables/assets/2026-08-02-ui-e4/alarm-402x874.png' });
+
+  // 구 62px clamp를 지우는 데서 끝내면 다음 상한이 생길 수 있다. 영역을 넓혔을 때 실제로
+  // 더 커지는지 단언해 T6 7회차를 막는다.
+  await page.setViewportSize({ width: 480, height: 1000 });
+  await page.waitForTimeout(300);
+  const wideValueSize = await page.locator('[data-testid="anomaly-prev-value"]')
+    .evaluate((el) => parseFloat(getComputedStyle(el as HTMLElement).fontSize));
+  console.log(
+    `[ALERT-COMPARE 402→480] label=${metrics.labelSize.toFixed(2)} ` +
+    `value=${metrics.valueSize.toFixed(2)} wideValue=${wideValueSize.toFixed(2)}`,
+  );
+  expect(wideValueSize, '영역이 남으면 78px에서 멈추지 않고 더 커진다').toBeGreaterThan(metrics.valueSize + 5);
 
   await page.setViewportSize({ width: 390, height: 568 });
   await page.waitForTimeout(300);
   const narrow = await page.locator('[data-testid="anomaly-alert"]').evaluate((el) => {
     const comparisonEl = el.querySelector('[data-testid="anomaly-comparison"]') as HTMLElement;
+    const headlineEl = el.querySelector('[data-testid="anomaly-headline"]') as HTMLElement;
+    const style = getComputedStyle(el as HTMLElement);
     return {
       clientWidth: (el as HTMLElement).clientWidth,
       scrollWidth: (el as HTMLElement).scrollWidth,
@@ -416,8 +434,17 @@ test('[ALERT-COMPARE-1] 2026-07-29 제보 #3 — 라벨 end·값 start 중앙축
       scrollHeight: (el as HTMLElement).scrollHeight,
       comparisonClientWidth: comparisonEl.clientWidth,
       comparisonScrollWidth: comparisonEl.scrollWidth,
+      alertStyle: {
+        display: style.display,
+        gap: style.gap,
+        paddingBlock: `${style.paddingTop}/${style.paddingBottom}`,
+        minHeight: style.minHeight,
+      },
+      headlineHeight: headlineEl.getBoundingClientRect().height,
+      comparisonHeight: comparisonEl.getBoundingClientRect().height,
     };
   });
+  console.log(`[ALERT-COMPARE narrow] ${JSON.stringify(narrow)}`);
   expect(narrow.scrollWidth - narrow.clientWidth, '390×568 알람 카드 가로 넘침').toBeLessThanOrEqual(1);
   expect(narrow.scrollHeight - narrow.clientHeight, '390×568 알람 카드 세로 넘침').toBeLessThanOrEqual(1);
   expect(

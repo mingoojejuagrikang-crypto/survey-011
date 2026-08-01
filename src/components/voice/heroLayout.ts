@@ -132,10 +132,11 @@ export const CONTROL_ROW_FRACTION = 1 / 3;
 export const STATE_TYPE = {
   /** 경보행 `<추세|범위>알람 : <넘어선 정도>` — 값 **위**에 오고 값을 가리지 않는다(§[2]). */
   alarmLabel: 'max(17px, calc(clamp(22px, min(6.6vw, 3.6vh), 36px) * var(--fit-lo, 1)))',
-  /** 2열 비교의 열 라벨(`직전(YYYY-MM-DD)` / `현재`). */
-  compareLabel: 'max(12px, calc(clamp(14px, min(4.2vw, 2.2vh), 21px) * var(--fit-lo, 1)))',
-  /** 2열 비교의 값 — 원거리에서 두 값을 한눈에 대조한다(GL-005 가독 하한 22px). */
-  compareValue: 'max(22px, calc(clamp(30px, min(16vw, 8vh), 62px) * var(--fit-hi, 1)))',
+  /** 2열 비교의 열 라벨(`mm-dd` / `현재`). 402px 폭에서 56px이고, 더 넓은 영역에서는
+   *  함께 커진다. `clamp(..., max)`를 다시 넣으면 T6의 상한 재발이다. */
+  compareLabel: 'max(22px, 13.93vw)',
+  /** 2열 비교의 값 — 402px 폭에서 78px. 고정 상한 없이 영역 폭을 따라 커진다. */
+  compareValue: 'max(30px, 19.4vw)',
   /** 완료 요약 `X / N`. UI-c에서 상태어를 지운 폭을 값이 회수한다 — 고정 최대 px 없이 열린 fit. */
   completeSummary: fittedHeroType(
     COMPLETE_SUMMARY_MIN_FONT_PX,
