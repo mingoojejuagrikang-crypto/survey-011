@@ -415,10 +415,10 @@ test('B4 — 마지막 행 대기(완료) 상태에서 하단 종료 버튼으�
     .isVisible({ timeout: 1000 }).catch(() => false);
   expect(ready).toBe(false);
 
-  // v0.35.0 FB-G — 완료(마지막 행 대기)면 하단 중앙 버튼이 '일시정지' 대신 '종료'로 바뀐다.
-  //   일시정지 패널을 거치지 않고 바로 종료(ExitConfirmDialog 재사용).
-  await expect(page.locator('button[title="일시정지"]')).toHaveCount(0);
-  const endBtn = page.locator('button[title="입력 종료"]');
+  // UI-e1 — 완료 상태도 `[‹][⏹][⏸][›]`를 유지한다. 종료 심볼은
+  //   ExitConfirmDialog를 여는 영속 상태 컨트롤이다.
+  await expect(page.locator('button[title="일시정지"]')).toBeVisible();
+  const endBtn = page.locator('[data-testid="voice-status-control"][data-status="exit"]');
   await expect(endBtn).toBeVisible();
   await endBtn.click();
   await page.locator('button[title="종료 확인"]').click();
@@ -438,7 +438,7 @@ test('R2-FIX-1 — persistSession resolve 전엔 phase가 ready로 가지 않는
       .__survey011DelaySessionPutMs = 1500;
   });
 
-  const endBtn = page.locator('button[title="입력 종료"]');
+  const endBtn = page.locator('[data-testid="voice-status-control"][data-status="exit"]');
   await expect(endBtn).toBeVisible();
   await endBtn.click();
   await page.locator('button[title="종료 확인"]').click();
@@ -463,7 +463,7 @@ test('R2-FIX-2 — 종료 확인 다이얼로그 동안 STT suspend, 취소 시 
     (await loadLogEvents(page)).filter((e) => e.parsed === parsed && e.extra === 'exit_confirm').length;
 
   // 다이얼로그 열기 → suspend.
-  await page.locator('button[title="입력 종료"]').click();
+  await page.locator('[data-testid="voice-status-control"][data-status="exit"]').click();
   await expect(page.locator('button[title="종료 확인"]')).toBeVisible();
   await expect.poll(() => countOf('ui_suspend'), { timeout: 3000 }).toBeGreaterThanOrEqual(1);
   expect(await countOf('ui_resume')).toBe(0); // 아직 열려 있으므로 resume 없음

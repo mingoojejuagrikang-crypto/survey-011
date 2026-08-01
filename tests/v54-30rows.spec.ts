@@ -762,16 +762,13 @@ test('[음성] 일시정지 → 재개 → 종료 UI 상태 검증', async ({ pa
   console.log(`✓ 재시작 후 행 카운터: ${rowAfterResume} (expected: 1)`);
   expect(rowAfterResume).toBe(1);
 
-  // 종료: 버튼 클릭 시도 → 실패 시 STT "종료" 명령으로 fallback
-  const endBtn = page.locator('button[title="입력 종료"]').first();
+  // UI-e1: 활성 화면의 4심볼 행동행에서 종료를 누르고 확인한다.
+  const endBtn = page.locator('[data-testid="voice-control-stop"]');
   const endBtnCount = await endBtn.count();
   console.log(`종료 버튼 발견: ${endBtnCount}개`);
   if (endBtnCount > 0) {
-    // 직접 DOM click (React 이벤트 핸들러 호출)
-    await page.evaluate(() => {
-      const btn = document.querySelector('button[title="입력 종료"]') as HTMLButtonElement | null;
-      if (btn) btn.click();
-    });
+    await endBtn.click({ force: true });
+    await page.locator('button[title="종료 확인"]').click();
   }
   await page.waitForTimeout(800);
 

@@ -116,10 +116,8 @@ export const zoneTrack = (pct: number) => `minmax(0, ${pct / 10}fr)`;
 export const ACTIVE_ZONE_ROWS =
   `auto ${zoneTrack(ACTIVE_ZONE_RATIOS.base.chip)} ${zoneTrack(ACTIVE_ZONE_RATIOS.base.center)} ${zoneTrack(ACTIVE_ZONE_RATIOS.base.bottom)}`;
 
-/** ⏭ **UI-e 예약** — 하단 트랙 안에서 버튼 행이 갖는 몫(ui-standard §2의 20:10 = `1/3`).
- *  아직 배선하지 않는다. `ActiveControlBar`의 버튼은 도트·파형과 `voice-nav-row` **한 행을
- *  가로로** 나눠 쓰므로 세로로 나눌 행이 없고, 지금 %를 쓰면 기준이 nav row가 되어 하단 트랙
- *  10%와 무관한 값이 나온다. UI-e가 2행을 만들 때 `EdgeButton`의 `56px` 상한과 함께 처리한다. */
+/** UI-e1 — 하단 트랙 안에서 버튼 행이 갖는 몫(ui-standard §2의 20:10 = `1/3`).
+ *  `ActiveControlBar`가 인디케이터 행과 행동행을 세로로 분리해 이 값을 직접 물려받는다. */
 export const CONTROL_ROW_FRACTION = 1 / 3;
 
 /** 와이어프레임 §[2]·§[4] — 중앙 50%가 hero 말고 다른 정보를 그릴 때 쓰는 타이포 SSOT.

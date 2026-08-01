@@ -367,22 +367,29 @@ test('§공통규칙2·3 — 중앙 정보가 중앙 50% 안에서 가로+세로
   expect(hero!.y + hero!.height).toBeLessThanOrEqual(zone.centerBottom + 1);
 });
 
-// ─── §공통규칙5 — 하단 `<` `>` 양끝 + 가운데 인디케이터 ────────────────────────
-test('§공통규칙5 — `<` `>`가 하단 양끝, 인디케이터가 가운데(대기=글리프 → 음성 입력=도트 파형)', async ({ page }) => {
+// ─── §공통규칙5 — 인디케이터 아래 4심볼 행동행 ─────────────────────────────────
+test('§공통규칙5 — 인디케이터 아래 `[‹][⏹][⏸][›]` 4심볼(대기=글리프 → 음성 입력=도트 파형)', async ({ page }) => {
   await boot(page);
   const bar = await page.locator('[data-testid="voice-control-bar"]').boundingBox();
+  const actionRow = await page.locator('[data-testid="voice-nav-row"]').boundingBox();
   const prev = await page.locator('button[aria-label="이전"]').boundingBox();
+  const stop = await page.locator('button[aria-label="종료"]').boundingBox();
+  const pause = await page.locator('button[aria-label="일시정지"]').boundingBox();
   const next = await page.locator('button[aria-label="다음"]').boundingBox();
   const band = await page.locator('[data-testid="live-listen-band"]').boundingBox();
-  expect(prev).not.toBeNull(); expect(next).not.toBeNull(); expect(band).not.toBeNull();
-  // 양끝 배치: `<`가 바 왼쪽 끝, `>`가 오른쪽 끝, 인디케이터가 그 사이.
+  expect(actionRow).not.toBeNull(); expect(prev).not.toBeNull(); expect(stop).not.toBeNull();
+  expect(pause).not.toBeNull(); expect(next).not.toBeNull(); expect(band).not.toBeNull();
+  // 4버튼 순서와 인디케이터/행동행 세로 분리.
   expect(prev!.x - bar!.x, '`<`는 바 왼쪽 끝').toBeLessThanOrEqual(16);
   expect(bar!.x + bar!.width - (next!.x + next!.width), '`>`는 바 오른쪽 끝').toBeLessThanOrEqual(16);
-  expect(band!.x).toBeGreaterThanOrEqual(prev!.x + prev!.width - 1);
-  expect(band!.x + band!.width).toBeLessThanOrEqual(next!.x + 1);
+  expect(prev!.x + prev!.width).toBeLessThanOrEqual(stop!.x + 1);
+  expect(stop!.x + stop!.width).toBeLessThanOrEqual(pause!.x + 1);
+  expect(pause!.x + pause!.width).toBeLessThanOrEqual(next!.x + 1);
+  expect(band!.y + band!.height, '인디케이터는 행동행 위').toBeLessThanOrEqual(actionRow!.y + 1);
+  await expect(page.locator('[data-testid="voice-nav-row"] [data-testid="control-symbol"]'))
+    .toHaveText(['‹', '⏹', '⏸', '›']);
   // 장갑 조작 터치 타깃(PRINCIPLES §2).
-  expect(prev!.height).toBeGreaterThanOrEqual(44);
-  expect(next!.height).toBeGreaterThanOrEqual(44);
+  for (const button of [prev!, stop!, pause!, next!]) expect(button.height).toBeGreaterThanOrEqual(44);
   // 도트 격자가 인디케이터 슬롯을 넘치지 않는다.
   const dotsFit = await page.locator('[data-testid="state-dots"]').evaluate((el) => {
     const d = el.getBoundingClientRect();
@@ -403,6 +410,45 @@ test('§공통규칙5 — `<` `>`가 하단 양끝, 인디케이터가 가운데
   expect(await indicatorMode(page), '음성 입력: 도트 파형').toBe('wave');
   // 🔴 전환은 표시 전환이지 마운트 교체가 아니다 — 격자는 계속 **하나**로 살아 있다([STT-16]).
   await expect(page.locator('[data-testid="state-dots"]')).toHaveCount(1);
+});
+
+test('UI-e1 — 행동행 높이가 버튼을 정하고 심볼은 버튼 높이의 50%, 터치 하한은 44px', async ({ page }) => {
+  await boot(page, PHONE_375);
+  const measure = () => page.locator('[data-testid="voice-control-bar"]').evaluate((bar) => {
+    const row = bar.querySelector('[data-testid="voice-nav-row"]') as HTMLElement;
+    const buttons = Array.from(row.querySelectorAll('button')) as HTMLElement[];
+    const symbols = Array.from(row.querySelectorAll('[data-testid="control-symbol"]')) as HTMLElement[];
+    return {
+      barHeight: bar.getBoundingClientRect().height,
+      rowHeight: row.getBoundingClientRect().height,
+      buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+      symbols: symbols.map((symbol) => ({
+        text: symbol.textContent ?? '',
+        fontSize: Number.parseFloat(getComputedStyle(symbol).fontSize),
+        buttonHeight: (symbol.closest('button') as HTMLElement).getBoundingClientRect().height,
+      })),
+    };
+  });
+
+  const short = await measure();
+  await page.setViewportSize(PHONE_402);
+  await page.waitForTimeout(300);
+  const tall = await measure();
+
+  expect(tall.barHeight, '뷰포트가 커지면 하단 배정 영역도 커진다').toBeGreaterThan(short.barHeight + 20);
+  expect(tall.rowHeight, '행동행도 하단 영역을 따라 커진다').toBeGreaterThan(short.rowHeight + 10);
+  for (const [name, sample] of [['short', short], ['tall', tall]] as const) {
+    expect(sample.buttonHeights, `${name}: 4버튼`).toHaveLength(4);
+    expect(sample.symbols.map((symbol) => symbol.text), `${name}: 심볼 순서`).toEqual(['‹', '⏹', '⏸', '›']);
+    for (const height of sample.buttonHeights) {
+      expect(height, `${name}: 44px 터치 하한`).toBeGreaterThanOrEqual(44);
+      expect(Math.abs(height - sample.rowHeight), `${name}: 버튼은 행동행 높이를 채운다`).toBeLessThan(1);
+    }
+    for (const symbol of sample.symbols) {
+      expect(symbol.fontSize / symbol.buttonHeight, `${name}: 심볼/버튼 높이`).toBeCloseTo(0.5, 1);
+    }
+  }
+  console.log(`UI-e1 controls: short bar/row=${short.barHeight}/${short.rowHeight}, tall=${tall.barHeight}/${tall.rowHeight}`);
 });
 
 test('🔴 [UI-WAVE-1] 소멸 — 어떤 레벨에서도 도트와 파형이 **동시에** 보이지 않는다', async ({ page }) => {
@@ -605,7 +651,7 @@ async function indicatorMode(page: Page): Promise<string> {
 }
 
 // ─── §[3] paused ────────────────────────────────────────────────────────────
-test('UI-c paused — 중앙·상단 상태어 비움 + aria 상태 + 하단 재개/종료 + 도트 `||`', async ({ page }) => {
+test('UI-e1 paused — 중앙·상단 상태어 비움 + 하단 4심볼 토글 + 도트 `||`', async ({ page }) => {
   await boot(page);
   await page.locator('button[title="일시정지"]').click({ force: true });
   await page.waitForTimeout(400);
@@ -622,15 +668,16 @@ test('UI-c paused — 중앙·상단 상태어 비움 + aria 상태 + 하단 재
   const centerText = await page.locator('[data-testid="voice-center-stage"]').innerText();
   expect(centerText.trim(), '§[3] 중앙 비움').toBe('');
 
-  // 하단 `<` `>` → 재개 / 종료(§[3]). 재개 버튼은 정확히 하나다(인디케이터는 표시 전용).
+  // 하단은 다른 화면과 같은 4버튼. 토글의 시각은 심볼이고 상태명은 title/aria가 싣는다.
   await expect(page.locator('button[title="재시작"]')).toHaveCount(1);
-  // 🔴 라벨 = 음성 명령 어휘와 **같은 말**(민구 확정 2026-07-27). 화면에 "재개"라고 쓰여 있으면
-  //    사용자가 "재개"라고 말하는데 파서는 "재시작"만 받아 인식되지 않는다(실기기 관측).
   await expect(page.locator('button[title="재시작"][aria-label="재시작"]')).toBeVisible();
-  await expect(page.locator('button[title="재시작"]'), '버튼 글자도 명령 어휘와 같다').toHaveText('재시작');
+  await expect(page.locator('button[title="재시작"]'), '재시작 토글은 심볼로 그린다').toHaveText('⏸');
   await expect(page.locator('button[aria-label="재개"]'), '옛 라벨은 남아 있지 않다').toHaveCount(0);
   await expect(page.locator('button[title="입력 종료"]')).toBeVisible();
-  await expect(page.locator('button[aria-label="이전"]'), '일시정지 중엔 이전/다음이 아니다').toHaveCount(0);
+  await expect(page.locator('button[aria-label="이전"]')).toBeVisible();
+  await expect(page.locator('button[aria-label="다음"]')).toBeVisible();
+  await expect(page.locator('[data-testid="voice-nav-row"] [data-testid="control-symbol"]'))
+    .toHaveText(['‹', '⏹', '⏸', '›']);
 
   // 도트는 일시정지 아이콘(||), 파형은 정지(rAF 미가동).
   await expect(page.locator('[data-testid="state-dots"]')).toHaveAttribute('data-glyph', 'pause');
@@ -744,8 +791,10 @@ test('UI-c complete — 중앙 `X / N` + aria 완료 상태, 체크 도트, 시�
   await expect(page.locator('button[aria-label="다음"]')).toBeVisible();
   // 파형 자리 = V(체크) 도트.
   await expect(page.locator('[data-testid="state-dots"]')).toHaveAttribute('data-glyph', 'check');
-  // 완료 상태의 유일한 행동은 종료다 — 일시정지 버튼이 존재하지 않는다(기존 계약 v023-voice와 동일).
-  await expect(page.locator('button[title="일시정지"]')).toHaveCount(0);
+  // 완료도 같은 4버튼이며 일시정지 상태명은 title/aria에 남는다.
+  await expect(page.locator('button[title="일시정지"][aria-label="일시정지"]')).toBeVisible();
+  await expect(page.locator('[data-testid="voice-nav-row"] [data-testid="control-symbol"]'))
+    .toHaveText(['‹', '⏹', '⏸', '›']);
   await exit.click();
   await expect(page.locator('button[title="종료 확인"]')).toBeVisible();
 });

@@ -155,6 +155,7 @@ export function StateDots({
 
     // 마운트 직후·glyph/active 변경으로 effect가 재생성된 직후는 cache를 신뢰하지 않는다.
     paint(glyphLit(), true);
+    rootRef.current?.setAttribute('data-mode', 'glyph');
     if (reduced || !active || !getLevel) return;
 
     const buf = new Uint8Array(FFT);

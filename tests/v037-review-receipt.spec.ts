@@ -257,7 +257,7 @@ test('[MODIFY-TARGET-1] atEnd "수정 <첫컬럼명>" → 명시한 첫 항목�
 });
 
 // ─── [EXIT-PERSIST-1] 조사 완료 뒤 종료 수단 상시 노출 ────────────────────────
-test('[EXIT-PERSIST-1] 끝 도달 뒤 완료 행을 이동해도 도트 자리 종료가 남는다', async ({ page }) => {
+test('[EXIT-PERSIST-1] 끝 도달 뒤 완료 행을 이동해도 하단 4버튼의 종료가 남는다', async ({ page }) => {
   await bootAndStart(page, twoRowSettings());
   // 짧은 현장폰 높이에서도 종료 승계가 기존 하단 밴드 높이를 바꾸지 않아야 한다.
   // 부트 뒤 축소해 이 과제와 무관한 기존 탭바↔시작버튼 겹침은 테스트 경로에서 분리한다.
@@ -279,7 +279,9 @@ test('[EXIT-PERSIST-1] 끝 도달 뒤 완료 행을 이동해도 도트 자리 �
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
   await expect(centralExit).toBeVisible();
   await expect(persistentExit).toBeVisible();
-  await expect(persistentExit).toHaveText('종료');
+  await expect(persistentExit).toHaveText('⏹');
+  await expect(persistentExit).toHaveAttribute('aria-label', '종료');
+  await expect(persistentExit).toHaveAttribute('title', '입력 종료');
 
   // 끝 도달 뒤 다른 완료 행을 보면 중앙 요약은 사라지지만 하단 종료는 남는다.
   await page.getByRole('button', { name: '이전', exact: true }).click();
@@ -296,31 +298,38 @@ test('[EXIT-PERSIST-1] 끝 도달 뒤 완료 행을 이동해도 도트 자리 �
   await expect(centralExit).toHaveCount(0);
   await expect(persistentExit).toBeVisible();
 
-  // 종료 라벨을 위해 밴드나 새 행을 만들지 않는다 — 승계 버튼은 기존 고정 밴드 안에 있다.
-  const bandMetrics = await page.evaluate(() => {
+  // 인디케이터와 4버튼은 각자 배정된 세로 행 안에 남는다.
+  const controlMetrics = await page.evaluate(() => {
+    const indicatorRow = document.querySelector('[data-testid="voice-indicator-row"]')?.getBoundingClientRect();
+    const actionRow = document.querySelector('[data-testid="voice-nav-row"]')?.getBoundingClientRect();
     const band = document.querySelector('[data-testid="live-listen-band"]')?.getBoundingClientRect();
     const dots = document.querySelector('[data-testid="state-dots"]')?.getBoundingClientRect();
     const exitControl = document.querySelector(
       '[data-testid="voice-status-control"][data-status="exit"]',
     )?.getBoundingClientRect();
-    if (!band || !dots || !exitControl) return null;
+    if (!indicatorRow || !actionRow || !band || !dots || !exitControl) return null;
     return {
+      indicatorRow: { top: indicatorRow.top, bottom: indicatorRow.bottom, height: indicatorRow.height },
+      actionRow: { top: actionRow.top, bottom: actionRow.bottom, height: actionRow.height },
       band: { top: band.top, bottom: band.bottom, height: band.height },
       dots: { top: dots.top, bottom: dots.bottom, height: dots.height },
       exit: { top: exitControl.top, bottom: exitControl.bottom, height: exitControl.height },
     };
   });
   const contained = (() => {
-    if (!bandMetrics) return false;
+    if (!controlMetrics) return false;
     const epsilon = 1;
-    return bandMetrics.dots.top >= bandMetrics.band.top - epsilon &&
-      bandMetrics.dots.bottom <= bandMetrics.band.bottom + epsilon &&
-      bandMetrics.exit.top >= bandMetrics.band.top - epsilon &&
-      bandMetrics.exit.bottom <= bandMetrics.band.bottom + epsilon;
+    return controlMetrics.band.top >= controlMetrics.indicatorRow.top - epsilon &&
+      controlMetrics.band.bottom <= controlMetrics.indicatorRow.bottom + epsilon &&
+      controlMetrics.dots.top >= controlMetrics.band.top - epsilon &&
+      controlMetrics.dots.bottom <= controlMetrics.band.bottom + epsilon &&
+      controlMetrics.exit.top >= controlMetrics.actionRow.top - epsilon &&
+      controlMetrics.exit.bottom <= controlMetrics.actionRow.bottom + epsilon &&
+      controlMetrics.indicatorRow.bottom <= controlMetrics.actionRow.top + epsilon;
   })();
   expect(
     contained,
-    `검토 도트/종료 컨트롤이 기존 밴드 밖으로 넘침: ${JSON.stringify(bandMetrics)}`,
+    `검토 인디케이터/종료 컨트롤이 각 행 밖으로 넘침: ${JSON.stringify(controlMetrics)}`,
   ).toBe(true);
 
   // 기존 안전 게이트: 조절판이 열리면 종료를 포함한 하단 행동 행 전체가 사라지고, 닫으면 복귀한다.
