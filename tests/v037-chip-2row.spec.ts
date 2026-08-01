@@ -14,10 +14,22 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
-import {
-  CHIP_LABEL_BASELINE_PX,
-  CHIP_LABEL_REGRESSION_TOLERANCE,
-} from '../src/components/voice/heroLayout';
+
+/** 🔴 T3(레이아웃 밀도, 6회차) 7회차 방어선 — **기준선을 테스트에 둔다.**
+ *  종전엔 `heroLayout.ts`에 있었는데 Codex 리뷰가 반증했다: 기준값만 `46.23/36.92 → 40/30`으로
+ *  낮추자 **실제 글자는 그대로인데 1/1 통과**했다. 제품 파일에 있으면 `CHIP_TYPE.name`과 함께
+ *  낮추는 한 번의 diff로 크기 회귀가 승인된다. *"상수를 낮추지 마라"* 는 주석은 계약이 아니다.
+ *  👉 값 변경이 **이 테스트의 diff로 드러나야** 한다.
+ *
+ *  값은 `36a01b1`(UI-a 완료) 실측이다. 두 뷰포트를 다 두는 이유는 `min(11.5vw, 6.5vh)`의
+ *  **이기는 항이 서로 다르기** 때문이다(402×874는 vw, 390×568은 vh).
+ *  🔴 red일 때 이 숫자를 낮추지 마라 — 그게 T6 6회차 재발의 형태다. 공간을 회수해서 되돌린다.
+ *  원 제보는 `fb-28-1`("칩 항목명이 너무 작다")이고 v0.40.0 `CHIP_TYPE`이 겨우 닫았다. */
+const CHIP_LABEL_BASELINE_PX = { standard: 46.23, short: 36.92 } as const;
+
+/** 허용 오차 — **절대 px**다. 종전 비율 `0.95`는 402에서 2.31px 축소를 이미 허용했다(리뷰 🟡-2).
+ *  폰트 로딩·서브픽셀 라운딩 변동만 흡수하는 크기여야 한다. */
+const CHIP_LABEL_TOLERANCE_PX = 0.6;
 
 test.setTimeout(90_000);
 
@@ -217,7 +229,7 @@ test('[CHIP-TYPO-1] rounded rect + 커진 항목명, 390×568에서도 세로 �
   expect(
     metrics.labelSize,
     `402×874 항목명이 36a01b1 실측 ${CHIP_LABEL_BASELINE_PX.standard}px에서 깎이면 안 된다`,
-  ).toBeGreaterThanOrEqual(CHIP_LABEL_BASELINE_PX.standard * CHIP_LABEL_REGRESSION_TOLERANCE);
+  ).toBeGreaterThanOrEqual(CHIP_LABEL_BASELINE_PX.standard - CHIP_LABEL_TOLERANCE_PX);
   expect(metrics.radius, '캡슐 반지름(height / 2)이 아니어야 한다').toBeLessThan(metrics.height / 2 - 1);
   await expect(label).toBeVisible();
 
@@ -248,7 +260,7 @@ test('[CHIP-TYPO-1] rounded rect + 커진 항목명, 390×568에서도 세로 �
   expect(
     narrowLabel,
     `390×568 항목명이 36a01b1 실측 ${CHIP_LABEL_BASELINE_PX.short}px에서 깎이면 안 된다`,
-  ).toBeGreaterThanOrEqual(CHIP_LABEL_BASELINE_PX.short * CHIP_LABEL_REGRESSION_TOLERANCE);
+  ).toBeGreaterThanOrEqual(CHIP_LABEL_BASELINE_PX.short - CHIP_LABEL_TOLERANCE_PX);
   const clip390 = await chipClip(page);
   console.log(`[CHIP-TYPO-1] 390x568 clip top=${clip390.labelTopInside.toFixed(2)} bottom=${clip390.labelBottomInside.toFixed(2)} overflow=${clip390.contentOverflow.toFixed(2)} chipH=${clip390.chipHeight.toFixed(1)} valTop=${clip390.valueTopInside.toFixed(2)} valBot=${clip390.valueBottomInside.toFixed(2)}`);
   expectChipLabelNotClipped(clip390, '390×568');

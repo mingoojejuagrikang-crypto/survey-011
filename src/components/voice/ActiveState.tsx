@@ -29,7 +29,7 @@ const CHIP_SCROLL_PAD = 8;
  *  워치독·클립 레코더가 통째로 teardown된다([STT-16] 실기기 62초 사공백, [IOS-7]의 PortraitGuard가
  *  오버레이인 이유도 같다).
  *
- *  구역(§공통규칙1): 상단 스트립(auto) + **칩존 25% / 중앙 50% / 하단 25%**. 비율의 분모는
+ *  구역(§공통규칙1): 상단 스트립(auto) + **칩존 20% / 중앙 50% / 하단 30%**(UI-b). 비율의 분모는
  *  `ACTIVE_ZONE_ROWS` 주석 참조. */
 export function ActiveState({
   totalRows, columns, voiceCols, currentColId, completing, endReached, paused, anomalyPending, tone,
@@ -252,7 +252,8 @@ export function ActiveState({
       style={{
         flex: 1, minHeight: 0,
         display: 'grid',
-        // 와이어프레임 §공통규칙1 — auto(상단 스트립) + 칩존 25% / 중앙 50% / 하단 25%.
+        // 와이어프레임 §공통규칙1 — auto(상단 스트립) + 칩존 20% / 중앙 50% / 하단 30%.
+        //   v0.43.0 UI-b에서 25/50/25 → 20/50/30 (ui-standard §2). SSOT는 ACTIVE_ZONE_RATIOS.
         gridTemplateRows: ACTIVE_ZONE_ROWS,
       }}
       data-testid="voice-active-state"

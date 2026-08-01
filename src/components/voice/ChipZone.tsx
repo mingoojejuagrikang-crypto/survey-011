@@ -4,7 +4,8 @@ import { ColumnChip } from './ColumnChip';
 import { nestedAutoValue } from '../../lib/autoValue';
 import type { Column } from '../../types';
 
-/** 칩존 25% 트랙 — **한 행 · 가로 스크롤 · 진행중 칩 우측 끝 정렬** (민구 확정 2026-07-27).
+/** 칩존 **20%** 트랙(v0.43.0 UI-b, 종전 25%) — **한 행 · 가로 스크롤 · 진행중 칩 우측 끝 정렬**
+ *  (민구 확정 2026-07-27). 🔴 20%는 T3 7회차 위험이라 `v037-chip-2row`의 잘림 가드가 지킨다.
  *
  *  ## 무엇이 바뀌었나 (v0.40.0)
  *  종전은 **2줄 + 세로 스크롤**이었고, 2줄에 맞추려고 글자를 배율(`--chip-fit`)로 줄였다.

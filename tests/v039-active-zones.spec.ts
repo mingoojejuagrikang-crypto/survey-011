@@ -3,7 +3,8 @@
  *
  * SSOT: `Deliverables/2026-07-24-survey-011-active-screen-wireframe.md` (민구 확정 2026-07-24).
  *   §공통규칙1 공간 배정 — 🔴 v0.43.0 UI-b가 **칩존 20% / 중앙 50% / 하단 30%**로 바꿨다
- *     (ui-standard §2, 민구 확정). 기대값 SSOT는 `heroLayout.ACTIVE_ZONE_RATIOS`다.
+ *     (ui-standard §2, 민구 확정). 🔴 기대값은 **이 파일에 고정**한다 — 제품 상수를 읽으면
+ *     제품과 테스트를 같은 diff로 바꿨을 때 회귀가 통과한다.
  *   §공통규칙2·3 중앙 정보 가로+세로 중앙정렬
  *   §공통규칙4 칩존 한 행 + 가로 스크롤 + 활성칸 하이라이트·점멸
  *   §공통규칙5 하단 `<` `>` 양끝 + 가운데 단일 도트 격자 → 음성 입력 시 도트 파형
@@ -18,13 +19,18 @@ import {
   boot, injectLevel, zoneMetrics, triggerAnomaly, fillAllRows, PREV_ROUND,
 } from './fixtures/activeZones';
 import { fireStt } from './fixtures/stt';
-import { ACTIVE_ZONE_RATIOS } from '../src/components/voice/heroLayout';
-
 /** 🔴 v0.43.0 UI-b — 배분이 **25/50/25 → 20/50/30**으로 바뀌었다(ui-standard §2, 민구 확정).
- *  기대값을 여기 숫자로 다시 적지 않고 제품 상수를 읽는다 — 이중 기록이면 한쪽만 고쳐도 통과한다.
+ *
+ *  🔴 **여기 숫자는 제품 상수에서 읽지 않는다. 설계 계약을 테스트에 직접 고정한다.**
+ *  종전 구현은 `heroLayout.ACTIVE_ZONE_RATIOS`를 import했는데, Codex 리뷰가 그걸 반증했다 —
+ *  제품 상수와 이 기대값을 **같은 diff로** 25/50/25로 되돌리자 테스트 제목까지 따라 바뀌며
+ *  **2/2 green**이었다(402×874가 `183/366/183`을 렌더하는데도 통과). 즉 배분 회귀를 못 막는다.
+ *  🔑 **이건 중복 기록이 아니라 외부 SSOT(`ui-standard §2`)를 향한 독립 오라클이다.**
+ *  값을 바꾸려면 **이 파일의 diff에 반드시 드러나야** 한다.
+ *
  *  🔑 **중앙 50%는 안 바뀐다.** 하단을 30%로 올리라는 지시를 칩존에서 5%p 빼서 흡수했다.
  *  그러므로 이 파일에서 중앙이 깨지면 그건 정당 파손이 아니라 **회귀**다. */
-const Z = ACTIVE_ZONE_RATIOS.base;
+const Z = { chip: 20, center: 50, bottom: 30 } as const;
 
 // 시딩·부팅·상태진입 헬퍼는 `tests/fixtures/activeZones.ts`로 이동했다(동작 불변). 두 번째 소비자
 // (`capture-current-states.spec.ts` — 실렌더 캡처)가 같은 상태로 진입해야 해서 복제를 피한 것이고,

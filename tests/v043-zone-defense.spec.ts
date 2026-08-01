@@ -28,11 +28,14 @@
  */
 import { test, expect } from '@playwright/test';
 import { PHONE_402, PHONE_375, boot, zoneMetrics, triggerAnomaly, SETTINGS } from './fixtures/activeZones';
-import { ACTIVE_ZONE_RATIOS, ACTIVE_ZONE_ROWS } from '../src/components/voice/heroLayout';
+import { ACTIVE_ZONE_ROWS } from '../src/components/voice/heroLayout';
 
 test.setTimeout(120_000);
 
-const Z = ACTIVE_ZONE_RATIOS.base;
+/** 🔴 설계 계약을 **직접 고정**한다 — `ACTIVE_ZONE_RATIOS`를 읽지 않는다.
+ *  제품 상수를 읽으면 둘을 같은 diff로 바꿨을 때 배분 회귀가 통과한다(Codex 리뷰 🔴-1 실측).
+ *  `ACTIVE_ZONE_ROWS`는 **소스 계약 검사의 대상**이라 여전히 import한다 — 성격이 다르다. */
+const Z = { chip: 20, center: 50, bottom: 30 } as const;
 
 /** 방어를 실제로 물리게 하려면 **콘텐츠가 배정 영역을 넘겨야** 한다. 안 넘치는 상태에서 재는
  *  단언은 방어가 있든 없든 통과하므로 공허하다(UI-a `reserveScale`이 그랬다).
@@ -73,6 +76,60 @@ test('[UI-b 방어 1/3-a] minmax(0) 소스 계약 — 모든 fr 트랙이 zero-m
     expect(t, `fr 트랙 \`${t}\`가 zero-min이 아니다 — \`1fr\`은 \`minmax(auto, 1fr)\`이다`)
       .toMatch(/^minmax\(0,\s*[\d.]+fr\)$/);
   }
+});
+
+/** 🔑 **방어 1의 효과 오라클** — Codex 리뷰가 제안하고 실측까지 준 방법이다.
+ *
+ *  종전엔 *"`minmax(0)`은 렌더로 반증 불가"* 로 결론내고 소스 계약에만 맡겼다. 근거는
+ *  *"세 트랙 자식이 이미 `overflow:hidden`이라 auto-min이 0"* 이었고 그건 사실이다.
+ *  🔴 **그러나 그 전제를 깨는 압력을 주입하면 갈린다.** 칩 자식에 `overflow:visible` +
+ *  큰 `min-height`를 주면 auto-min이 되살아나고, 그때 zero-min 트랙과 bare `fr`이 다르게 눕는다.
+ *
+ *  🔴 **압력을 거는 자리가 셋 다 맞아야 한다.** 세 번 틀렸고 그때마다 A/B가 같았다:
+ *  | 잘못 건 곳 | 왜 안 되나 |
+ *  |---|---|
+ *  | 그리드 자신의 `min-height` | 요소의 min-height가 트랙 크기를 **직접** 이긴다 — `minmax` 무관 |
+ *  | 그리드 `height:100%` 유지 | 자식이 트랙 크기에 고정돼 min-content가 전파되지 않는다 |
+ *  | `containerType: size` 유지 | 🔑 **size containment가 자식→부모 전파를 통째로 막는다** |
+ *
+ *  실측(402×874, 칩 자식에 `min-height:500px` + 위 셋 해제):
+ *  | 트랙 | 압력 후 칩존 |
+ *  |---|---|
+ *  | `minmax(0, …)` | **146.2px** — 배분 유지 |
+ *  | bare `fr` | **507px** — 콘텐츠가 트랙을 밀어내고 중앙·하단을 깎는다 |
+ *
+ *  👉 이제 방어 1은 소스 계약(1/3-a)과 **효과**(1/3-c) 양쪽으로 지켜진다.
+ *  ⚠️ 이 테스트가 A/B 동일해지면 **압력이 안 걸린 것**이다 — 단언을 완화하지 말고
+ *     위 세 자리부터 확인해라. 통과하지만 아무것도 안 재는 상태가 이 파일에서 가장 위험하다. */
+test('[UI-b 방어 1/3-c] minmax(0) 효과 — auto-min을 되살리는 압력에도 배분이 버틴다', async ({ page }) => {
+  await bootOverloaded(page, PHONE_402);
+  const before = await zoneMetrics(page);
+
+  // 🔴 방어가 기대는 전제(자식 `overflow:hidden`)를 **일부러 깬다.** 이 압력이 없으면
+  //   `minmax(0)`이 있든 없든 결과가 같아 단언이 공허해진다.
+  await page.evaluate(() => {
+    const grid = document.querySelector('[data-testid="voice-chip-grid"]') as HTMLElement;
+    // 🔴 제품이 auto-min 전파를 끊어놓은 **세 겹**을 전부 연다. 하나라도 남으면 압력이
+    //   트랙에 닿지 않아 `minmax(0)` 유무와 무관하게 같은 결과가 나온다(위 표 참조).
+    grid.style.overflow = 'visible';   // ① min-height:auto가 0이 되는 경로
+    grid.style.height = 'auto';        // ② 트랙 크기에 고정되는 경로
+    grid.style.minHeight = 'auto';
+    grid.style.containerType = 'normal'; // ③ size containment — 이게 마지막 차단막이었다
+    // min-height는 그리드가 아니라 **자식**에 건다. 그리드에 걸면 요소 자신의 크기가 되어
+    // 트랙 계산을 우회한다. auto-min은 **자식의 min-content가 올라오는** 경로다.
+    const chip = grid.querySelector('[data-testid="column-chip"]') as HTMLElement;
+    chip.style.minHeight = '500px';
+  });
+  await page.waitForTimeout(120);
+
+  const after = await zoneMetrics(page);
+  const zoneTotal = after.rootHeight - after.headerHeight;
+  console.log(`[방어1-c] before chip=${before.chipHeight.toFixed(1)} → after chip=${after.chipHeight.toFixed(1)} (total=${zoneTotal.toFixed(1)})`);
+
+  // 🔑 오라클 — 칩존이 주입한 500px로 부풀지 않는다. zero-min이 아니면 여기서 red다.
+  expect(after.chipHeight, 'minmax(0)이 없으면 칩존이 500px로 부푼다').toBeLessThan(300);
+  expect(after.chipHeight / zoneTotal, `압력 뒤에도 칩존 ${Z.chip}%`).toBeCloseTo(Z.chip / 100, 2);
+  expect(after.centerHeight / zoneTotal, `압력 뒤에도 중앙 ${Z.center}%`).toBeCloseTo(Z.center / 100, 2);
 });
 
 for (const vp of [

@@ -14,10 +14,10 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { BASE } from './baseUrl';
-import { ACTIVE_ZONE_RATIOS } from '../src/components/voice/heroLayout';
-
-/** 칩존 배정 비율 — 제품 상수를 읽는다(이중 기록 금지). v0.43.0 UI-b에서 25→20%. */
-const CHIP_ZONE_PCT = ACTIVE_ZONE_RATIOS.base.chip;
+/** 칩존 배정 비율 — v0.43.0 UI-b에서 25→20%(ui-standard §2).
+ *  🔴 **제품 상수를 읽지 않는다.** 읽으면 제품과 테스트를 같은 diff로 바꿨을 때 회귀가 통과한다
+ *  (Codex 리뷰 🔴-1 실측). 정밀 비율은 `v039-active-zones`가 담당하고 여기는 상한만 본다. */
+const CHIP_ZONE_PCT = 20;
 const PHONE = { width: 402, height: 874 };
 
 // isSpeechSupported() 통과용 최소 스텁. start() 후 onstart만 부르고 결과는 안 보냄

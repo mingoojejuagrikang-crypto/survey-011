@@ -8,7 +8,7 @@ import { StateIndicator } from './StateIndicator';
 import type { DotGlyph } from './StateDots';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 
-/** 와이어프레임 §공통규칙5 — **하단 25%**.
+/** 와이어프레임 §공통규칙5 — **하단 30%**(v0.43.0 UI-b에서 25→30. ui-standard §2).
  *
  * ```
  * | <            . . .            >        (대기: 도트 마이크)
@@ -156,8 +156,10 @@ export function ActiveControlBar({
 }
 
 /** 양끝 버튼 — 아이콘형(`<` `>`)과 텍스트형(확인/수정/재시작/종료)이 같은 타깃 크기를 쓴다.
- *  장갑 조작(PRINCIPLES §2) 하한 44px보다 넉넉한 56px 높이를 유지하되, 하단 25%가 얇은 기기에서는
- *  트랙을 넘지 않도록 flex로 수축한다(최소 44px). */
+ *  장갑 조작(PRINCIPLES §2) 하한 44px보다 넉넉한 56px 높이를 유지하되, 하단 트랙이 얇은
+ *  기기에서는 트랙을 넘지 않도록 flex로 수축한다(최소 44px).
+ *  🔴 **`56px`은 규칙 2가 금지하는 하드코딩 상한이고 UI-b는 이걸 제거하지 않았다** —
+ *  버튼이 크기를 물려받을 자기 행이 없기 때문이다(아래 `height` 주석). UI-e의 몫이다. */
 function EdgeButton({
   kind, label, title, onClick, icon, accent, accentBg, testId,
 }: {
