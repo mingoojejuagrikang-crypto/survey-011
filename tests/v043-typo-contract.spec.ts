@@ -64,6 +64,10 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   let violationCount = 0;
 
   const violations: string[] = [];
+  // 🔴 comment·allowlist도 **목록으로** 남긴다 — 숫자만 보면 분류가 조용히 바뀐 것을
+  //    못 알아챈다. 실패했을 때 무엇이 어디로 갔는지 바로 보여야 한다. (독립 리뷰 C1)
+  const comments: string[] = [];
+  const allowlisted: string[] = [];
 
   for (const filePath of tsxFiles) {
     const relativePath = path.relative(process.cwd(), filePath);
@@ -75,40 +79,51 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
         return;
       }
 
-      const fontSizeIdx = line.indexOf('fontSize');
-      const commentIdx = line.indexOf('//');
-
-      // 1. 주석 처리 (fontSize 앞부분에 //가 있음)
-      if (commentIdx !== -1 && commentIdx < fontSizeIdx) {
+      // 1. 주석 처리 — 🔴 **줄 선두**로만 판정한다.
+      //    종전엔 `line.indexOf('//') < indexOf('fontSize')`였는데, 그러면 줄 어디든 `//`가
+      //    앞서기만 하면(예: URL `https://…`) **위반이 violation이 아니라 comment로 조용히
+      //    집계**된다. 위반 목록도 안 찍히므로 "숫자만 갱신"하면 그대로 통과한다.
+      //    (독립 리뷰 C1)
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) {
         commentCount++;
+        comments.push(`${relativePath}:${index + 1} ${line.trim()}`);
         return;
       }
 
-      // 2. ALLOWLIST 검사
-      const isAllowlisted = ALLOWLIST_ITEMS.some((allowItem) => line.includes(allowItem));
-      if (isAllowlisted) {
+      // 2. ALLOWLIST 검사 — 줄 단위다.
+      //    값 추출(`[^,}\n]+`)은 계약 문자열 내부의 콤마에서 끊기므로 allowlist는 줄로 본다.
+      if (ALLOWLIST_ITEMS.some((allowItem) => line.includes(allowItem))) {
         allowlistCount++;
+        allowlisted.push(`${relativePath}:${index + 1} ${line.trim()}`);
         return;
       }
 
-      // 3. 계약 참조 검사 (fontSize: 뒤의 값에서만 계약 키 존재 여부를 확인)
-      const m = /fontSize:\s*([^,}\n]+)/.exec(line);
-      const fontSizeValue = m ? m[1] : '';
-      const hasValidContract = VALID_CONTRACT_PREFIXES.some((prefix) => fontSizeValue.includes(prefix));
-      if (hasValidContract) {
-        contractCount++;
+      // 3. 🔴 한 줄에 `fontSize:`가 여러 개일 수 있으므로 **전부** 순회한다.
+      //    종전엔 첫 매치만 봐서 두 번째 이후가 검사를 빠져나갔다. (독립 리뷰 M2)
+      const matches = [...line.matchAll(/fontSize:\s*([^,}\n]+)/g)];
+      if (matches.length === 0) {
+        // `fontSize`는 있으나 `fontSize:` 형태가 아니다(예: 백틱 문자열 안의 언급).
+        // 계약 대상이 아니므로 세지 않는다.
         return;
       }
-
-      // 4. 위반 처리
-      violationCount++;
-      violations.push(`${relativePath}:${index + 1} ${line.trim()}`);
+      for (const m of matches) {
+        const value = m[1];
+        if (VALID_CONTRACT_PREFIXES.some((prefix) => value.includes(prefix))) {
+          contractCount++;
+        } else {
+          violationCount++;
+          violations.push(`${relativePath}:${index + 1} ${line.trim()}`);
+        }
+      }
     });
   }
 
-  const total = contractCount + allowlistCount + commentCount + violationCount;
-
-  console.log(`[typo-contract-summary] contract=${contractCount} allowlist=${allowlistCount} comment=${commentCount} violation=${violationCount} total=${total}`);
+  console.log(
+    `[typo-contract-summary] contract=${contractCount} allowlist=${allowlistCount} ` +
+      `comment=${commentCount} violation=${violationCount}`,
+  );
+  comments.forEach((c) => console.log(`  [comment]   ${c}`));
+  allowlisted.forEach((a) => console.log(`  [allowlist] ${a}`));
 
   if (violations.length > 0) {
     console.error('🔴 [TYPO-CONTRACT-VIOLATIONS]:');
@@ -116,9 +131,12 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   }
 
   // 🔴 리터럴 단언 (제품 상수를 import하지 마라 [TEAMOPS-38])
+  //
+  // ⚠️ 합계(total) 단언은 **두지 않는다.** 위 네 값의 산술 귀결이라 지워도 green인
+  //    「압력 없는 오라클」이었다(독립 리뷰 C2). 재발 방지 검사기가 그런 단언을 들고
+  //    나가는 모양이 나쁘다 — `UI-b` 리뷰가 지적한 것과 같은 계열이다.
   expect(contractCount, '계약 참조 (통과)').toBe(49);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(6);
   expect(commentCount, '주석 (skip)').toBe(1);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);
-  expect(total, '전체 매칭 항목 합계').toBe(56);
 });
