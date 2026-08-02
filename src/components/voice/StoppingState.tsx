@@ -1,4 +1,5 @@
 import { T } from '../../tokens';
+import { VOICE_TYPE } from './heroLayout';
 
 /** 종료 안내·클립 flush·최종 IDB 저장이 끝날 때까지 노출하는 비대화형 화면.
  *  현장 원거리(2~3m)에서도 상태를 즉시 판독하도록 큰 타이포만 남기고 조작 요소는 렌더하지 않는다. */
@@ -32,10 +33,10 @@ export function StoppingState() {
           animation: 'spin 900ms linear infinite',
         }}
       />
-      <div style={{ fontSize: 42, lineHeight: 1.12, fontWeight: 900, color: T.text, letterSpacing: -1.5 }}>
+      <div style={{ fontSize: VOICE_TYPE.stoppingTitle, lineHeight: 1.12, fontWeight: 900, color: T.text, letterSpacing: -1.5 }}>
         종료 중…
       </div>
-      <div style={{ fontSize: 19, lineHeight: 1.45, fontWeight: 700, color: T.textDim, wordBreak: 'keep-all' }}>
+      <div style={{ fontSize: VOICE_TYPE.stoppingBody, lineHeight: 1.45, fontWeight: 700, color: T.textDim, wordBreak: 'keep-all' }}>
         입력한 값을 안전하게 저장하고 있습니다
       </div>
     </div>

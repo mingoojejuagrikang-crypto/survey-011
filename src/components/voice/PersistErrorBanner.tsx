@@ -1,5 +1,6 @@
 import { T } from '../../tokens';
 import { I } from '../icons';
+import { VOICE_TYPE } from './heroLayout';
 
 /** v0.35.0 R3-FIX-2(리뷰 라운드3, Codex High·데이터무결성, Vance) — **최종 저장 실패** 배너.
  *
@@ -52,7 +53,7 @@ export function PersistErrorBanner({
           <span
             id="persist-error-title"
             style={{
-              fontSize: 22, fontWeight: 900, color: T.red, letterSpacing: -0.3,
+              fontSize: VOICE_TYPE.bannerTitle, fontWeight: 900, color: T.red, letterSpacing: -0.3,
               lineHeight: 1.25, wordBreak: 'keep-all', overflowWrap: 'anywhere',
             }}
           >
@@ -62,7 +63,7 @@ export function PersistErrorBanner({
         <p
           id="persist-error-desc"
           style={{
-            margin: 0, fontSize: 16, lineHeight: 1.55, color: T.text,
+            margin: 0, fontSize: VOICE_TYPE.bodyText, lineHeight: 1.55, color: T.text,
             wordBreak: 'keep-all', overflowWrap: 'anywhere',
           }}
         >
@@ -81,7 +82,7 @@ export function PersistErrorBanner({
             cursor: retrying ? 'wait' : 'pointer',
             background: retrying ? '#7a2e2e' : T.red, color: '#fff',
             opacity: retrying ? 0.85 : 1,
-            fontSize: 19, fontWeight: 900, letterSpacing: -0.3,
+            fontSize: VOICE_TYPE.bannerAction, fontWeight: 900, letterSpacing: -0.3,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
             boxShadow: retrying ? 'none' : '0 4px 14px rgba(255,23,68,0.4)',
           }}

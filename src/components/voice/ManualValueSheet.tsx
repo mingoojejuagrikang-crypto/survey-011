@@ -4,6 +4,7 @@ import type { Column } from '../../types';
 import { choicesFor, validateManual } from '../../lib/manualInput';
 import { EdgeButton } from './ActiveControlBar';
 import type { GlowTone } from './EdgeGlow';
+import { VOICE_TYPE } from './heroLayout';
 
 /** 음성 칩을 눌렀을 때 활성 화면의 중앙·하단 트랙을 승계하는 인라인 수동 입력.
  *
@@ -103,7 +104,7 @@ export function ManualValueSheet({
               maxWidth: '100%', minWidth: 0, overflow: 'hidden',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.08em',
               color: draft ? T.text : T.textDim,
-              fontSize: 'max(48px, min(32vw, 18vh))',
+              fontSize: VOICE_TYPE.sheetDisplay,
               fontWeight: 900, lineHeight: 0.9, letterSpacing: -1,
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
               fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
@@ -125,7 +126,7 @@ export function ManualValueSheet({
           <div
             role="status"
             aria-label={`현재값 ${currentValue}`}
-            style={{ color: T.textDim, fontSize: 28, fontWeight: 850, whiteSpace: 'nowrap' }}
+            style={{ color: T.textDim, fontSize: VOICE_TYPE.sheetTitle, fontWeight: 850, whiteSpace: 'nowrap' }}
           >
             {currentValue}
           </div>
@@ -137,7 +138,7 @@ export function ManualValueSheet({
             role="alert"
             style={{
               position: 'absolute', top: 6, left: 12, right: 12,
-              color: T.red, fontSize: 14, fontWeight: 850, textAlign: 'center',
+              color: T.red, fontSize: VOICE_TYPE.caption, fontWeight: 850, textAlign: 'center',
             }}
           >
             {error}
@@ -172,7 +173,7 @@ export function ManualValueSheet({
                     minHeight: 44, borderRadius: 14,
                     border: `1px solid ${option === currentValue ? toneColor : T.lineStrong}`,
                     background: option === currentValue ? toneBackground : T.card,
-                    color: T.text, fontSize: 17, fontWeight: 800, cursor: 'pointer',
+                    color: T.text, fontSize: VOICE_TYPE.actionLabel, fontWeight: 800, cursor: 'pointer',
                     touchAction: 'manipulation',
                   }}
                 >
@@ -200,7 +201,7 @@ export function ManualValueSheet({
                     minHeight: 44, borderRadius: 14,
                     border: `1px solid ${value === currentValue ? toneColor : T.lineStrong}`,
                     background: value === currentValue ? toneBackground : T.card,
-                    color: T.text, fontSize: 18, fontWeight: 800,
+                    color: T.text, fontSize: VOICE_TYPE.bodyStrong, fontWeight: 800,
                     fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                     cursor: 'pointer', touchAction: 'manipulation',
                   }}
@@ -236,7 +237,7 @@ export function ManualValueSheet({
                       width: '100%', height: '100%', minHeight: 44, minWidth: 0,
                       borderRadius: 14, border: `1px solid ${toneColor}`,
                       background: toneBackground, color: T.text,
-                      fontSize: 24, fontWeight: 850, cursor: 'pointer',
+                      fontSize: VOICE_TYPE.keypadKey, fontWeight: 850, cursor: 'pointer',
                       fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                       touchAction: 'manipulation',
                     }}
@@ -258,7 +259,7 @@ export function ManualValueSheet({
                 width: '100%', height: '100%', minHeight: 44, boxSizing: 'border-box',
                 borderRadius: 14, border: `1px solid ${toneColor}`,
                 background: 'rgba(0,0,0,0.3)', color: T.text,
-                fontSize: 18, fontWeight: 600, padding: 12, resize: 'none',
+                fontSize: VOICE_TYPE.bodyStrong, fontWeight: 600, padding: 12, resize: 'none',
               }}
             />
           )}
@@ -273,7 +274,7 @@ export function ManualValueSheet({
                 width: '100%', height: '100%', minHeight: 44, boxSizing: 'border-box',
                 borderRadius: 14, border: `1px solid ${toneColor}`,
                 background: 'rgba(0,0,0,0.3)', color: T.text,
-                fontSize: 18, fontWeight: 700, padding: '0 12px', colorScheme: 'dark',
+                fontSize: VOICE_TYPE.bodyStrong, fontWeight: 700, padding: '0 12px', colorScheme: 'dark',
               }}
             />
           )}

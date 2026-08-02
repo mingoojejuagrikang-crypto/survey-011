@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { T } from '../../tokens';
 import { I } from '../icons';
+import { VOICE_TYPE } from './heroLayout';
 
 /** v0.22.0 P0(UI) → v0.38.0 #5 — "마이크 재연결" 배너. 클립 마이크가 죽은 뒤 기존 복구
  *  경로의 자동 1회 시도까지 실패했을 때만(micLost) 화면 상단에 띄운다. 장갑·원거리·소음 현장 기준:
@@ -61,7 +62,7 @@ export function MicReconnectBanner({
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span
             style={{
-              fontSize: 18, fontWeight: 900, color: T.red, letterSpacing: -0.3,
+              fontSize: VOICE_TYPE.headerTitle, fontWeight: 900, color: T.red, letterSpacing: -0.3,
               wordBreak: 'keep-all', overflowWrap: 'anywhere', lineHeight: 1.2,
             }}
           >
@@ -80,7 +81,7 @@ export function MicReconnectBanner({
             border: 'none', cursor: reconnecting ? 'wait' : 'pointer',
             background: reconnecting ? '#7a2e2e' : T.red, color: '#fff',
             opacity: reconnecting ? 0.85 : 1,
-            fontSize: 18, fontWeight: 900, letterSpacing: -0.3,
+            fontSize: VOICE_TYPE.bodyStrong, fontWeight: 900, letterSpacing: -0.3,
             display: 'flex', alignItems: 'center', gap: 8,
             boxShadow: reconnecting ? 'none' : '0 4px 14px rgba(255,23,68,0.4)',
           }}

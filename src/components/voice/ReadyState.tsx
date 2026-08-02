@@ -4,6 +4,7 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { isSpeechSupported } from '../../lib/speech';
 import { ConnectionStatusCard } from '../ConnectionStatusCard';
 import { isSheetSourceBlocked } from '../../lib/sheetConnection';
+import { VOICE_TYPE } from './heroLayout';
 
 export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => void }) {
   const s = useSettingsStore();
@@ -38,7 +39,7 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
               width: '100%', maxWidth: 320,
               padding: '12px 16px', borderRadius: 12,
               background: 'rgba(255,234,0,0.10)', border: `1px solid ${T.amber}`,
-              color: T.amber, fontSize: 15, fontWeight: 600,
+              color: T.amber, fontSize: VOICE_TYPE.bodySm, fontWeight: 600,
               lineHeight: 1.5, letterSpacing: -0.1, textAlign: 'center',
             }}
           >
@@ -95,7 +96,7 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
             width: '100%', height: 60, borderRadius: 28, border: 'none',
             background: ready ? T.blue : '#2A2D32',
             color: ready ? '#fff' : T.textMute,
-            fontSize: 17, fontWeight: 800, letterSpacing: -0.3,
+            fontSize: VOICE_TYPE.actionLabel, fontWeight: 800, letterSpacing: -0.3,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
             cursor: ready ? 'pointer' : 'not-allowed',
             boxShadow: ready ? `0 8px 28px ${T.blueGlow}` : 'none',
@@ -111,17 +112,17 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
 function SummaryRow({ label, value, unit, accent }: { label: string; value: number; unit?: string; accent?: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-      <span style={{ fontSize: 15, color: T.textDim, fontWeight: 600, letterSpacing: -0.1 }}>{label}</span>
+      <span style={{ fontSize: VOICE_TYPE.bodySm, color: T.textDim, fontWeight: 600, letterSpacing: -0.1 }}>{label}</span>
       <span
         style={{
-          fontSize: 24, fontWeight: 800,
+          fontSize: VOICE_TYPE.readyValue, fontWeight: 800,
           color: accent ? T.blue : T.text,
           letterSpacing: -0.6,
           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
         }}
       >
         {value}
-        {unit && <span style={{ fontSize: 13, color: T.textDim, fontWeight: 500, marginLeft: 4 }}>{unit}</span>}
+        {unit && <span style={{ fontSize: VOICE_TYPE.captionSm, color: T.textDim, fontWeight: 500, marginLeft: 4 }}>{unit}</span>}
       </span>
     </div>
   );

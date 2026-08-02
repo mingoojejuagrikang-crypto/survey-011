@@ -1,4 +1,5 @@
 import { T } from '../../tokens';
+import { VOICE_TYPE } from './heroLayout';
 
 /** 상단 스트립 — 행 진행값 + 진행바 + 상시 도움말.
  *
@@ -25,10 +26,10 @@ export function ActiveHeaderStrip({
           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
         }}
       >
-        <span data-testid="active-row" style={{ fontSize: 18, fontWeight: 800, color: T.text, letterSpacing: -0.5, lineHeight: 1.2 }}>
+        <span data-testid="active-row" style={{ fontSize: VOICE_TYPE.headerTitle, fontWeight: 800, color: T.text, letterSpacing: -0.5, lineHeight: 1.2 }}>
           {row}
         </span>
-        <span style={{ fontSize: 13, fontWeight: 700, color: T.textMute }}>/ {totalRows}행</span>
+        <span style={{ fontSize: VOICE_TYPE.captionSm, fontWeight: 700, color: T.textMute }}>/ {totalRows}행</span>
       </div>
       <div style={{ flex: 1, position: 'relative', height: 4, borderRadius: 2, background: T.line, minWidth: 0 }}>
         <div
@@ -51,7 +52,7 @@ export function ActiveHeaderStrip({
           border: `1px solid ${T.lineStrong}`,
           background: 'transparent',
           color: T.textMute,
-          fontSize: 18, fontWeight: 900,
+          fontSize: VOICE_TYPE.headerTitle, fontWeight: 900,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           cursor: 'pointer', flexShrink: 0,
         }}

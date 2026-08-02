@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import { T } from '../../tokens';
 import { StateDots, type DotGlyph } from './StateDots';
 import type { GlowTone } from './EdgeGlow';
+import { VOICE_TYPE } from './heroLayout';
 
 /** 와이어프레임 §공통규칙5 — 하단 `<` `>` **가운데**에 놓이는 상태 인디케이터.
  *
@@ -81,7 +82,7 @@ export function StateIndicator({
           style={{
             gridArea: '1 / 1',
             color: control.accent ?? T.textDim,
-            fontSize: 'clamp(18px, 5vw, 24px)',
+            fontSize: VOICE_TYPE.statusLabel,
             fontWeight: 900,
             letterSpacing: -0.3,
             whiteSpace: 'nowrap',

@@ -152,6 +152,65 @@ export const STATE_TYPE = {
   alarmInterim: 'max(24px, calc(clamp(44px, min(19vw, 11vh), 96px) * var(--fit-hi, 1)))',
 } as const;
 
+/** v0.43.0 UI-f — 현장 화면(`src/components/voice/`) 인라인 fontSize 계약 SSOT.
+ *  🔴 계약 규정 정정 (민구 확정 08-02):
+ *  - VOICE_TYPE 컴포넌트(fit 훅 미물림)에서는 「하한 + 비례」 2요소가 필수 계약이다.
+ *  - `var(--fit-lo, 1)`은 fit 훅이 없는 현재 컴포넌트에서 fallback 1로 동작하여 안전(무해)하며,
+ *    향후 fit 훅 연결 시 자동 적용되도록 미리 포함한다.
+ *  - 하한(minPx)은 402×874 현재 렌더값 자체이며, 미확정 최소 가독크기가 아니다 (ui-standard §7-2 참조).
+ *  - 고정 상한(`clamp(..., max)`)은 T6 6회차 재발의 원인이므로 포함하지 않는다 (규칙 2 준수).
+ */
+export const VOICE_TYPE = {
+  /** ManualValueSheet 수동입력 시트 대형 값 디스플레이 — 402×874 기준 128.64px 보존 */
+  sheetDisplay: 'max(128.64px, calc(min(32.00vw, 14.72vh) * var(--fit-lo, 1)))',
+  /** StoppingState 정지 화면 메인 타이틀 — 402×874 기준 42px 보존 */
+  stoppingTitle: 'max(42px, calc(min(10.45vw, 4.81vh) * var(--fit-lo, 1)))',
+  /** ExitConfirmInline 종료 확인 메인 문구 — 402×874 기준 38px 보존 */
+  exitConfirmTitle: 'max(38px, calc(min(9.45vw, 4.35vh) * var(--fit-lo, 1)))',
+  /** ManualValueSheet 수동입력 시트 헤더 제목 — 402×874 기준 28px 보존 */
+  sheetTitle: 'max(28px, calc(min(6.97vw, 3.20vh) * var(--fit-lo, 1)))',
+  /** ActiveControlSteppers 스텝퍼 +/- 제어 버튼 심볼 — 402×874 기준 26px 보존 */
+  stepperValueLg: 'max(26px, calc(min(6.47vw, 2.97vh) * var(--fit-lo, 1)))',
+  /** ReadyState 수치 강조 렌더링 값 — 402×874 기준 24px 보존 */
+  readyValue: 'max(24px, calc(min(5.97vw, 2.75vh) * var(--fit-lo, 1)))',
+  /** ManualValueSheet 키패드 백스페이스/입력 키 — 402×874 기준 24px 보존 */
+  keypadKey: 'max(24px, calc(min(5.97vw, 2.75vh) * var(--fit-lo, 1)))',
+  /** PersistErrorBanner 경고 배너 제목 — 402×874 기준 22px 보존 */
+  bannerTitle: 'max(22px, calc(min(5.47vw, 2.52vh) * var(--fit-lo, 1)))',
+  /** CommandHelpPopup 음성 명령어 팝업 제목 — 402×874 기준 21px 보존 */
+  popupTitle: 'max(21px, calc(min(5.22vw, 2.40vh) * var(--fit-lo, 1)))',
+  /** StateIndicator 상태 표시기 뱃지/라벨 — 402×874 기준 20.1px 보존 */
+  statusLabel: 'max(20.1px, calc(min(5.00vw, 2.30vh) * var(--fit-lo, 1)))',
+  /** ActiveControlSteppers 스텝퍼 수치 값 — 402×874 기준 20px 보존 */
+  stepperValue: 'max(20px, calc(min(4.98vw, 2.29vh) * var(--fit-lo, 1)))',
+  /** CommandHelpPopup 팝업 닫기 버튼 심볼 — 402×874 기준 20px 보존 */
+  popupClose: 'max(20px, calc(min(4.98vw, 2.29vh) * var(--fit-lo, 1)))',
+  /** StoppingState 정지 화면 보조 문구 — 402×874 기준 19px 보존 */
+  stoppingBody: 'max(19px, calc(min(4.73vw, 2.17vh) * var(--fit-lo, 1)))',
+  /** PersistErrorBanner 경고 배너 액션 버튼 — 402×874 기준 19px 보존 */
+  bannerAction: 'max(19px, calc(min(4.73vw, 2.17vh) * var(--fit-lo, 1)))',
+  /** ActiveControlBar 하단 제어바 메인 액션 버튼 — 402×874 기준 18.492px 보존 */
+  controlButton: 'max(18.492px, calc(min(4.60vw, 2.12vh) * var(--fit-lo, 1)))',
+  /** MicReconnectBanner / ActiveHeaderStrip 섹션 헤더 제목 — 402×874 기준 18px 보존 */
+  headerTitle: 'max(18px, calc(min(4.48vw, 2.06vh) * var(--fit-lo, 1)))',
+  /** ManualValueSheet 폼 입력 필드 및 시트 탭 라벨 — 402×874 기준 18px 보존 */
+  bodyStrong: 'max(18px, calc(min(4.48vw, 2.06vh) * var(--fit-lo, 1)))',
+  /** CommandHelpPopup / ManualValueSheet / ReadyState 액션 버튼 라벨 — 402×874 기준 17px 보존 */
+  actionLabel: 'max(17px, calc(min(4.23vw, 1.95vh) * var(--fit-lo, 1)))',
+  /** CommandHelpPopup 카테고리 태그 / PersistErrorBanner 본문 텍스트 — 402×874 기준 16px 보존 */
+  bodyText: 'max(16px, calc(min(3.98vw, 1.83vh) * var(--fit-lo, 1)))',
+  /** CommandHelpPopup 항목 설명 / ReadyState 항목 라벨 — 402×874 기준 15px 보존 */
+  bodySm: 'max(15px, calc(min(3.73vw, 1.72vh) * var(--fit-lo, 1)))',
+  /** CommandHelpPopup 서브 설명 / ManualValueSheet 에러 문구 / ActiveControlSteppers 라벨 — 402×874 기준 14px 보존 */
+  caption: 'max(14px, calc(min(3.48vw, 1.60vh) * var(--fit-lo, 1)))',
+  /** ReadyState 단위 / ActiveHeaderStrip 행 카운터 소형 라벨 — 402×874 기준 13px 보존 */
+  captionSm: 'max(13px, calc(min(3.23vw, 1.49vh) * var(--fit-lo, 1)))',
+  /** ActiveControlSteppers 소형 스텝퍼 라벨 — 402×874 기준 12px 보존 */
+  captionXs: 'max(12px, calc(min(2.99vw, 1.37vh) * var(--fit-lo, 1)))',
+  /** ActiveControlSteppers 스텝퍼 캡션 상세설명 — 402×874 기준 10px 보존 */
+  captionXxs: 'max(10px, calc(min(2.49vw, 1.14vh) * var(--fit-lo, 1)))',
+} as const;
+
 /** v0.23.0 입력탭#1 — 흡수영역(grid row3, 1fr, overflow:hidden) 안에서 카드가 부모에 잘리지 않게
  *  하는 공통 가드. maxHeight:100% + minHeight:0.
  *  v0.27.0 — overflowY:auto는 이제 **폴백**이다: 정상 경로에선 useFitScale이 폰트를 줄여 스크롤

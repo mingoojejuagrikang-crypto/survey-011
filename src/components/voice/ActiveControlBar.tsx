@@ -6,7 +6,7 @@ import { ActiveControlSteppers } from './ActiveControlSteppers';
 import { StateIndicator } from './StateIndicator';
 import type { DotGlyph } from './StateDots';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
-import { CONTROL_ROW_FRACTION } from './heroLayout';
+import { CONTROL_ROW_FRACTION, VOICE_TYPE } from './heroLayout';
 
 /** ui-standard §2·§3 — **하단 30%**(v0.43.0 UI-b에서 25→30).
  *
@@ -225,7 +225,7 @@ export function EdgeButton({
         background: accentBg ?? T.card,
         color,
         opacity: disabled ? 0.45 : 1,
-        fontSize: 'clamp(16px, 4.6vw, 20px)',
+        fontSize: VOICE_TYPE.controlButton,
         fontWeight: 900,
         letterSpacing: -0.3,
         display: 'flex', alignItems: 'center', justifyContent: 'center',

@@ -5,6 +5,7 @@ import { logger } from '../../lib/logger';
 import { inputControlPanelOpened, settingChanged } from '../../lib/logEvents';
 import { speak } from '../../lib/speech';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
+import { VOICE_TYPE } from './heroLayout';
 
 /** v0.20.0 입력탭#1·#2 — 입력 컨트롤바: [인식 허용범위] · [안내 속도] 두 다이얼을 수평 배치.
  *  허용범위(recognitionTolerance) 0.40~0.90 → %로 표시. 속도(ttsRate) 0.5~2.0 → x로 표시·샘플 음성.
@@ -106,7 +107,7 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
           border: `1px solid ${T.lineStrong}`,
           background: T.card,
           color: T.textDim,
-          fontSize: 14,
+          fontSize: VOICE_TYPE.caption,
           fontWeight: 850,
           letterSpacing: -0.2,
           display: 'flex',
@@ -188,11 +189,11 @@ function StepperControl({
     >
       <StepperButton label="−" title={minusLabel} disabled={!canMinus} onClick={onMinus} testId={`${testId}-minus`} />
       <div style={{ minWidth: 0, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontSize: 12, color: T.textMute, fontWeight: 800, lineHeight: 1 }}>{label}</span>
-        <span style={{ fontSize: 20, color: accent, fontWeight: 950, lineHeight: 1.15, fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>
+        <span style={{ fontSize: VOICE_TYPE.captionXs, color: T.textMute, fontWeight: 800, lineHeight: 1 }}>{label}</span>
+        <span style={{ fontSize: VOICE_TYPE.stepperValue, color: accent, fontWeight: 950, lineHeight: 1.15, fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>
           {value}
         </span>
-        <span style={{ fontSize: 10, color: T.textMute, fontWeight: 650, lineHeight: 1.2, whiteSpace: 'nowrap' }}>{detail}</span>
+        <span style={{ fontSize: VOICE_TYPE.captionXxs, color: T.textMute, fontWeight: 650, lineHeight: 1.2, whiteSpace: 'nowrap' }}>{detail}</span>
       </div>
       <StepperButton label="+" title={plusLabel} disabled={!canPlus} onClick={onPlus} testId={`${testId}-plus`} />
     </div>
@@ -223,7 +224,7 @@ function StepperButton({
         border: `1px solid ${T.lineStrong}`,
         background: disabled ? 'rgba(255,255,255,0.025)' : T.card,
         color: disabled ? T.textMute : T.text,
-        fontSize: 26,
+        fontSize: VOICE_TYPE.stepperValueLg,
         fontWeight: 950,
         lineHeight: 1,
         cursor: disabled ? 'default' : 'pointer',
