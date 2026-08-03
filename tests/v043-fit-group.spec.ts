@@ -22,8 +22,50 @@ import { fireStt, fireSttInterim, waitForTtsIdle } from './fixtures/stt';
 
 test.setTimeout(120_000);
 
+/** 🔴 **테스트가 자기 눈으로 재는 잉크 경계 계측기**(v0.44.0 A1).
+ *
+ *  종전 이 파일은 넘침을 `scrollWidth <= clientWidth + 1`로 단언했다 — **제품이 쓰던 것과 똑같은
+ *  매직넘버 `+1`을 복제한 것**이라, 제품이 「맞다」고 하는 1px을 오라클도 「맞다」고 했다.
+ *  그래서 F01(402×874에서 잉크가 배정을 1.313px 초과)이 이 스위트를 **green으로 통과**했다.
+ *  기대값이 제품 판정과 독립이 아니면 파손을 감춘다.
+ *
+ *  이 계측기는 **제품의 판정 함수를 import하지 않는다**(`fitGroups` import는 fit을 *실행*하기
+ *  위한 것이지 판정을 빌리기 위한 것이 아니다). 여기서 재는 것:
+ *   - `scrollWidth`는 정수라 서브픽셀 초과를 반올림으로 삼킨다 → `Range`(float)로 잰다.
+ *   - `inline-flex` + `justify-content:center`에서 `scrollWidth`는 **좌측 오버플로를 못 본다**
+ *     → 폭이 아니라 **좌우 경계**를 각각 잰다.
+ *  반환값 `overflowLeftPx`/`overflowRightPx`는 **양수면 그만큼 삐져나갔다**는 뜻이다. */
+const INK_BOUNDS_FN = `(member) => {
+  const style = getComputedStyle(member);
+  const px = (v) => Number.parseFloat(v) || 0;
+  const box = member.getBoundingClientRect();
+  const contentLeft = box.left + px(style.borderLeftWidth) + px(style.paddingLeft);
+  const contentRight = box.right - px(style.borderRightWidth) - px(style.paddingRight);
+  const r = document.createRange();
+  r.selectNodeContents(member);
+  const ink = r.getBoundingClientRect();
+  return {
+    inkLeft: ink.left, inkRight: ink.right, inkWidth: ink.width,
+    contentLeft, contentRight, contentWidth: contentRight - contentLeft,
+    overflowLeftPx: contentLeft - ink.left,
+    overflowRightPx: ink.right - contentRight,
+    measuredBy: member.dataset.fitMeasuredBy ?? '(none)',
+  };
+}`;
+
+/** 잉크가 배정 구간 밖으로 나갔는지 단언한다. 관용은 제품 상수를 빌리지 않고 **리터럴**로 박는다 —
+ *  0.1px은 부동소수/레이아웃 반올림 잡음만 흡수하며, 종전 1px과 달리 글자 손실을 만들지 않는다.
+ *  (402×874 실측: 초과 1.313px에서 이미 `…`로 마지막 글자 112.97px이 통째로 사라졌다) */
+function expectWithinAllocation(
+  bounds: { overflowLeftPx: number; overflowRightPx: number },
+  what: string,
+) {
+  expect(bounds.overflowLeftPx, `${what} — 잉크가 배정 구간 왼쪽으로 넘음`).toBeLessThanOrEqual(0.1);
+  expect(bounds.overflowRightPx, `${what} — 잉크가 배정 구간 오른쪽으로 넘음`).toBeLessThanOrEqual(0.1);
+}
+
 async function heroValueMetrics(page: Page) {
-  return page.locator('[data-hero-state="listening"]').evaluate((container) => {
+  return page.locator('[data-hero-state="listening"]').evaluate((container, fn) => {
     const member = container.querySelector<HTMLElement>('[data-fit-group="value"]');
     if (!member) throw new Error('value fit member 없음');
     const style = getComputedStyle(member);
@@ -36,16 +78,27 @@ async function heroValueMetrics(page: Page) {
       widthStyle: member.style.width,
       whiteSpace: style.whiteSpace,
       overflow: style.overflow,
+      // eslint-disable-next-line no-eval
+      ink: (eval(fn) as (el: HTMLElement) => InkBounds)(member),
     };
-  });
+  }, INK_BOUNDS_FN);
+}
+
+interface InkBounds {
+  inkLeft: number; inkRight: number; inkWidth: number;
+  contentLeft: number; contentRight: number; contentWidth: number;
+  overflowLeftPx: number; overflowRightPx: number;
+  measuredBy: string;
 }
 
 async function heroLabelMetrics(page: Page) {
-  return page.locator('[data-hero-state="confirm"]').evaluate((container) => {
+  return page.locator('[data-hero-state="confirm"]').evaluate((container, fn) => {
     const label = container.querySelector<HTMLElement>('[data-fit-group="label"]');
     if (!label) throw new Error('label fit member 없음');
     const fontSize = parseFloat(getComputedStyle(label).fontSize);
     const value = container.querySelector<HTMLElement>('[data-fit-group="value"]');
+    // eslint-disable-next-line no-eval
+    const ink = eval(fn) as (el: HTMLElement) => InkBounds;
     return {
       fontSize,
       offsetHeight: label.offsetHeight,
@@ -54,8 +107,10 @@ async function heroLabelMetrics(page: Page) {
       scrollWidth: label.scrollWidth,
       fitLabel: getComputedStyle(container).getPropertyValue('--fit-label').trim(),
       valueFontSize: value ? parseFloat(getComputedStyle(value).fontSize) : 0,
+      ink: ink(label),
+      valueInk: value ? ink(value) : null,
     };
-  });
+  }, INK_BOUNDS_FN);
 }
 
 function twoVoiceSettings(label: string) {
@@ -90,7 +145,7 @@ test('그룹 통일 — 긴 멤버가 같은 계열의 공통 배율을 결정�
     container,
     groups: [{ variable: '--fit-probe', members: [short, long], searchBasePx: 32 }],
   });
-  const groupedMetrics = await page.locator('#fit').evaluate((el) => {
+  const groupedMetrics = await page.locator('#fit').evaluate((el, fn) => {
     const shortEl = el.querySelector<HTMLElement>('#short')!;
     const longEl = el.querySelector<HTMLElement>('#long')!;
     return {
@@ -98,10 +153,13 @@ test('그룹 통일 — 긴 멤버가 같은 계열의 공통 배율을 결정�
       longSize: parseFloat(getComputedStyle(longEl).fontSize),
       longScroll: longEl.scrollWidth,
       longClient: longEl.clientWidth,
+      // eslint-disable-next-line no-eval
+      longInk: (eval(fn) as (el: HTMLElement) => InkBounds)(longEl),
     };
-  });
+  }, INK_BOUNDS_FN);
   expect(groupedMetrics.shortSize, '같은 계열은 같은 배율').toBeCloseTo(groupedMetrics.longSize, 3);
-  expect(groupedMetrics.longScroll, '긴 멤버도 배정 폭 안').toBeLessThanOrEqual(groupedMetrics.longClient + 1);
+  // 종전: `longScroll <= longClient + 1` — 제품의 1px 관용을 복제해 서브픽셀 초과를 놓쳤다.
+  expectWithinAllocation(groupedMetrics.longInk, '긴 멤버도 배정 폭 안');
 
   await page.locator('#long').evaluate((el) => el.remove());
   const shortOnly = await page.evaluate(fitGroups, {
@@ -187,7 +245,9 @@ test('위로 열림 — live VoiceHero 320→402 배정 폭에서 정착 fontSiz
   expect(settled.fitValue, '성장 뒤 fit 변수도 정착한다').toBe(wide.fitValue);
   expect(wide.containerWidth, '실제 배정 폭이 늘어난 대조').toBeGreaterThan(narrow.containerWidth + 30);
   expect(wide.fitValue, 'fit 변수가 실제로 기록됐다').not.toBe('');
-  expect(wide.memberScrollWidth).toBeLessThanOrEqual(wide.memberClientWidth + 1);
+  // 종전: `memberScrollWidth <= memberClientWidth + 1` — 제품의 1px 관용 복제.
+  expectWithinAllocation(wide.ink, '성장 뒤 값이 배정 폭 안');
+  expect(wide.ink.measuredBy, '잉크 계측기로 쟀다(폴백 아님)').toBe('ink');
   expect(wide.widthStyle).toBe('100%');
   expect(wide.whiteSpace).toBe('nowrap');
   expect(wide.overflow).toBe('hidden');
@@ -254,8 +314,14 @@ for (const { labelKind, label, viewport } of [
     console.log(`[fit-matrix] state=confirm viewport=${viewport.width}x${viewport.height} label=${label} font=${confirmMetrics.fontSize.toFixed(2)}px box=${confirmMetrics.offsetHeight}px ratio=${confirmMetrics.lineBoxRatio.toFixed(2)} width=${confirmMetrics.scrollWidth}/${confirmMetrics.clientWidth} value=${confirmMetrics.valueFontSize.toFixed(2)}px floor=${confirmMetrics.fontSize <= HERO_MIN_FONT_PX.name + 0.05}`);
     expect(confirmMetrics.lineBoxRatio, 'confirm 라벨 line box').toBeGreaterThanOrEqual(0.9);
     expect(confirmMetrics.fontSize, 'confirm 라벨 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.name);
-    expect(confirmMetrics.scrollWidth, 'confirm 라벨 nowrap 폭').toBeLessThanOrEqual(confirmMetrics.clientWidth + 1);
+    // 🔴 종전: `scrollWidth <= clientWidth + 1`. 라벨은 `inline-flex` + `justify-content:center`라
+    //    **`scrollWidth`가 좌측 오버플로를 아예 못 본다** — 402 실측에서 좌 1.25 / 우 1.25(총 2.5)로
+    //    넘치는데 `scrollWidth - clientWidth`는 1만 줬고, 그 1이 `+1` 관용에 흡수돼 green이었다.
+    //    양쪽 경계를 각각 재야 이 비대칭이 드러난다.
+    expectWithinAllocation(confirmMetrics.ink, 'confirm 라벨');
+    expect(confirmMetrics.ink.measuredBy, 'confirm 라벨을 잉크로 쟀다(폴백 아님)').toBe('ink');
     expect(confirmMetrics.valueFontSize, 'confirm 확정값 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.value);
+    if (confirmMetrics.valueInk) expectWithinAllocation(confirmMetrics.valueInk, 'confirm 확정값');
 
     await expect(page.locator('[data-hero-state="listening"]')).toBeVisible({ timeout: 4000 });
     await waitForTtsIdle(page);
@@ -264,14 +330,17 @@ for (const { labelKind, label, viewport } of [
     const reviewHero = page.locator('[data-hero-state="review"]');
     await expect(reviewHero.locator('[data-fit-group="label"]'), '활성 칩과 같은 review 항목명은 중복이라 미렌더')
       .toHaveCount(0);
-    const reviewMetrics = await reviewHero.locator('[data-fit-group="value"]').evaluate((member) => ({
+    const reviewMetrics = await reviewHero.locator('[data-fit-group="value"]').evaluate((member, fn) => ({
       fontSize: parseFloat(getComputedStyle(member).fontSize),
       scrollWidth: member.scrollWidth,
       clientWidth: member.clientWidth,
-    }));
+      // eslint-disable-next-line no-eval
+      ink: (eval(fn) as (el: HTMLElement) => InkBounds)(member),
+    }), INK_BOUNDS_FN);
     console.log(`[fit-matrix] state=review viewport=${viewport.width}x${viewport.height} label=N/A value=${reviewMetrics.fontSize.toFixed(2)}px width=${reviewMetrics.scrollWidth}/${reviewMetrics.clientWidth}`);
     expect(reviewMetrics.fontSize, 'review 확정값 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.value);
-    expect(reviewMetrics.scrollWidth, 'review 값 nowrap 폭').toBeLessThanOrEqual(reviewMetrics.clientWidth + 1);
+    // 종전: `scrollWidth <= clientWidth + 1` — A0가 지목한 3곳(:101 :187 :254) 외 **네 번째** 복제다.
+    expectWithinAllocation(reviewMetrics.ink, 'review 값');
   });
 }
 

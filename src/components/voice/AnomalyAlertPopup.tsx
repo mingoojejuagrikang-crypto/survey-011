@@ -1,5 +1,7 @@
+import { useRef } from 'react';
 import { T } from '../../tokens';
 import { useFitScale } from './useFitScale';
+import { useFitGroup } from './useFitGroup';
 import { STATE_TYPE } from './heroLayout';
 import { anomalyAlarmLabel } from '../../lib/anomalyAlert';
 
@@ -75,6 +77,21 @@ export function AnomalyAlertPopup({
   const fitRef = useFitScale<HTMLDivElement>([
     a.colName, a.prev, a.next, a.changeText, a.sampleKey, a.prevDate, a.status, a.kind,
   ], ANOMALY_FIT_STEPS);
+  // v0.44.0 §C0 — 2열 비교(직전/현재)의 라벨·값을 각각 그룹으로 묶어 더 좁은 쪽이 정한 배율을
+  // 둘 다 공유한다(§C5-c: "같은 줄에 같은 성격의 데이터가 존재하면 작은 크기에 맞추어 통일").
+  // 이 카드 자체는 여전히 구 훅(useFitScale, 위 fitRef)이 돈다 — 신 훅은 비교 그리드 안쪽에만
+  // 적용된다(v043-fit-group.spec.ts "fit 기제 경계"가 이 경계를 지킨다).
+  const prevLabelRef = useRef<HTMLSpanElement>(null);
+  const prevValueRef = useRef<HTMLSpanElement>(null);
+  const nextLabelRef = useRef<HTMLSpanElement>(null);
+  const nextValueRef = useRef<HTMLSpanElement>(null);
+  const comparisonFitRef = useFitGroup<HTMLDivElement>(
+    [previousLabel, a.prev, a.next],
+    [
+      { variable: '--fit-compare-label', members: [prevLabelRef, nextLabelRef], searchBasePx: 22 },
+      { variable: '--fit-compare-value', members: [prevValueRef, nextValueRef], searchBasePx: 30 },
+    ],
+  );
   return (
     <div
       ref={fitRef}
@@ -110,6 +127,7 @@ export function AnomalyAlertPopup({
           2026-07-29 민구 제보 #3 — 각 영역 중앙정렬은 글자 크기 차이 때문에 시각 무게가 오른쪽으로
           쏠려 반려됐다. 라벨 끝과 값 시작을 화면 중앙축으로 모아 한 비교 덩어리로 읽히게 한다. */}
       <div
+        ref={comparisonFitRef}
         data-testid="anomaly-comparison"
         style={{
           width: '100%',
@@ -121,10 +139,10 @@ export function AnomalyAlertPopup({
           alignItems: 'center',
         }}
       >
-        <span data-testid="anomaly-prev-label" style={COMPARE_LABEL}>{previousLabel}</span>
-        <span data-testid="anomaly-prev-value" style={{ ...COMPARE_VALUE, color: T.textDim }}>{a.prev}</span>
-        <span data-testid="anomaly-next-label" style={COMPARE_LABEL}>현재</span>
-        <span data-testid="anomaly-next-value" style={{ ...COMPARE_VALUE, color: accent }}>{a.next}</span>
+        <span ref={prevLabelRef} data-testid="anomaly-prev-label" style={COMPARE_LABEL}>{previousLabel}</span>
+        <span ref={prevValueRef} data-testid="anomaly-prev-value" style={{ ...COMPARE_VALUE, color: T.textDim }}>{a.prev}</span>
+        <span ref={nextLabelRef} data-testid="anomaly-next-label" style={COMPARE_LABEL}>현재</span>
+        <span ref={nextValueRef} data-testid="anomaly-next-value" style={{ ...COMPARE_VALUE, color: accent }}>{a.next}</span>
       </div>
     </div>
   );
@@ -137,12 +155,51 @@ function formatCompareDate(raw?: string): string {
   return m ? `${m[1]}-${m[2]}` : raw;
 }
 
+/** 🔴 `lineHeight`는 **임계 1.15 위**여야 한다(v0.44.0 A2 실측).
+ *
+ *  Pretendard `fontWeight 800~900`에서 글리프(어센더~디센더)가 line box를 넘어
+ *  `scrollHeight`가 상시 초과하고, 그 초과가 `useFitGroup`/`useFitScale`의 **높이 판정을
+ *  오염시켜 fit이 최저 단계에 갇힌다**(§C0 배선이 막혔던 원인).
+ *
+ *  실측(375×667, `fontWeight 900` + `letterSpacing -1.4px` + nowrap + tabular):
+ *  ```
+ *    lineHeight   1.0   1.02   1.1   1.15   1.2
+ *    excess@72.75px  5      5     2      0     0
+ *    excess@30px     2      1     1      0     0
+ *  ```
+ *  🔴 **1.15에 딱 붙이지 않는다** — 경계값은 폰트 폴백(-apple-system 등)이나 굵기가 바뀌는
+ *  순간 다시 넘친다(T6 재발 형태). `1.2`는 임계 대비 약 4% 여유이고 흔한 값이라 폴백에서도
+ *  안전한 쪽이다. 세로 비용은 실측 **+25~27px**이며, 알람 카드 하단 여유가 375×667에서 46px ·
+ *  402×874에서 56.8px이라 **카드 높이·3구역 배분·무스크롤(`card.excess = 0`)이 모두 불변**이다.
+ *
+ *  ⚠️ **`ExitConfirmInline.tsx:19` · `VoiceHero.tsx:341`이 이미 1.15를 쓴다** — 같은 계열이다.
+ *
+ *  🔴 **이 선언은 현재 런타임에서 효과가 없다. 그래도 되돌리지 않았다.**
+ *  이 4개 요소(`anomaly-{prev,next}-{label,value}`)에서 **인라인 `line-height`가 무시되는
+ *  현상**이 있다 — DOM `style` 속성과 CSSOM에는 `1.2`가 들어 있는데 computed는 `font-size`와
+ *  같은 값(ratio 1.0)으로 나오고, `!important`를 붙일 때만 적용된다. 원인 **미확정**이며
+ *  후보 10가지를 소거했다(CSS 규칙 0건 · 폰트 · 굵기 · `font-size` 형태 8종 · 애니메이션 0건 ·
+ *  적용 순서/시점). 🔑 **같은 `style` 문자열의 `cloneNode` 복제본은 정상 작동한다.**
+ *  전체 기록과 다음 조사 출발점: `Deliverables/2026-08-03-survey-011-v0440-A0-probe.md` §8.
+ *
+ *  **되돌리지 않은 이유:** 값 `1.2`는 실측 임계(1.15) 기준으로 옳고 **해가 없다**(효과가 없을
+ *  뿐 회귀도 없다 — 블래스트 실측 완료). 되돌리면 다음 사람이 `1.02`를 보고 **같은 조사를
+ *  처음부터 반복한다.** 무시 현상이 풀리는 순간 이 값이 그대로 살아난다.
+ *
+ *  ⚠️ **이 선언이 실제로 먹는지는 소스가 아니라 `getComputedStyle`로 재라.** */
+const COMPARE_LINE_HEIGHT = 1.2;
+
 const COMPARE_LABEL: React.CSSProperties = {
+  // v0.44.0 §C0 — width:100%(maxWidth 아님)로 박스를 트랙 폭에 고정한다. maxWidth만 있으면
+  // 콘텐츠가 트랙보다 짧을 때 박스가 잉크에 딱 붙어(shrink-to-fit) 넘침 판정 경계가 잉크와 함께
+  // 움직여 useFitGroup이 상한을 못 찾는다(advisor 지적, 실측 반영). justifySelf는 width:100%면
+  // 무의미해지지만 textAlign이 같은 배치(라벨 끝을 중앙축에 모음)를 그대로 유지한다.
+  width: '100%',
   maxWidth: '100%',
   color: T.textMute,
   fontSize: STATE_TYPE.compareLabel,
   fontWeight: 800,
-  lineHeight: 1.1,
+  lineHeight: COMPARE_LINE_HEIGHT,
   letterSpacing: -0.3,
   whiteSpace: 'nowrap',
   textAlign: 'right',
@@ -150,10 +207,12 @@ const COMPARE_LABEL: React.CSSProperties = {
 };
 
 const COMPARE_VALUE: React.CSSProperties = {
+  width: '100%',
   maxWidth: '100%',
   fontSize: STATE_TYPE.compareValue,
   fontWeight: 900,
-  lineHeight: 1.02,
+  // 🔴 COMPARE_LABEL 위 주석의 임계 실측을 그대로 따른다(종전 1.02는 임계 1.15 미만이었다).
+  lineHeight: COMPARE_LINE_HEIGHT,
   letterSpacing: -1.4,
   fontVariantNumeric: 'tabular-nums',
   whiteSpace: 'nowrap',

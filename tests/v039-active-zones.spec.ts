@@ -729,10 +729,27 @@ test('§[2] anomaly — 라벨 1행·값 2행 + 하단 수정(좌)/확인(우) 2
   expect(prevBox.x, '직전 값은 왼쪽 열').toBeLessThan(nextBox.x);
   const compareFonts = await cmp.evaluate((el) => {
     const size = (id: string) => parseFloat(getComputedStyle(el.querySelector(`[data-testid="${id}"]`) as HTMLElement).fontSize);
-    return { label: size('anomaly-prev-label'), value: size('anomaly-prev-value') };
+    const fits = (id: string) => {
+      const node = el.querySelector(`[data-testid="${id}"]`) as HTMLElement;
+      return node.scrollWidth <= node.clientWidth + 1;
+    };
+    return {
+      label: size('anomaly-prev-label'),
+      nextLabel: size('anomaly-next-label'),
+      value: size('anomaly-prev-value'),
+      nextValue: size('anomaly-next-value'),
+      labelFits: fits('anomaly-prev-label') && fits('anomaly-next-label'),
+      valueFits: fits('anomaly-prev-value') && fits('anomaly-next-value'),
+    };
   });
-  expect(compareFonts.label, '402×874 라벨 56px').toBeCloseTo(56, 0);
-  expect(compareFonts.value, '402×874 값 78px').toBeCloseTo(78, 0);
+  // 🔴 v0440 §C0(Larry 판정, 08-03) — 종전 `toBeCloseTo(56/78, 0)`은 "이 크기여야 한다"가 아니라
+  // "지금 vw 공식을 402px에 대입하면 이 값이 나온다"는 부산물을 재고 있어 정당 파손으로 뒤집는다.
+  // "넘치지 않는다"·"같은 성격은 같은 크기(§C5-c)"만 잰다 — 상한 없음 회귀가드는
+  // trend-alert.spec.ts의 [ALERT-COMPARE-1](402→480 리사이즈)이 이미 담당한다.
+  expect(compareFonts.labelFits, '라벨 둘 다 배정 폭 안').toBe(true);
+  expect(compareFonts.valueFits, '값 둘 다 배정 폭 안').toBe(true);
+  expect(compareFonts.label, '좌우 라벨은 같은 크기(§C5-c)').toBeCloseTo(compareFonts.nextLabel, 3);
+  expect(compareFonts.value, '좌우 값은 같은 크기(§C5-c)').toBeCloseTo(compareFonts.nextValue, 3);
 
   // 알람은 2버튼을 유지하되 규칙 5에 따라 되돌리기(수정)는 좌, 진행(확인)은 우다.
   const confirm = page.locator('[data-testid="anomaly-confirm-btn"]');
