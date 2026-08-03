@@ -559,6 +559,38 @@ test('[A1-DIAG] 라벨 inline-flex에서 Range가 무엇을 재는가 + 폴백 �
   expect(d).toBeTruthy();
 });
 
+/** 🔴 A1 잔여 위험 검증 — **`check-pop`(320ms) 완료 후에도 라벨이 배정 안에 있는가.**
+ *
+ *  fit은 confirm 진입 시점에 돈다. 그 시점의 ✓ span은 애니메이션 진행 중이라 폭이 0에 가깝고,
+ *  실제로 A1-DIAG에서 `width: 0`으로 측정된 프레임이 있었다. 애니메이션이 끝나 ✓가 제 크기를
+ *  찾으면 라벨에 필요한 폭이 **늘어난다** — 그때 재계산이 돌지 않으면 넘친 채로 굳는다.
+ *  `useFitGroup`의 재계산 트리거는 deps 변화 · ResizeObserver(부모 크기) · `fonts.ready` ·
+ *  window resize뿐이고, **자식 애니메이션 완료는 그중 어디에도 없다.**
+ *  → confirm 진입 직후와 애니메이션 완료 후를 각각 재서 비교한다. */
+test('[A1-ANIM] check-pop 완료 후 라벨이 여전히 배정 안에 있는가', async ({ page }) => {
+  await boot(page);
+  await startSession(page);
+  await fireStt(page, '33.3');
+  await page.waitForTimeout(2200);
+  await fireStt(page, '44.4');
+  await expect(page.locator('[data-hero-state="confirm"]')).toBeVisible({ timeout: 3000 });
+
+  const samples: unknown[] = [];
+  // check-pop = 320ms. CONFIRM_MS = 1500ms이므로 1200ms까지는 confirm이 살아 있다.
+  let elapsed = 0;
+  for (const atMs of [80, 200, 420, 700, 1200]) {
+    await page.waitForTimeout(atMs - elapsed);
+    elapsed = atMs;
+    const s = await page.evaluate((fn) => {
+      // eslint-disable-next-line no-eval
+      return (eval(fn) as () => unknown)();
+    }, LABEL_DIAG_FN);
+    samples.push({ atMs, ...(s as object) });
+  }
+  console.log('=== A1-ANIM::timeline ===\n' + JSON.stringify(samples, null, 1));
+  expect(samples.length).toBe(5);
+});
+
 /** A1 과제 3 — 🔴 **CHIP_TYPE 회귀.** `UI-b` 함정 1이 "390×568에서 칩 여유 1.92px뿐"이라고
  *  경고한다. `fitGroups`는 공용 코어라 칩(`--fit-lo`/`--fit-hi`)도 같은 판정을 쓴다.
  *  처방으로 배율이 0.3~0.5% 줄면 그 여유가 어떻게 되는지 **숫자로** 남긴다. */
