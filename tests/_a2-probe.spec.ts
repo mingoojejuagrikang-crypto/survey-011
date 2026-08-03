@@ -184,3 +184,140 @@ test('[A2-CHIP] §C1 판정 — 390×568 칩 여유 재측정(알람 전/중)', 
   const during = await chipSnapshot(page, '390x568-during-alarm');
   expect(during.chipCount).toBeGreaterThan(0);
 });
+
+/** 🔴 D안 판정 실험 — 「높이도 멤버별로 본다」가 성립하는가.
+ *
+ *  Larry의 D안: `fits()`에서 `overflowsWidth(member) || overflowsHeight(member)`.
+ *  성립하려면 **폰트를 줄였을 때 멤버의 `scrollHeight - clientHeight` 초과가 사라져야** 한다.
+ *  사라지지 않으면 fit은 어떤 배율에서도 false를 받아 최저 단계에 갇힌다 —
+ *  C0가 겪은 문제가 해결이 아니라 **모든 멤버로 확산**된다.
+ *
+ *  compare 슬롯은 현재 `var(--fit-*)`를 안 쓰므로 배율로는 못 줄인다. 그래서 fontSize를
+ *  직접 주입해 스윕한다(C0의 배선이 들어온 뒤와 같은 조건을 만드는 것).  */
+test('[A2-DPLAN] D안 판정 — 폰트를 줄이면 멤버 높이 초과가 사라지는가', async ({ page }) => {
+  await boot(page, PHONE_375);
+  await triggerAnomaly(page);
+  await page.waitForTimeout(300);
+  const rows = await page.evaluate(() => {
+    const sel = ['[data-testid="anomaly-next-value"]', '[data-testid="anomaly-prev-label"]',
+      '[data-testid="anomaly-headline"]'];
+    const out: unknown[] = [];
+    for (const s of sel) {
+      const el = document.querySelector<HTMLElement>(s);
+      if (!el) continue;
+      const cs0 = getComputedStyle(el);
+      const baseLh = cs0.lineHeight;
+      for (const fs of [90, 72.75, 60, 48, 36, 30, 24, 18, 12]) {
+        el.style.fontSize = `${fs}px`;
+        void document.body.offsetHeight;
+        const cs = getComputedStyle(el);
+        const px = (v: string) => Number.parseFloat(v) || 0;
+        const box = el.getBoundingClientRect();
+        const ct = box.top + px(cs.borderTopWidth) + px(cs.paddingTop);
+        const cb = box.bottom - px(cs.borderBottomWidth) - px(cs.paddingBottom);
+        const r = document.createRange(); r.selectNodeContents(el);
+        const ink = r.getBoundingClientRect();
+        out.push({
+          sel: s.replace(/.*testid="anomaly-|".*/g, ''), fontSizePx: fs,
+          lineHeight: cs.lineHeight, baseLineHeight: baseLh,
+          scrollH: el.scrollHeight, clientH: el.clientHeight,
+          excessScroll: el.scrollHeight - el.clientHeight,
+          // overflowsHeight()의 판정 그대로: scrollHeight > clientHeight + 1
+          overflowsHeightVerdict: el.scrollHeight > el.clientHeight + 1,
+          inkExcess: +(ink.height - (cb - ct)).toFixed(3),
+        });
+      }
+      el.style.fontSize = '';
+    }
+    return out;
+  });
+  console.log('=== A2-DPLAN ===\n' + JSON.stringify(rows, null, 1));
+  expect(rows.length).toBeGreaterThan(0);
+});
+
+/** 🔴 D안 대안 검증 — **카드 루트를 컨테이너로 쓰면 판정이 작동하는가.**
+ *  카드 루트(`anomaly-alert`)는 실제 clip 경계다(`overflowY:auto`, `height:100%`).
+ *  compare를 키웠을 때 루트의 `scrollHeight`가 반응해야 fit이 이진탐색을 할 수 있다. */
+test('[A2-ROOT] 카드 루트를 컨테이너로 쓰면 높이 판정이 반응하는가', async ({ page }) => {
+  await boot(page, PHONE_375);
+  await triggerAnomaly(page);
+  await page.waitForTimeout(300);
+  const rows = await page.evaluate(() => {
+    const card = document.querySelector<HTMLElement>('[data-testid="anomaly-alert"]')!;
+    const targets = ['[data-testid="anomaly-prev-value"]', '[data-testid="anomaly-next-value"]',
+      '[data-testid="anomaly-prev-label"]', '[data-testid="anomaly-next-label"]']
+      .map((s) => document.querySelector<HTMLElement>(s)).filter(Boolean) as HTMLElement[];
+    const out: unknown[] = [];
+    for (const fs of [30, 45, 60, 72.75, 90, 120, 160]) {
+      targets.forEach((el) => { el.style.fontSize = `${fs}px`; });
+      void document.body.offsetHeight;
+      out.push({
+        compareFontPx: fs,
+        rootScrollH: card.scrollHeight, rootClientH: card.clientHeight,
+        rootExcess: card.scrollHeight - card.clientHeight,
+        // fitGroup.ts의 overflowsHeight(container) 판정 그대로
+        containerVerdict: card.scrollHeight > card.clientHeight + 1,
+      });
+    }
+    targets.forEach((el) => { el.style.fontSize = ''; });
+    return out;
+  });
+  console.log('=== A2-ROOT ===\n' + JSON.stringify(rows, null, 1));
+  expect(rows.length).toBe(7);
+});
+
+/** 🔴 UNCLEAR 1 해소 — lineHeight를 얼마로 올려야 높이 초과가 0이 되는가.
+ *  A2 판정의 권고(「오염원은 lineHeight다」)가 성립하는지를 직접 잰다. */
+test('[A2-LH] lineHeight 스윕 — 초과가 0이 되는 지점이 있는가', async ({ page }) => {
+  await boot(page, PHONE_375);
+  await triggerAnomaly(page);
+  await page.waitForTimeout(300);
+  const rows = await page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>('[data-testid="anomaly-next-value"]')!;
+    const out: unknown[] = [];
+    // 실제 인라인 스타일이 무엇인지 먼저 기록한다(코드는 1.02인데 computed가 1.0이었다).
+    const declared = el.style.lineHeight;
+    for (const fs of [72.75, 30]) {
+      el.style.fontSize = `${fs}px`;
+      for (const lh of ['1.02', '1.1', '1.2', '1.3', '1.4', 'normal']) {
+        el.style.lineHeight = lh;
+        void document.body.offsetHeight;
+        const cs = getComputedStyle(el);
+        out.push({
+          fontSizePx: fs, lineHeightSet: lh, lineHeightComputed: cs.lineHeight,
+          ratio: +(parseFloat(cs.lineHeight) / fs).toFixed(3),
+          scrollH: el.scrollHeight, clientH: el.clientHeight,
+          excess: el.scrollHeight - el.clientHeight,
+          overflowsHeightVerdict: el.scrollHeight > el.clientHeight + 1,
+        });
+      }
+    }
+    el.style.fontSize = ''; el.style.lineHeight = declared;
+    return { declaredInlineLineHeight: declared, rows: out };
+  });
+  console.log('=== A2-LH ===\n' + JSON.stringify(rows, null, 1));
+  expect(rows.rows.length).toBe(12);
+});
+
+/** lineHeight가 왜 안 먹는지 — 어떤 규칙이 이기는가. */
+test('[A2-LH2] lineHeight 우선순위 진단', async ({ page }) => {
+  await boot(page, PHONE_375);
+  await triggerAnomaly(page);
+  await page.waitForTimeout(300);
+  const d = await page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>('[data-testid="anomaly-next-value"]')!;
+    const before = { inline: el.style.lineHeight, computed: getComputedStyle(el).lineHeight };
+    el.style.setProperty('line-height', '2', 'important');
+    void document.body.offsetHeight;
+    const after = { inline: el.style.lineHeight, computed: getComputedStyle(el).lineHeight,
+      scrollH: el.scrollHeight, clientH: el.clientHeight, excess: el.scrollHeight - el.clientHeight };
+    // 부모(grid item 맥락)도 본다 — align-items:center가 높이를 눌렀을 수 있다.
+    const parent = el.parentElement!;
+    const pcs = getComputedStyle(parent);
+    return { before, after, parentDisplay: pcs.display, parentAlignItems: pcs.alignItems,
+      parentRows: pcs.gridTemplateRows, elDisplay: getComputedStyle(el).display,
+      elBoxH: el.getBoundingClientRect().height };
+  });
+  console.log('=== A2-LH2 ===\n' + JSON.stringify(d, null, 1));
+  expect(d).toBeTruthy();
+});
