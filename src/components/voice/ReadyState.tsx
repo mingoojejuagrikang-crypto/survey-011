@@ -27,7 +27,14 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
           경고 배너로 이전한다 — 순수 탭 이름만 사라지고 기능 안내는 보존. */}
       <div
         style={{
-          flex: 1, display: 'flex', flexDirection: 'column',
+          // 🔴 `minHeight: 0`이 없으면 flex 자식의 `min-height: auto`가 콘텐츠 자연 높이를
+          //    하한으로 잡아 컨테이너가 수축을 거부한다 — 짧은 뷰포트에서 시작 버튼이 아래로
+          //    밀려 TabBar에 가려지고 **클릭 자체가 불가능**해진다.
+          //    §B1이 셸을 실제 뷰포트에 맞추면서 발현 조건이 노출됐다(B1 산출물 §4).
+          //    🔑 B1 산출물은 이걸 "640×600 = 작은 데스크톱 창, 실기기엔 없음"으로 우선순위를
+          //    낮췄으나 **틀렸다** — 390×568(실기기 폰 크기, PortraitGuard에 안 걸린다)에서도
+          //    재현된다. §C1 probe가 실측으로 반증했다(2026-08-03).
+          flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
           padding: '0 24px', gap: 28,
         }}
