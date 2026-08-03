@@ -1,5 +1,7 @@
+import { useRef } from 'react';
 import { T } from '../../tokens';
 import { useFitScale } from './useFitScale';
+import { useFitGroup } from './useFitGroup';
 import { STATE_TYPE } from './heroLayout';
 import { anomalyAlarmLabel } from '../../lib/anomalyAlert';
 
@@ -75,6 +77,21 @@ export function AnomalyAlertPopup({
   const fitRef = useFitScale<HTMLDivElement>([
     a.colName, a.prev, a.next, a.changeText, a.sampleKey, a.prevDate, a.status, a.kind,
   ], ANOMALY_FIT_STEPS);
+  // v0.44.0 §C0 — 2열 비교(직전/현재)의 라벨·값을 각각 그룹으로 묶어 더 좁은 쪽이 정한 배율을
+  // 둘 다 공유한다(§C5-c: "같은 줄에 같은 성격의 데이터가 존재하면 작은 크기에 맞추어 통일").
+  // 이 카드 자체는 여전히 구 훅(useFitScale, 위 fitRef)이 돈다 — 신 훅은 비교 그리드 안쪽에만
+  // 적용된다(v043-fit-group.spec.ts "fit 기제 경계"가 이 경계를 지킨다).
+  const prevLabelRef = useRef<HTMLSpanElement>(null);
+  const prevValueRef = useRef<HTMLSpanElement>(null);
+  const nextLabelRef = useRef<HTMLSpanElement>(null);
+  const nextValueRef = useRef<HTMLSpanElement>(null);
+  const comparisonFitRef = useFitGroup<HTMLDivElement>(
+    [previousLabel, a.prev, a.next],
+    [
+      { variable: '--fit-compare-label', members: [prevLabelRef, nextLabelRef], searchBasePx: 22 },
+      { variable: '--fit-compare-value', members: [prevValueRef, nextValueRef], searchBasePx: 30 },
+    ],
+  );
   return (
     <div
       ref={fitRef}
@@ -110,6 +127,7 @@ export function AnomalyAlertPopup({
           2026-07-29 민구 제보 #3 — 각 영역 중앙정렬은 글자 크기 차이 때문에 시각 무게가 오른쪽으로
           쏠려 반려됐다. 라벨 끝과 값 시작을 화면 중앙축으로 모아 한 비교 덩어리로 읽히게 한다. */}
       <div
+        ref={comparisonFitRef}
         data-testid="anomaly-comparison"
         style={{
           width: '100%',
@@ -121,10 +139,10 @@ export function AnomalyAlertPopup({
           alignItems: 'center',
         }}
       >
-        <span data-testid="anomaly-prev-label" style={COMPARE_LABEL}>{previousLabel}</span>
-        <span data-testid="anomaly-prev-value" style={{ ...COMPARE_VALUE, color: T.textDim }}>{a.prev}</span>
-        <span data-testid="anomaly-next-label" style={COMPARE_LABEL}>현재</span>
-        <span data-testid="anomaly-next-value" style={{ ...COMPARE_VALUE, color: accent }}>{a.next}</span>
+        <span ref={prevLabelRef} data-testid="anomaly-prev-label" style={COMPARE_LABEL}>{previousLabel}</span>
+        <span ref={prevValueRef} data-testid="anomaly-prev-value" style={{ ...COMPARE_VALUE, color: T.textDim }}>{a.prev}</span>
+        <span ref={nextLabelRef} data-testid="anomaly-next-label" style={COMPARE_LABEL}>현재</span>
+        <span ref={nextValueRef} data-testid="anomaly-next-value" style={{ ...COMPARE_VALUE, color: accent }}>{a.next}</span>
       </div>
     </div>
   );
@@ -172,6 +190,11 @@ function formatCompareDate(raw?: string): string {
 const COMPARE_LINE_HEIGHT = 1.2;
 
 const COMPARE_LABEL: React.CSSProperties = {
+  // v0.44.0 §C0 — width:100%(maxWidth 아님)로 박스를 트랙 폭에 고정한다. maxWidth만 있으면
+  // 콘텐츠가 트랙보다 짧을 때 박스가 잉크에 딱 붙어(shrink-to-fit) 넘침 판정 경계가 잉크와 함께
+  // 움직여 useFitGroup이 상한을 못 찾는다(advisor 지적, 실측 반영). justifySelf는 width:100%면
+  // 무의미해지지만 textAlign이 같은 배치(라벨 끝을 중앙축에 모음)를 그대로 유지한다.
+  width: '100%',
   maxWidth: '100%',
   color: T.textMute,
   fontSize: STATE_TYPE.compareLabel,
@@ -184,6 +207,7 @@ const COMPARE_LABEL: React.CSSProperties = {
 };
 
 const COMPARE_VALUE: React.CSSProperties = {
+  width: '100%',
   maxWidth: '100%',
   fontSize: STATE_TYPE.compareValue,
   fontWeight: 900,
