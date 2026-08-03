@@ -133,10 +133,13 @@ export const STATE_TYPE = {
   /** 경보행 `<추세|범위>알람 : <넘어선 정도>` — 값 **위**에 오고 값을 가리지 않는다(§[2]). */
   alarmLabel: 'max(17px, calc(clamp(22px, min(6.6vw, 3.6vh), 36px) * var(--fit-lo, 1)))',
   /** 2열 비교의 열 라벨(`mm-dd` / `현재`). 402px 폭에서 56px이고, 더 넓은 영역에서는
-   *  함께 커진다. `clamp(..., max)`를 다시 넣으면 T6의 상한 재발이다. */
-  compareLabel: 'max(22px, 13.93vw)',
-  /** 2열 비교의 값 — 402px 폭에서 78px. 고정 상한 없이 영역 폭을 따라 커진다. */
-  compareValue: 'max(30px, 19.4vw)',
+   *  함께 커진다. `clamp(..., max)`를 다시 넣으면 T6의 상한 재발이다.
+   *  v0.44.0 §C0 — `--fit-compare-label`(AnomalyAlertPopup의 `useFitGroup`)이 각 칸 폭 안에
+   *  들어가도록 배율을 내린다. 22px 하한은 그대로 기준값이 아니라 바닥이다. */
+  compareLabel: 'max(22px, calc(13.93vw * var(--fit-compare-label, 1)))',
+  /** 2열 비교의 값 — 402px 폭에서 78px. 고정 상한 없이 영역 폭을 따라 커진다.
+   *  v0.44.0 §C0 — `--fit-compare-value`가 같은 방식으로 배율을 내린다. */
+  compareValue: 'max(30px, calc(19.4vw * var(--fit-compare-value, 1)))',
   /** 완료 요약 `X / N`. UI-c에서 상태어를 지운 폭을 값이 회수한다 — 고정 최대 px 없이 열린 fit. */
   completeSummary: fittedHeroType(
     COMPLETE_SUMMARY_MIN_FONT_PX,
