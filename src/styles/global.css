@@ -11,6 +11,20 @@
   /* v0.37.0 FB-I — 하단 나비(TabBar) 실측 높이. TabBar가 마운트 시 offsetHeight로 덮어쓴다(SSOT).
      이 100px는 err-large 첫 페인트 폴백(측정 전 한 프레임): 크면 무해한 여백, 작으면 나비 잘림. */
   --nav-h: 100px;
+  /* 🔴 §C1(2026-08-03) — 칩의 최소 높이. **기본은 0이고 터치 기기에서만 44px다.**
+     근거: 44px의 출처는 PRINCIPLES §2 「장갑 조작 하한」 = **터치 타깃** 기준이다
+     (`ColumnChip.tsx:97-98` 주석). 마우스 포인터에는 그 근거가 없다.
+     🔑 왜 나눠야 하나: 칩 높이는 칩존 트랙(`--chip-row-h: 100%`)을 따르는데, 짧은 창에서
+     트랙이 44px 밑으로 내려가면 `minHeight`가 이겨 **칩이 칩존보다 커지고
+     `ChipZone`의 `overflowY:hidden`이 칩 하단을 잘라낸다**(뷰포트 높이 h<443, 실측 7px 소실).
+     칩존 16%(F20 민구 확정) · 44px 하한 · 존 클립 — **셋 다는 h<443에서 성립하지 않는다.**
+     그 구간은 데스크톱 창에만 존재한다(폰은 manifest `orientation:portrait` + PortraitGuard가 막는다).
+     👉 44px를 터치에 한정하면 세 계약이 **전부** 살아난다. */
+  --chip-min-h: 0px;
+}
+
+@media (pointer: coarse) {
+  :root { --chip-min-h: 44px; }
 }
 
 /* v0.38.0 #6 — iOS WebView별 viewport-unit 지원 편차를 흡수한다. 미지원 선언은 무시되므로

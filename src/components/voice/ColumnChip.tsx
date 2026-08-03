@@ -97,7 +97,10 @@ export function ColumnChip({
         // §공통규칙4 "배정 구역 내 최대 크게" — 칩 높이는 칩존이 트랙에서 역산한 한 줄 높이
         // (--chip-row-h)를 그대로 쓴다. 44px는 장갑 조작 하한(PRINCIPLES §2)이라 고정 하한으로 남는다.
         height: 'var(--chip-row-h, 44px)',
-        minHeight: 44,
+        // 🔴 §C1(2026-08-03) — 리터럴 `44`에서 변수로. **터치 기기에서만 44px다**
+        //    (`global.css` `--chip-min-h`에 근거와 media query가 있다).
+        //    44px 하한이 칩존 트랙보다 커지면 칩이 칩존을 넘고 `overflowY:hidden`이 잘라낸다.
+        minHeight: 'var(--chip-min-h, 44px)',
         // 🔴 폭은 **내용이 정한다**(`0 0 auto`). 종전 `0 1 auto`는 한 행에 다 넣으려고 칩을 글자
         //    밑으로 찌그러뜨려 항목명이 한 글자로 잘렸다 — 넘치면 줄이지 말고 가로로 밀어야 한다.
         flex: isEditing ? '1 1 220px' : compact ? '0 0 clamp(180px, 48vw, 260px)' : '0 0 auto',

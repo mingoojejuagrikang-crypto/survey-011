@@ -17,11 +17,23 @@ import { boot } from './fixtures/activeZones';
 const WIDTHS = [320, 375, 430, 540, 768, 1024, 1280, 1600, 1920];
 const HEIGHTS = [400, 500, 568, 667, 800, 874, 1024, 1200];
 
+/** 🔴 **축마다 기준 박스가 다르다. 하나로 통일하지 마라** — 감사(2026-08-03)가 잡은 함정이다.
+ *
+ *  | 축 | 기준 박스 | 왜 |
+ *  |---|---|---|
+ *  | 세로 | **칩존 padding box**(`clientHeight`) | `overflowY:'hidden'`이 거기서 자른다. 칩이 `minHeight:44`로 칩존보다 커지는 것을 잡는 유일한 축 |
+ *  | 가로 | **칩 자신의 content box** | 클리핑 주체가 칩이다(`maxWidth:96cqw` + `overflow:hidden` + `nowrap`). 칩존은 `overflowX:'auto'` **스크롤 컨테이너**라 칩이 밖에 있는 건 **정상**이다 |
+ *
+ *  🔴 가로를 칩존 기준으로 재면 `alignActiveChip`(우측끝 정렬, 민구 확정 계약)이 밀어놓은
+ *  칩들이 전부 3000px대 오탐으로 잡혀 **72칸 전부 red**가 되고 진짜 신호가 묻힌다. */
 type Cell = {
   w: number; h: number;
   chipH: number; contentTop: number; contentBottom: number;
-  labelTop: number; labelBottom: number; labelFont: number;
-  valueTop: number; valueBottom: number; valueFont: number;
+  contentLeft: number; contentRight: number;
+  labelTop: number; labelBottom: number; labelLeft: number; labelRight: number; labelFont: number;
+  valueTop: number; valueBottom: number; valueLeft: number; valueRight: number; valueFont: number;
+  chipTop: number; chipBottom: number;
+  zoneClipTop: number; zoneClipBottom: number; zoneScrollTop: number;
   chipZoneH: number;
 };
 
@@ -40,17 +52,29 @@ async function measure(page: import('@playwright/test').Page, w: number, h: numb
     const cr = chip.getBoundingClientRect();
     const bt = parseFloat(cs.borderTopWidth), bb = parseFloat(cs.borderBottomWidth);
     const pt = parseFloat(cs.paddingTop), pb = parseFloat(cs.paddingBottom);
+    const bl = parseFloat(cs.borderLeftWidth), br = parseFloat(cs.borderRightWidth);
+    const pl = parseFloat(cs.paddingLeft), pr = parseFloat(cs.paddingRight);
     const lr = label.getBoundingClientRect(), vr = value.getBoundingClientRect();
+    // 칩존 padding box — `overflowY:'hidden'`이 자르는 경계.
+    const gs = getComputedStyle(grid);
+    const gr = grid.getBoundingClientRect();
+    const gbt = parseFloat(gs.borderTopWidth);
     return {
       w, h,
       chipH: cr.height,
       contentTop: cr.top + bt + pt,
       contentBottom: cr.bottom - bb - pb,
-      labelTop: lr.top, labelBottom: lr.bottom,
+      contentLeft: cr.left + bl + pl,
+      contentRight: cr.right - br - pr,
+      labelTop: lr.top, labelBottom: lr.bottom, labelLeft: lr.left, labelRight: lr.right,
       labelFont: parseFloat(getComputedStyle(label).fontSize),
-      valueTop: vr.top, valueBottom: vr.bottom,
+      valueTop: vr.top, valueBottom: vr.bottom, valueLeft: vr.left, valueRight: vr.right,
       valueFont: parseFloat(getComputedStyle(value).fontSize),
-      chipZoneH: grid.getBoundingClientRect().height,
+      chipTop: cr.top, chipBottom: cr.bottom,
+      zoneClipTop: gr.top + gbt,
+      zoneClipBottom: gr.top + gbt + grid.clientHeight,
+      zoneScrollTop: grid.scrollTop,
+      chipZoneH: gr.height,
     };
   }, { w, h });
 }
@@ -63,7 +87,10 @@ test('[SWEEP] 칩이 어떤 창 비율에서도 잘리지 않는다 · 위계가
     content: '*, *::before, *::after { animation: none !important; transition: none !important; }',
   });
 
-  const clipped: string[] = [];
+  const clippedV: string[] = [];
+  const clippedH: string[] = [];
+  const zoneOver: string[] = [];
+  const scrolled: string[] = [];
   const inverted: string[] = [];
   const tiny: string[] = [];
   let n = 0;
@@ -73,16 +100,29 @@ test('[SWEEP] 칩이 어떤 창 비율에서도 잘리지 않는다 · 위계가
       const m = await measure(page, w, h);
       if (!m) continue;
       n++;
-      // 🔴 잘림 — 자식이 칩 content box를 벗어난다(0.5px 여유는 서브픽셀 라운딩).
-      const over = Math.max(
-        m.contentTop - m.labelTop,
-        m.labelBottom - m.contentBottom,
-        m.contentTop - m.valueTop,
-        m.valueBottom - m.contentBottom,
+      // 🔴 ① 세로 — 자식이 칩 content box를 벗어난다(0.5px 여유는 서브픽셀 라운딩).
+      const overV = Math.max(
+        m.contentTop - m.labelTop, m.labelBottom - m.contentBottom,
+        m.contentTop - m.valueTop, m.valueBottom - m.contentBottom,
       );
-      if (over > 0.5) {
-        clipped.push(`${w}×${h} over=${over.toFixed(2)}px (zone=${m.chipZoneH.toFixed(0)} chip=${m.chipH.toFixed(0)} ${m.labelFont.toFixed(1)}/${m.valueFont.toFixed(1)})`);
+      if (overV > 0.5) {
+        clippedV.push(`${w}×${h} over=${overV.toFixed(2)}px (zone=${m.chipZoneH.toFixed(0)} chip=${m.chipH.toFixed(0)} ${m.labelFont.toFixed(1)}/${m.valueFont.toFixed(1)})`);
       }
+      // 🔴 ② 가로 — 자식이 칩 content box를 벗어난다. **칩 기준이다**(칩존 아님 — 위 주석).
+      const overH = Math.max(
+        m.contentLeft - m.labelLeft, m.labelRight - m.contentRight,
+        m.contentLeft - m.valueLeft, m.valueRight - m.contentRight,
+      );
+      if (overH > 0.5) {
+        clippedH.push(`${w}×${h} over=${overH.toFixed(2)}px (${m.labelFont.toFixed(1)}/${m.valueFont.toFixed(1)})`);
+      }
+      // 🔴 ③ 칩 박스가 칩존 clip 박스(padding box)를 넘는다 — `minHeight:44`가 칩존보다 클 때.
+      const overZone = Math.max(m.zoneClipTop - m.chipTop, m.chipBottom - m.zoneClipBottom);
+      if (overZone > 0.5) {
+        zoneOver.push(`${w}×${h} over=${overZone.toFixed(2)}px (zoneClip=${(m.zoneClipBottom - m.zoneClipTop).toFixed(1)} chip=${m.chipH.toFixed(1)})`);
+      }
+      // ⚠️ 세로 기준 프레임 전제 — 칩존이 스크롤되면 위 판정이 통째로 어긋난다.
+      if (Math.abs(m.zoneScrollTop) > 0.5) scrolled.push(`${w}×${h} scrollTop=${m.zoneScrollTop}`);
       // 🔴 위계 — 항목명은 값 이하다(CHIP_TYPE 계약).
       if (m.labelFont > m.valueFont + 0.01) {
         inverted.push(`${w}×${h} label=${m.labelFont.toFixed(2)} > value=${m.valueFont.toFixed(2)}`);
@@ -96,10 +136,16 @@ test('[SWEEP] 칩이 어떤 창 비율에서도 잘리지 않는다 · 위계가
 
   console.log(`[SWEEP] ${n}개 조합 측정`);
   console.log(`[SWEEP] 하한 발동 ${tiny.length}건${tiny.length ? ': ' + tiny.slice(0, 6).join(' | ') : ''}`);
-  if (clipped.length) console.log(`[SWEEP] 🔴 잘림 ${clipped.length}건:\n  ${clipped.slice(0, 25).join('\n  ')}`);
+  if (clippedV.length) console.log(`[SWEEP] 🔴 세로잘림 ${clippedV.length}건:\n  ${clippedV.slice(0, 20).join('\n  ')}`);
+  if (clippedH.length) console.log(`[SWEEP] 🔴 가로잘림 ${clippedH.length}건:\n  ${clippedH.slice(0, 20).join('\n  ')}`);
+  if (zoneOver.length) console.log(`[SWEEP] 🔴 칩이 칩존을 넘음 ${zoneOver.length}건:\n  ${zoneOver.slice(0, 20).join('\n  ')}`);
+  if (scrolled.length) console.log(`[SWEEP] ⚠️ 칩존 세로 스크롤 ${scrolled.length}건: ${scrolled.slice(0, 5).join(' | ')}`);
   if (inverted.length) console.log(`[SWEEP] 🔴 위계역전 ${inverted.length}건:\n  ${inverted.slice(0, 10).join('\n  ')}`);
 
-  expect(clipped, `칩 내용이 잘리는 창 비율이 있다(${clipped.length}/${n})`).toEqual([]);
+  expect(scrolled, `칩존이 세로로 스크롤됐다 — 세로 판정의 기준 프레임이 어긋난다(${scrolled.length}/${n})`).toEqual([]);
+  expect(clippedV, `칩 내용이 세로로 잘리는 창 비율이 있다(${clippedV.length}/${n})`).toEqual([]);
+  expect(clippedH, `칩 내용이 가로로 잘리는 창 비율이 있다(${clippedH.length}/${n})`).toEqual([]);
+  expect(zoneOver, `칩 박스가 칩존 밖으로 넘치는 창 비율이 있다(${zoneOver.length}/${n})`).toEqual([]);
   expect(inverted, `항목명이 값보다 커지는 창 비율이 있다(${inverted.length}/${n})`).toEqual([]);
 });
 
