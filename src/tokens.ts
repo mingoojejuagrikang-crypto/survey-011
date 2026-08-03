@@ -49,11 +49,3 @@ export const TYPE_COLORS = {
   options: { fg: '#A78BFA', bg: 'rgba(167,139,250,0.13)' },
   name: { fg: '#50C878', bg: 'rgba(80,200,120,0.13)' },
 } as const;
-
-export const DEVICE = {
-  width: 375,
-  height: 812,
-  statusBar: 62,
-  tabBar: 88,
-  content: 662,
-} as const;
