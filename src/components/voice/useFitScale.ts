@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type DependencyList } from 'react';
+import { overflowsWidth, overflowsHeight } from './fitGroup';
 
 /** v0.27.0 입력탭(무스크롤 카드, Vance) — 음성반응 카드(이상치/일시정지/수정/hero)는 사용자가
  *  양손 측정 중이라 **스크롤할 수 없다**(민구 2026-07-03). 카드 콘텐츠는 흡수영역(grid row3,
@@ -48,8 +49,15 @@ export function useFitScale<T extends HTMLElement>(
     const el = ref.current;
     if (!el) return;
     let raf = 0;
-    const fits = () =>
-      el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1;
+    // 🔴 v0.44.0 A2 — 폭 판정을 `fitGroup.ts`의 `overflowsWidth`와 **공유**한다.
+    //  종전에는 `el.scrollWidth <= el.clientWidth + 1`을 여기 따로 적었다. A1이 신 훅
+    //  (`fitGroup.ts`)만 고치면서 **같은 근본원인이 이 구 훅에 그대로 남았고**, 구 훅이 발행하는
+    //  `--fit-lo`/`--fit-hi`를 쓰는 화면은 A0가 밝힌 결함을 계속 안고 있었다(`[TEAMOPS-47]` —
+    //  같은 판정이 두 곳에 살면 갈라진다). 판정을 복제하지 않고 한 함수를 부른다.
+    //  ⚠️ **탐색 로직은 공유하지 않는다** — 여기는 이산 단계(`steps`) 순차, 신 훅은 이진탐색이다.
+    //  ⚠️ 높이 관용(1px)은 A2에서 손대지 않았다 — 2026-07-20 "여유 230px에도 lo=0.58" 재발 위험이
+    //     미확인이라, 같은 기준을 쓰되 값은 종전 그대로다.
+    const fits = () => !overflowsHeight(el) && !overflowsWidth(el);
     const fit = () => {
       for (const s of steps) {
         el.style.setProperty('--fit-lo', String(s));
