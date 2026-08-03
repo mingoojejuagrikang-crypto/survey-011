@@ -137,12 +137,34 @@ function formatCompareDate(raw?: string): string {
   return m ? `${m[1]}-${m[2]}` : raw;
 }
 
+/** 🔴 `lineHeight`는 **임계 1.15 위**여야 한다(v0.44.0 A2 실측).
+ *
+ *  Pretendard `fontWeight 800~900`에서 글리프(어센더~디센더)가 line box를 넘어
+ *  `scrollHeight`가 상시 초과하고, 그 초과가 `useFitGroup`/`useFitScale`의 **높이 판정을
+ *  오염시켜 fit이 최저 단계에 갇힌다**(§C0 배선이 막혔던 원인).
+ *
+ *  실측(375×667, `fontWeight 900` + `letterSpacing -1.4px` + nowrap + tabular):
+ *  ```
+ *    lineHeight   1.0   1.02   1.1   1.15   1.2
+ *    excess@72.75px  5      5     2      0     0
+ *    excess@30px     2      1     1      0     0
+ *  ```
+ *  🔴 **1.15에 딱 붙이지 않는다** — 경계값은 폰트 폴백(-apple-system 등)이나 굵기가 바뀌는
+ *  순간 다시 넘친다(T6 재발 형태). `1.2`는 임계 대비 약 4% 여유이고 흔한 값이라 폴백에서도
+ *  안전한 쪽이다. 세로 비용은 실측 **+25~27px**이며, 알람 카드 하단 여유가 375×667에서 46px ·
+ *  402×874에서 56.8px이라 **카드 높이·3구역 배분·무스크롤(`card.excess = 0`)이 모두 불변**이다.
+ *
+ *  ⚠️ **`ExitConfirmInline.tsx:19` · `VoiceHero.tsx:341`이 이미 1.15를 쓴다** — 같은 계열이다.
+ *  ⚠️ 이 선언이 실제로 먹는지는 `getComputedStyle`로 확인해야 한다 — §A2가 이 4개 요소에서
+ *     **인라인 `line-height`가 무시되는 현상**을 관측했고 원인이 **미확정**이다(TODO 참조). */
+const COMPARE_LINE_HEIGHT = 1.2;
+
 const COMPARE_LABEL: React.CSSProperties = {
   maxWidth: '100%',
   color: T.textMute,
   fontSize: STATE_TYPE.compareLabel,
   fontWeight: 800,
-  lineHeight: 1.1,
+  lineHeight: COMPARE_LINE_HEIGHT,
   letterSpacing: -0.3,
   whiteSpace: 'nowrap',
   textAlign: 'right',
@@ -153,7 +175,8 @@ const COMPARE_VALUE: React.CSSProperties = {
   maxWidth: '100%',
   fontSize: STATE_TYPE.compareValue,
   fontWeight: 900,
-  lineHeight: 1.02,
+  // 🔴 COMPARE_LABEL 위 주석의 임계 실측을 그대로 따른다(종전 1.02는 임계 1.15 미만이었다).
+  lineHeight: COMPARE_LINE_HEIGHT,
   letterSpacing: -1.4,
   fontVariantNumeric: 'tabular-nums',
   whiteSpace: 'nowrap',
