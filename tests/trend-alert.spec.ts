@@ -354,7 +354,11 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   expect(events.filter((e) => e.extra === 'trend_alert_corrected')).toHaveLength(0);
 });
 
-test('[ALERT-COMPARE-1] 2열 비교 — 안 넘침·좌우 동일 크기(§C5-c)·상한 없음, 390×568 무넘침', async ({ page }) => {
+// 🔴 `@pending-c0` — **의도된 red다. 회귀로 세지 마라.** §C0 배선이 완성되면 통과한다.
+//    c0-r1이 고정 px 단언(`toBeCloseTo(56/78)`)을 규칙 2에 맞게 뒤집어 놓은 것이라
+//    지금은 §C0 미완 때문에 실패한다. 👉 **§C0가 끝나면 이 태그를 뗀다.**
+//    태그가 없으면 다음 회차가 회귀로 오분류한다 — 실제로 08-04 판정에서 그럴 뻔했다.
+test('[ALERT-COMPARE-1] 2열 비교 — 안 넘침·좌우 동일 크기(§C5-c)·상한 없음, 390×568 무넘침 @pending-c0', async ({ page }) => {
   await page.setViewportSize({ width: 402, height: 874 });
   await setupAndStart(page, {
     sheetRows: [[PREV_ROUND, '이원창', '1', '1', '100.0', '99.9']],

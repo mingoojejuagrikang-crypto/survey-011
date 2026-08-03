@@ -46,7 +46,9 @@ test.setTimeout(120_000);
 /** `STATE_TYPE.alarmLabel`의 하한. 리터럴로 박는다 — 제품 상수를 import하지 않는다. */
 const ALARM_LABEL_FLOOR_PX = 17;
 
-test('🔴 §C0 대기 — 알람 compare 슬롯에 fit 배선이 없어 headline이 하한에 갇힌다(375×667)', async ({ page }) => {
+// 🔴 `@pending-c0` — **의도된 red다. 회귀로 세지 마라.** 제목의 「§C0 대기」는 사람만 읽는다 —
+//    기계가 거르려면 태그가 있어야 한다. 👉 **§C0가 끝나면 이 태그를 뗀다.**
+test('🔴 §C0 대기 — 알람 compare 슬롯에 fit 배선이 없어 headline이 하한에 갇힌다(375×667) @pending-c0', async ({ page }) => {
   await boot(page, { width: 375, height: 667 });
   await triggerAnomaly(page);
   await page.waitForTimeout(300);
