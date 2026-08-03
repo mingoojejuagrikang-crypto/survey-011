@@ -120,6 +120,23 @@ for (const vp of [PHONE_375, PHONE_390_568] as const) {
   });
 }
 
+/** 🔴 회귀의 시각적 크기 — headline 17px가 실제로 얼마나 읽기 나쁜지 눈으로 본다.
+ *  §7-1 표는 숫자만 준다. 「37% 축소」가 감수할 만한지는 §C0 우선순위 판단 재료라 그림이 필요하다. */
+test('[A2-SHOT] 처방 후 알람 카드 렌더(375×667) — headline 17px 육안 확인', async ({ page }) => {
+  await boot(page, PHONE_375);
+  await triggerAnomaly(page);
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: 'test-results/a2-alarm-after.png' });
+  const m = await page.locator('[data-testid="anomaly-alert"]').evaluate((card) => ({
+    fitLo: card.style.getPropertyValue('--fit-lo').trim(),
+    headline: card.querySelector('[data-testid="anomaly-headline"]')?.textContent,
+    headlinePx: parseFloat(getComputedStyle(
+      card.querySelector('[data-testid="anomaly-headline"]') as Element).fontSize),
+  }));
+  console.log('=== A2-SHOT ===\n' + JSON.stringify(m));
+  expect(m.headlinePx).toBeGreaterThan(0);
+});
+
 /** §C1 판정 — 처방 후 390×568에서 칩 여유를 다시 잰다.
  *  🔴 함께 확인: 칩이 `--fit-lo`를 **상속받는가**(구 훅은 자기 카드에만 발행한다). */
 const CHIP_FN = `() => {
