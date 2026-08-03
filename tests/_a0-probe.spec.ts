@@ -647,6 +647,69 @@ for (const vp of [{ width: 390, height: 568 }, { width: 402, height: 874 }] as c
   });
 }
 
+/** 🔴 A1 성능 회귀 규명 — 판정 1회 비용을 세 방식으로 잰다(앱 무관, 제품 코드 미사용).
+ *  ① old: `scrollWidth > clientWidth + 1` (종전)
+ *  ② new: `getComputedStyle` + `getBoundingClientRect` + `Range` (현 구현)
+ *  ③ new-cached: padding/border를 그룹 탐색 1회당 한 번만 읽고 루프에서는 rect 2개만 */
+test('[A1-PERF] 넘침 판정 1회 비용 — old vs new vs new-cached', async ({ page }) => {
+  await page.setViewportSize(PHONE_402);
+  await page.setContent(CSS_PROBE2_HTML, { waitUntil: 'domcontentloaded' });
+  const r = await page.evaluate(() => {
+    const bl = document.getElementById('blockLine')!;
+    bl.textContent = '44.4';
+    const fl = document.getElementById('flexLine')!;
+    document.getElementById('nm')!.textContent = '종경';
+    const members = [bl, fl];
+    const range = document.createRange();
+    const px = (v: string) => Number.parseFloat(v) || 0;
+
+    const old = (el: HTMLElement) => el.scrollWidth > el.clientWidth + 1;
+    const neu = (el: HTMLElement) => {
+      const st = getComputedStyle(el);
+      const box = el.getBoundingClientRect();
+      const cl = box.left + px(st.borderLeftWidth) + px(st.paddingLeft);
+      const cr = box.right - px(st.borderRightWidth) - px(st.paddingRight);
+      range.selectNodeContents(el);
+      const ink = range.getBoundingClientRect();
+      return (cl - ink.left) > 0.05 || (ink.right - cr) > 0.05;
+    };
+    // ③ 캐시 버전 — padding/border는 배율에 따라 안 변하므로 탐색 시작 시 1회만 읽는다.
+    const insets = members.map((el) => {
+      const st = getComputedStyle(el);
+      return { l: px(st.borderLeftWidth) + px(st.paddingLeft), r: px(st.borderRightWidth) + px(st.paddingRight) };
+    });
+    const cached = (el: HTMLElement, i: number) => {
+      const box = el.getBoundingClientRect();
+      const cl = box.left + insets[i].l;
+      const cr = box.right - insets[i].r;
+      range.selectNodeContents(el);
+      const ink = range.getBoundingClientRect();
+      return (cl - ink.left) > 0.05 || (ink.right - cr) > 0.05;
+    };
+
+    const bench = (fn: (el: HTMLElement, i: number) => boolean, iters: number) => {
+      // 매 반복마다 fontSize를 바꿔 레이아웃을 무효화한다(실제 이진탐색과 같은 조건).
+      const t0 = performance.now();
+      for (let k = 0; k < iters; k += 1) {
+        const size = 60 + (k % 40);
+        members.forEach((el) => { el.style.fontSize = `${size}px`; });
+        members.forEach((el, i) => { fn(el, i); });
+      }
+      return performance.now() - t0;
+    };
+    const ITERS = 400;
+    bench(old, 50); bench(neu, 50); bench(cached, 50); // warmup
+    return {
+      iters: ITERS,
+      oldMs: +bench(old, ITERS).toFixed(2),
+      newMs: +bench(neu, ITERS).toFixed(2),
+      cachedMs: +bench(cached, ITERS).toFixed(2),
+    };
+  });
+  console.log('=== A1-PERF ===\n' + JSON.stringify(r, null, 1));
+  expect(r.iters).toBe(400);
+});
+
 test('[A0-PartB2] listening interim 실측 — 실시간 인식값 경로', async ({ page }) => {
   await boot(page);
   await startSession(page);
