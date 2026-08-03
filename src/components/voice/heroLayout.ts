@@ -48,9 +48,24 @@ export const HERO_TYPE = {
 export const CHIP_TYPE = {
   // 항목명은 값 이하에서 최대한 키운다(민구 제보 #6). 양축 비례항과 50px 상한 모두 value보다
   // 작아서, 어떤 뷰포트에서도 2행 값의 시각 위계를 뒤집지 않는다(402×874: name 46.23 / value 52px).
-  name: 'max(12px, calc(clamp(14px, min(11.5vw, 6.5vh), 50px) * var(--fit-lo, 1)))',
-  inputValue: 'max(16px, calc(clamp(18px, min(10vw, 5.2vh), 42px) * var(--fit-hi, 1)))',
-  value: 'max(18px, calc(clamp(22px, min(13vw, 6.5vh), 52px) * var(--fit-hi, 1)))',
+  // 🔴 §C1(2026-08-03) — 세로 항을 `6.5vh`(뷰포트)에서 `cqh`(칩존 트랙)로 옮겼다.
+  //   **`ChipZone.tsx:21-24`가 이미 그걸 설계로 적어놨는데 글자만 안 따르고 있었다** —
+  //   padding·minWidth·maxWidth는 `cqh`/`cqw`인데 fontSize만 뷰포트 비례라 비대칭이었다.
+  //   그래서 칩존 배분을 줄여도 글자가 안 줄어 **`overflow:hidden`이 잘라냈다**(v037 방어②가
+  //   재는 바로 그 형태). 실측: 390×568 현행 20%에서 이미 15/15 칩이 세로 5px 넘쳤고
+  //   `min(11.5vw, 6.5vh)`·`min(13vw, 6.5vh)`가 **둘 다 6.5vh로 수렴해 36.92px로 같아져**
+  //   항목명/값의 시각 위계까지 사라져 있었다.
+  //   ⚠️ 계수를 그냥 옮기면 안 된다 — `vw`는 **뷰포트 폭**(402)이지만 `cqw`는 컨테이너의
+  //   **content box 폭**(402 − 좌우 padding 24 = 378)이라 같은 계수가 6.35% 작게 나온다.
+  //   `cqh`도 같다(트랙 박스 146.19가 아니라 content 139.19 기준 = 칩 높이와 같다).
+  //   계수는 402×874 현재 렌더값을 재현하도록 역산했다(46.23 / 52.26 / 40.2 — 회귀 0 확인).
+  //   🔴 이 역산값을 하한으로 굳히지 마라 — `R2`가 터진 방식이다. 하한은 아래 `max()`의
+  //   가독 한계(12/16/18px)와 `max()` 첫 항(14/18/22px)이고, **현재 렌더값이 아니다.**
+  //   상한 `50/52/42px`는 제거했다(ui-standard 규칙 2 — 영역이 크기를 정한다).
+  //   `cqh`는 상한이 구조적으로 필요 없다: 트랙이 커져야 글자가 커진다.
+  name: 'max(12px, calc(max(14px, min(34cqh, 12.23cqw)) * var(--fit-lo, 1)))',
+  inputValue: 'max(16px, calc(max(18px, min(30cqh, 10.63cqw)) * var(--fit-hi, 1)))',
+  value: 'max(18px, calc(max(22px, min(38cqh, 13.83cqw)) * var(--fit-hi, 1)))',
 } as const;
 
 /** 입력화면 공간 배정 — 🔴 **칩존 20% / 중앙 50% / 하단 30%** (v0.43.0 UI-b).
