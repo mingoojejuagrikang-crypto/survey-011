@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { fitGroups } from '../src/components/voice/fitGroup';
+import { fitGroups, overflowsWidth, overflowsHeight } from '../src/components/voice/fitGroup';
 import {
   HERO_LABEL_BASELINE_PX,
   HERO_LABEL_RESERVE_SCALE,
@@ -8,6 +8,30 @@ import {
 // 🔴 리터럴로 고정: 제품 상수를 import하면 상수가 바뀔 때 기대값이 자동 추종해 파손을 감춘다.
 // heroLayout.ts의 HERO_MIN_FONT_PX 현재값(2026-08-03 기준)을 그대로 박는다.
 const HERO_MIN_FONT_PX = { name: 22, value: 26, interim: 24 } as const;
+
+/** 🔴 `page.evaluate(fitGroups, …)` 앞에 **반드시** 부른다 (2026-08-04, `[TEAMOPS-64]`).
+ *
+ *  Playwright는 `evaluate`에 넘긴 함수의 **본문만** 문자열화한다 — 모듈 스코프 참조는
+ *  브라우저로 따라가지 않는다. `96eff16`이 넘침 판정을 `fitGroups` 내부 지역 함수에서
+ *  모듈 스코프 `export`로 끌어올린 순간 이 스펙 3개가
+ *  `ReferenceError: overflowsWidth is not defined`로 **터졌다.**
+ *  🔴 그리고 그 상태로 §C0가 「부분 성과」 판정을 받았다 — **red가 아니라 무판정이었다.**
+ *
+ *  🔑 **제품 소스를 그대로 심는다**(`.toString()`). 판정식을 스펙에 복제하면
+ *     제품과 같은 눈으로 보게 되어 아무것도 못 잡는다 — `[TEAMOPS-47]`이 금지하는 형태다.
+ *  ⚠️ 이것이 성립하려면 두 판정 함수가 **자기 완결**이어야 한다(상수·헬퍼가 본문 안에).
+ *     `fitGroup.ts` 상단 주석이 그 계약을 지킨다. 새 상수를 모듈 스코프에 두면 여기서 깨진다. */
+async function installFitJudge(page: Page) {
+  await page.evaluate(
+    ([widthSrc, heightSrc]) => {
+      (globalThis as { __fitJudge?: unknown }).__fitJudge = {
+        overflowsWidth: new Function(`return (${widthSrc})`)(),
+        overflowsHeight: new Function(`return (${heightSrc})`)(),
+      };
+    },
+    [overflowsWidth.toString(), overflowsHeight.toString()],
+  );
+}
 import {
   boot,
   COLUMNS,
@@ -141,6 +165,7 @@ test('그룹 통일 — 긴 멤버가 같은 계열의 공통 배율을 결정�
   const short = await page.locator('#short').elementHandle();
   const long = await page.locator('#long').elementHandle();
   if (!container || !short || !long) throw new Error('fit probe DOM 없음');
+  await installFitJudge(page);
   const grouped = await page.evaluate(fitGroups, {
     container,
     groups: [{ variable: '--fit-probe', members: [short, long], searchBasePx: 32 }],
@@ -188,6 +213,7 @@ test('그룹 우선순위 — reserveScale이 후순위 공간을 예약해 앞 
     const primary = await root.locator('.primary').elementHandle();
     const label = await root.locator('.label').elementHandle();
     if (!container || !primary || !label) throw new Error('reserve probe DOM 없음');
+    await installFitJudge(page);
     return page.evaluate(fitGroups, {
       container,
       groups: [
@@ -211,6 +237,7 @@ test('계산 첫 probe가 맞아도 실패 경계까지 위로 열린다', async
   const container = await page.locator('#fit').elementHandle();
   const member = await page.locator('#member').elementHandle();
   if (!container || !member) throw new Error('open probe DOM 없음');
+  await installFitJudge(page);
   const firstProbe = 300 / 1000 + 1;
   const result = await page.evaluate(fitGroups, {
     container,
