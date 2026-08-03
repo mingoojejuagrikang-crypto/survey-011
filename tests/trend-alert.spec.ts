@@ -354,7 +354,7 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   expect(events.filter((e) => e.extra === 'trend_alert_corrected')).toHaveLength(0);
 });
 
-test('[ALERT-COMPARE-1] 라벨 56px·값 78px 2열, 넓어지면 값이 더 커지고 390×568 무넘침', async ({ page }) => {
+test('[ALERT-COMPARE-1] 2열 비교 — 안 넘침·좌우 동일 크기(§C5-c)·상한 없음, 390×568 무넘침', async ({ page }) => {
   await page.setViewportSize({ width: 402, height: 874 });
   await setupAndStart(page, {
     sheetRows: [[PREV_ROUND, '이원창', '1', '1', '100.0', '99.9']],
@@ -383,7 +383,13 @@ test('[ALERT-COMPARE-1] 라벨 56px·값 78px 2열, 넓어지면 값이 더 커�
       labelAboveValue: prevLabel.bottom <= prevValue.y + 1 && nextLabel.bottom <= nextValue.y + 1,
       columnOrder: prevLabel.x < nextLabel.x && prevValue.x < nextValue.x,
       labelSize: parseFloat(getComputedStyle(prevLabelEl).fontSize),
+      nextLabelSize: parseFloat(getComputedStyle(nextLabelEl).fontSize),
       valueSize: parseFloat(getComputedStyle(prevValueEl).fontSize),
+      nextValueSize: parseFloat(getComputedStyle(nextValueEl).fontSize),
+      labelFits: prevLabelEl.scrollWidth <= prevLabelEl.clientWidth + 1
+        && nextLabelEl.scrollWidth <= nextLabelEl.clientWidth + 1,
+      valueFits: prevValueEl.scrollWidth <= prevValueEl.clientWidth + 1
+        && nextValueEl.scrollWidth <= nextValueEl.clientWidth + 1,
       valueColors: [getComputedStyle(prevValueEl).color, getComputedStyle(nextValueEl).color],
     };
   });
@@ -391,8 +397,14 @@ test('[ALERT-COMPARE-1] 라벨 56px·값 78px 2열, 넓어지면 값이 더 커�
   expect(metrics.valueRowDeltaY, '두 값은 같은 2행').toBeLessThanOrEqual(1);
   expect(metrics.labelAboveValue, '라벨 행은 값 행 위').toBe(true);
   expect(metrics.columnOrder, '직전은 왼쪽 열, 현재는 오른쪽 열').toBe(true);
-  expect(metrics.labelSize, '402×874 라벨 56px').toBeCloseTo(56, 0);
-  expect(metrics.valueSize, '402×874 값 78px').toBeCloseTo(78, 0);
+  // 🔴 v0440 §C0(Larry 판정, 08-03) — 종전 `toBeCloseTo(56/78, 0)`은 "이 크기여야 한다"가 아니라
+  // "지금 vw 공식을 402px에 대입하면 이 값이 나온다"는 부산물을 재고 있어 정당 파손으로 뒤집는다.
+  // ui-standard 규칙 2가 가르는 대로 "넘치지 않는다"·"같은 성격은 같은 크기(§C5-c)"만 잰다 —
+  // 고정 px는 다음 T6 재발(clamp 상한) 경로라 다시 넣지 않는다.
+  expect(metrics.labelFits, '라벨 둘 다 배정 폭 안').toBe(true);
+  expect(metrics.valueFits, '값 둘 다 배정 폭 안').toBe(true);
+  expect(metrics.labelSize, '좌우 라벨은 같은 크기(§C5-c)').toBeCloseTo(metrics.nextLabelSize, 3);
+  expect(metrics.valueSize, '좌우 값은 같은 크기(§C5-c)').toBeCloseTo(metrics.nextValueSize, 3);
   expect(metrics.valueColors, '비교값은 붉은 톤').toEqual(['rgb(255, 23, 68)', 'rgb(255, 23, 68)']);
 
   await page.evaluate(() => {
@@ -410,16 +422,19 @@ test('[ALERT-COMPARE-1] 라벨 56px·값 78px 2열, 넓어지면 값이 더 커�
   await page.screenshot({ path: 'Deliverables/assets/2026-08-02-ui-e4/alarm-402x874.png' });
 
   // 구 62px clamp를 지우는 데서 끝내면 다음 상한이 생길 수 있다. 영역을 넓혔을 때 실제로
-  // 더 커지는지 단언해 T6 7회차를 막는다.
+  // 더 커지는지 단언해 T6 7회차를 막는다. 값뿐 아니라 라벨도 같은 상한 금지 계약이라 함께 잰다.
   await page.setViewportSize({ width: 480, height: 1000 });
   await page.waitForTimeout(300);
-  const wideValueSize = await page.locator('[data-testid="anomaly-prev-value"]')
-    .evaluate((el) => parseFloat(getComputedStyle(el as HTMLElement).fontSize));
+  const wide = await page.locator('[data-testid="anomaly-comparison"]').evaluate((el) => ({
+    label: parseFloat(getComputedStyle(el.querySelector('[data-testid="anomaly-prev-label"]') as HTMLElement).fontSize),
+    value: parseFloat(getComputedStyle(el.querySelector('[data-testid="anomaly-prev-value"]') as HTMLElement).fontSize),
+  }));
   console.log(
-    `[ALERT-COMPARE 402→480] label=${metrics.labelSize.toFixed(2)} ` +
-    `value=${metrics.valueSize.toFixed(2)} wideValue=${wideValueSize.toFixed(2)}`,
+    `[ALERT-COMPARE 402→480] label=${metrics.labelSize.toFixed(2)}→${wide.label.toFixed(2)} ` +
+    `value=${metrics.valueSize.toFixed(2)}→${wide.value.toFixed(2)}`,
   );
-  expect(wideValueSize, '영역이 남으면 78px에서 멈추지 않고 더 커진다').toBeGreaterThan(metrics.valueSize + 5);
+  expect(wide.label, '영역이 남으면 라벨도 멈추지 않고 더 커진다').toBeGreaterThan(metrics.labelSize + 3);
+  expect(wide.value, '영역이 남으면 값도 78px에서 멈추지 않고 더 커진다').toBeGreaterThan(metrics.valueSize + 5);
 
   await page.setViewportSize({ width: 390, height: 568 });
   await page.waitForTimeout(300);
