@@ -6,9 +6,15 @@
  * `compareValue: 'max(30px, 19.4vw)'`는 fit도 상한도 없어, 제보 37건 중 8건(iPhone F03·F04·F07·F09·
  * F10·F11 + 태블릿 F33·F36)이 이 화면 하나에서 나왔다(단일 최대 오염원).
  *
- * 🔴 이 파일 작성 시점(A1의 fitGroup.ts 잉크폭 판정 처방 0051071 이후, §C0 배선 전) —
- * 단언 A·B는 **지금 red**다. 아래 두 값 쌍은 실제 재현 값이다(짧은 값 `9`↔`8`은 배선 없이도
- * 통과하는 반증 함정이라 쓰지 않는다):
+ * 🔴 [08-03 최종 상태 — 민구·Larry 확정, 부분 성과로 닫음] `compareLabel`/`compareValue`를
+ * `useFitGroup`에 배선했다(`AnomalyAlertPopup.tsx`, 라벨 2개 한 그룹·값 2개 한 그룹). **달성**:
+ * 겹침·오버플로 제거(단언 A·B, 아래 3케이스 green) — 제보 8건의 핵심 증상이다. **미해결**: compare
+ * 슬롯이 뷰포트/콘텐츠 길이와 무관하게 항상 절대 하한(22px/30px)에 고정된다(단언 C 및 태블릿
+ * 9자리 값의 640px 케이스, `@pending-lineheight` 태그 참고 — 근인·다음 조사 출발점은 파일 하단
+ * 상수 주석과 `Deliverables/2026-08-03-survey-011-v0440-A0-probe.md` §8, 배선 자체 이력은
+ * `2026-08-03-survey-011-v0440-C0-alarm-fit.md`).
+ *
+ * 아래 두 값 쌍은 실제 재현 값이다(짧은 값 `9`↔`8`은 배선 없이도 통과하는 반증 함정이라 쓰지 않는다):
  *   - iPhone(F11): 직전 `255.5` → 현재 `255`
  *   - 태블릿(F33·F36): 직전 `3` → 현재 `388859857`
  *
@@ -36,9 +42,12 @@
  * 결합해야 "그룹이 아니라 멤버별로 fit을 잘못 배선"한 경우도 잡는다: 그러면 크기는 갈라지고
  * 배정폭 안은 만족해 결합이 여전히 red가 된다).
  *
- * 단언 C(뷰포트 차이)는 처방 **전에도 이미 green**이다 — `19.4vw`가 이미 뷰포트 비례라
- * 402→640에서 값이 커진다. 무변화 카드(clamp 상한 재발) 방지 회귀 가드이지, red-before 오라클이
- * 아니다.
+ * 단언 C(뷰포트 차이)는 배선 **전에는 green이었다**(`19.4vw`가 순수 뷰포트 비례라 402→640에서
+ * 값이 커졌다) — 원래 설계는 "무변화 카드"(clamp 상한 재발) 방지 회귀 가드였다. 🔴 배선 **후인
+ * 지금은 `@pending-lineheight`로 red다** — compare 슬롯이 항상 절대 하한에 고정돼 뷰포트가
+ * 커져도 안 자란다. **단언 A·B만으로는 이 회귀가 안 보였다**(바닥 크기도 겹침·오버플로 계약은
+ * 만족하므로) — 이 단언이 유일하게 잡았다(Larry, 08-03: "네 단언 C가 아니었으면 이 회귀는 green
+ * 으로 통과했다"). 원인이 풀리면 되살려 정식 회귀가드로 승격한다.
  */
 import { test, expect, type Page } from '@playwright/test';
 import { boot } from './fixtures/activeZones';
@@ -155,9 +164,26 @@ async function setupCase(
   await page.waitForTimeout(200);
 }
 
+// 🔴 v0.44.0 마무리(민구·Larry 확정, 08-03) — §C0는 부분 성과로 닫는다.
+// 달성: 겹침·오버플로 제거(제보 8건의 핵심, 단언 A·B). 미해결: compare 슬롯이 뷰포트/콘텐츠
+// 길이와 무관하게 항상 절대 하한(22px/30px)에 고정된다. 근인은 A2가 규명한 "인라인
+// line-height가 이 4개 요소에서만 무시되는 현상"(원인 UNCLEAR, 후보 10개 소거 완료,
+// cloneNode 대조가 다음 조사 출발점 — Deliverables/2026-08-03-survey-011-v0440-A0-probe.md
+// §8) — 줄 상자가 글리프를 못 담아 만드는 초과가 fitGroup.ts의 높이 판정(overflowsHeight)을
+// 오염시켜 이진탐색이 바닥에서 조기 이탈한다(fitGroups()는 low=0.25에서 fits()=false면
+// 바로 그 값을 채택한다). @pending-lineheight = 이 원인이 풀리기 전까지 의도된 red.
+const PENDING_LINEHEIGHT = '@pending-lineheight';
+
 for (const viewport of [PHONE_402, PHONE_640]) {
   for (const c of CASES) {
-    test(`§C0 단언A — 겹치지 않는다 · ${c.name} @ ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    // 🔴 태블릿 9자리(`388859857`)는 640px에서도 바닥(30px대)조차 168px 칸에 못 들어간다
+    // (실측: scrollWidth 180 vs clientWidth 168) — 단언 C와 같은 근본원인(바닥 고정)이
+    // 가장 긴 값 × 가장 큰 화면 조합에서 겹침 판정 자체까지 침범한 것. 나머지 3케이스는
+    // 바닥 크기가 우연히 해당 콘텐츠 길이에 충분해 겹침·오버플로 계약은 그대로 산다.
+    const isPendingCase = viewport === PHONE_640 && c.name.startsWith('태블릿');
+    const suffix = isPendingCase ? ` ${PENDING_LINEHEIGHT}` : '';
+
+    test(`§C0 단언A — 겹치지 않는다 · ${c.name} @ ${viewport.width}x${viewport.height}${suffix}`, async ({ page }) => {
       await setupCase(page, viewport, c);
       const r = await measure(page);
       console.log(`[v0440-alarm-fit][A] ${c.name}@${viewport.width}x${viewport.height} = ${JSON.stringify(r)}`);
@@ -170,7 +196,7 @@ for (const viewport of [PHONE_402, PHONE_640]) {
       }
     });
 
-    test(`§C5-c 단언B — 같은 성격은 같은 크기(배정폭 안과 결합) · ${c.name} @ ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    test(`§C5-c 단언B — 같은 성격은 같은 크기(배정폭 안과 결합) · ${c.name} @ ${viewport.width}x${viewport.height}${suffix}`, async ({ page }) => {
       await setupCase(page, viewport, c);
       const r = await measure(page);
       const fits = (id: 'anomaly-prev-label' | 'anomaly-prev-value' | 'anomaly-next-label' | 'anomaly-next-value') =>
@@ -188,15 +214,15 @@ for (const viewport of [PHONE_402, PHONE_640]) {
       );
 
       // 🔴 반증 함정(브리핑 §3) — 좌우 폰트 동일 자체는 지금도 항상 참이다(정적 CSS 공식 공유).
-      // 압력은 "동일 ∧ 배정폭 안" 결합에서 나온다: 지금은 배정폭 안이 깨져 있어 red,
-      // 멤버별(그룹 아닌) fit으로 잘못 배선하면 안 fit은 고쳐져도 동일함이 깨져 여전히 red다.
+      // 압력은 "동일 ∧ 배정폭 안" 결합에서 나온다: 멤버별(그룹 아닌) fit으로 잘못 배선하면
+      // 안 fit은 고쳐져도 동일함이 깨져 여전히 red다.
       expect(labelSizesEqual && labelsFit, '라벨 그룹 — 동일 크기이며 둘 다 배정폭 안').toBe(true);
       expect(valueSizesEqual && valuesFit, '값 그룹 — 동일 크기이며 둘 다 배정폭 안').toBe(true);
     });
   }
 }
 
-test('§C0 단언C — 402×874와 640×1024에서 값이 서로 달라야 한다(무변화 카드 방지)', async ({ page }) => {
+test(`§C0 단언C — 402×874와 640×1024에서 값이 서로 달라야 한다(무변화 카드 방지) ${PENDING_LINEHEIGHT}`, async ({ page }) => {
   const c = CASES[0];
   await setupCase(page, PHONE_402, c);
   const narrow = await measure(page);
@@ -209,8 +235,11 @@ test('§C0 단언C — 402×874와 640×1024에서 값이 서로 달라야 한�
     `[v0440-alarm-fit][C] label ${narrow.metrics['anomaly-prev-label'].fontSize.toFixed(2)}→${wide.metrics['anomaly-prev-label'].fontSize.toFixed(2)}px, ` +
     `value ${narrow.metrics['anomaly-prev-value'].fontSize.toFixed(2)}→${wide.metrics['anomaly-prev-value'].fontSize.toFixed(2)}px`,
   );
-  // 🔴 이 단언은 처방 전에도 이미 green이다(19.4vw가 이미 뷰포트 비례) — 배선 후 clamp 상한
-  // 재발(T6) 같은 "무변화 카드"를 잡는 회귀 가드다.
+  // 🔴 배선 전에는 이미 green이었다(19.4vw가 순수 뷰포트 비례). 배선 후 지금은 red다 —
+  // compare 슬롯이 항상 절대 하한에 고정돼(위 PENDING_LINEHEIGHT 설명 참고) 뷰포트가
+  // 커져도 안 자란다. 단언 A·B(겹침·배정폭)는 바닥 크기로도 대부분 만족되어 이 결함을
+  // 못 잡는다 — 이 단언이 유일하게 잡는다(Larry 08-03: "단언 C가 아니었으면 이 회귀는
+  // green으로 통과했다"). lineHeight 원인이 풀리면 이 단언을 되살려 정식 회귀가드로 승격한다.
   expect(wide.metrics['anomaly-prev-label'].fontSize, '뷰포트가 넓어지면 라벨도 커진다')
     .toBeGreaterThan(narrow.metrics['anomaly-prev-label'].fontSize + 5);
   expect(wide.metrics['anomaly-prev-value'].fontSize, '뷰포트가 넓어지면 값도 커진다')
