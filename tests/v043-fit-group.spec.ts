@@ -3,8 +3,11 @@ import { fitGroups } from '../src/components/voice/fitGroup';
 import {
   HERO_LABEL_BASELINE_PX,
   HERO_LABEL_RESERVE_SCALE,
-  HERO_MIN_FONT_PX,
 } from '../src/components/voice/heroLayout';
+
+// 🔴 리터럴로 고정: 제품 상수를 import하면 상수가 바뀔 때 기대값이 자동 추종해 파손을 감춘다.
+// heroLayout.ts의 HERO_MIN_FONT_PX 현재값(2026-08-03 기준)을 그대로 박는다.
+const HERO_MIN_FONT_PX = { name: 22, value: 26, interim: 24 } as const;
 import {
   boot,
   COLUMNS,
