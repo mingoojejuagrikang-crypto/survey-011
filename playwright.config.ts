@@ -49,8 +49,16 @@ export default defineConfig({
   //  - `reuseExistingServer: false` + `--strictPort` = 남이 띄운 서버를 물려받는 경로가 없다.
   //    누가 5177을 잡고 있으면 vite가 죽고 Playwright가 **시끄럽게** 실패한다(조용한 통과 불가).
   //  - 5175는 사람이 보는 관전용 dev 서버로 분리됐다. 테스트는 그 포트를 쓰지 않는다.
+  //
+  // 🔴 포트는 `BASE`에서 **파생**한다 — 하드코딩하지 마라 (2026-08-03).
+  //   `tests/baseUrl.ts`가 `SURVEY_BASE_URL`을 읽어 포트를 갈 수 있게 해뒀는데, 여기 `command`가
+  //   `5177`을 박아둬서 **반쪽이었다**: `BASE`만 바꾸면 서버는 여전히 5177에 뜨려다 죽는다.
+  //   이 때문에 **여러 워크트리에서 동시에 테스트를 못 돌렸다**(6레인 병렬 중 실측).
+  //   이제 `SURVEY_BASE_URL=http://localhost:5178 npx playwright test …` 한 줄로 갈린다.
+  //   ⚠️ `--strictPort`와 `reuseExistingServer: false`는 **그대로 유지한다** — 위 [ORCH-27]의
+  //   방어가 목적이지 포트 고정이 목적이 아니었다. 남의 서버를 물려받는 경로는 여전히 없다.
   webServer: {
-    command: 'npx vite --port 5177 --strictPort',
+    command: `npx vite --port ${new URL(BASE).port} --strictPort`,
     url: BASE,
     reuseExistingServer: false,
     timeout: 120_000,
