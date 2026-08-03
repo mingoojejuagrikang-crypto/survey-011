@@ -155,8 +155,20 @@ function formatCompareDate(raw?: string): string {
  *  402×874에서 56.8px이라 **카드 높이·3구역 배분·무스크롤(`card.excess = 0`)이 모두 불변**이다.
  *
  *  ⚠️ **`ExitConfirmInline.tsx:19` · `VoiceHero.tsx:341`이 이미 1.15를 쓴다** — 같은 계열이다.
- *  ⚠️ 이 선언이 실제로 먹는지는 `getComputedStyle`로 확인해야 한다 — §A2가 이 4개 요소에서
- *     **인라인 `line-height`가 무시되는 현상**을 관측했고 원인이 **미확정**이다(TODO 참조). */
+ *
+ *  🔴 **이 선언은 현재 런타임에서 효과가 없다. 그래도 되돌리지 않았다.**
+ *  이 4개 요소(`anomaly-{prev,next}-{label,value}`)에서 **인라인 `line-height`가 무시되는
+ *  현상**이 있다 — DOM `style` 속성과 CSSOM에는 `1.2`가 들어 있는데 computed는 `font-size`와
+ *  같은 값(ratio 1.0)으로 나오고, `!important`를 붙일 때만 적용된다. 원인 **미확정**이며
+ *  후보 10가지를 소거했다(CSS 규칙 0건 · 폰트 · 굵기 · `font-size` 형태 8종 · 애니메이션 0건 ·
+ *  적용 순서/시점). 🔑 **같은 `style` 문자열의 `cloneNode` 복제본은 정상 작동한다.**
+ *  전체 기록과 다음 조사 출발점: `Deliverables/2026-08-03-survey-011-v0440-A0-probe.md` §8.
+ *
+ *  **되돌리지 않은 이유:** 값 `1.2`는 실측 임계(1.15) 기준으로 옳고 **해가 없다**(효과가 없을
+ *  뿐 회귀도 없다 — 블래스트 실측 완료). 되돌리면 다음 사람이 `1.02`를 보고 **같은 조사를
+ *  처음부터 반복한다.** 무시 현상이 풀리는 순간 이 값이 그대로 살아난다.
+ *
+ *  ⚠️ **이 선언이 실제로 먹는지는 소스가 아니라 `getComputedStyle`로 재라.** */
 const COMPARE_LINE_HEIGHT = 1.2;
 
 const COMPARE_LABEL: React.CSSProperties = {
