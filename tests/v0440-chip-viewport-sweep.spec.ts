@@ -149,6 +149,51 @@ test('[SWEEP] 칩이 어떤 창 비율에서도 잘리지 않는다 · 위계가
   expect(inverted, `항목명이 값보다 커지는 창 비율이 있다(${inverted.length}/${n})`).toEqual([]);
 });
 
+/** 🔴 **safe-area 축.** 노치 기기는 `--sat`/`--sab`가 pool에서 **68px를 떼간다**
+ *  (`App.tsx:221 paddingTop:var(--sat)` + `global.css height:100dvh` + `box-sizing:border-box`,
+ *  하단은 `TabBar.tsx:62 paddingBottom: max(28px, var(--sab))`).
+ *  칩존은 pool의 16%이므로 **잘림 임계가 그만큼 위로 밀린다** — safe-area 0에서 안전한 높이가
+ *  노치 기기에서는 안전하지 않다. 감사(2026-08-03) P5가 실측으로 잡았다.
+ *  🔑 위 스윕은 safe-area를 주입하지 않는다(`boot`만) — 그래서 이 축이 따로 필요하다. */
+test('[SWEEP] safe-area(노치)에서도 칩이 잘리지 않는다', async ({ page }) => {
+  await boot(page, { width: 402, height: 874 });
+  await page.addStyleTag({
+    content: '*, *::before, *::after { animation: none !important; transition: none !important; }',
+  });
+  // 픽스처와 같은 값(iPhone 17 노치 실측 가정): top 62 / bottom 34.
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--sat', '62px');
+    document.documentElement.style.setProperty('--sab', '34px');
+  });
+  await page.waitForTimeout(200);
+
+  const bad: string[] = [];
+  let n = 0;
+  for (const h of HEIGHTS) {
+    for (const w of WIDTHS) {
+      const m = await measure(page, w, h);
+      if (!m) continue;
+      n++;
+      const overV = Math.max(
+        m.contentTop - m.labelTop, m.labelBottom - m.contentBottom,
+        m.contentTop - m.valueTop, m.valueBottom - m.contentBottom,
+      );
+      const overH = Math.max(
+        m.contentLeft - m.labelLeft, m.labelRight - m.contentRight,
+        m.contentLeft - m.valueLeft, m.valueRight - m.contentRight,
+      );
+      const overZone = Math.max(m.zoneClipTop - m.chipTop, m.chipBottom - m.zoneClipBottom);
+      const worst = Math.max(overV, overH, overZone);
+      if (worst > 0.5) {
+        bad.push(`${w}×${h} V=${overV.toFixed(1)} H=${overH.toFixed(1)} Z=${overZone.toFixed(1)} (${m.labelFont.toFixed(1)}/${m.valueFont.toFixed(1)} zone=${m.chipZoneH.toFixed(0)})`);
+      }
+    }
+  }
+  console.log(`[SWEEP-SA] ${n}개 조합 · 잘림 ${bad.length}건`);
+  if (bad.length) console.log(`  🔴 ${bad.slice(0, 20).join('\n  ')}`);
+  expect(bad, `safe-area 주입 시 칩이 잘리는 창 비율이 있다(${bad.length}/${n})`).toEqual([]);
+});
+
 /** 🔑 폭 반응 — 같은 높이에서 폭을 넓히면 글자가 커진다(민구 *"일정 비율로 조절"*).
  *  `v019:264`가 375→430 한 쌍만 재던 것을 **전 구간**으로 확장한다. */
 test('[SWEEP] 같은 높이에서 폭이 넓어지면 칩 글자가 커지거나 최소한 줄지 않는다', async ({ page }) => {

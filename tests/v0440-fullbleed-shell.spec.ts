@@ -91,8 +91,18 @@ test('TabBar 가시성 — ManualValueSheet 열린 상태에서도 화면 안 @ 
  *  스크롤 영역화 — `minHeight:0` 단독으로는 버튼은 안 겹쳐도 원형 아이콘·연결카드가 대신 겹칠
  *  수 있어 검증 없이 단정하지 않는다). 640×600은 PortraitGuard가 landscape+터치를 막아 실기기
  *  형태는 아니지만, **작은 데스크톱 브라우저 창(개발·QA 환경)에서는 재현되므로 무시하지 말고
- *  TODO로 등재한다.** */
-test('@pending-readystate TabBar 가시성 — 압력 확인: 뷰포트를 줄이면(640×600) §B1 이후에도 red(다른 원인)', async ({ page }) => {
+ *  TODO로 등재한다.**
+ *
+ *  🟢 **§C1(2026-08-03) 해소 — `@pending-readystate` 태그를 뗐다.**
+ *  처방은 위 후보 그대로 `ReadyState.tsx:30`의 `minHeight: 0`이었다(커밋 `dbfba20`).
+ *  🔑 **B1의 우선순위 판단이 틀렸다는 것도 §C1이 실측으로 잡았다** — 이 결함은
+ *  "640×600 = 작은 데스크톱 창"에만 있는 게 아니라 **390×568(실기기 폰 크기,
+ *  PortraitGuard에 안 걸린다)에서도 앱 부팅 자체를 막고 있었다**(시작 버튼이 TabBar
+ *  뒤로 밀려 클릭 불가 → `boot()` timeout).
+ *  ⚠️ **미확인으로 남은 것:** 이 단언이 재는 것은 「시작 버튼 ↔ TabBar 겹침」 축뿐이다.
+ *  B1이 경고한 false green(원형 아이콘·연결상태 카드가 대신 겹칠 가능성)은
+ *  **다른 축이라 여기서 검증되지 않는다.** TODO 등재. */
+test('TabBar 가시성 — 압력 케이스(640×600): ReadyState가 수축해 시작 버튼이 안 가린다', async ({ page }) => {
   const SHORT_640 = { width: 640, height: 600 };
   await boot(page, SHORT_640);
   await page.locator('[data-testid="column-chip"][data-active="true"]').click();
