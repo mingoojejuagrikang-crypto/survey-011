@@ -19,8 +19,19 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      // safe-area.spec은 iphone17 프로젝트 전용(아래) — 여기서 중복 실행하지 않는다.
-      testIgnore: /safe-area\.spec\.ts/,
+      testIgnore: [
+        // safe-area.spec은 iphone17 프로젝트 전용(아래) — 여기서 중복 실행하지 않는다.
+        /safe-area\.spec\.ts/,
+        // 🔴 `_` 접두 = 조사용 probe spec. **릴리스 게이트가 아니다** (2026-08-03, 민구 확정).
+        //   c0-r1 병합 때 _a0-probe(725줄)·_a2-probe(323)·_a2-blast(72)가 들어왔고,
+        //   그대로 두면 **테스트 22개가 릴리스 스위트에 합류**한다(실측). 파일은 남긴다 —
+        //   HANDOFF 미확인 1번(lineHeight 무시 현상)의 **재현 절차가 이 안에 있어서**
+        //   지우면 다음 회차가 725줄을 다시 짜야 한다.
+        //   👉 돌리려면 프로젝트를 우회한다: `npx playwright test tests/_a0-probe.spec.ts --project=""`
+        //      또는 config 없이 직접 지정. **회귀 판정의 「의도된 red」 목록에 넣지 마라** —
+        //      아예 스위트 밖이다.
+        /\/_[^/]+\.spec\.ts$/,
+      ],
     },
     {
       // v0.33.0 — 검증 기준 기기: 아이폰 17 일반(노치, 402×874 @3x). webkit 미설치 환경이라
