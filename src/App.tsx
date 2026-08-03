@@ -5,7 +5,7 @@ import { PortraitGuard } from './components/PortraitGuard';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { VoiceScreen, type VoiceTelemetryReaders } from './screens/VoiceScreen';
 import { DataScreen } from './screens/DataScreen';
-import { T, DEVICE } from './tokens';
+import { T } from './tokens';
 import { hydrateSessions } from './lib/hydrate';
 import {
   hydratePastIndexFallback,
@@ -27,7 +27,6 @@ import { onTokenSettled } from './lib/googleAuth';
 
 export default function App() {
   const [tab, setTab] = useState<TabId>('settings');
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 480);
   // v0.33.0 항목11 — 개선요청 모달 상태. closed=닫힘 / capturing=캡처 중(모달 미표시) /
   // {shot}=캡처 종료(성공 Blob 또는 실패 null) + 모달 표시. 캡처를 모달 '표시 전에' 끝내야
   // 스크린샷에 모달 자신이 찍히지 않는다.
@@ -39,12 +38,6 @@ export default function App() {
   const voiceTelemetryRef = useRef<VoiceTelemetryReaders | null>(null);
   const setVoiceTelemetryReaders = useCallback((readers: VoiceTelemetryReaders | null) => {
     voiceTelemetryRef.current = readers;
-  }, []);
-
-  useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth <= 480);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   // v0.38.0 #1 — 어떤 화면(설정 로그인·데이터 재로그인)에서 토큰이 확정돼도 과거값을 즉시 강제
@@ -210,37 +203,28 @@ export default function App() {
     setTab(next);
   };
 
-  const phoneStyle: React.CSSProperties = isMobile
-    ? {
-        width: '100vw',
-        display: 'flex',
-        flexDirection: 'column',
-        background: T.bg,
-        color: T.text,
-        // v0.15.0 A1 — standalone(홈화면 설치) safe-area 침범 방지. 브라우저 크롬이 없는
-        // standalone에서 콘텐츠가 상태바·노치를 침범하던 문제. 상단/좌우만 셸에서 흡수하고,
-        // 하단은 탭바가 max(28px, env(...))로 별도 처리한다(이중 패딩 방지). 일반 Safari 탭에선
-        // env(...)가 0이라 무영향. 가로 inset은 노치 가로방향 안전마진(앱은 portrait 고정이지만 방어).
-        // v0.33.0 — env() 직접 판독 대신 global.css :root의 safe-area 변수(SSOT) 소비.
-        paddingTop: 'var(--sat)',
-        paddingLeft: 'var(--sal)',
-        paddingRight: 'var(--sar)',
-      }
-    : {
-        width: DEVICE.width,
-        height: DEVICE.height,
-        margin: '20px auto',
-        borderRadius: 36,
-        background: T.bg,
-        color: T.text,
-        boxShadow: `0 24px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.06)`,
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-      };
+  // v0.44.0 §B1 — 항상 풀블리드 셸(isMobile 분기 제거, 민구 §4-a 확정 3번: "외곽 셸은
+  // 기기화면 전체 감지, 태블릿/모바일 구분 없음"). 【데스크톱 프리뷰 박스】(375×812 고정,
+  // overflow:hidden)는 폐기(§4-b) — 태블릿을 그 박스에 가둬 실기기 제보 5건(F29·F30·F31·
+  // F32(나)·F34)을 냈다.
+  const phoneStyle: React.CSSProperties = {
+    width: '100vw',
+    display: 'flex',
+    flexDirection: 'column',
+    background: T.bg,
+    color: T.text,
+    // v0.15.0 A1 — standalone(홈화면 설치) safe-area 침범 방지. 브라우저 크롬이 없는
+    // standalone에서 콘텐츠가 상태바·노치를 침범하던 문제. 상단/좌우만 셸에서 흡수하고,
+    // 하단은 탭바가 max(28px, env(...))로 별도 처리한다(이중 패딩 방지). 일반 Safari 탭에선
+    // env(...)가 0이라 무영향. 가로 inset은 노치 가로방향 안전마진(앱은 portrait 고정이지만 방어).
+    // v0.33.0 — env() 직접 판독 대신 global.css :root의 safe-area 변수(SSOT) 소비.
+    paddingTop: 'var(--sat)',
+    paddingLeft: 'var(--sal)',
+    paddingRight: 'var(--sar)',
+  };
 
   return (
-    <div className={isMobile ? 'mobile-app-shell' : undefined} style={phoneStyle}>
+    <div className="mobile-app-shell" style={phoneStyle}>
       {/* v0.18.0 1f — 비강제 "새 버전" 배너(상단 고정, 모든 탭 공통). 새 SW waiting 시에만 노출. */}
       <UpdateBanner />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
