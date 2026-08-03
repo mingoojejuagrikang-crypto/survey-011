@@ -77,10 +77,22 @@ test('TabBar 가시성 — ManualValueSheet 열린 상태에서도 화면 안 @ 
  *  `margin:'20px auto'`로 위치가 고정돼 바닥이 항상 y=832 근방이라 1024 뷰포트 안에 항상
  *  들어간다). 압력이 있는지 확인하려고 뷰포트 높이를 줄여 박스가 넘치게 만든다 — 박스는
  *  뷰포트 높이에 반응하지 않고 절대 위치가 고정이므로, 뷰포트를 640×600으로 줄이면 박스 바닥
- *  (y≈832)이 뷰포트(600) 밖으로 나가 TabBar가 실제로 밀려난다. §B1 이후(진짜 fullbleed)엔
- *  TabBar가 flex 하단에 고정돼 뷰포트 높이에 맞춰 재배치되므로 이 케이스도 green이 돼야 한다
- *  — 그래서 이 단언 자체가 §B1의 유효 회귀가드다. */
-test('TabBar 가시성 — 압력 확인: 뷰포트를 줄이면(640×600) §B1 이전에도 red', async ({ page }) => {
+ *  (y≈832)이 뷰포트(600) 밖으로 나가 TabBar가 실제로 밀려난다.
+ *
+ *  🔴 `@pending-readystate` — §B1 적용 후 이 케이스가 **다른 이유로** red다. Larry 정정(2026-08-03):
+ *  "pre-existing"은 절반만 맞다 — **잠재 결함(`ReadyState.tsx:30`의 `flex:1` 컨테이너에
+ *  `minHeight:0` 누락)은 B1 이전부터 있었지만, 그 증상(콘텐츠가 TabBar와 겹침)은 §B1
+ *  이후에만 나온다.** §B1 이전엔 셸이 812px 고정이라 600px 뷰포트보다 커서 "잘림/스크롤"만
+ *  났고, §B1이 셸을 뷰포트(600px)에 맞추자 비로소 내부 콘텐츠가 대칭으로 넘쳐 TabBar와
+ *  겹치는 형태로 드러났다 — `boot()`의 "음성 입력 시작" 클릭 자체가 TabBar에 가로막혀 타임아웃.
+ *  실측(정규 3뷰포트 640×1024·402×874·1280×720은 전부 `startBtn.bottom - tabBar.top = -12px`로
+ *  겹침 없음·스크롤 없음 — 640×600에서만 `+41px` 겹침. `ReadyState.tsx`는 이 레인(§B1) 스코프
+ *  밖이라 고치지 않는다. 처방 후보: 그 `flex:1` 컨테이너에 `minHeight:0`(+ 필요시 `overflowY:auto`
+ *  스크롤 영역화 — `minHeight:0` 단독으로는 버튼은 안 겹쳐도 원형 아이콘·연결카드가 대신 겹칠
+ *  수 있어 검증 없이 단정하지 않는다). 640×600은 PortraitGuard가 landscape+터치를 막아 실기기
+ *  형태는 아니지만, **작은 데스크톱 브라우저 창(개발·QA 환경)에서는 재현되므로 무시하지 말고
+ *  TODO로 등재한다.** */
+test('@pending-readystate TabBar 가시성 — 압력 확인: 뷰포트를 줄이면(640×600) §B1 이후에도 red(다른 원인)', async ({ page }) => {
   const SHORT_640 = { width: 640, height: 600 };
   await boot(page, SHORT_640);
   await page.locator('[data-testid="column-chip"][data-active="true"]').click();
