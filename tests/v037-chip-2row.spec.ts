@@ -198,6 +198,14 @@ async function chipClip(page: Page) {
       labelBottomInside: cr.bottom - lr.bottom, // 음수면 칩 아래로 삐져나감
       valueTopInside: vr ? vr.top - cr.top : Number.POSITIVE_INFINITY,
       valueBottomInside: vr ? cr.bottom - vr.bottom : Number.POSITIVE_INFINITY,
+      // 🔴 §C1(2026-08-03) — **가로 축이 없었다.** 이 함수가 릴리스 게이트의 정본 잘림
+      //    판정인데 top/bottom 4항만 봤다. 실제 파손 기제는 가로다:
+      //    `maxWidth:'96cqw'` + `whiteSpace:'nowrap'` + `overflow:'hidden'`(ellipsis 없음).
+      //    감사가 320×1200에서 값 **156px 소실**을 실측했는데 이 게이트는 green이었다.
+      labelLeftInside: lr.left - cr.left,
+      labelRightInside: cr.right - lr.right,
+      valueLeftInside: vr ? vr.left - cr.left : Number.POSITIVE_INFINITY,
+      valueRightInside: vr ? cr.right - vr.right : Number.POSITIVE_INFINITY,
       contentOverflow: chipEl.scrollHeight - chipEl.clientHeight,
       chipHeight: cr.height,
       padding: cs.paddingTop,
@@ -214,6 +222,8 @@ function expectChipLabelNotClipped(
   m: {
     labelTopInside: number; labelBottomInside: number;
     valueTopInside: number; valueBottomInside: number;
+    labelLeftInside: number; labelRightInside: number;
+    valueLeftInside: number; valueRightInside: number;
   },
   vp: string,
 ) {
@@ -221,6 +231,11 @@ function expectChipLabelNotClipped(
   expect(m.labelBottomInside, `${vp} 항목명이 칩 아래로 잘림`).toBeGreaterThanOrEqual(-0.5);
   expect(m.valueTopInside, `${vp} 값이 칩 위로 잘림`).toBeGreaterThanOrEqual(-0.5);
   expect(m.valueBottomInside, `${vp} 값이 칩 아래로 잘림`).toBeGreaterThanOrEqual(-0.5);
+  // 🔴 §C1(2026-08-03) 신설 — 가로. 위 주석 참고(이 게이트가 156px 소실을 놓쳤다).
+  expect(m.labelLeftInside, `${vp} 항목명이 칩 좌측으로 잘림`).toBeGreaterThanOrEqual(-0.5);
+  expect(m.labelRightInside, `${vp} 항목명이 칩 우측으로 잘림`).toBeGreaterThanOrEqual(-0.5);
+  expect(m.valueLeftInside, `${vp} 값이 칩 좌측으로 잘림`).toBeGreaterThanOrEqual(-0.5);
+  expect(m.valueRightInside, `${vp} 값이 칩 우측으로 잘림`).toBeGreaterThanOrEqual(-0.5);
 }
 
 test('[CHIP-TYPO-1] rounded rect + 커진 항목명, 390×568에서도 세로 넘침 없음', async ({ page }) => {
