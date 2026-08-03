@@ -516,6 +516,105 @@ test('[A0-PartD2] 반증 압력 — 배율을 한 칸 낮추면 잘림이 사라
   expect(true).toBe(true);
 });
 
+/** A1 진단 — 라벨(inline-flex, 자식 span 2개)에서 Range가 무엇을 재는지, 폴백을 탔는지. */
+const LABEL_DIAG_FN = `() => {
+  const label = document.querySelector('[data-fit-group="label"]');
+  const val = document.querySelector('[data-testid="hero-primary"]');
+  const rectOf = (el) => { const b = el.getBoundingClientRect(); return { w:+b.width.toFixed(3), left:+b.left.toFixed(3), right:+b.right.toFixed(3) }; };
+  const rangeInk = (el) => { const r = document.createRange(); r.selectNodeContents(el); const b = r.getBoundingClientRect(); return { w:+b.width.toFixed(3), left:+b.left.toFixed(3), right:+b.right.toFixed(3) }; };
+  const describe = (el, name) => {
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return {
+      name,
+      measuredBy: el.dataset.fitMeasuredBy ?? '(none)',
+      fontSize: cs.fontSize, display: cs.display, overflow: cs.overflow,
+      box: rectOf(el),
+      rangeInk: rangeInk(el),
+      scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+      children: Array.from(el.children).map((c) => ({
+        tag: c.tagName, text: c.textContent,
+        flexShrink: getComputedStyle(c).flexShrink,
+        minWidth: getComputedStyle(c).minWidth,
+        box: rectOf(c), rangeInk: rangeInk(c),
+      })),
+    };
+  };
+  return { label: describe(label, 'label'), value: describe(val, 'value') };
+}`;
+
+test('[A1-DIAG] 라벨 inline-flex에서 Range가 무엇을 재는가 + 폴백 진입 여부', async ({ page }) => {
+  await boot(page);
+  await startSession(page);
+  await fireStt(page, '33.3');
+  await page.waitForTimeout(2200);
+  await fireStt(page, '44.4');
+  await expect(page.locator('[data-hero-state="confirm"]')).toBeVisible({ timeout: 3000 });
+  await page.waitForTimeout(200);
+  const d = await page.evaluate((fn) => {
+    // eslint-disable-next-line no-eval
+    return (eval(fn) as () => unknown)();
+  }, LABEL_DIAG_FN);
+  console.log('=== A1-DIAG::label ===\n' + JSON.stringify(d, null, 1));
+  expect(d).toBeTruthy();
+});
+
+/** A1 과제 3 — 🔴 **CHIP_TYPE 회귀.** `UI-b` 함정 1이 "390×568에서 칩 여유 1.92px뿐"이라고
+ *  경고한다. `fitGroups`는 공용 코어라 칩(`--fit-lo`/`--fit-hi`)도 같은 판정을 쓴다.
+ *  처방으로 배율이 0.3~0.5% 줄면 그 여유가 어떻게 되는지 **숫자로** 남긴다. */
+const CHIP_PROBE_FN = `() => {
+  const chips = Array.from(document.querySelectorAll('[data-testid="column-chip"]'));
+  const bounds = (el) => {
+    const cs = getComputedStyle(el);
+    const px = (v) => Number.parseFloat(v) || 0;
+    const box = el.getBoundingClientRect();
+    const contentLeft = box.left + px(cs.borderLeftWidth) + px(cs.paddingLeft);
+    const contentRight = box.right - px(cs.borderRightWidth) - px(cs.paddingRight);
+    const r = document.createRange(); r.selectNodeContents(el);
+    const ink = r.getBoundingClientRect();
+    return {
+      text: (el.textContent || '').trim(),
+      fontSize: cs.fontSize,
+      measuredBy: el.dataset.fitMeasuredBy ?? '(none)',
+      contentW: +(contentRight - contentLeft).toFixed(3),
+      inkW: +ink.width.toFixed(3),
+      overflowLeftPx: +(contentLeft - ink.left).toFixed(3),
+      overflowRightPx: +(ink.right - contentRight).toFixed(3),
+      slackPx: +Math.min(contentLeft - ink.left, contentRight - ink.right).toFixed(3),
+      scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+    };
+  };
+  const root = document.querySelector('[data-hero-state]');
+  const rootStyle = root ? getComputedStyle(root) : null;
+  return {
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+    fitLo: rootStyle ? rootStyle.getPropertyValue('--fit-lo').trim() : null,
+    fitHi: rootStyle ? rootStyle.getPropertyValue('--fit-hi').trim() : null,
+    chipCount: chips.length,
+    chips: chips.map(bounds),
+    chipInner: chips.flatMap((c) => Array.from(c.querySelectorAll('*')).map(bounds)),
+  };
+}`;
+
+for (const vp of [{ width: 390, height: 568 }, { width: 402, height: 874 }] as const) {
+  test(`[A1-CHIP] CHIP_TYPE 여유 실측 @ ${vp.width}x${vp.height}`, async ({ page }) => {
+    // boot()는 402로 띄운다 — 탭 진입까지 끝낸 뒤 목표 뷰포트로 줄인다(작은 뷰포트에서
+    // 탭 클릭이 타임아웃하는 harness 문제를 피하면서, 측정은 목표 뷰포트에서 한다).
+    await boot(page);
+    await startSession(page);
+    await page.setViewportSize(vp);
+    await page.waitForTimeout(400);
+    await fireStt(page, '33.3');
+    await page.waitForTimeout(2400);
+    const d = await page.evaluate((fn) => {
+      // eslint-disable-next-line no-eval
+      return (eval(fn) as () => unknown)();
+    }, CHIP_PROBE_FN);
+    console.log(`=== A1-CHIP::${vp.width}x${vp.height} ===\n` + JSON.stringify(d, null, 1));
+    expect(d).toBeTruthy();
+  });
+}
+
 test('[A0-PartB2] listening interim 실측 — 실시간 인식값 경로', async ({ page }) => {
   await boot(page);
   await startSession(page);
