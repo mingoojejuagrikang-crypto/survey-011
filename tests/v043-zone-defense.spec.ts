@@ -34,8 +34,12 @@ test.setTimeout(120_000);
 
 /** 🔴 설계 계약을 **직접 고정**한다 — `ACTIVE_ZONE_RATIOS`를 읽지 않는다.
  *  제품 상수를 읽으면 둘을 같은 diff로 바꿨을 때 배분 회귀가 통과한다(Codex 리뷰 🔴-1 실측).
- *  `ACTIVE_ZONE_ROWS`는 **소스 계약 검사의 대상**이라 여전히 import한다 — 성격이 다르다. */
-const Z = { chip: 20, center: 50, bottom: 30 } as const;
+ *  `ACTIVE_ZONE_ROWS`는 **소스 계약 검사의 대상**이라 여전히 import한다 — 성격이 다르다.
+ *
+ *  🔴 §C1(2026-08-03) 갱신 — 종전 `{ chip: 20, center: 50, bottom: 30 }`.
+ *  F20(칩존 20 → 16%, 민구 확정 §4-a)이 빼낸 4%p를 `bottom`이 받는다(30 → 34).
+ *  `center: 50`은 불변 — `v0440-zone-ratios` 층2a가 같은 값을 독립으로 단언한다. */
+const Z = { chip: 16, center: 50, bottom: 34 } as const;
 
 /** 방어를 실제로 물리게 하려면 **콘텐츠가 배정 영역을 넘겨야** 한다. 안 넘치는 상태에서 재는
  *  단언은 방어가 있든 없든 통과하므로 공허하다(UI-a `reserveScale`이 그랬다).
@@ -161,9 +165,11 @@ test('[UI-b 방어 1/3-d] 배분 상수 — 합계 100 불변식과 ROWS 생성 
   expect(ACTIVE_ZONE_ROWS, 'ROWS는 RATIOS.base에서 생성된다').toBe(
     `auto ${zoneTrack(B.chip)} ${zoneTrack(B.center)} ${zoneTrack(B.bottom)}`,
   );
-  // 그리고 그 값이 설계 계약(20/50/30)과 일치한다 — 제품 상수를 읽지 않는 독립 확인.
-  expect(ACTIVE_ZONE_ROWS, '설계 계약 20/50/30')
-    .toBe('auto minmax(0, 2fr) minmax(0, 5fr) minmax(0, 3fr)');
+  // 그리고 그 값이 설계 계약(16/50/34)과 일치한다 — 제품 상수를 읽지 않는 독립 확인.
+  // 🔴 §C1(2026-08-03) — 종전 `20/50/30` = `2fr 5fr 3fr`. `zoneTrack`이 `pct/10`이므로
+  //    16/50/34는 `1.6fr 5fr 3.4fr`이다.
+  expect(ACTIVE_ZONE_ROWS, '설계 계약 16/50/34')
+    .toBe('auto minmax(0, 1.6fr) minmax(0, 5fr) minmax(0, 3.4fr)');
 });
 
 for (const vp of [

@@ -83,7 +83,11 @@ for (const { name, viewport, insets } of [
       .toBeLessThanOrEqual(1);
   });
 
-  test(`@pending-v0440 층2 — 3구역 배분 16/50/24/10 @ ${name}`, async ({ page }) => {
+  /** 🔴 §C1(2026-08-03)에서 **둘로 갈랐다.** 종전엔 4개 단언이 한 test에 있어서 §C1이 칩존을
+   *  16%로 만들어도 §C5-b 몫인 `bottomRow1` 하나 때문에 test 전체가 red였다 — **달성분이
+   *  기계로 안 보인다.** 한쪽이 다른 쪽의 성과를 가리면 회귀 판정에서 둘 다 "pending"으로
+   *  뭉개진다(`c0-r1` `808e9b0`이 같은 이유로 알람 오라클을 갈랐다). */
+  test(`층2a — 칩존 16% · 중앙 50% · 버튼행 10% (§C1 달성분) @ ${name}`, async ({ page }) => {
     await injectSafeArea(page, insets);
     await boot(page, viewport);
     const m = await zoneRatioMetrics(page);
@@ -91,14 +95,27 @@ for (const { name, viewport, insets } of [
     const ratios = {
       chip: m.chipHeight / pool,
       center: m.centerHeight / pool,
-      bottomRow1: m.indicatorRowHeight / pool,
       bottomRow2: m.navRowHeight / pool,
     };
-    console.log(`[zone-ratio] ${name}: pool=${pool.toFixed(2)} chip=${ratios.chip.toFixed(4)} center=${ratios.center.toFixed(4)} bottomRow1=${ratios.bottomRow1.toFixed(4)} bottomRow2=${ratios.bottomRow2.toFixed(4)}`);
-    expect(ratios.chip, `${name} 칩존이 pool의 16%다(§C1 대상)`).toBeCloseTo(0.16, 2);
+    console.log(`[zone-ratio] ${name}: pool=${pool.toFixed(2)} chip=${ratios.chip.toFixed(4)} center=${ratios.center.toFixed(4)} bottomRow2=${ratios.bottomRow2.toFixed(4)}`);
+    expect(ratios.chip, `${name} 칩존이 pool의 16%다(§C1)`).toBeCloseTo(0.16, 2);
     expect(ratios.center, `${name} 중앙이 pool의 50%다(불변)`).toBeCloseTo(0.50, 2);
-    expect(ratios.bottomRow1, `${name} 하단1행(도트·파형)이 pool의 24%다(§C5-b 대상)`).toBeCloseTo(0.24, 2);
     expect(ratios.bottomRow2, `${name} 하단2행(버튼)이 pool의 10%다(불변, 절대 늘리지 않는다)`).toBeCloseTo(0.10, 2);
+  });
+
+  /** 🔴 **의도된 red — §C5-b 몫이다. 회귀로 세지 마라.**
+   *  §C1이 하단 트랙을 30 → 34%로 키웠지만 그 안에서 도트행이 24%를 갖지는 못한다:
+   *  `ActiveControlSteppers`의 접힌 토글이 **약 49px를 고정으로 먹는다**(§60-63 주석의 그 존재).
+   *  실측 402=16.7% · 640=18.5%. 그 49px를 회수하거나 F08대로 TabBar를 최하단으로 옮겨
+   *  공간을 확보하는 것이 §C5-b의 일이고, 그때 이 test가 green이 되면서 태그가 떨어진다. */
+  test(`@pending-c5b 층2b — 하단1행(도트·파형) 24% @ ${name}`, async ({ page }) => {
+    await injectSafeArea(page, insets);
+    await boot(page, viewport);
+    const m = await zoneRatioMetrics(page);
+    const pool = m.viewportHeight - m.sat - m.headerHeight - m.tabBarHeight;
+    const bottomRow1 = m.indicatorRowHeight / pool;
+    console.log(`[zone-ratio] ${name}: bottomRow1=${bottomRow1.toFixed(4)} (target 0.24, §C5-b 대상)`);
+    expect(bottomRow1, `${name} 하단1행(도트·파형)이 pool의 24%다(§C5-b 대상)`).toBeCloseTo(0.24, 2);
   });
 
   test(`@pending-v0440 파형 가로폭 — 실제 뷰포트 폭의 2/3 @ ${name}`, async ({ page }) => {
