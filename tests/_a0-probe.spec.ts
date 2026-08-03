@@ -108,6 +108,71 @@ test('[A0-PartA] 계측기 검증 — center+nowrap+hidden에서 scrollWidth가 
   expect(rows.length).toBe(8);
 });
 
+/** Part A2 — 🔴 **멤버의 display 형태별로 scrollWidth가 다른 것을 보는가.**
+ *  Part A는 텍스트 노드 단독 block(HeroPrimaryLine 형태)만 검증했다. 그런데
+ *  HeroNameLine(VoiceHero.tsx:244-262)은 **inline-flex + 자식 span 2개 + justifyContent:center**다.
+ *  flex 컨테이너에서 자식이 넘치면 inline-start(LTR 좌측) 오버플로는 스크롤 불가 영역이 되어
+ *  scrollWidth에 잡히지 않는다는 알려진 동작이 있다. 실측으로 가른다. */
+const CSS_PROBE2_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+  html,body{margin:0;padding:0;background:#000;color:#fff;font-family:system-ui,sans-serif}
+  #root{width:100%;max-width:min(560px,94vw);margin:0 auto;min-width:0}
+  /* A: HeroPrimaryLine 형태 — block + text-align:center, 텍스트 노드 단독 */
+  #blockLine{font-weight:900;line-height:1.04;letter-spacing:-2px;display:block;width:100%;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
+  /* B: HeroNameLine 형태 — inline-flex + justify-content:center, 자식 span 2개 */
+  #flexLine{font-weight:900;line-height:1.04;letter-spacing:-0.6px;
+        display:inline-flex;align-items:baseline;justify-content:center;gap:0.22em;
+        width:100%;white-space:nowrap;overflow:hidden;flex-shrink:0;text-align:center}
+</style></head><body>
+  <div id="root">
+    <span id="blockLine"></span>
+    <span id="flexLine"><span id="chk" style="flex-shrink:0">✓</span><span id="nm"></span></span>
+  </div>
+</body></html>`;
+
+const MEASURE2_FN = `(el) => {
+  const r = document.createRange(); r.selectNodeContents(el);
+  const ink = r.getBoundingClientRect();
+  const box = el.getBoundingClientRect();
+  return {
+    fontSize: getComputedStyle(el).fontSize,
+    scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+    boxLeft: +box.left.toFixed(3), boxRight: +box.right.toFixed(3), boxW: +box.width.toFixed(3),
+    inkLeft: +ink.left.toFixed(3), inkRight: +ink.right.toFixed(3), inkW: +ink.width.toFixed(3),
+    overflowLeftPx: +(box.left - ink.left).toFixed(3),
+    overflowRightPx: +(ink.right - box.right).toFixed(3),
+    overflowTotalPx: +(ink.width - box.width).toFixed(3),
+    scrollWidthMinusClient: el.scrollWidth - el.clientWidth,
+  };
+}`;
+
+test('[A0-PartA2] 계측기 검증2 — block(값) vs inline-flex(라벨)에서 scrollWidth가 보는 것이 다른가', async ({ page }) => {
+  await page.setViewportSize(PHONE_402);
+  await page.setContent(CSS_PROBE2_HTML, { waitUntil: 'domcontentloaded' });
+
+  const out: unknown[] = [];
+  for (const fs of [60, 100, 132.229, 160, 200] as const) {
+    const r = await page.evaluate(
+      ({ fs, fn }) => {
+        const bl = document.getElementById('blockLine')!;
+        bl.textContent = '44.4';
+        bl.style.fontSize = `${fs}px`;
+        const fl = document.getElementById('flexLine')!;
+        document.getElementById('nm')!.textContent = '종경';
+        fl.style.fontSize = `${fs}px`;
+        void document.body.offsetHeight;
+        // eslint-disable-next-line no-eval
+        const m = eval(fn) as (e: HTMLElement) => Record<string, unknown>;
+        return { fontSize: fs, block: m(bl), flex: m(fl) };
+      },
+      { fs, fn: MEASURE2_FN },
+    );
+    out.push(r);
+  }
+  console.log('=== A0-PartA2::form-compare ===\n' + JSON.stringify(out, null, 1));
+  expect(out.length).toBe(5);
+});
+
 // ── Part B ──────────────────────────────────────────────────────────────────
 // F01 재현: 항목명 "종경"(행의 마지막 음성 컬럼 아님 — confirm 창을 CONFIRM_MS 동안 유지하려면
 // 뒤에 음성 컬럼이 하나 더 있어야 한다. F01 스크린샷은 종경이 활성 칩이고 확인표시가 떠 있는
