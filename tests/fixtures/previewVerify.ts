@@ -81,6 +81,10 @@ export async function fingerprint(page: Page): Promise<Fingerprint> {
     for (const sel of selectors) {
       const el = root.querySelector<HTMLElement>(sel);
       if (!el) continue;
+      // v0.44.0 §C5-b — 접힌 조절판이 anomaly/paused에서 display:none으로 **마운트 유지**된다
+      // (단일 인스턴스 계약 — ActiveControlBar 주석). 비가시 노드는 rect가 0이라 원점 차이가
+      // 가짜 drift로 잡힌다 — 지문은 화면에 **보이는** 것만 잰다.
+      if (el.getClientRects().length === 0) continue;
       const r = el.getBoundingClientRect();
       const cs = getComputedStyle(el);
       nodes[sel] = {

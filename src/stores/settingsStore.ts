@@ -135,6 +135,12 @@ interface SettingsState {
    *  beep.ts가 곱하는 마스터 배수로 매핑(0~1 → 0~BEEP_VOLUME_MAX). 기본 0.5(현행 1×보다 큼 —
    *  민구 "확인음 더 크게"). 500–1200Hz·클립경계 제약은 beepVariants.ts에서 유지(STT 오트리거 방지). */
   beepVolume: number;
+  /** v0.44.0 §D1(민구 확정 08-02) — barge-in(말끊기) 토글. true(기본) = 현행 이어폰 경로:
+   *  TTS 재생 중에도 STT가 살아 있어 말하면 즉시 끊고 처리. false = half-duplex 복원:
+   *  TTS 재생 중 STT를 물리적으로 중지(스피커폰에서 TTS 에코가 STT로 되먹임돼 45셀에
+   *  771발화가 된 08-02 실측의 처방). 라이브 배선은 speech.setBargeInEnabled 모듈 플래그 —
+   *  변경 지점(입력탭 서랍 토글·세션 시작·초기화)에서 동기화한다(preferredVoiceName 패턴). */
+  bargeInEnabled: boolean;
   /** Preferred Web Speech API voice name for ko-KR TTS. Empty string = auto (first available). */
   preferredVoiceName: string;
   /** v0.10.1: 캐시된 관리자 폴더 내 본인 팀 하위 폴더 — race 방지용, 첫 결정 후 재사용.
@@ -280,6 +286,7 @@ export function makeSettingsDefaults(): SettingsDefaults {
     beepPositiveId: DEFAULT_POSITIVE_BEEP_ID,
     beepNegativeId: DEFAULT_NEGATIVE_BEEP_ID,
     beepVolume: 0.5,
+    bargeInEnabled: true,
     preferredVoiceName: '',
     teamFolderCache: null,
     userLogFolderCache: null,
@@ -296,7 +303,7 @@ export function makeSettingsDefaults(): SettingsDefaults {
 const INPUT_SETTINGS_KEYS = [
   'columns', 'tableGenerated', 'totalRows', 'manualMode',
   'ttsRate', 'recognitionTolerance', 'fastRecognition', 'autoScreenCapture',
-  'beepPositiveId', 'beepNegativeId', 'beepVolume', 'preferredVoiceName',
+  'beepPositiveId', 'beepNegativeId', 'beepVolume', 'bargeInEnabled', 'preferredVoiceName',
   'sessionLabelColId', 'sessionAutoLabel', 'sessionCustomLabel', 'roundDateColId',
 ] as const;
 
@@ -328,6 +335,7 @@ export function inputSettingsResetPatch(): Partial<SettingsState> {
     beepPositiveId: d.beepPositiveId,
     beepNegativeId: d.beepNegativeId,
     beepVolume: d.beepVolume,
+    bargeInEnabled: d.bargeInEnabled,
     manualMode: d.manualMode,
     preferredVoiceName: d.preferredVoiceName,
     sessionLabelColId: d.sessionLabelColId,
@@ -539,6 +547,10 @@ export const useSettingsStore = create<SettingsState>()(
         if (typeof s.beepVolume !== 'number' || !Number.isFinite(s.beepVolume) || s.beepVolume < 0 || s.beepVolume > 1) {
           s.beepVolume = 0.5;
         }
+        // v0.44.0 §D1 — barge-in 토글. 구버전 영속본엔 없으므로 기본 ON(true)으로 치유(민구 확정:
+        // "디폴트는 바지인 on" — 기존 사용자 = undefined → ON). 같은 persist version의 저장본은
+        // migrate를 안 타지만, 그 경로는 merge의 current 기본값(true)이 같은 결과를 보장한다.
+        if (typeof s.bargeInEnabled !== 'boolean') s.bargeInEnabled = true;
         if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
         // v0.35.1 — 계정 결합 폴더 캐시(형태 손상은 null로 치유). legacy 맨 문자열 캐시
         // (teamFolderId/userLogFolderId)는 계정 미상이라 승계하지 않는다(DEPRECATED strip —

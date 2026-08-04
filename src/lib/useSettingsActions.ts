@@ -36,7 +36,7 @@ import { mergeInferredColumnsForSheet } from './columnFlags';
 import { computeTotalRows } from './autoValue';
 import { buildSessionLabel, pickSessionLabelValue } from './sessionLabel';
 import { getPickerApiKey, openDrivePicker } from './drivePicker';
-import { setPreferredVoiceName } from './speech';
+import { setPreferredVoiceName, setBargeInEnabled } from './speech';
 import { logger } from './logger';
 import { isSheetSourceBlocked } from './sheetConnection';
 
@@ -427,6 +427,7 @@ export function useSettingsActions() {
     // 필드 단위 그대로 옮겼고, inputSettingsDate:null(초기화 직후 자동 발동 억제)만 추가됐다.
     s.set(inputSettingsResetPatch());
     setPreferredVoiceName(''); // 라이브 speech 모듈도 스토어 기본값과 동기화
+    setBargeInEnabled(true);   // v0.44.0 §D1 — 초기화 = 기본 ON(말끊기 허용)도 라이브 동기화
     setTypeReview(null);
     if (clearLogin) {
       await googleSignOut('settings_reset'); // 토큰 없으면 no-op(clearToken만) — 로그아웃 상태에서도 안전

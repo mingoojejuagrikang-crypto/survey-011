@@ -9,7 +9,7 @@ import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingle
 import { attemptParseValue, parseValueForCol } from './valueParseAttempt';
 import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiCommandSignal } from './voiceCommands';
 import { decimalReaskPrompt } from './voicePrompts';
-import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, refreshVoices, resumeTtsEngine } from './speech';
+import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, setBargeInEnabled, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
@@ -2475,6 +2475,9 @@ export function useVoiceSession() {
   const start = useCallback(async (label?: string) => {
     const s = useSettingsStore.getState();
     setPreferredVoiceName(s.preferredVoiceName);
+    // v0.44.0 §D1 — barge-in 설정을 라이브 speech 모듈에 동기화(세션 시작 = 항상 최신 영속값.
+    // F28 날짜 초기화 등 스토어만 바뀐 경로도 여기서 따라잡는다).
+    setBargeInEnabled(s.bargeInEnabled);
     const sess = useSessionStore.getState();
     if (sess.phase === 'stopping') return false;
     // v0.38.0 리뷰#4 — 세션 대상(target)은 **연결된 시트가 있을 때만** 고정한다.

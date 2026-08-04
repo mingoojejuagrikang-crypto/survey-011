@@ -91,6 +91,14 @@ const DEFAULT_ZOMBIE_STALE_MS = 12_000;
  *  들쑤시는 잔여 churn 방지와 "영영 안 되살림" 사이의 절충. onresult가 오면 기본값으로 리셋. */
 const ZOMBIE_BACKOFF_CAP_MS = 60_000;
 
+// ── v0.44.0 §D1 — barge-in(말끊기) 설정, 모듈 레벨 플래그 ──────────────────────
+// settingsStore를 여기서 import하지 않는다: postTtsGuard/speech-lifecycle 스펙이 이 모듈을
+// Node에서 직접 import하는데, 스토어는 import 시점에 persist 하이드레이션(localStorage/IDB)을
+// 돌려 Node에서 깨진다. 대신 preferredVoiceName과 같은 setter 패턴 — 변경 지점(입력탭 서랍
+// 토글·세션 시작·설정 초기화)이 setBargeInEnabled로 동기화한다. 기본 true(이어폰 barge-in).
+let _bargeInEnabled = true;
+export function setBargeInEnabled(v: boolean) { _bargeInEnabled = v; }
+
 /** A long-running recognition controller that auto-restarts. */
 export class SpeechController {
   private rec: SpeechRecognitionLike | null = null;
@@ -106,6 +114,15 @@ export class SpeechController {
    *  인식기를 죽이면(end→100ms 타이머) 그 타이머를 mute가 취소한 채 아무도 되살리지 않아
    *  세션 끝까지 STT 무음이었다(실기기 로그: "이전" 재진입 TTS 연발 → 5분 STT 0건). */
   private restartPendingAfterTts = false;
+  /** v0.44.0 §D1 — half-duplex 래치. barge-in OFF 상태에서 muteForTts가 세우고 unmuteForTts/
+   *  stop이 내린다. 서 있는 동안: ① 인식기를 abort(물리 중지 — 스피커폰 에코의 마이크 되먹임
+   *  차단), ② abort 경합으로 새어든 결과를 onResult에서 폐기(논리 차단), ③ onEnd의 재시작
+   *  예약을 restartPendingAfterTts로 미룬다(unmuteForTts의 기존 P0 재예약 경로에 합류 — 새
+   *  복구 경로를 만들지 않는다). 🔴 이 래치는 **TTS 스코프 전용**이며 useVoiceSession의 UI
+   *  서스펜드 래치(uiSuspendRef — suspendRecognitionForUi/resumeRecognitionForUi)와 완전히
+   *  독립이다: 그 래치는 모달 수명, 이것은 utterance 수명을 산다(R3-FIX-1 계열 회귀 방지).
+   *  mute 시점 설정값을 캡처하므로 재생 중 토글 변경은 다음 TTS부터 적용된다(결정론). */
+  private halfDuplexHold = false;
   /** 인식기 실제 가동 여부: 'start' 이벤트에 true, 'end'에 false. ('error' 후엔 스펙상
    *  항상 'end'가 따라오므로 error에선 건드리지 않는다.) watchdog의 좀비 판정 근거. */
   private recRunning = false;
@@ -186,6 +203,15 @@ export class SpeechController {
       this.restartPendingAfterTts = true;
       this.logLifecycle('restart_cancelled_by_mute', true);
     }
+    // v0.44.0 §D1 — barge-in OFF면 half-duplex: TTS 재생 동안 인식기를 물리적으로 내린다.
+    // 스피커폰에서 echoCancellation ON으로도 못 막은 TTS 에코 되먹임(08-02 실측: stt_barge_in
+    // 167건 전부 TTS 재생창 안, 45셀에 771발화)의 처방. abort의 'end'는 onEnd가 받아
+    // restartPendingAfterTts로 미루고, unmuteForTts가 기존 P0 경로로 fresh 재시작한다.
+    if (!_bargeInEnabled && this.active) {
+      this.halfDuplexHold = true;
+      this.logLifecycle('half_duplex_stt_stop', true);
+      try { this.rec?.abort(); } catch { /* ignore — 미기동 인스턴스 abort는 무해 */ }
+    }
   }
 
   /** Called when TTS utterance ends — STT was never aborted so no restart needed.
@@ -201,6 +227,9 @@ export class SpeechController {
     }
     this.ttsMutedAt = null;
     this.ttsMuted = false;
+    // v0.44.0 §D1 — half-duplex 래치 해제. 이 아래의 기존 P0 재예약이 abort됐던 인식기를
+    // fresh로 되살린다(onEnd가 hold 동안 restartPendingAfterTts를 세워 뒀다).
+    this.halfDuplexHold = false;
     // P0: muteForTts가 취소했던 재시작을 여기서 되살린다.
     if (this.active && this.restartPendingAfterTts) {
       this.restartPendingAfterTts = false;
@@ -242,6 +271,7 @@ export class SpeechController {
     this.active = false;
     this.ttsMuted = false;
     this.ttsMutedAt = null;
+    this.halfDuplexHold = false; // §D1 — 세션 경계에서 half-duplex 래치도 리셋(오차단 방지)
     this.restartPendingAfterTts = false;
     this.recRunning = false;
     this.hadResultSinceStart = false;
@@ -277,6 +307,14 @@ export class SpeechController {
       // stale-instance 가드: 버려진 구 인식기 인스턴스의 늦은 이벤트가 중복 재시작(이중 start)을
       // 예약하지 못하게, 현재 인스턴스가 아니면 무시한다(onError/onStart/onEnd 동일).
       if (this.rec !== rec) return;
+      // v0.44.0 §D1 — half-duplex(말끊기 OFF) 동안의 결과는 **여기서 폐기**한다(논리 차단).
+      // abort는 비동기라 in-flight 결과가 새어들 수 있고, 그 한 건이면 TTS 에코 오커밋이
+      // 재발한다. 텔레메트리(raw_confidence)·liveness·barge-in 컷·onFinal 전부 도달 전 컷 —
+      // 커밋/파싱 경로 0건이 §D1의 오라클이다(v0440-d1-bargein T2).
+      if (this.halfDuplexHold) {
+        this.logLifecycle('result_dropped_half_duplex');
+        return;
+      }
       // 좀비 감지용 liveness 갱신 — interim 포함(가장 이르고 잦은 liveness 증거; final-only는
       // 지연됨). watchdog이 recRunning=true인데 이 값이 오래 정체되면 좀비로 판정한다.
       this.lastResultAt = Date.now();
@@ -345,7 +383,17 @@ export class SpeechController {
       this.recRunning = false;
       this.logLifecycle('end');
       this.cb.onEnd?.();
-      if (this.active) this.scheduleRestart();
+      if (this.active) {
+        // v0.44.0 §D1 — half-duplex 동안(muteForTts의 abort 포함)은 즉시 재시작하지 않고
+        // 기존 P0 플래그에 합류한다: unmuteForTts가 TTS 종료 시 재예약한다. 여기서 그냥
+        // scheduleRestart하면 TTS 재생 중 인식기가 되살아나 half-duplex가 무의미해진다.
+        if (this.halfDuplexHold) {
+          this.restartPendingAfterTts = true;
+          this.logLifecycle('restart_deferred_half_duplex', true);
+        } else {
+          this.scheduleRestart();
+        }
+      }
     };
 
     rec.addEventListener('result', onResult);

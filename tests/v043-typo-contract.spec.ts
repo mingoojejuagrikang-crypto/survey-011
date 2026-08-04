@@ -137,7 +137,9 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //    「압력 없는 오라클」이었다(독립 리뷰 C2). 재발 방지 검사기가 그런 단언을 들고
   //    나가는 모양이 나쁘다 — `UI-b` 리뷰가 지적한 것과 같은 계열이다.
   // v0.44.0 §C2·C3: ExitConfirmInline 3행(+2 계약) · CompleteSummary 중앙 버튼 삭제(allowlist −1).
-  expect(contractCount, '계약 참조 (통과)').toBe(51);
+  // v0.44.0 §D1: ActiveControlSteppers 말끊기 토글(BargeInToggle) 4건(+4 계약 — captionXs·
+  // stepperValue·captionXxs·stepperValueLg 전부 VOICE_TYPE 참조, 위반 0 유지).
+  expect(contractCount, '계약 참조 (통과)').toBe(55);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(5);
   expect(commentCount, '주석 (skip)').toBe(1);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);

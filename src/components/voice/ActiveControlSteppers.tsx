@@ -3,13 +3,16 @@ import { T } from '../../tokens';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { logger } from '../../lib/logger';
 import { inputControlPanelOpened, settingChanged } from '../../lib/logEvents';
-import { speak } from '../../lib/speech';
+import { speak, setBargeInEnabled } from '../../lib/speech';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 import { VOICE_TYPE } from './heroLayout';
 
 /** v0.20.0 입력탭#1·#2 — 입력 컨트롤바: [인식 허용범위] · [안내 속도] 두 다이얼을 수평 배치.
  *  허용범위(recognitionTolerance) 0.40~0.90 → %로 표시. 속도(ttsRate) 0.5~2.0 → x로 표시·샘플 음성.
- *  두 다이얼은 375 폭에서도 한 줄에 들어가게 동일 flex(각 minWidth:0). */
+ *  두 다이얼은 375 폭에서도 한 줄에 들어가게 동일 flex(각 minWidth:0).
+ *  v0.44.0 §D1 — 세 번째 항목 [말끊기 ON/OFF](BargeInToggle, 기본 ON)를 그 아래 전폭 1행으로
+ *  추가(민구 확정 08-02: "바지인 기능 토글을 입력탭의 서랍메뉴에 포함"). 접힌 요약 필은 종전
+ *  두 값만 유지한다 — 문자열이 길어지면 375 폭 오버레이 필이 줄바꿈돼 §C5-b 겹침 관례를 해친다. */
 function clampStep(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value * 100) / 100));
 }
@@ -60,6 +63,14 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
     const value = clampStep(next, 0.5, 2);
     s.set({ ttsRate: value });
     sampleTts(value);
+  };
+  // v0.44.0 §D1(민구 확정 08-02) — 말끊기(barge-in) 토글. 스토어 영속 + 라이브 speech 모듈
+  // 동기화(TtsVoiceSelector의 setPreferredVoiceName 패턴). 토글은 연타 대상이 아니라서
+  // 스텝퍼류 디바운스 없이 즉시 1회 로깅한다.
+  const setBargeIn = (next: boolean) => {
+    s.set({ bargeInEnabled: next });
+    setBargeInEnabled(next);
+    logger.log({ type: 'app', extra: settingChanged('bargeInEnabled', next) });
   };
   const handledUiCommandSeqRef = useRef(0);
   useEffect(() => {
@@ -151,9 +162,73 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
             onMinus={() => setTtsRate(s.ttsRate - 0.05)}
             onPlus={() => setTtsRate(s.ttsRate + 0.05)}
           />
+          <BargeInToggle on={s.bargeInEnabled} onToggle={() => setBargeIn(!s.bargeInEnabled)} />
         </div>
       )}
     </div>
+  );
+}
+
+/** v0.44.0 §D1 — 세 번째 서랍 항목: 말끊기 ON/OFF(기본 ON). 두 스텝퍼 아래 전폭 1행
+ *  (375 폭에서 3항목 가로 배치는 48px 터치 타깃이 안 나온다). 행 전체가 하나의 토글 버튼 —
+ *  터치 타깃 = 행 전체(minHeight 56 ≥ 48). 시각 관례는 StepperControl을 따른다(테두리·배경·
+ *  라벨/값/설명 3단 타이포). ON=현행 이어폰 barge-in(안내 중 말하면 즉시 끊고 인식),
+ *  OFF=half-duplex(안내 중 인식 중지 — 스피커폰 에코 오인식 방지). */
+function BargeInToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="toggle-barge-in"
+      role="switch"
+      aria-checked={on}
+      aria-label={on ? '말끊기 끄기' : '말끊기 켜기'}
+      title={on ? '말끊기 끄기' : '말끊기 켜기'}
+      onClick={onToggle}
+      style={{
+        gridColumn: '1 / -1',
+        minHeight: 56,
+        borderRadius: 16,
+        border: `1px solid ${T.lineStrong}`,
+        background: 'rgba(255,255,255,0.035)',
+        padding: 8,
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) 48px',
+        alignItems: 'center',
+        gap: 8,
+        cursor: 'pointer',
+        touchAction: 'manipulation',
+      }}
+    >
+      <span style={{ minWidth: 0, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span style={{ fontSize: VOICE_TYPE.captionXs, color: T.textMute, fontWeight: 800, lineHeight: 1 }}>말끊기</span>
+        <span style={{ fontSize: VOICE_TYPE.stepperValue, color: on ? T.green : T.textMute, fontWeight: 950, lineHeight: 1.15 }}>
+          {on ? '켬' : '끔'}
+        </span>
+        <span style={{ fontSize: VOICE_TYPE.captionXxs, color: T.textMute, fontWeight: 650, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+          {on ? '안내 중 말하면 즉시 인식' : '안내 중에는 인식 중지'}
+        </span>
+      </span>
+      {/* 상태 심볼 — 스텝퍼의 48px 우측 버튼 자리와 정렬(시각 관례 유지). aria는 버튼 본체가 진다. */}
+      <span
+        aria-hidden
+        style={{
+          width: 48,
+          height: 48,
+          borderRadius: 14,
+          border: `1px solid ${on ? T.green : T.lineStrong}`,
+          background: on ? T.greenGlowFaint : 'rgba(255,255,255,0.025)',
+          color: on ? T.green : T.textMute,
+          fontSize: VOICE_TYPE.stepperValueLg,
+          fontWeight: 950,
+          lineHeight: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {on ? '✓' : '✕'}
+      </span>
+    </button>
   );
 }
 
