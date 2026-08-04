@@ -1,18 +1,19 @@
 /**
  * v0.44.0 §C0 — 알람 비교값(`compareLabel`/`compareValue`) 오버플로 오라클.
  *
- * 대상: `AnomalyAlertPopup.tsx:113-127`의 2열 비교(`anomaly-comparison` 안
- * `anomaly-{prev,next}-{label,value}`). `heroLayout.ts`의 `compareLabel: 'max(22px, 13.93vw)'` ·
- * `compareValue: 'max(30px, 19.4vw)'`는 fit도 상한도 없어, 제보 37건 중 8건(iPhone F03·F04·F07·F09·
- * F10·F11 + 태블릿 F33·F36)이 이 화면 하나에서 나왔다(단일 최대 오염원).
+ * 대상: `AnomalyAlertPopup.tsx`의 2열 비교(`anomaly-comparison` 안
+ * `anomaly-{prev,next}-{label,value}`). 현재 `heroLayout.ts`는
+ * `compareLabel: 'max(22px, calc(13.93vw * var(--fit-compare-label, 1)))'` ·
+ * `compareValue: 'max(30px, calc(19.4vw * var(--fit-compare-value, 1)))'`로 fit 배선이 있다
+ * (c0-r1). 배선 전 상한·fit 부재 시절엔 제보 37건 중 8건(iPhone F03·F04·F07·F09·F10·F11 +
+ * 태블릿 F33·F36)이 이 화면 하나에서 나왔다(단일 최대 오염원).
  *
- * 🔴 [08-03 최종 상태 — 민구·Larry 확정, 부분 성과로 닫음] `compareLabel`/`compareValue`를
- * `useFitGroup`에 배선했다(`AnomalyAlertPopup.tsx`, 라벨 2개 한 그룹·값 2개 한 그룹). **달성**:
- * 겹침·오버플로 제거(단언 A·B, 아래 3케이스 green) — 제보 8건의 핵심 증상이다. **미해결**: compare
- * 슬롯이 뷰포트/콘텐츠 길이와 무관하게 항상 절대 하한(22px/30px)에 고정된다(단언 C 및 태블릿
- * 9자리 값의 640px 케이스, `@pending-lineheight` 태그 참고 — 근인·다음 조사 출발점은 파일 하단
- * 상수 주석과 `Deliverables/2026-08-03-survey-011-v0440-A0-probe.md` §8, 배선 자체 이력은
- * `2026-08-03-survey-011-v0440-C0-alarm-fit.md`).
+ * 🟢 [08-04 §C0 완결] `compareLabel`/`compareValue`의 `useFitGroup` 배선(c0-r1) 위에서,
+ * 바닥 고정의 원인이던 CenterStage 알람 `<style>`의 `line-height: 1 !important`를 제거해
+ * fit이 살아났다(375에서 값 30→60.6px · 640 태블릿 9자리 31→48.7px, 잉크는 슬롯 안).
+ * 「인라인 line-height 무시 현상」(A0-probe.md §8)도 같은 규칙이 원인이었다 — 알람 분기에서만
+ * DOM에 존재하는 `<style>`이라 알람 밖 시트 전수조사가 0건으로 나왔던 것(gates/15 TEAMOPS-69).
+ * `@pending-lineheight` 태그는 전부 뗐고 단언 A·B·C가 정상 회귀 가드다.
  *
  * 아래 두 값 쌍은 실제 재현 값이다(짧은 값 `9`↔`8`은 배선 없이도 통과하는 반증 함정이라 쓰지 않는다):
  *   - iPhone(F11): 직전 `255.5` → 현재 `255`
@@ -42,12 +43,10 @@
  * 결합해야 "그룹이 아니라 멤버별로 fit을 잘못 배선"한 경우도 잡는다: 그러면 크기는 갈라지고
  * 배정폭 안은 만족해 결합이 여전히 red가 된다).
  *
- * 단언 C(뷰포트 차이)는 배선 **전에는 green이었다**(`19.4vw`가 순수 뷰포트 비례라 402→640에서
- * 값이 커졌다) — 원래 설계는 "무변화 카드"(clamp 상한 재발) 방지 회귀 가드였다. 🔴 배선 **후인
- * 지금은 `@pending-lineheight`로 red다** — compare 슬롯이 항상 절대 하한에 고정돼 뷰포트가
- * 커져도 안 자란다. **단언 A·B만으로는 이 회귀가 안 보였다**(바닥 크기도 겹침·오버플로 계약은
- * 만족하므로) — 이 단언이 유일하게 잡았다(Larry, 08-03: "네 단언 C가 아니었으면 이 회귀는 green
- * 으로 통과했다"). 원인이 풀리면 되살려 정식 회귀가드로 승격한다.
+ * 단언 C(뷰포트 차이)는 "무변화 카드"(clamp 상한·바닥 고정 재발) 방지 회귀 가드다.
+ * 🔑 **단언 A·B만으로는 바닥 고정이 안 보인다**(바닥 크기도 겹침·오버플로 계약은 만족하므로) —
+ * 크기가 실제로 자라는지는 이 단언이 유일하게 잡는다(Larry, 08-03: "단언 C가 아니었으면
+ * 이 회귀는 green으로 통과했다"). 08-04 원인 해소로 정식 회귀 가드로 승격됐다.
  */
 import { test, expect, type Page } from '@playwright/test';
 import { boot } from './fixtures/activeZones';
@@ -147,6 +146,12 @@ async function commitViaKeypad(page: Page, digits: string) {
 const CASES = [
   { name: 'iPhone 255.5→255(음성)', trendRule: 'decrease' as const, prevValue: '255.5', spoken: '255', viaKeypad: false },
   { name: '태블릿 3→388859857(키패드)', trendRule: 'increase' as const, prevValue: '3', spoken: '388859857', viaKeypad: true },
+  // 🔴 등길이 값쌍(리뷰② 2026-08-04) — 위 두 쌍은 5:3·1:9라 구조적으로 충돌 불가다(짧은 쪽에
+  // 항상 여유). fit은 잉크를 트랙 경계까지 키우므로(경계 추구 평형) column-gap이 죽으면
+  // **글자수가 같은 쌍**만 ~2px로 맞붙어 한 덩어리로 읽힌다(실캡처 "99.919.9"). 이 쌍이 그 축을
+  // 잰다. ⚠️ 소수쌍(`99.9`)은 못 쓴다 — 이 픽스처의 컬럼이 `int`(9자리 무상한용)라 커밋이 안 돼
+  // 알람이 아예 안 뜬다(08-04 실측 timeout). 등길이 int 쌍으로 같은 축을 잰다.
+  { name: '등길이 999→199(음성)', trendRule: 'decrease' as const, prevValue: '999', spoken: '199', viaKeypad: false },
 ];
 
 async function setupCase(
@@ -164,39 +169,36 @@ async function setupCase(
   await page.waitForTimeout(200);
 }
 
-// 🔴 v0.44.0 마무리(민구·Larry 확정, 08-03) — §C0는 부분 성과로 닫는다.
-// 달성: 겹침·오버플로 제거(제보 8건의 핵심, 단언 A·B). 미해결: compare 슬롯이 뷰포트/콘텐츠
-// 길이와 무관하게 항상 절대 하한(22px/30px)에 고정된다. 근인은 A2가 규명한 "인라인
-// line-height가 이 4개 요소에서만 무시되는 현상"(원인 UNCLEAR, 후보 10개 소거 완료,
-// cloneNode 대조가 다음 조사 출발점 — Deliverables/2026-08-03-survey-011-v0440-A0-probe.md
-// §8) — 줄 상자가 글리프를 못 담아 만드는 초과가 fitGroup.ts의 높이 판정(overflowsHeight)을
-// 오염시켜 이진탐색이 바닥에서 조기 이탈한다(fitGroups()는 low=0.25에서 fits()=false면
-// 바로 그 값을 채택한다). @pending-lineheight = 이 원인이 풀리기 전까지 의도된 red.
-const PENDING_LINEHEIGHT = '@pending-lineheight';
+// 🟢 §C0 완결(08-04) — 바닥 고정의 근인은 CenterStage 알람 `<style>`의
+// `line-height: 1 !important`였다(글리프 초과 → overflowsHeight 전 배율 true → 이진탐색
+// low 즉시 이탈). "인라인 line-height 무시 현상"(A0-probe.md §8)도 같은 규칙이 원인
+// (알람 분기에서만 DOM에 존재해 알람 밖 시트 조사가 0건 — TEAMOPS-69). 강제 제거로
+// 전 케이스 green 전환을 직렬 2회 실측 확인, @pending-lineheight 태그를 전부 뗐다.
 
 for (const viewport of [PHONE_402, PHONE_640]) {
   for (const c of CASES) {
-    // 🔴 태블릿 9자리(`388859857`)는 640px에서도 바닥(30px대)조차 168px 칸에 못 들어간다
-    // (실측: scrollWidth 180 vs clientWidth 168) — 단언 C와 같은 근본원인(바닥 고정)이
-    // 가장 긴 값 × 가장 큰 화면 조합에서 겹침 판정 자체까지 침범한 것. 나머지 3케이스는
-    // 바닥 크기가 우연히 해당 콘텐츠 길이에 충분해 겹침·오버플로 계약은 그대로 산다.
-    const isPendingCase = viewport === PHONE_640 && c.name.startsWith('태블릿');
-    const suffix = isPendingCase ? ` ${PENDING_LINEHEIGHT}` : '';
-
-    test(`§C0 단언A — 겹치지 않는다 · ${c.name} @ ${viewport.width}x${viewport.height}${suffix}`, async ({ page }) => {
+    test(`§C0 단언A — 겹치지 않는다 · ${c.name} @ ${viewport.width}x${viewport.height}`, async ({ page }) => {
       await setupCase(page, viewport, c);
       const r = await measure(page);
       console.log(`[v0440-alarm-fit][A] ${c.name}@${viewport.width}x${viewport.height} = ${JSON.stringify(r)}`);
 
       expect(r.labelInkOverlap, '좌우 라벨 잉크 rect 교집합 없음').toBe(false);
       expect(r.valueInkOverlap, '좌우 값 잉크 rect 교집합 없음').toBe(false);
+      // 🔴 교집합 없음만으로는 부족하다(리뷰② 2026-08-04) — 간격 0.1px도 통과해 두 수가
+      // 한 덩어리로 읽히는 결함("99.919.9")이 안 보인다. 최소 간격은 팝업 인라인
+      // columnGap clamp(4px,…)의 하한 4px — CenterStage가 column-gap을 다시 강제하면 red다.
+      const labelGap = r.metrics['anomaly-next-label'].ink.x - r.metrics['anomaly-prev-label'].ink.right;
+      const valueGap = r.metrics['anomaly-next-value'].ink.x - r.metrics['anomaly-prev-value'].ink.right;
+      console.log(`[v0440-alarm-fit][A-gap] ${c.name}@${viewport.width} labelGap=${labelGap.toFixed(2)} valueGap=${valueGap.toFixed(2)}`);
+      expect(labelGap, '좌우 라벨 잉크 간격 ≥ 4px(한 덩어리로 안 읽힘)').toBeGreaterThanOrEqual(4);
+      expect(valueGap, '좌우 값 잉크 간격 ≥ 4px(한 덩어리로 안 읽힘)').toBeGreaterThanOrEqual(4);
       for (const id of ['anomaly-prev-label', 'anomaly-prev-value', 'anomaly-next-label', 'anomaly-next-value'] as const) {
         expect(r.metrics[id].scrollWidth, `${id} scrollWidth<=clientWidth`)
           .toBeLessThanOrEqual(r.metrics[id].clientWidth + 1);
       }
     });
 
-    test(`§C5-c 단언B — 같은 성격은 같은 크기(배정폭 안과 결합) · ${c.name} @ ${viewport.width}x${viewport.height}${suffix}`, async ({ page }) => {
+    test(`§C5-c 단언B — 같은 성격은 같은 크기(배정폭 안과 결합) · ${c.name} @ ${viewport.width}x${viewport.height}`, async ({ page }) => {
       await setupCase(page, viewport, c);
       const r = await measure(page);
       const fits = (id: 'anomaly-prev-label' | 'anomaly-prev-value' | 'anomaly-next-label' | 'anomaly-next-value') =>
@@ -222,7 +224,7 @@ for (const viewport of [PHONE_402, PHONE_640]) {
   }
 }
 
-test(`§C0 단언C — 402×874와 640×1024에서 값이 서로 달라야 한다(무변화 카드 방지) ${PENDING_LINEHEIGHT}`, async ({ page }) => {
+test('§C0 단언C — 402×874와 640×1024에서 값이 서로 달라야 한다(무변화 카드 방지)', async ({ page }) => {
   const c = CASES[0];
   await setupCase(page, PHONE_402, c);
   const narrow = await measure(page);
@@ -235,11 +237,10 @@ test(`§C0 단언C — 402×874와 640×1024에서 값이 서로 달라야 한�
     `[v0440-alarm-fit][C] label ${narrow.metrics['anomaly-prev-label'].fontSize.toFixed(2)}→${wide.metrics['anomaly-prev-label'].fontSize.toFixed(2)}px, ` +
     `value ${narrow.metrics['anomaly-prev-value'].fontSize.toFixed(2)}→${wide.metrics['anomaly-prev-value'].fontSize.toFixed(2)}px`,
   );
-  // 🔴 배선 전에는 이미 green이었다(19.4vw가 순수 뷰포트 비례). 배선 후 지금은 red다 —
-  // compare 슬롯이 항상 절대 하한에 고정돼(위 PENDING_LINEHEIGHT 설명 참고) 뷰포트가
-  // 커져도 안 자란다. 단언 A·B(겹침·배정폭)는 바닥 크기로도 대부분 만족되어 이 결함을
-  // 못 잡는다 — 이 단언이 유일하게 잡는다(Larry 08-03: "단언 C가 아니었으면 이 회귀는
-  // green으로 통과했다"). lineHeight 원인이 풀리면 이 단언을 되살려 정식 회귀가드로 승격한다.
+  // 🔑 단언 A·B(겹침·배정폭)는 바닥 크기로도 대부분 만족되어 바닥 고정을 못 잡는다 —
+  // 크기가 실제로 자라는지는 이 단언이 유일하게 잡는다(Larry 08-03: "단언 C가 아니었으면
+  // 이 회귀는 green으로 통과했다"). 08-04 §C0 완결로 정식 회귀 가드가 됐다(실측
+  // label 61→96px · value 65→102px).
   expect(wide.metrics['anomaly-prev-label'].fontSize, '뷰포트가 넓어지면 라벨도 커진다')
     .toBeGreaterThan(narrow.metrics['anomaly-prev-label'].fontSize + 5);
   expect(wide.metrics['anomaly-prev-value'].fontSize, '뷰포트가 넓어지면 값도 커진다')

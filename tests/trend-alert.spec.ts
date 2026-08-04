@@ -354,11 +354,14 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   expect(events.filter((e) => e.extra === 'trend_alert_corrected')).toHaveLength(0);
 });
 
-// 🔴 `@pending-c0` — **의도된 red다. 회귀로 세지 마라.** §C0 배선이 완성되면 통과한다.
-//    c0-r1이 고정 px 단언(`toBeCloseTo(56/78)`)을 규칙 2에 맞게 뒤집어 놓은 것이라
-//    지금은 §C0 미완 때문에 실패한다. 👉 **§C0가 끝나면 이 태그를 뗀다.**
-//    태그가 없으면 다음 회차가 회귀로 오분류한다 — 실제로 08-04 판정에서 그럴 뻔했다.
-test('[ALERT-COMPARE-1] 2열 비교 — 안 넘침·좌우 동일 크기(§C5-c)·상한 없음, 390×568 무넘침 @pending-c0', async ({ page }) => {
+// 🟢 §C0 완결(2026-08-04)로 `@pending-c0` 태그를 뗐다 — 정상 회귀 가드다.
+//    바닥 고정의 원인은 CenterStage 알람 `<style>`의 `line-height: 1 !important`였다
+//    (글리프 초과가 fit 높이 판정을 전 배율에서 실패시켰다). 그 강제를 제거해 통과한다.
+//    ⚠️ 이 테스트의 390×568 무스크롤 단언(아래 narrow 블록)은 **fit 배선 + line-height 1.2
+//    체제에서는 이번(08-04)이 첫 실행**이다 — c0-r1 병합~08-04 사이엔 바닥 고정이 402→480
+//    무성장 단언을 먼저 죽여 도달 불가였다(그 전 체제에선 실행 이력 있음). 여기서 red가
+//    나면 회귀 단정 전에 git log로 어느 체제의 이력인지 확인하라.
+test('[ALERT-COMPARE-1] 2열 비교 — 안 넘침·좌우 동일 크기(§C5-c)·상한 없음, 390×568 무넘침', async ({ page }) => {
   await page.setViewportSize({ width: 402, height: 874 });
   await setupAndStart(page, {
     sheetRows: [[PREV_ROUND, '이원창', '1', '1', '100.0', '99.9']],

@@ -1,39 +1,24 @@
 /**
- * v0.44.0 A2 — 🔴 **§C0 인수인계 오라클: 알람 카드 compare 슬롯에 fit 배선이 없다.**
+ * v0.44.0 §C0 — 🟢 **정상 회귀 가드로 승격판(2026-08-04). 알람 compare fit이 살아 있는지 잰다.**
  *
- *  ── 왜 이 파일이 있나 ────────────────────────────────────────────────────────
- *  A0가 규명한 근본원인(넘친 것을 넘쳤다고 판정 못함)을 A1이 `fitGroup.ts`에서,
- *  A2가 `useFitScale.ts`에서 닫았다. 그런데 **알람 카드에서는 판정이 정확해져도
- *  값이 줄지 않는다** — `heroLayout.ts`의 두 상수가 fit 변수를 **소비하지 않기 때문이다**:
+ *  ── 이력 ────────────────────────────────────────────────────────────────────
+ *  A2가 「compare 슬롯에 fit 배선이 없다」를 고정하는 characterization으로 만들었고
+ *  (원문: `git log -p` 또는 A0-probe.md §7-4), c0-r1이 배선을 넣은 뒤에도 fit이 **바닥
+ *  (0.25)에 갇혀** 있었다 — 원인은 CenterStage 알람 `<style>`의 `line-height: 1 !important`
+ *  (글리프가 line box를 넘어 만든 초과가 `overflowsHeight`를 전 배율에서 true로 만들어
+ *  이진탐색이 low에서 즉시 이탈). **그 강제를 제거해 §C0가 완결됐고**(2026-08-04),
+ *  characterization 단언을 뒤집어 이 승격판이 됐다.
  *
- *    STATE_TYPE.alarmLabel   = 'max(17px, calc(clamp(22px, min(6.6vw,3.6vh), 36px) * var(--fit-lo,1)))'
- *                                                                                  ↑ 쓴다
- *    STATE_TYPE.compareLabel = 'max(22px, 13.93vw)'   ← 🔴 var(--fit-*) 없음
- *    STATE_TYPE.compareValue = 'max(30px, 19.4vw)'    ← 🔴 var(--fit-*) 없음
+ *  ── 이 파일이 재는 것 (375×667, 값쌍 120.5→100) ─────────────────────────────
+ *   1. compare 값이 배정 폭을 넘지 않는다(잉크 우측 초과 ≤ 0.5px).
+ *   2. 🔑 **compare 값이 절대 하한(30px)에서 떨어져 실제로 커졌다**(> 35px — 실측 60.6px).
+ *      바닥 고정이 재발하면 여기가 red다. 겹침·배정폭 단언(A·B)은 바닥 크기로도
+ *      만족되므로 **이 단언만이 재발을 잡는다**(v0440-alarm-fit 단언C와 같은 원리).
+ *   3. headline이 하한(17px)에 붙어 있지 않다(> 17.5px).
  *
- *  결과(375×667 실측, A2 처방 전후 대조):
- *    - 처방 전: `--fit-lo` **1.12**(첫 단계) · headline **26.89px** · next-value 우측 초과 **+33.344px**
- *    - 처방 후: `--fit-lo` **0.13**(최저 단계) · headline **17px** · 초과 **+33.344px (그대로)**
- *
- *  즉 fit이 초과를 **보게** 되자 단계를 끝까지 내렸는데, 정작 넘치는 `compareValue`는
- *  `--fit-lo`를 안 쓰므로 크기가 안 변했다(19.4vw = 375px에서 72.75px 고정).
- *  🔴 **못 고치는 초과를 보고, 고칠 수 있는 headline만 하한까지 깎은 것이다.**
- *
- *  ── 이 파일이 재는 것 ────────────────────────────────────────────────────────
- *  **현 결함 상태를 그대로 고정하는 characterization test다.**
- *   - **지금**: 초과가 실재하고(> 1px) headline이 하한(17px)에 붙어 있다 → 둘 다 참 → green.
- *   - 🔴 **§C0가 `compareValue`/`compareLabel`에 fit 변수를 배선하면**: compare가 줄어
- *     초과가 해소되고 headline이 하한에서 떨어진다 → 단언이 깨지며 **red** →
- *     **그때가 이 파일을 정상 오라클로 승격하거나 지울 때다**(단언 메시지가 그 지시를 담는다).
- *
- *  🔴 **`test.fail()`을 쓰지 않는다.** 그걸 쓰면 **어떤 실패든** 「예상된 실패」로 green이 된다 —
- *  `boot()`가 시작 버튼을 못 찾거나 `triggerAnomaly`가 타임아웃해도 green이다. 이 harness는
- *  실제로 그렇게 깨진 적이 있다(390×568에서 `text=음성 입력 시작` 클릭 타임아웃 → 402로 띄운 뒤
- *  줄이는 우회를 넣었다). 그러면 §C0 배선이 들어와도 **아무 신호가 안 나는 영구 green**이 된다 —
- *  이 파일이 막으려던 바로 그 실패다. characterization 형태는 harness가 깨지면 **red**가 난다.
- *
- *  이 구조를 쓰는 이유: 말로 적은 제약은 다음 회차에 안 지켜진다(`UI-e2` 교훈).
- *  **오라클이 된 제약만 남는다.** 배선이 들어오는 순간 CI가 알려준다.
+ *  🔴 **`test.fail()`을 쓰지 않는다.** 그걸 쓰면 어떤 실패든 「예상된 실패」로 green이 된다 —
+ *  harness가 깨져도(boot 실패·trigger 타임아웃) 신호가 없는 영구 green이 된다.
+ *  아래 harness 건전성 단언(>0 측정 확인)이 그 경로를 막는다.
  *
  *  ⚠️ 기대값은 **리터럴**이다(`STATE_TYPE`을 import하지 않는다). 제품 상수를 빌리면
  *     둘을 같은 diff로 바꿀 때 통과해버려 파손을 감춘다(COMMON §4).
@@ -46,9 +31,8 @@ test.setTimeout(120_000);
 /** `STATE_TYPE.alarmLabel`의 하한. 리터럴로 박는다 — 제품 상수를 import하지 않는다. */
 const ALARM_LABEL_FLOOR_PX = 17;
 
-// 🔴 `@pending-c0` — **의도된 red다. 회귀로 세지 마라.** 제목의 「§C0 대기」는 사람만 읽는다 —
-//    기계가 거르려면 태그가 있어야 한다. 👉 **§C0가 끝나면 이 태그를 뗀다.**
-test('🔴 §C0 대기 — 알람 compare 슬롯에 fit 배선이 없어 headline이 하한에 갇힌다(375×667) @pending-c0', async ({ page }) => {
+// 🟢 §C0 완결(2026-08-04) — `@pending-c0` 태그를 떼고 단언을 뒤집은 승격판이다(위 docstring).
+test('§C0 회귀 가드 — 알람 compare fit이 살아 있다: 안 넘침 · 하한 이탈(375×667)', async ({ page }) => {
   await boot(page, { width: 375, height: 667 });
   await triggerAnomaly(page);
   await page.waitForTimeout(300);
@@ -81,16 +65,18 @@ test('🔴 §C0 대기 — 알람 compare 슬롯에 fit 배선이 없어 headlin
   expect(m.nextValueFontPx, 'next-value를 실제로 측정했다').toBeGreaterThan(0);
   expect(m.nextValueOverflowRightPx, 'next-value 초과를 실제로 측정했다').not.toBeNull();
 
-  // ── 🔴 현 결함 상태 고정 ────────────────────────────────────────────────────
-  // 이 두 단언은 **지금 참이고, §C0 배선이 들어오면 거짓이 된다.** 깨지는 것이 목적이다.
+  // ── 🟢 §C0 완결 상태 가드 (승격판 2026-08-04) ──────────────────────────────
   expect(
     m.nextValueOverflowRightPx!,
-    '🔴 §C0가 compare 슬롯에 fit 변수를 배선하면 이 초과가 사라진다 — '
-    + '그때 이 단언이 red가 나면 정상이다. 이 파일을 정상 오라클로 승격하거나 지워라.',
-  ).toBeGreaterThan(1);
+    'compare 값이 배정 폭을 넘지 않는다(잉크 우측 초과 ≤ 0.5px)',
+  ).toBeLessThanOrEqual(0.5);
+  expect(
+    m.nextValueFontPx,
+    '🔑 compare 값이 절대 하한(30px)에서 떨어져 실제로 커졌다 — 바닥 고정이 재발하면 '
+    + '여기가 red다(겹침·배정폭 단언은 바닥 크기로도 만족되므로 이 단언만이 재발을 잡는다)',
+  ).toBeGreaterThan(35);
   expect(
     m.headlineFontPx,
-    '🔴 §C0 배선이 들어오면 초과가 해소돼 fit이 바닥까지 갈 이유가 없어지고 '
-    + 'headline이 하한에서 떨어진다 — 그때 이 단언이 red가 나면 정상이다.',
-  ).toBeLessThanOrEqual(ALARM_LABEL_FLOOR_PX + 0.5);
+    'headline이 하한에 붙어 있지 않다',
+  ).toBeGreaterThan(ALARM_LABEL_FLOOR_PX + 0.5);
 });

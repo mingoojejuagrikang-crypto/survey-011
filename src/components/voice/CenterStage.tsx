@@ -14,7 +14,22 @@ import { T } from '../../tokens';
 
 /** 금지된 알람 카드 내부 구현에 레이아웃 책임을 다시 섞지 않고, 중앙 stage가 공개 testid 계약을
  *  2열(라벨 1행 / 값 2행)로 배치한다. 인라인 style보다 우선해야 해서 이 범위 안에서만 `!important`를
- *  쓴다. 값/라벨 타이포는 `STATE_TYPE`의 열린 폭 비례 계약이 계속 맡는다. */
+ *  쓴다. 값/라벨 타이포는 `STATE_TYPE`의 열린 폭 비례 계약이 계속 맡는다.
+ *
+ *  🔴 **`line-height`를 이 블록에 다시 넣지 마라**(§C0, 2026-08-04). 종전 `line-height: 1
+ *  !important`가 인라인 1.2(임계 1.15 위 — AnomalyAlertPopup `COMPARE_LINE_HEIGHT`)를 덮어
+ *  글리프가 line box를 넘었고, 그 초과가 `useFitGroup`의 높이 판정을 전 배율에서 실패시켜
+ *  compare 슬롯이 절대 하한(22/30px)에 갇혔다(제보 8건 화면의 잔여 원인). 제거로 fit이
+ *  살아났다(375에서 값 30→60.6px, 오라클: v044-alarm-compare-fit · v0440-alarm-fit 단언C).
+ *
+ *  🔴 **`column-gap` 강제도 두지 마라**(리뷰② 실증, 2026-08-04). fit은 잉크를 트랙 경계까지
+ *  키우므로(경계 추구 평형) 거터가 0이면 등길이 값쌍이 ~2px 간격으로 맞붙어 한 숫자로
+ *  읽힌다(실캡처 "99.919.9"). 팝업 인라인 `columnGap: clamp(4px,1.5vw,12px)`가 최소 간격을
+ *  보장한다. 오라클: v0440-alarm-fit 단언A의 잉크 간격 ≥ 4px.
+ *
+ *  ⚠️ 이 `<style>`은 알람 분기에서만 DOM에 존재한다 — 스타일 조사는 알람을 띄운 상태에서
+ *  하라. (08-03 순회가 0건을 본 이유는 미확정이다 — 알람 밖 순회였거나 CORS 차단 시트에서
+ *  순회가 끊겼을 수 있다. A0-probe.md §8-4) */
 const ALARM_TWO_COLUMN_LAYOUT = `
   [data-central-state="alarm"] [data-testid="anomaly-alert"] {
     padding-block: 0 !important;
@@ -25,7 +40,6 @@ const ALARM_TWO_COLUMN_LAYOUT = `
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     grid-template-rows: auto auto !important;
     width: 100% !important;
-    column-gap: 0 !important;
     row-gap: 0 !important;
     overflow: hidden !important;
   }
@@ -50,7 +64,6 @@ const ALARM_TWO_COLUMN_LAYOUT = `
     justify-self: center !important;
     text-align: center !important;
     color: ${T.red} !important;
-    line-height: 1 !important;
   }
 `;
 
