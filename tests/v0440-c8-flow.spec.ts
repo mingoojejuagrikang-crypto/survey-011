@@ -393,3 +393,28 @@ test('F18 — 테스트 픽스처 우회(__micSettleSkipForTest)는 지연만 �
   const delta = shownTs - postClick[postClick.length - 1];
   expect(delta, `우회 경로인데 지연 ${delta}ms — 심(__micSettleSkipForTest)이 죽었다`).toBeLessThan(900);
 });
+
+test('F18 리뷰 B1 — 정착 창에서 탭 이탈 시 고아 세션을 만들지 않는다', async ({ page }) => {
+  // 독립 리뷰 B1(실측 재현): 정착 1초 창에서 다른 탭을 누르면 VoiceScreen이 언마운트되는데,
+  // 고아 클로저가 세션을 계속 올려 리마운트된 훅이 닿을 수 없는 인식기·마이크가 영구 생존했다.
+  // 수정(disposedRef): await 뒤 언마운트를 감지하면 스트림을 되돌리고 세션을 올리지 않는다.
+  await installVoiceMocks(page);
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
+  // 🔴 이 테스트는 정착 지연이 실제로 흘러야 의미가 있다 — 우회 심을 명시적으로 끈다.
+  await page.addInitScript({ content: 'window.__micSettleSkipForTest = false;' });
+  await seedAndOpenVoiceTab(page, settingsRows(3, 'c8-b1-orphan'));
+
+  await page.locator('text=음성 입력 시작').first().click();
+  await page.waitForTimeout(200); // 정착 창(1000ms) 한복판
+  await page.locator('[data-testid="tab-data"]').click(); // 탭 이탈 → VoiceScreen 언마운트
+  await page.waitForTimeout(1400); // 고아 클로저가 세션을 올렸다면 이 사이에 올라온다
+
+  // 세션이 몰래 시작되지 않았다 — 입력탭에 돌아오면 ready 화면 그대로다.
+  await page.locator('[data-testid="tab-voice"]').click();
+  await expect(page.locator('text=음성 입력 시작').first()).toBeVisible({ timeout: 3000 });
+  await expect(page.locator('[data-testid="voice-active-state"]')).toHaveCount(0);
+
+  // 되돌아와 다시 시작하면 정상 동작한다(고아 상태가 새 세션을 오염시키지 않는다).
+  await clickStart(page);
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 5000 });
+});

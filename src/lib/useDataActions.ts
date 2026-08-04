@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- [ENV-12] v0.44.0 F23(동기화 상태기계) 유입으로 530줄 — 해소 계획: export/recover 절을 서브 훅으로 분리(백로그). 해소 시 이 주석 제거 + KNOWN-ISSUES 목록에서 삭제. */
 /**
  * v0.35.2 Stage 2 — 데이터탭 액션 오케스트레이션 훅 (DataScreen에서 순수 이동, GL-006 §7~8 UI/로직 분리).
  * 시트 동기화·Drive 로그 백업·내보내기·세션 복구·삭제·재로그인 resume의 상태와 핸들러를 소유한다.

@@ -163,6 +163,17 @@ export function useVoiceSession() {
   // F18 — start()의 마이크 획득+정착 대기 중 재클릭 가드. 그 창에서는 phase가 아직 'ready'라
   // '음성 입력 시작' 버튼이 살아 있어, 가드 없이는 start()가 이중 진입한다(세션 이중 생성).
   const startingRef = useRef(false);
+  // 🔴 F18 리뷰 B1(v0.44.0 독립 리뷰, 실측 재현) — start()의 await 창(권한 프롬프트 무한 +
+  // 정착 1초)에서 탭을 이탈하면 VoiceScreen이 언마운트되는데, 고아가 된 이 클로저가 계속
+  // 실행돼 세션을 올리고 인식기·레코더를 **고아 인스턴스의 ref**에 만든다 — 리마운트된 새
+  // 훅은 ctrlRef가 null이라 종료를 눌러도 abort가 0회(마이크·인식기 영구 생존). await 뒤에
+  // 이 플래그를 재확인해 언마운트됐으면 중단한다. StrictMode의 모의 재마운트에서 ref가
+  // 유지되므로 mount 시 false로 되돌리는 형태가 필수다.
+  const disposedRef = useRef(false);
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => { disposedRef.current = true; };
+  }, []);
   const sessionIdRef = useRef<string>('');
   const sessionLabelRef = useRef<string | undefined>(undefined);
   // 설정탭은 활성 세션 중에도 바뀔 수 있다. 목적지와 컬럼은 start()에서 함께 고정해 한 세션의
@@ -2549,6 +2560,14 @@ export function useVoiceSession() {
       }
     } finally {
       startingRef.current = false;
+    }
+    // 🔴 F18 리뷰 B1 — await 창에서 언마운트됐으면(탭 이탈) 여기서 끝낸다. 이 클로저가
+    // 만든 레코더의 스트림을 되돌려 놓는다(획득 세대 카운터가 늦게 열린 스트림도 닫는다 —
+    // audioRecorder [리뷰#6]). 세션은 올리지 않는다: 올리면 새 훅이 닿을 수 없는 고아다.
+    if (disposedRef.current) {
+      recorderRef.current?.dispose();
+      recorderRef.current = null;
+      return false;
     }
 
     sessionTargetRef.current = target;

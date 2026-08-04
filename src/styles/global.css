@@ -173,7 +173,9 @@ input::placeholder {
    사라진다(§C4 오라클이 버튼 4개의 animation:none을 단언한다).
    !important인 이유: 대상들이 자기 톤 애니메이션(edge-pulse·chip-pulse·dot-breathe)을
    인라인으로 들고 있어 mono 스코프에서 그걸 이겨야 한다. reduced-motion 블록(파일 하단)이
-   같은 !important로 더 늦게 선언돼 모션 민감 사용자에게는 이 점멸이 꺼진다. */
+   모션 민감 사용자에게 이 점멸을 끈다 — ⚠️ !important끼리는 명시도가 순서를 이기므로
+   reduced 블록에 **같은 명시도의 셀렉터를 복제**해야 한다(선언 순서만 믿으면 도트가 남는다 —
+   독립 리뷰 M1 실측). */
 @keyframes pauseMonoPulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.66; }
@@ -284,6 +286,9 @@ input::placeholder {
   [data-testid="voice-control-bar"] button[data-status="exit"],
   [data-voice-tone="mono"] [data-glow-pulse],
   [data-voice-tone="mono"] [data-testid="voice-progress-fill"],
+  /* 🔴 도트는 일반 셀렉터(state-dots span)로 못 끈다 — mono 규칙의 명시도(0,3,1)가
+     !important끼리의 비교에서 이긴다(v0.44.0 독립 리뷰 M1 실측). 같은 명시도로 복제한다. */
+  [data-voice-tone="mono"] [data-testid="state-dots"] span[data-on="true"],
   [data-voice-tone="mono"] [data-testid="column-chip"][data-active="true"] {
     animation: none !important;
     filter: none !important;

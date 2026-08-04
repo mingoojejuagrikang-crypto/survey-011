@@ -314,9 +314,13 @@ test('R3-FIX-3 — 레벨 0(마이크 사망)이면 파형이 정지(정적 세�
   await injectLevel(page, 0);
   await page.waitForTimeout(300); // 정착
   const a1 = await waveFingerprint(page);
-  await page.waitForTimeout(400); // 30fps면 ~12프레임.
+  // 병렬 부하에서 rAF가 기아 상태면 고정 400ms 두 샘플이 같은 프레임을 잡는다(전체 스위트
+  // 1회 실측·단독 3회 green). 지문이 바뀔 때까지 폴링한다 — 계약은 "흐른다"이지 "400ms 안에
+  // 바뀐다"가 아니다.
+  await expect(async () => {
+    expect(await waveFingerprint(page), '레벨 0: idle 웨이브가 흐른다(F11 — 죽은 화면 금지)').not.toBe(a1);
+  }).toPass({ timeout: 5000, intervals: [250] });
   const a2 = await waveFingerprint(page);
-  expect(a2, '레벨 0: idle 웨이브가 흐른다(F11 — 죽은 화면 금지)').not.toBe(a1);
   expect(await page.locator('[data-testid="state-dots"]').getAttribute('data-mode'), '레벨 0 = idle').toBe('idle');
   const idleLitCount = (a1.match(/1/g) ?? []).length;
 
@@ -324,9 +328,10 @@ test('R3-FIX-3 — 레벨 0(마이크 사망)이면 파형이 정지(정적 세�
   await injectLevel(page, 0.85);
   await page.waitForTimeout(300);
   const b1 = await waveFingerprint(page);
-  await page.waitForTimeout(400);
-  const b2 = await waveFingerprint(page);
-  expect(b2, '레벨 0.85: 파형이 실제로 흐른다(대조군)').not.toBe(b1);
+  // 같은 rAF 기아 축 — 대조군도 폴링으로 잰다(위 idle 단언과 동일 근거).
+  await expect(async () => {
+    expect(await waveFingerprint(page), '레벨 0.85: 파형이 실제로 흐른다(대조군)').not.toBe(b1);
+  }).toPass({ timeout: 5000, intervals: [250] });
   expect(await page.locator('[data-testid="state-dots"]').getAttribute('data-mode'), '레벨 0.85 = wave').toBe('wave');
   expect((b1.match(/1/g) ?? []).length, '실발화 진폭이 idle보다 크다').toBeGreaterThan(idleLitCount);
   console.log('✓ R3-FIX-3(재협상): 레벨0=idle 저진폭 흐름 / 레벨0.85=wave 고진폭 (모드·진폭 구분)');

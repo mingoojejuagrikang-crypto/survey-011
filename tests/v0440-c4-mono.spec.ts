@@ -100,3 +100,17 @@ test('C4 — 수정모드는 amber다(일시정지에서 의미 이동, 4번째 
     .evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(fill, '진행바 amber').toBe('rgb(255, 234, 0)');
 });
+
+test('C4 리뷰 M1 — reduced-motion에서는 mono 도트 점멸도 꺼진다', async ({ page }) => {
+  // 독립 리뷰 M1(실측): !important끼리는 명시도가 순서를 이긴다 — mono 도트 셀렉터(0,3,1)가
+  // reduced 블록의 일반 셀렉터(0,1,1)를 이겨 모션 민감 사용자에게 점멸이 남았다.
+  // 수정: reduced 블록에 같은 명시도의 셀렉터 복제. 이 오라클이 그 복제를 지킨다.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await boot(page, PHONE_402);
+  await page.locator('button[title="일시정지"]').click();
+  await expect(page.locator('[data-testid="state-dots"]')).toHaveAttribute('data-glyph', 'pause');
+  await expect(page.locator('[data-voice-tone="mono"]')).toHaveCount(1);
+  const dotAnim = await page.locator('[data-testid="state-dots"] span[data-on="true"]').first()
+    .evaluate((el) => getComputedStyle(el).animationName);
+  expect(dotAnim, 'reduced-motion에서 mono 도트 정지').toBe('none');
+});

@@ -319,7 +319,7 @@ export function StateDots({
       style={{
         display: 'grid',
         // StateIndicator의 명목 높이가 부모 하단 트랙보다 클 수 있다(완료/검토 상태의 짧은 화면).
-        // 고정 px 트랙을 그대로 두면 부모만 줄고 7행 격자는 남아 밴드 밖 버튼 영역을 침범한다.
+        // 고정 px 트랙을 그대로 두면 부모만 줄고 10행 격자는 남아 밴드 밖 버튼 영역을 침범한다.
         // 실제 부모 높이를 상한으로 삼아 7행을 함께 축소한다 — overflow clip이나 transform이
         // 아니라 레이아웃 박스 자체가 밴드 안에 들어가는 계약이다.
         height: `min(${gridHeight}px, 100%)`,
