@@ -76,10 +76,9 @@ export function VoiceScreen(props: {
     sess.phase === 'active' || sess.phase === 'complete' || sess.phase === 'paused' || sess.phase === 'stopping',
   );
 
-  // v0.25.0 기능2(WS-2) — 입력탭 진입(마운트) 시 마이크 prewarm(첫 클립 유실 완화). best-effort:
-  //   실패/거부해도 start()의 init()이 재시도(폴백)하므로 회귀 없음. prewarmMic은 useVoiceSession의
-  //   useCallback([])라 안정 참조 → 마운트당 정확히 1회 발동(탭 진입=마운트, App.tsx 조건부 렌더).
-  useEffect(() => { void voiceSession.prewarmMic(); }, [voiceSession.prewarmMic]);
+  // v0.44.0 §C8 F18(민구 확정 08-02) — v0.25.0 WS-2의 마운트 시 마이크 prewarm을 **폐지**했다.
+  //   입력탭 진입은 이제 getUserMedia를 호출하지 않는다(권한 요청 = '음성 입력 시작' 클릭,
+  //   useVoiceSession.start() 선두의 선행 획득 + 1초 정착). 오라클: v0440-c8-flow.spec.ts.
 
   const activeColumns = voiceSession.sessionColumns ?? s.columns;
   const totalRows = sess.phase === 'ready'

@@ -33,8 +33,10 @@ export function settingChanged(key: string, value: string | number | boolean): s
   return `setting_changed:${key}=${value}`;
 }
 
-/** `${kind}:${row},src=${source}` — 행 완료/스킵 계측(SOP-003 진행 파서 대상). */
-export function rowMarked(kind: 'row_complete' | 'row_skipped', row: number, source: string): string {
+/** `${kind}:${row},src=${source}` — 행 완료/스킵 계측(SOP-003 진행 파서 대상).
+ *  v0.44.0 §C8 F13 — `row_last_stop` 추가: '다음'이 마지막 행 경계에서 이동 없이 멈춘 사건
+ *  (jump 이벤트가 없어 이 계측이 유일한 흔적이다). */
+export function rowMarked(kind: 'row_complete' | 'row_skipped' | 'row_last_stop', row: number, source: string): string {
   return `${kind}:${row},src=${source}`;
 }
 

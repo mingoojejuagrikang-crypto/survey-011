@@ -57,6 +57,7 @@ const SETTINGS = {
  *  앱의 `stopAllTracks(dispose)`가 다음 획득을 오염시키지 않게 한다. */
 const FAKE_MIC_SCRIPT = `
 (function() {
+  window.__micSettleSkipForTest = true; // F18 픽스처 우회 — 시작 시 1초 마이크 정착 생략(우회 심 오라클: v0440-c8-flow.spec.ts)
   window.__micTracks = [];
   var ac = null;
   var real = navigator.mediaDevices && navigator.mediaDevices.getUserMedia
@@ -141,7 +142,9 @@ async function waitForActiveChip(page: Page, colName: string, timeout = 6000) {
   );
 }
 
-/** 세션을 시작하지 않고 입력탭까지만 간다(prewarm으로 레코더·트랙은 이미 확보된다). */
+/** 세션을 시작하지 않고 입력탭까지만 간다.
+ *  v0.44.0 §C8 F18 — 마운트 prewarm 폐지: 이 상태에서 레코더·트랙은 **없다**(getUserMedia 0회).
+ *  트랙이 필요한 테스트는 startSession을 거쳐야 한다. */
 async function bootIdle(page: Page, settings = SETTINGS) {
   await page.addInitScript({ content: FAKE_MIC_SCRIPT });
   await installVoiceMocks(page);
@@ -251,28 +254,30 @@ test('C — 개선요청 모달을 닫아도 안내가 나가지 않는다(resum
 });
 
 // ─── D: 중지를 실제로 수행하지 않았으면 안내가 없다 ─────────────────────────────────────
-test('D — 세션 미가동 왕복에는 안내가 없다(stt=noop). 캡처 복구는 그래도 돈다', async ({ page }) => {
-  await bootIdle(page); // 세션 시작 없음 — prewarm으로 트랙만 확보된 상태
-  expect(await trackEnabled(page), 'prewarm이 트랙을 확보해야 이 테스트가 성립한다').toBe(true);
+// v0.44.0 §C8 F18 적응 — 구 전제(prewarm으로 트랙만 확보된 유휴 상태)는 prewarm 폐지로 제품에서
+// 사라졌다. 유휴 = **레코더·트랙 자체가 없음**(getUserMedia 0회). 그래서 capture 축도 off/on이
+// 아니라 noop/noop이 된다(끌 트랙이 없다). "캡처 복구는 무관하게 돈다" 계약은 세션 가동 테스트
+// (위 A~C의 trackEnabled false→true 왕복)가 계속 고정한다.
+test('D — 세션 미가동 왕복에는 안내가 없다(stt=noop). 유휴엔 만질 트랙도 없다(F18)', async ({ page }) => {
+  await bootIdle(page); // 세션 시작 없음 — F18: 마이크 미획득 상태
+  expect(await trackEnabled(page), 'F18: 입력탭 진입만으로 트랙이 생기면 안 된다').toBe(null);
 
   await setVisibility(page, 'hidden');
-  await expect.poll(() => trackEnabled(page), { timeout: 4000 }).toBe(false);
   await setVisibility(page, 'visible');
 
   // 🔴 v0.43.0 리뷰(Codex 사소#1, 2026-07-31 수용) — **여기가 제목과 반대를 고정하고 있었다.**
   //   제목은 `stt=noop`인데 단언은 `edge=enter,stt=stopped`였다. 근인은 앱 쪽:
   //   `suspendRecognitionForUi`의 반환 boolean이 "실제로 STT를 멈췄나"가 아니라 **래치 전이**만
   //   뜻했고, 그걸 그대로 `stt`에 실었다. 세션이 안 돌던 이 회차엔 멈출 인식기가 없었으므로
-  //   `stopped`는 거짓 기록이다 — 실제 중지 횟수를 집계하면 유휴/prewarm 왕복이 분자에 섞인다.
+  //   `stopped`는 거짓 기록이다 — 실제 중지 횟수를 집계하면 유휴 왕복이 분자에 섞인다.
   //   반환을 `{latched, sttStopped}`로 가르고 `stt`는 `sttStopped`를 쓰게 고쳤다. 이제 계약대로다.
   //   ⚠️ `latched`(복원 의무·안내 예약)는 **종전 그대로**다 — 1c의 시작-TTS race 복원이 걸려 있다.
   await expect.poll(() => bgMicExtras(page), { timeout: 4000 })
-    .toEqual(['edge=enter,stt=noop,capture=off', 'edge=return,stt=noop,capture=on']);
+    .toEqual(['edge=enter,stt=noop,capture=noop', 'edge=return,stt=noop,capture=noop']);
   // 🔑 복원할 인식기가 없었으므로 "다시 시작합니다"는 거짓말이다 — 나가면 안 된다.
   expect(await announceCount(page)).toBe(0);
-  // 🔴 캡처 복구는 STT 복원 여부와 **무관하게** 돈다. 안 그러면 트랙이 꺼진 채 남아
-  //   다음 세션이 조용히 무음을 녹음한다.
-  expect(await trackEnabled(page)).toBe(true);
+  // F18: 왕복 후에도 여전히 트랙 없음(유휴 왕복이 마이크를 만들지 않는다).
+  expect(await trackEnabled(page)).toBe(null);
 });
 
 // ─── E: 🔴 백그라운드 중 세션 경계가 지나가면 안내 예약이 폐기된다 ────────────────────────
@@ -280,8 +285,9 @@ test('E — 백그라운드 중 세션 시작(clearUiSuspendLatch)이 안내 예
   await bootIdle(page);
 
   // hidden에서 suspend가 걸려 안내가 예약된다(래치 reasons = {app_background}).
+  // F18 — 유휴엔 트랙이 없어(trackEnabled=null) 트랙 관찰 대신 bg_mic enter 이벤트로 래치를 확인.
   await setVisibility(page, 'hidden');
-  await expect.poll(() => trackEnabled(page), { timeout: 4000 }).toBe(false);
+  await expect.poll(async () => (await bgMicExtras(page)).some((x) => x.startsWith('edge=enter')), { timeout: 4000 }).toBe(true);
 
   // 🔑 hidden인 채로 세션을 시작한다 → start()의 clearUiSuspendLatch('start')가 래치를 통째로
   //   비운다. 그러면 아래 visible의 resume은 **조기 반환**해 플래그를 소비할 주체가 사라진다.

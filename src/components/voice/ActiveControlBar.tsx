@@ -188,32 +188,33 @@ export function ActiveControlBar({
           - 도트는 표시일 뿐 터치 대상이 아니라서 겹쳐도 오탭 경로가 없다.
           열리면(panelOpen) 종전대로 행들을 통째로 숨기고 패널이 플로우를 가져간다(민구 확정
           2026-07-27 — 겹칠 상자를 없애는 방식 유지). */}
-      {panelOpen ? (
+      {/* 🔴 인스턴스는 **하나**다 — 래퍼 스타일만 오버레이↔플로우로 바뀐다. 조건부 분기 두 개로
+          그렸더니 음성 명령('입력 조절')이 열리는 순간 재마운트된 새 인스턴스가 같은 uiCommand
+          신호를 한 번 더 처리해 도로 닫혔다(v026 T6 실측). anomaly/paused/exit에서는
+          display:none — 마운트 유지(신호 배선 보존) + hit-test·오탭 없음. */}
+      <div
+        style={
+          panelOpen
+            ? { minHeight: 0 }
+            : controlsExpandable
+              ? {
+                  position: 'absolute',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  bottom: `calc(${CONTROL_ROW_FRACTION * 100}% + 10px)`,
+                  zIndex: 5,
+                  maxWidth: 'calc(100% - 24px)',
+                }
+              : { display: 'none' }
+        }
+      >
         <ActiveControlSteppers
           uiCommand={uiCommand}
-          open
+          open={panelOpen}
           canExpand={controlsExpandable}
           onOpenChange={setControlsOpen}
         />
-      ) : controlsExpandable && (
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            bottom: `calc(${CONTROL_ROW_FRACTION * 100}% + 10px)`,
-            zIndex: 5,
-            maxWidth: 'calc(100% - 24px)',
-          }}
-        >
-          <ActiveControlSteppers
-            uiCommand={uiCommand}
-            open={false}
-            canExpand={controlsExpandable}
-            onOpenChange={setControlsOpen}
-          />
-        </div>
-      )}
+      </div>
     </div>
   );
 }

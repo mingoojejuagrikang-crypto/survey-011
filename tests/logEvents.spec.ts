@@ -38,9 +38,11 @@ test('settingChanged — 기존 4개 콜사이트 산출과 바이트 동일', (
   expect(settingChanged('autoScreenCapture', false)).toBe('setting_changed:autoScreenCapture=false');
 });
 
-test('rowMarked — row_complete/row_skipped 산출과 바이트 동일', () => {
+test('rowMarked — row_complete/row_skipped/row_last_stop 산출과 바이트 동일', () => {
   expect(rowMarked('row_complete', 3, 'voice')).toBe('row_complete:3,src=voice');
   expect(rowMarked('row_skipped', 12, 'touch')).toBe('row_skipped:12,src=touch');
+  // v0.44.0 §C8 F13 — '다음'의 마지막 행 경계 멈춤(이동 없음 → jump 이벤트가 없어 유일한 흔적).
+  expect(rowMarked('row_last_stop', 5, 'voice')).toBe('row_last_stop:5,src=voice');
 });
 
 test('withErr — Error/비Error 모두 기존 String((err as Error)?.message ?? err) 산출과 동일', () => {

@@ -68,6 +68,7 @@ const SHEET_ROWS = [
 //   micLost 경로를 의도적으로 발화시킬 수 있다(전용 테스트).
 const MOCK_INIT_SCRIPT = `
 (function() {
+  window.__micSettleSkipForTest = true; // F18 픽스처 우회 — 시작 시 1초 마이크 정착 생략(우회 심 오라클: v0440-c8-flow.spec.ts)
   window.__getUserMediaCallCount = 0;
   window.__failNextGetUserMedia = 0;
   function nextStream() {
@@ -230,14 +231,14 @@ test('B7 — 도트 파형 실제 렌더 + 주입 레벨에 진폭 반응(FB-D)'
   await startSession(page);
   await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
 
-  // 레벨 0: 움직임 없이 **상태 글리프**가 정적으로 보인다(마이크 아이콘).
+  // 레벨 0: v0.44.0 §C5(F11, 민구 확정) — mic 글리프 대신 **idle 웨이브**가 흐른다.
+  //   "음성이 들리지 않아도 진동을 보여줘서 인식중이란 걸 알려라" — 종전 "레벨 0 정지" 계약의
+  //   의도적 폐기다(플랜 §4-b 계열). 마이크 사망 신호는 micLost(red 톤+재연결 배너)가 맡는다.
   await injectLevel(page, 0);
   await page.waitForTimeout(600); // hangover 경과
   const lo = await waveLitCells(page);
-  expect(lo, '무입력에도 글리프가 보인다(빈 격자 아님)').toBeGreaterThan(0);
-  const idleFingerprint = await waveFingerprint(page);
-  await page.waitForTimeout(200);
-  expect(await waveFingerprint(page), '레벨 0에서는 그림이 정지').toBe(idleFingerprint);
+  expect(lo, '무입력에도 idle 웨이브가 보인다(빈 격자 아님)').toBeGreaterThan(0);
+  expect(await page.locator('[data-testid="state-dots"]').getAttribute('data-mode'), '레벨 0 = idle 모드').toBe('idle');
 
   // 레벨↑: 같은 격자가 **파형**으로 바뀌고 켜진 셀이 늘어난다(진폭 반응).
   await injectLevel(page, 0.85);
@@ -259,7 +260,8 @@ test('[리뷰#1] 짧은 화면(375×667) 최대 진폭에서도 격자가 밴드
   //   가장 빡빡한 예산) 전제는 실제 불변식으로 바꾼다.
   const bandHeight = await page.locator('[data-testid="live-listen-band"]')
     .evaluate((el) => el.getBoundingClientRect().height);
-  expect(bandHeight, '짧은 화면에서 밴드 예산이 실제로 빡빡하다(clamp 하한~100)').toBeLessThanOrEqual(100);
+  // v0.44.0 §C5-b — 하단1행이 pool의 24%가 되며 375×667 실측 밴드가 ~126px로 커졌다. 게이트 재보정.
+  expect(bandHeight, '짧은 화면에서 밴드 예산이 실제로 빡빡하다(§C5-b 24% 반영)').toBeLessThanOrEqual(140);
 
   await injectLevel(page, 1);
   await page.waitForTimeout(250);
@@ -294,7 +296,7 @@ function waveFingerprint(page: Page): Promise<string> {
   );
 }
 
-// v0.35.0 R3-FIX-3(리뷰 라운드3, Codex Medium) — **죽은 마이크에 움직이는 파형 금지**.
+// v0.35.0 R3-FIX-3 → 🔴 v0.44.0 §C5(F11)에서 계약 반전(아래 본문 주석) — **무음에도 idle 웨이브**.
 //   이 파형의 존재 이유가 "2~3m 밖에서 내 말을 듣고 있나 확인"이라, 마이크/프리롤 초기화가 실패해
 //   아무것도 안 듣는 상태에서 흔들리면 기능의 목적을 배신한다. 종전 합성 폴백은 진폭이
 //   `0.12 + lv*0.88`이라 레벨 0에서도 12% 진폭으로 계속 흔들렸다.
@@ -305,22 +307,29 @@ test('R3-FIX-3 — 레벨 0(마이크 사망)이면 파형이 정지(정적 세�
   await startSession(page);
   await expect(page.locator('[data-testid="state-dots"]')).toBeVisible();
 
-  // 레벨 0 = analyser 미가용(headless) + 입력 없음 = 마이크가 죽은 상태와 동일한 신호.
+  // 🔴 v0.44.0 §C5(F11) — 이 테스트의 원 계약("레벨 0 = 정지")은 민구 확정으로 **폐기**됐다:
+  //   "음성이 들리지 않아도 진동을 보여줘서 인식중이란 걸 알려라." 죽은 마이크의 신호는 이제
+  //   micLost(red 톤 + MicReconnectBanner)가 맡고, 레벨 0의 idle 웨이브는 저진폭(행 4~6)으로
+  //   흘러 파형(최대 10행)과 **모드·진폭으로** 구분된다. 되살리려면 F11 확정을 먼저 뒤집어라.
   await injectLevel(page, 0);
   await page.waitForTimeout(300); // 정착
   const a1 = await waveFingerprint(page);
-  await page.waitForTimeout(400); // 30fps면 ~12프레임 — 움직였다면 반드시 달라진다.
+  await page.waitForTimeout(400); // 30fps면 ~12프레임.
   const a2 = await waveFingerprint(page);
-  expect(a2, '레벨 0: 파형이 움직이지 않는다(정적 세로막대)').toBe(a1);
+  expect(a2, '레벨 0: idle 웨이브가 흐른다(F11 — 죽은 화면 금지)').not.toBe(a1);
+  expect(await page.locator('[data-testid="state-dots"]').getAttribute('data-mode'), '레벨 0 = idle').toBe('idle');
+  const idleLitCount = (a1.match(/1/g) ?? []).length;
 
-  // 대조군: 실제 레벨이 있으면 움직인다(위 단언이 '지문이 원래 안 변한다'는 공허한 통과가 아님).
+  // 대조군: 실제 레벨이 있으면 wave 모드로 바뀌고 켜진 셀이 는다(idle과 실발화가 구분됨).
   await injectLevel(page, 0.85);
   await page.waitForTimeout(300);
   const b1 = await waveFingerprint(page);
   await page.waitForTimeout(400);
   const b2 = await waveFingerprint(page);
   expect(b2, '레벨 0.85: 파형이 실제로 흐른다(대조군)').not.toBe(b1);
-  console.log('✓ R3-FIX-3: 레벨0=정지 / 레벨0.85=움직임 (지문 비교)');
+  expect(await page.locator('[data-testid="state-dots"]').getAttribute('data-mode'), '레벨 0.85 = wave').toBe('wave');
+  expect((b1.match(/1/g) ?? []).length, '실발화 진폭이 idle보다 크다').toBeGreaterThan(idleLitCount);
+  console.log('✓ R3-FIX-3(재협상): 레벨0=idle 저진폭 흐름 / 레벨0.85=wave 고진폭 (모드·진폭 구분)');
 });
 
 // v0.35.0 R3-FIX-4(리뷰 라운드3, Codex Medium·perf) — 렌더 루프의 **가시성 백오프 계약 보존**.

@@ -106,12 +106,14 @@ export type AudioTrackState = 'none' | 'ended' | 'muted' | 'live';
 
 export class AudioRecorder {
   private stream: MediaStream | null = null;
-  /** v0.25.0 기능2(prewarm) — 진행 중 init() Promise 공유(동시 획득 직렬화). prewarm(입력탭 마운트)과
-   *  start()의 init()이 겹치면 this.stream이 아직 없어 getUserMedia가 두 번 호출된다(스트림 누수·
-   *  리스너 이중등록·iOS Safari 동시호출 거부). 진행 중 Promise를 공유해 정확히 1회만 획득하고,
-   *  정착(성공/실패) 시 클리어한다 — 실패 시 다음 호출이 재획득하는 폴백을 보존. */
+  /** v0.25.0 기능2(구 prewarm) — 진행 중 init() Promise 공유(동시 획득 직렬화). 두 init() 호출이
+   *  겹치면 this.stream이 아직 없어 getUserMedia가 두 번 호출된다(스트림 누수·리스너 이중등록·
+   *  iOS Safari 동시호출 거부). v0.44.0 F18 이후의 겹침 축은 start() 선두의 **선행 획득 await**과
+   *  같은 start() 안의 후행 fire-and-forget init()이다(구 prewarm 마운트 축은 폐지). 진행 중
+   *  Promise를 공유해 정확히 1회만 획득하고, 정착(성공/실패) 시 클리어한다 — 실패 시 다음 호출이
+   *  재획득하는 폴백을 보존. */
   private initPromise: Promise<boolean> | null = null;
-  /** v0.25.0 기능2 — 마지막 init() 실패 사유(DOMException.name 등). prewarm 텔레메트리 `_denied`가 읽는다. */
+  /** v0.25.0 기능2 — 마지막 init() 실패 사유(DOMException.name 등). */
   private lastInitError: string | null = null;
   /** v0.38.0 [리뷰#6·#7] **획득 세대.** `dispose()`와 **모든 스트림 획득 시작**이 올린다.
    *  획득을 시작한 쪽은 자기 세대를 잡아 두고, 결과가 도착했을 때 세대가 그대로일 때만 그 스트림을

@@ -56,6 +56,7 @@ const SETTINGS = {
 
 const MOCK_INIT_SCRIPT = `
 (function() {
+  window.__micSettleSkipForTest = true; // F18 픽스처 우회 — 시작 시 1초 마이크 정착 생략(우회 심 오라클: v0440-c8-flow.spec.ts)
   window.__ttsLog = [];
   window.__clipMode = 'ok';
 

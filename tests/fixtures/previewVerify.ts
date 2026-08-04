@@ -185,7 +185,15 @@ export function diffFingerprints(live: Fingerprint, preview: Fingerprint): strin
   if (extra.length > 0) problems.push(`프리뷰에만 있는 노드: ${extra.join(', ')}`);
 
   if (live.dotMask && preview.dotMask) {
+    // §C5-①(F19) idle 웨이브는 **매 프레임 위상이 흐르는** 애니메이션이다 — 라이브 지문과
+    // 프리뷰 직렬화가 각자 다른 순간을 찍으므로 lit/partial/off 셀 수가 몇 개씩 어긋나는 게
+    // 정상이다(§C4 pauseMonoPulse의 opacity 정규화와 같은 클래스 — 위 nodes 주석 참조).
+    // v0.44.0 §C8 F18이 세션 시작 타이밍을 프레임 경계만큼 옮기면서 이 위상 어긋남이 실측됐다
+    // (09-chipzone-overflow: lit 88↔92 플레이크). idle 모드는 mode 일치만 대조하고 셀 수는
+    // 건너뛴다 — 격자 무결성(18×10=180)은 capture 스펙이 라이브 마스크로 따로 고정한다.
+    const idlePhaseFlows = live.dotMask.mode === 'idle' && preview.dotMask.mode === 'idle';
     for (const key of ['mode', 'lit', 'partial', 'off'] as const) {
+      if (idlePhaseFlows && key !== 'mode') continue;
       if (live.dotMask[key] !== preview.dotMask[key]) {
         problems.push(`도트 마스크 ${key}: ${live.dotMask[key]} → ${preview.dotMask[key]}`);
       }

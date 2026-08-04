@@ -23,6 +23,7 @@ const PHONE = { width: 402, height: 874 };
 // isSpeechSupported() 통과용 최소 스텁. start() 후 onstart만 부르고 결과는 안 보냄
 // (레이아웃 검증이라 인식 결과 불필요 — ActiveState 진입이 목적).
 const SR_STUB = `
+  window.__micSettleSkipForTest = true; // F18 픽스처 우회 — 시작 시 1초 마이크 정착 생략(우회 심 오라클: v0440-c8-flow.spec.ts)
   class StubRecognition {
     constructor() { this.lang=''; this.continuous=false; this.interimResults=false; }
     start() { if (this.onstart) try { this.onstart(); } catch(e){} }
@@ -85,7 +86,9 @@ test('W5 — ActiveState 진입 + 컨트롤바 한자리 고정(버그B)', async
 
   // ActiveState에 들어왔는지 확인 — v0.31.0부터 활성 하단에 종료 버튼이 없다([TEST-UI-2]).
   // 기준점은 활성/일시정지 양쪽에 항상 렌더되는 input-control-toggle로 잡는다.
-  const controlAnchor = page.locator('[data-testid="input-control-toggle"]');
+  // v0.44.0 §C5-b — 접힌 토글은 nav 전용 오버레이(paused에선 display:none). 계약("컨트롤바
+  // 한자리 고정")의 앵커를 컨트롤바 자체로 바꾼다(v023과 동일 정정).
+  const controlAnchor = page.locator('[data-testid="voice-control-bar"]');
   await expect(controlAnchor).toBeVisible({ timeout: 5000 });
 
   await page.screenshot({ path: '/tmp/v019-shots/after-active-hero.png' });

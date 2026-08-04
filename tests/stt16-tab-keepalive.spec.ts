@@ -7,7 +7,8 @@
  *
  * 수정(택일 (a) keep-alive 렌더): 세션이 살아 있는 동안 VoiceScreen을 display:none으로
  * 유지(unmount 금지) → 인식기가 탭 전환을 그대로 관통해 살아남는다. 세션이 없으면 기존대로
- * unmount(첫 진입 전 prewarm 안 뜸).
+ * unmount. (v0.44.0 §C8 F18 — 마운트 prewarm 폐지: 세션 없는 탭 왕복은 getUserMedia 0회.
+ * mic_prewarm_* 텔레메트리 기반 오라클은 그 계약으로 재작성됐다.)
  *
  * 함께 검증: 항목4의 visibilitychange/pageshow 복귀 훅 — kick_result:* 텔레메트리 배선.
  *
@@ -407,11 +408,10 @@ test('[STT-16] 탭 전환(입력→데이터→입력) 후 STT 자동 생존 —
   await fireStt(page, '35.1', 300);
   await waitForActiveChip(page, '종경');
 
-  // 기준점: 지금까지의 prewarm 횟수(최초 마운트분 — dev StrictMode는 마운트 효과를 2회 돌리므로
-  // 절대값 대신 "탭 왕복 후 증가 없음"을 단언한다).
-  const prewarmsBefore = (await loadLogEventsFromIDB(page))
-    .filter((e) => e.extra === 'mic_prewarm_attempt').length;
-  expect(prewarmsBefore).toBeGreaterThan(0);
+  // v0.44.0 §C8 F18 — 마운트 prewarm 폐지로 mic_prewarm_* 텔레메트리 기준점 단언은 은퇴했다.
+  // (구 단언: 마운트분 prewarm > 0 + 탭 왕복 후 증가 없음 = "재마운트 없음"의 계측 증명.
+  //  이제 마운트는 마이크를 만지지 않으므로 그 계측 자체가 없다 — keep-alive의 몸통 증명은
+  //  아래 행동 단언(복귀 직후 STT 커밋 지속)이 그대로 담당한다.)
 
   // 입력 → 데이터 → 입력 (07-13 S1/S2 재현 시퀀스)
   await page.locator('[data-testid="tab-data"]').click();
@@ -427,13 +427,12 @@ test('[STT-16] 탭 전환(입력→데이터→입력) 후 STT 자동 생존 —
   await waitForRow(page, 2);
   expect(await getActiveRow(page)).toBe(2); // 행 1 완료 → 자동 전진 = 인식기 생존 증명
 
-  // 텔레메트리: 탭 전환 왕복이 기록되고(B-4), 재마운트가 없었으므로 mic_prewarm은 최초 1회뿐.
+  // 텔레메트리: 탭 전환 왕복이 기록된다(B-4). (mic_prewarm 계측은 F18로 은퇴 — 위 주석.)
   const events = await loadLogEventsFromIDB(page);
   const tabEvents = events.filter((e) => e.type === 'command' && e.parsed === 'tab');
   expect(tabEvents.some((e) => e.extra === 'tab:voice->data')).toBe(true);
   expect(tabEvents.some((e) => e.extra === 'tab:data->voice')).toBe(true);
-  const prewarms = events.filter((e) => e.extra === 'mic_prewarm_attempt');
-  expect(prewarms.length).toBe(prewarmsBefore); // 재마운트 없음 = unmount teardown 자체가 사라짐
+  expect(events.some((e) => (e.extra ?? '').startsWith('mic_prewarm'))).toBe(false); // F18 — prewarm 부활 금지
 
   // IDB: 탭 전환을 관통해 행 1이 정상 완료로 영속화됨.
   await fireStt(page, '종료', 1000);
@@ -446,8 +445,26 @@ test('[STT-16] 탭 전환(입력→데이터→입력) 후 STT 자동 생존 —
   expect(row1?.values['c9']).toBe('28.3');
 });
 
-test('세션 없으면 keep-alive 없음 — 입력탭 이탈 시 VoiceScreen unmount(재진입 시 prewarm 재시도)', async ({ page }) => {
+// v0.44.0 §C8 F18 재작성 — 구 오라클(재진입 fresh mount마다 prewarm 재발화)은 prewarm 폐지로
+// 매체를 잃었다. 같은 자리(세션 없는 입력탭 수명주기)를 F18 계약으로 다시 고정한다:
+// **어떤 탭 왕복도 getUserMedia를 호출하지 않는다**(요청 시점은 오직 '음성 입력 시작' 클릭).
+// unmount 자체(자원 위생)는 유지되지만 이제 관찰 가능한 마이크 부작용이 없다 — 그 "없음"이 계약이다.
+test('세션 없으면 입력탭 왕복이 마이크를 만지지 않는다 — getUserMedia 0회(F18)', async ({ page }) => {
   await page.addInitScript(MOCK_INIT_SCRIPT);
+  // getUserMedia 호출 계수 스텁 — headless 기본과 동일하게 **거부**하되 호출만 센다.
+  await page.addInitScript({
+    content: `
+      window.__gumCallCount = 0;
+      if (navigator.mediaDevices) {
+        try {
+          Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
+            value: function() { window.__gumCallCount++; return Promise.reject(new DOMException('denied', 'NotAllowedError')); },
+            writable: true, configurable: true,
+          });
+        } catch(e) {}
+      }
+    `,
+  });
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate((s) => {
     localStorage.clear();
@@ -457,22 +474,21 @@ test('세션 없으면 keep-alive 없음 — 입력탭 이탈 시 VoiceScreen un
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(500);
 
-  // 세션 시작 없이 입력탭 → 데이터탭 → 입력탭 왕복: 매 진입이 fresh mount여야 한다.
+  // 세션 시작 없이 입력탭 → 데이터탭 → 입력탭 왕복(재진입 fresh mount 포함).
   await page.locator('[data-testid="tab-voice"]').click();
   await page.waitForTimeout(400);
-  const prewarmsFirstEntry = (await loadLogEventsFromIDB(page))
-    .filter((e) => e.extra === 'mic_prewarm_attempt').length;
-  expect(prewarmsFirstEntry).toBeGreaterThan(0);
-
   await page.locator('[data-testid="tab-data"]').click();
   await page.waitForTimeout(300);
   await page.locator('[data-testid="tab-voice"]').click();
   await page.waitForTimeout(400);
 
+  const gumCalls = await page.evaluate(
+    () => (window as unknown as { __gumCallCount?: number }).__gumCallCount ?? -1,
+  );
+  expect(gumCalls, '세션 없는 탭 왕복에서 getUserMedia가 호출됐다(WS-2 prewarm 부활)').toBe(0);
+  // 구 prewarm 텔레메트리도 부활 금지.
   const events = await loadLogEventsFromIDB(page);
-  const prewarms = events.filter((e) => e.extra === 'mic_prewarm_attempt');
-  // 재진입 = fresh mount → prewarm이 추가로 발화(세션 없을 때 기존 수명주기 보존).
-  expect(prewarms.length).toBeGreaterThan(prewarmsFirstEntry);
+  expect(events.some((e) => (e.extra ?? '').startsWith('mic_prewarm'))).toBe(false);
 });
 
 test('항목4 — 포그라운드 복귀 훅: pageshow/visibilitychange가 kick_result:* + lifecycle:vis_*를 남긴다', async ({ page }) => {
@@ -503,7 +519,12 @@ test('항목4 — 포그라운드 복귀 훅: pageshow/visibilitychange가 kick_
   await fireStt(page, '종료', 800);
 });
 
-test('[MIC-B2] 실제 복귀 배선은 ready phase에서도 임계 경계와 vis→pageshow 중복 소비를 지킨다', async ({ page }) => {
+// v0.44.0 §C8 F18 적응 — 구 제목은 "ready phase에서도"였다: prewarm이 마운트에서 레코더를
+// 만들어 ready에도 teardown/revalidate 배선이 관측됐기 때문이다. prewarm 폐지로 ready엔
+// 레코더가 없고(복귀 요약은 teardown=no_recorder로 침묵이 정상), 이 스펙이 잠그려던
+// **레코더 존재 시의 실제 배선 바이트**는 세션 중에만 관측된다 → 세션을 시작하고 검증한다.
+// (gum은 headless 기본 거부 — 스트림 없는 레코더 = 종전과 동일한 found=none 관측 경로.)
+test('[MIC-B2] 실제 복귀 배선은 임계 경계와 vis→pageshow 중복 소비를 지킨다(레코더는 세션 중 존재 — F18)', async ({ page }) => {
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate((s) => {
@@ -514,8 +535,13 @@ test('[MIC-B2] 실제 복귀 배선은 ready phase에서도 임계 경계와 vis
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.locator('[data-testid="tab-voice"]').click();
   await page.waitForTimeout(500);
+  const startBtn = page.locator('text=음성 입력 시작').first();
+  await expect(startBtn).toBeVisible();
+  await startBtn.click();
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 5000 });
+  await page.waitForTimeout(600);
 
-  // 세션을 시작하지 않아 phase='ready'인 상태에서 정책 배선을 실제 DOM 이벤트로 발화한다.
+  // 세션 활성(레코더 존재) 상태에서 정책 배선을 실제 DOM 이벤트로 발화한다.
   await page.evaluate((threshold) => {
     const originalNow = Date.now;
     let now = 1_000;
@@ -570,6 +596,9 @@ test('[MIC-B2] 실제 복귀 배선은 ready phase에서도 임계 경계와 vis
 // 교과서적 사례라 리뷰 지적을 그대로 수용했다.
 //
 // 여기서는 **실제 DOM visibility 이벤트**로 배선을 발화시키고 IDB에 남은 바이트를 검사한다.
+// v0.44.0 §C8 F18 적응 — 종전엔 ready phase에서 검증했다(prewarm이 레코더를 만들어 뒀으므로).
+// 이제 ready엔 레코더가 없어 revalidate는 의도된 침묵(`!rec` 조기 반환 — 링버퍼 보호)이다.
+// 호출-잠금(ORCH-18)의 관측처는 세션 중(레코더 존재)뿐이라 세션을 시작하고 검증한다.
 test('[F5] 실제 복귀 배선이 audio_route_revalidate를 남긴다 — 정책만이 아니라 호출까지 잠근다', async ({ page }) => {
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
@@ -581,6 +610,11 @@ test('[F5] 실제 복귀 배선이 audio_route_revalidate를 남긴다 — 정�
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.locator('[data-testid="tab-voice"]').click();
   await page.waitForTimeout(500);
+  const startBtn = page.locator('text=음성 입력 시작').first();
+  await expect(startBtn).toBeVisible();
+  await startBtn.click();
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 5000 });
+  await page.waitForTimeout(600);
 
   await page.evaluate((threshold) => {
     const originalNow = Date.now;

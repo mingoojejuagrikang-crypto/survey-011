@@ -121,6 +121,12 @@ const EARLY_COMMIT_STABLE_MS = 400;
  *  의도적 차등 — stop() 5초(세션 종료, 최대 보존), 아카이브 flush 1.5초(백그라운드, UX 무영향). */
 const PAUSE_FLUSH_GRACE_MS = 3000;
 
+/** v0.44.0 §C8 F18(민구 확정 08-02) — 마이크 **승인 후 화면 전환까지의 정착 지연**(ms).
+ *  민구 원문: "바로 음성 입력 화면 전환시 일부 초기 음성 클립 생성이 안됨" — 스트림이 실제로
+ *  데이터를 흘리기 전에 세션이 시작되면 첫 클립이 비는 문제의 방어다(구 v0.25.0 WS-2 prewarm의
+ *  첫 클립 유실 완화를 이 지연이 승계한다). 오라클: tests/v0440-c8-flow.spec.ts(1000ms 계약). */
+const MIC_SETTLE_MS = 1000;
+
 /** v0.43.0 #4 — 백그라운드 복귀 안내 문구(plan §3-3, 민구 확정).
  *
  *  🔴 **중지 안내와 복귀 안내가 한 문장으로 합쳐져 있다.** iOS는 백그라운드 TTS를 막으므로
@@ -152,6 +158,9 @@ export interface VoiceRuntimeSnapshot {
 
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
+  // F18 — start()의 마이크 획득+정착 대기 중 재클릭 가드. 그 창에서는 phase가 아직 'ready'라
+  // '음성 입력 시작' 버튼이 살아 있어, 가드 없이는 start()가 이중 진입한다(세션 이중 생성).
+  const startingRef = useRef(false);
   const sessionIdRef = useRef<string>('');
   const sessionLabelRef = useRef<string | undefined>(undefined);
   // 설정탭은 활성 세션 중에도 바뀔 수 있다. 목적지와 컬럼은 start()에서 함께 고정해 한 세션의
@@ -355,8 +364,10 @@ export function useVoiceSession() {
   };
 
   // v0.5.0 NAV-1: 단방향 진행 — wrap-around 2차 루프(위쪽 빈 행으로 되돌아가던 탐색) 제거.
-  // '다음'/행 완료는 아래 방향으로만 전진하고, 건너뛴 행은 complete:false placeholder로 남아
+  // 행 완료(advance)는 아래 방향으로만 전진하고, 건너뛴 행은 complete:false placeholder로 남아
   // 데이터탭(EditableCell 터치 편집)에서 채운다.
+  // ⚠️ v0.44.0 §C8 F13 — '다음'(goNextRow)은 더 이상 이 탐색을 쓰지 않는다(항상 +1 이동).
+  //   이 함수의 소비자는 advance()의 행 완료 자동 전진뿐이다.
   const findNextIncompleteRow = (start: number, total: number, vCols: Column[]): number | null => {
     for (let r = start; r <= total; r++) {
       if (!isRowVoiceComplete(r, vCols)) return r;
@@ -1098,11 +1109,24 @@ export function useVoiceSession() {
     [announceField, enterReviewWait, jumpToRow, say],
   );
 
-  // ── v0.5.0 NAV-1: '다음' 단방향 전진 (음성 '다음' + ▶다음 버튼 공용) ──────────
-  // 현재 행이 미완료면 skip 표시 + 즉시 영속화(placeholder)한 뒤
-  // 아래 방향의 다음 미완료 행으로만 이동한다. returnRow를 만들지 않으므로(기존 stale 복귀도
-  // 해제) 완료 행으로 반복 복귀하는 NAV-1 루프가 구조적으로 불가능해진다. 더 갈 행이 없으면
-  // v0.23.0 입력탭#4 — 자동 종료하지 않고 빈 행 안내 후 종료 대기(announceEndReached).
+  // ── v0.44.0 §C8 F13(민구 확정 08-02): '다음' = '이전'과 대칭인 **항상 +1 이동** ──────────
+  // v0.5.0 NAV-1이 여기 두었던 「findNextIncompleteRow로 완료 행 건너뛰기」를 제거했다 —
+  // 실기기 로그 실측(08-02)에서 '다음'의 jump delta가 +2·+4로 튀던 원인이 그 건너뛰기다.
+  // (findNextIncompleteRow 자체는 advance()의 행 완료 자동 전진에 남아 있다 — F13의 대상 아님.)
+  //
+  // 🔴 NAV-1 무한루프 방지 계약의 **대체 = 「마지막 행에서 멈춤」**:
+  //   · returnRow 미등록(setReturn(null))은 그대로다 — 완료 행 자동 복귀 경로 자체가 없다.
+  //   · 전진은 항상 아래로 +1, 마지막 행에서는 이동 없이 재안내만 한다(무음 금지 REVIEW-4 —
+  //     gotoAdjacentRow의 '첫 행입니다' REPROMPT와 대칭). wrap-around가 없으므로 완료 행
+  //     재프롬프트 루프(NAV-1)는 여전히 구조적으로 불가능하다.
+  //   · 완료 행 착지는 jumpToRow의 검토 대기(enterReviewWait — 값 낭독+명령 대기)가 받는다.
+  //     값 수신 재프롬프트가 아니므로 NAV-1의 「완료 행 재프롬프트」도 부활하지 않는다.
+  //   · 이 경계 멈춤이 구 [EXIT-REACH-1] 분기(완료 행 검토 중 '다음'의 announceEndReached 재발화
+  //     방지)를 흡수한다: '다음'은 더 이상 announceEndReached를 부르지 않는다 — 끝 도달 전환은
+  //     advance()(행 완료)와 종료 명령의 소관이다.
+  // skip 개념(값 없이 지나간 행 = complete:false placeholder)은 유지 — **실제로 행을 떠날 때만**
+  // 마킹한다(경계 멈춤은 이동이 아니므로 마킹하지 않는다).
+  // 오라클: tests/v0440-c8-flow.spec.ts (jump delta 전 구간 ±1 · 경계 멈춤 · skip placeholder).
   const goNextRow = useCallback(async (source: 'voice' | 'touch' = 'touch') => {
     if (useSessionStore.getState().phase === 'stopping') return;
     // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중 행 이동 거부(위 gotoAdjacentRow와 동일 근거:
@@ -1115,6 +1139,24 @@ export function useVoiceSession() {
     epochRef.current++; // in-flight advance/안내 체인 무효화 (RACE-1 패턴 유지)
     sess.setReturn(null, null);
     const row = sess.activeRow;
+    if (row >= total) {
+      // F13 — 마지막 행 경계: 멈춘다. 완료 행이면 검토 대기 재무장(값 재낭독), 미완료면 현재
+      // 필드 재안내(둘 다 무음 금지). endReached 전환 없음 — 종료는 '종료' 명령/버튼만.
+      logCell({
+        type: 'command', parsed: 'nextRow', extra: rowMarked('row_last_stop', row, source),
+        row,
+      });
+      const msg = '마지막 행입니다.';
+      sess.setLastTts(msg);
+      await say(msg);
+      if (isRowVoiceComplete(row, vc)) {
+        await enterReviewWait(row);
+        return;
+      }
+      const cur = vc[sess.activeColIdx];
+      if (cur) await announceField(cur);
+      return;
+    }
     if (!isRowVoiceComplete(row, vc)) {
       sess.markRowSkipped(row);
       logCell({
@@ -1129,25 +1171,9 @@ export function useVoiceSession() {
         row,
       });
     }
-    const next = findNextIncompleteRow(row + 1, total, vc);
-    if (next === null) {
-      // [EXIT-REACH-1] 끝 도달 뒤 완료 행을 검토 중이면 "아래 미완료 없음"은 새 끝 도달이 아니다.
-      // 다음 완료 행은 검토 상태로 이동하고, 마지막 행 경계에서는 현재 검토를 재무장한다.
-      // 이 분기가 없으면 완료 행의 [다음]마다 announceEndReached가 재발화해 중앙 종료가 부활한다.
-      if (sess.phase === 'complete' && !sess.endReached && isRowVoiceComplete(row, vc)) {
-        if (row < total) {
-          await jumpToRow(row + 1, { setReturn: false, source });
-        } else {
-          await enterReviewWait(row);
-        }
-        return;
-      }
-      // v0.23.0 입력탭#4 — '다음'으로 마지막 행에 도달해도 자동 종료하지 않고 종료 안내 후 대기.
-      await announceEndReached();
-      return;
-    }
-    await jumpToRow(next, { setReturn: false, source });
-  }, [announceEndReached, enterReviewWait, jumpToRow, persistSession]);
+    // 완료 행 착지는 jumpToRow가 검토 대기로, 미완료 행 착지는 첫 미완료 필드 안내로 처리한다.
+    await jumpToRow(row + 1, { setReturn: false, source });
+  }, [announceField, enterReviewWait, jumpToRow, persistSession, say]);
 
   // ── v0.7.0 B4: 추세 검증 ───────────────────────────────────
   /** trend_skip 텔레메트리 — 같은 원인은 세션당 1회만 기록(셀마다 반복돼 로그를 도배하지 않게).
@@ -1623,8 +1649,9 @@ export function useVoiceSession() {
           await gotoAdjacentRow(-1, 'voice');
           return;
         case 'nextRow':
-          // v0.5.0 NAV-1: '다음'은 항상 단방향 전진(goNextRow) —
-          // 미완료 행은 skip(placeholder) 처리, returnRow 미등록, 완료 행 재프롬프트 없음.
+          // v0.44.0 §C8 F13: '다음'은 '이전'과 대칭인 항상 +1 이동(goNextRow) —
+          // 미완료 행은 skip(placeholder) 처리, returnRow 미등록, 마지막 행에서 멈춤
+          // (NAV-1 무한루프 방지의 대체 계약 — goNextRow 본문 주석 참조).
           await goNextRow('voice');
           return;
         case 'keep': await cmdKeep(awaiting); return;
@@ -2467,6 +2494,40 @@ export function useVoiceSession() {
     const total = computeTotalRows(columns);
     if (total === 0) return false;
 
+    // v0.38.0 리뷰#1(Codex High) — 이전 세션의 마지막 UI 음성명령(도움말·인식률 등)이 남아 있으면,
+    // 새 세션에서 ActiveState가 마운트될 때 소비 시퀀스가 0으로 초기화돼 **그 명령이 자동 재실행**된다
+    // (세션 B 시작하자마자 도움말이 열리고, 인식률 설정이 한 번 더 바뀐다). 세션 경계에서 비운다.
+    // 🔴 F18 이후 이 클리어는 **아래 첫 await보다 앞(클릭 이벤트의 동기 구간)** 이어야 한다.
+    //    await 뒤로 밀리면 클릭 배치가 끝난 프라미스 연속에서 zustand setPhase('active')의 동기
+    //    렌더가 useState 클리어 flush보다 먼저 ActiveState를 마운트해 stale 신호가 재실행된다
+    //    (실측: v026 [리뷰#1] red — 세션 B에서 도움말이 저절로 열림).
+    uiCommandSeqRef.current = 0;
+    setUiCommand(null);
+
+    // ── v0.44.0 §C8 F18(민구 확정 08-02) — 마이크 권한 요청 시점 = **이 클릭** ─────────
+    // 종전 v0.25.0 WS-2는 입력탭 마운트에서 prewarm(getUserMedia)을 돌렸다 — 탭에 들어가기만
+    // 해도 권한 요청이 떴다. 이제 요청은 여기(시작 버튼의 사용자 제스처 콜스택)서만 일어난다
+    // (iOS의 제스처 요건 [IOS-5]에도 부합). 승인되면 MIC_SETTLE_MS(1초) 정착 후에 화면을
+    // 전환한다(민구 원문: "바로 음성 입력 화면 전환시 일부 초기 음성 클립 생성이 안됨").
+    // 거부/실패 시에는 지연 없이 즉시 진행한다 — 기존 폴백(아래 fire-and-forget init 재시도 +
+    // micLost/재연결 배너)이 그대로 받는다. 이 await 구간 phase는 아직 'ready'(화면 전환 전).
+    if (startingRef.current) return false; // 정착 대기 중 재클릭 → 이중 세션 시작 차단
+    startingRef.current = true;
+    try {
+      if (!recorderRef.current) recorderRef.current = new AudioRecorder();
+      const granted = await recorderRef.current.init().catch(() => false);
+      // 🔴 테스트 전용 우회(조용한 우회 금지): 픽스처가 `window.__micSettleSkipForTest = true`를
+      //    세우면 **정착 지연만** 생략한다(요청 시점·횟수 계약은 그대로). 제품 경로의 1초 지연과
+      //    이 우회 심 자체를 tests/v0440-c8-flow.spec.ts가 모두 오라클로 고정한다 — 심을 지우면 red.
+      const skipSettle =
+        (window as unknown as { __micSettleSkipForTest?: boolean }).__micSettleSkipForTest === true;
+      if (granted && !skipSettle) {
+        await new Promise((r) => setTimeout(r, MIC_SETTLE_MS));
+      }
+    } finally {
+      startingRef.current = false;
+    }
+
     sessionTargetRef.current = target;
     sessionColumnsRef.current = columns;
     setSessionColumns(columns);
@@ -2512,11 +2573,7 @@ export function useVoiceSession() {
     // 스트림으로 시작한다(start()가 새 AudioRecorder.init()로 재획득).
     micLostLatchedRef.current = false;
     setMicLost(false);
-    // v0.38.0 리뷰#1(Codex High) — 이전 세션의 마지막 UI 음성명령(도움말·인식률 등)이 남아 있으면,
-    // 새 세션에서 ActiveState가 마운트될 때 소비 시퀀스가 0으로 초기화돼 **그 명령이 자동 재실행**된다
-    // (세션 B 시작하자마자 도움말이 열리고, 인식률 설정이 한 번 더 바뀐다). 세션 경계에서 비운다.
-    uiCommandSeqRef.current = 0;
-    setUiCommand(null);
+    // (UI 음성명령 신호 클리어는 F18로 setPhase('active') **이전**으로 이동 — 위 주석 참조.)
     sessionTodayRef.current = localTodayISO();
     // v0.8.0: 과거값 인덱스 프리페치(fire-and-forget) — 마스터 토글 제거 → 이상치 알람 규칙
     // (방향 trendRule 또는 변동률 pctThreshold)이 한 컬럼이라도 있고 Google 연결 시에만.
@@ -2561,15 +2618,16 @@ export function useVoiceSession() {
       },
     });
 
-    // Init audio recorder fire-and-forget — mic permission is independent of STT startup.
-    // Awaiting getUserMedia can block indefinitely in headless/denied-permission environments.
+    // F18 이후에도 이 fire-and-forget init은 남긴다: 위 선행 획득이 성공했으면 멱등(스트림 존재 →
+    // 즉시 true, getUserMedia 재호출 없음)이고, 거부/실패였으면 여기가 재시도 폴백이다. ui_fx/
+    // input_device 텔레메트리의 방출 지점이기도 하다. STT 기동을 막지 않도록 await하지 않는다.
     if (!recorderRef.current) recorderRef.current = new AudioRecorder();
     // 🔴 v0.43.0 #4 — 레코더는 **세션 간 재사용된다**(위 조건이 null일 때만 새로 만든다). 그래서
     //   백그라운드에서 캡처를 끈 뒤 복귀 이벤트를 못 받고 세션이 끝나면(탭 unmount 등) 트랙이
     //   꺼진 채 남아 **다음 세션이 조용히 무음을 녹음한다.** 세션 경계에서 무조건 되돌린다.
     recorderRef.current.setCaptureEnabled(true);
-    // v0.34.0 D11b — 파동 통계 리셋: prewarm(입력탭 마운트)이 세션 전부터 캡처를 돌리므로
-    // 세션 밖 구간이 wave_stats에 섞이지 않게 시작 시점에 0으로 되돌린다.
+    // v0.34.0 D11b — 파동 통계 리셋: F18의 선행 획득(클릭~1초 정착)이 세션 확정 전부터 캡처를
+    // 돌리므로 세션 밖 구간이 wave_stats에 섞이지 않게 시작 시점에 0으로 되돌린다.
     recorderRef.current.resetWaveStats();
     // #4 active mic: once init() resolves, emit a follow-up session event carrying the granted
     // input device. Done async (not awaited) so STT startup is never blocked; emitted as its own
@@ -2923,12 +2981,14 @@ export function useVoiceSession() {
       foregroundReturnRef.current = decision.state;
       // v0.38.2 F5 — 오디오 경로 재검증. teardown과 **같은 복귀 이벤트에서 짝으로** 읽히도록 여기서
       // 시작한다(비동기라 순서는 보장 안 되지만 같은 복귀 구간임은 bg_s로 대조된다).
-      // phase 게이트보다 앞인 이유도 teardown과 같다 — prewarm이 세션 시작 전부터 캡처를 붙여둔다.
+      // phase 게이트보다 앞인 이유도 teardown과 같다 — 캡처가 세션 확정 전(F18: 시작 클릭~1초
+      // 정착 구간, 구 prewarm 계보)부터 붙을 수 있다.
       void emitRouteRevalidate(evt, decision.hiddenInputLabel, decision.backgroundMs);
       // v0.38.1 [MIC-B2] 낡은 오디오 그래프 선-정리는 **세션 phase보다 먼저, phase와 무관하게** 본다.
-      // prewarm(입력탭 마운트)이 세션 시작 전부터 캡처를 붙여두므로 유휴 상태로 오래 백그라운드에
-      // 있다 돌아온 경우가 오히려 위험하다 — 그 물린 그래프를 진 채 세션을 시작하면 첫 획득부터
-      // 인터럽트된 오디오 세션 위에서 돈다. 재획득은 하지 않는다([IOS-5] 유지) — 정리만.
+      // (원 근거였던 「prewarm이 세션 전부터 캡처를 붙여둔다」는 F18로 사라졌지만, paused/stopping
+      // 등 phase 게이트 밖 구간과 F18 선행 획득~정착 창이 남아 있어 순서는 유지한다.)
+      // 물린 그래프를 진 채 세션을 시작하면 첫 획득부터 인터럽트된 오디오 세션 위에서 돈다.
+      // 재획득은 하지 않는다([IOS-5] 유지) — 정리만.
       // F6 — 복귀당 정확히 1건. completed는 teardown Promise가 **실제로 끝난 뒤**에만 기록한다.
       // close/reattach 상세의 정본은 기존 mic_teardown이고, 여기서는 skipped/no_recorder/
       // completed/failed로 복귀 처리 결과만 요약한다(PRINCIPLES §4 중복 계측 금지).
@@ -3395,26 +3455,10 @@ export function useVoiceSession() {
     });
   }, []);
 
-  // v0.25.0 기능2(WS-2, 민구 요청) — 입력탭 진입(마운트) 시 마이크 prewarm(첫 클립 유실 완화책 1).
-  // 기존 start()의 init() 폴백은 **그대로 두고** 위에 얹는 best-effort 배선이다(제거 아님 → 회귀 0).
-  // recorderRef.current를 여기서 채우면 이후 start()/reconnectMic이 같은 인스턴스를 재사용하고,
-  // init()은 멱등(this.stream 있으면 즉시 true)이라 재획득하지 않는다(동시호출은 audioRecorder의
-  // initPromise가 직렬화 → getUserMedia 1회). iOS standalone에선 마운트 효과가 탭 클릭 콜스택 밖이라
-  // 첫 획득이 NotAllowedError일 수 있으나([CLIP-DEVICECHANGE-1] 동일 실패모드), 거부돼도 start()가
-  // 재시도(폴백)하고 micLost/"마이크 재연결"은 불변. 효과/안전은 다음 실기기 로그 mic_prewarm_* 분포로 확정.
-  const prewarmMic = useCallback(async () => {
-    if (!recorderRef.current) recorderRef.current = new AudioRecorder();
-    const rec = recorderRef.current;
-    const t0 = Date.now();
-    logger.log({ type: 'app', extra: 'mic_prewarm_attempt' });
-    let ok = false;
-    try { ok = await rec.init(); } catch { ok = false; }
-    if (ok) {
-      logger.log({ type: 'app', extra: 'mic_prewarm_ok', durationMs: Date.now() - t0 });
-    } else {
-      logger.log({ type: 'app', extra: `mic_prewarm_denied:${rec.getLastInitError() ?? 'unknown'}` });
-    }
-  }, []);
+  // v0.44.0 §C8 F18 — v0.25.0 기능2(WS-2) prewarmMic(입력탭 마운트 시 마이크 선획득)를 **폐지**했다.
+  // 민구 확정(08-02): 권한 요청 시점 = '음성 입력 시작' 클릭. 획득은 start() 선두의 선행 init()이
+  // 담당하고, WS-2의 목적(첫 클립 유실 완화)은 승인 후 MIC_SETTLE_MS(1초) 정착 지연이 승계한다.
+  // mic_prewarm_* 텔레메트리도 함께 은퇴 — 진입 시 getUserMedia 0회는 v0440-c8-flow.spec.ts가 고정.
 
   return {
     start,
@@ -3446,7 +3490,6 @@ export function useVoiceSession() {
     micLost,
     micReconnectFallbackVisible,
     reconnectMic,
-    prewarmMic,
     uiCommand,
     sessionColumns,
   };
