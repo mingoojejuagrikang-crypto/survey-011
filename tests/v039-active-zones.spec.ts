@@ -491,13 +491,13 @@ test('§공통규칙5 — 인디케이터 아래 `[‹][⏹][⏸][›]` 4심볼(
       cells: el.querySelectorAll('span').length,
     };
   });
-  expect(dotsFit.cells, '13×7 격자').toBe(91);
+  expect(dotsFit.cells, '18×10 격자(§C5 밀도 2배)').toBe(180);
   expect(dotsFit.overflow, '격자가 밴드를 넘치지 않는다').toBeLessThan(1);
 
   // 와이어프레임 §공통규칙5 — 대기(무음)에는 **상태 글리프**, 음성이 들어오면 같은 격자가 **파형**이 된다.
   await injectLevel(page, 0);
   await page.waitForTimeout(600); // hangover(400ms) 경과 대기
-  expect(await indicatorMode(page), '대기: 글리프').toBe('glyph');
+  expect(await indicatorMode(page), '대기: idle 웨이브(§C5 F19 — mic 글리프는 렌더하지 않는다)').toBe('idle');
   await injectLevel(page, 0.9);
   expect(await indicatorMode(page), '음성 입력: 도트 파형').toBe('wave');
   // 🔴 전환은 표시 전환이지 마운트 교체가 아니다 — 격자는 계속 **하나**로 살아 있다([STT-16]).
@@ -574,7 +574,7 @@ test('🔴 [UI-WAVE-1] 소멸 — 어떤 레벨에서도 도트와 파형이 **�
     expect(m.layers, `레벨 ${lv}: 인디케이터 레이어는 하나뿐`).toBe(1);
     // 호흡 애니메이션이 opacity를 흔들지만, 그건 켜진 셀 안에서의 변조지 두 그림의 혼합이 아니다.
     // 따라서 "무엇을 그리는가"는 항상 단일 모드다.
-    expect(['glyph', 'wave']).toContain(m.mode);
+    expect(['glyph', 'wave', 'idle']).toContain(m.mode);
     expect(m.lit + m.partial, `레벨 ${lv}: 켜진 셀이 존재한다(공허 방지)`).toBeGreaterThan(0);
   }
   console.log(`[UI-WAVE-1] sweep: ${seen.join(' ')}`);
@@ -591,7 +591,10 @@ async function dotOpacitySnapshot(page: Page) {
       else if (cell.style.opacity === '0') {
         off.push({ index, computedOpacity: getComputedStyle(cell).opacity });
       }
-      if (getComputedStyle(cell).animationName === 'dot-breathe') animatedIndices.push(index);
+      // §C4 이후 켜진 셀의 애니메이션 이름은 상태에 따라 다르다(대기·글리프=dot-breathe,
+      // 일시정지 mono=pauseMonoPulse). 계약의 본질은 이름이 아니라 **꺼진 셀에 애니메이션이
+      // 없어야 한다**([UI-DOT-GHOST-1])는 것 — none 여부로 잰다.
+      if (getComputedStyle(cell).animationName !== 'none') animatedIndices.push(index);
     });
     return {
       glyph: el.getAttribute('data-glyph') ?? '',
@@ -607,7 +610,7 @@ function expectNoGhostDots(
   snapshot: Awaited<ReturnType<typeof dotOpacitySnapshot>>,
   label: string,
 ) {
-  expect(snapshot.cellCount, `${label}: 13×7 격자가 실제로 존재한다`).toBe(91);
+  expect(snapshot.cellCount, `${label}: 18×10 격자가 실제로 존재한다(§C5)`).toBe(180);
   expect(snapshot.litIndices.length, `${label}: 켜진 셀이 존재한다`).toBeGreaterThan(0);
   expect(snapshot.off.length, `${label}: 꺼진 셀이 존재한다`).toBeGreaterThan(0);
   expect(snapshot.litIndices.length + snapshot.off.length, `${label}: 모든 셀을 켜짐/꺼짐으로 분류했다`)
@@ -652,19 +655,24 @@ for (const vp of [
   { name: '402×874', viewport: PHONE_402 },
   { name: '375×667', viewport: PHONE_375 },
 ]) {
-  test(`C5 — 무음 대기 2초 opacity 쓰기 0 + 파형 프레임 갱신 @ ${vp.name}`, async ({ page }) => {
+  test(`C5 — 무음 idle도 중복 쓰기 0 + 파형 프레임 갱신 @ ${vp.name}`, async ({ page }) => {
+    // 🔴 v0.44.0 §C5-①(F11) — 계약 재협상: 종전 "무음 2초 쓰기 0"은 mic 글리프(정적) 전제였다.
+    // 이제 무음에도 idle 웨이브가 돌아 **변한 셀은 쓴다.** 배터리 계약의 본질은 "안 변한 값을
+    // 재기록하지 않는다"(diff 쓰기)이므로 **중복 쓰기 0**으로 잰다 — 같은 값 재기록이 1건이라도
+    // 있으면 red다. idle이 실제로 살아 있는지(총 쓰기 > 0)는 F11의 축이라 함께 잰다.
     await boot(page, vp.viewport, { preserveAnimations: true });
     await injectLevel(page, 0);
     await page.waitForTimeout(600);
 
     await page.locator('[data-testid="state-dots"]').evaluate((el) => {
-      const meter = { count: 0, startedAt: performance.now() };
+      const meter = { count: 0, redundant: 0, startedAt: performance.now() };
       Array.from(el.querySelectorAll('span')).forEach((cell) => {
         const style = (cell as HTMLElement).style;
         Object.defineProperty(style, 'opacity', {
           configurable: true,
           get: () => style.getPropertyValue('opacity'),
           set: (value: string) => {
+            if (style.getPropertyValue('opacity') === value) meter.redundant += 1;
             meter.count += 1;
             style.setProperty('opacity', value);
           },
@@ -676,12 +684,13 @@ for (const vp of [
     await page.waitForTimeout(2_000);
     const measured = await page.evaluate(() => {
       const meter = (window as unknown as {
-        __dotOpacityWriteMeter: { count: number; startedAt: number };
+        __dotOpacityWriteMeter: { count: number; redundant: number; startedAt: number };
       }).__dotOpacityWriteMeter;
-      return { count: meter.count, elapsedMs: performance.now() - meter.startedAt };
+      return { count: meter.count, redundant: meter.redundant, elapsedMs: performance.now() - meter.startedAt };
     });
     console.log(`[C5 idle] ${vp.name}: ${JSON.stringify(measured)}`);
-    expect(measured.count, '안정된 무음 글리프는 같은 opacity를 재기록하지 않는다').toBe(0);
+    expect(measured.redundant, '같은 opacity를 재기록하지 않는다(diff 쓰기 계약)').toBe(0);
+    expect(measured.count, '무음에도 idle 웨이브가 실제로 움직인다(F11)').toBeGreaterThan(0);
 
     // 파형 진입은 cache가 신뢰 불가한 경계라 첫 프레임을 전량 쓰고, 이후에는 실제 변화만 쓴다.
     await injectLevel(page, 0.85);
@@ -689,7 +698,7 @@ for (const vp of [
     const entryWrites = await page.evaluate(() => (
       window as unknown as { __dotOpacityWriteMeter: { count: number } }
     ).__dotOpacityWriteMeter.count);
-    expect(entryWrites, '파형 진입 첫 프레임은 91셀 전량 쓰기로 재동기화한다').toBeGreaterThanOrEqual(91);
+    expect(entryWrites, '파형 진입 첫 프레임은 180셀 전량 쓰기로 재동기화한다').toBeGreaterThanOrEqual(180);
 
     await page.evaluate(() => {
       const meter = (window as unknown as {
@@ -734,7 +743,7 @@ test('[UI-WAVE-1] hangover — 어절 사이 침묵에 글리프로 튀지 않�
   expect(await indicatorMode(page), '짧은 침묵에는 파형 유지(깜빡임 방지)').toBe('wave');
   // 발화가 실제로 끝나면(hangover 경과) 글리프로 돌아간다.
   await page.waitForTimeout(600);
-  expect(await indicatorMode(page), '발화 종료 → 글리프 복귀').toBe('glyph');
+  expect(await indicatorMode(page), '발화 종료 → idle 웨이브 복귀(§C5)').toBe('idle');
 });
 
 async function indicatorMode(page: Page): Promise<string> {

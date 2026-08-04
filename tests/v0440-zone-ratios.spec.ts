@@ -1,8 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { boot, PHONE_402 } from './fixtures/activeZones';
 
-/** §B2 과제3 — 3구역 배분 오라클(층 B). §C1(칩존 16%)·§C5-b(하단1행 24%)가 아직 구현되지
- *  않아 이 파일의 모든 단언은 의도적으로 red다(태그 `@pending-v0440`로 기계 판별 가능하게 표시).
+/** §B2 과제3 — 3구역 배분 오라클(층 B). 🟢 2026-08-04 §C5-b 완결로 전 단언 green —
+ *  `@pending-v0440`·`@pending-c5b` 태그를 전부 뗐다(§C1 칩존 16% + §C5-b 하단1행 24% 달성).
  *
  *  🔴 Larry 확인(2026-08-03) — 브리핑/플랜 §B2의 pool 공식(화면높이-sat-88(TabBar)-44(상단
  *  스트립))은 명목값이라 실측과 어긋난다(headerHeight 실측 54px, TabBar 실측 88~95px — sab에
@@ -72,7 +72,7 @@ for (const { name, viewport, insets } of [
   { name: '402×874', viewport: PHONE_402, insets: SAFE_AREA.phone402 },
   { name: '640×1024', viewport: TABLET_640, insets: SAFE_AREA.tablet640 },
 ] as const) {
-  test(`@pending-v0440 층1 — pool 자기 정합성 @ ${name}`, async ({ page }) => {
+  test(`층1 — pool 자기 정합성 @ ${name}`, async ({ page }) => {
     await injectSafeArea(page, insets);
     await boot(page, viewport);
     const m = await zoneRatioMetrics(page);
@@ -103,12 +103,10 @@ for (const { name, viewport, insets } of [
     expect(ratios.bottomRow2, `${name} 하단2행(버튼)이 pool의 10%다(불변, 절대 늘리지 않는다)`).toBeCloseTo(0.10, 2);
   });
 
-  /** 🔴 **의도된 red — §C5-b 몫이다. 회귀로 세지 마라.**
-   *  §C1이 하단 트랙을 30 → 34%로 키웠지만 그 안에서 도트행이 24%를 갖지는 못한다:
-   *  `ActiveControlSteppers`의 접힌 토글이 **약 49px를 고정으로 먹는다**(§60-63 주석의 그 존재).
-   *  실측 402=16.7% · 640=18.5%. 그 49px를 회수하거나 F08대로 TabBar를 최하단으로 옮겨
-   *  공간을 확보하는 것이 §C5-b의 일이고, 그때 이 test가 green이 되면서 태그가 떨어진다. */
-  test(`@pending-c5b 층2b — 하단1행(도트·파형) 24% @ ${name}`, async ({ page }) => {
+  /** 🟢 §C5-b 완결(2026-08-04) — `@pending-c5b` 태그 해제. 접힌 조절판 토글이 하단 트랙의
+   *  ~49px를 고정으로 먹던 것을 오버레이로 빼면서(ActiveControlBar §C5-b 주석) 도트행이
+   *  34% − 10%(버튼) = 정확히 24%를 갖는다. 되돌리면(토글을 플로우에 다시 쌓으면) red다. */
+  test(`층2b — 하단1행(도트·파형) 24% @ ${name}`, async ({ page }) => {
     await injectSafeArea(page, insets);
     await boot(page, viewport);
     const m = await zoneRatioMetrics(page);
@@ -118,7 +116,7 @@ for (const { name, viewport, insets } of [
     expect(bottomRow1, `${name} 하단1행(도트·파형)이 pool의 24%다(§C5-b 대상)`).toBeCloseTo(0.24, 2);
   });
 
-  test(`@pending-v0440 파형 가로폭 — 실제 뷰포트 폭의 2/3 @ ${name}`, async ({ page }) => {
+  test(`파형 가로폭 — 실제 뷰포트 폭의 2/3 @ ${name}`, async ({ page }) => {
     await injectSafeArea(page, insets);
     await boot(page, viewport);
     const m = await zoneRatioMetrics(page);
@@ -129,7 +127,7 @@ for (const { name, viewport, insets } of [
   });
 }
 
-test('@pending-v0440 층3 — 402×874와 640×1024의 pool이 서로 다르다(무변화 카드 방지)', async ({ page }) => {
+test('층3 — 402×874와 640×1024의 pool이 서로 다르다(무변화 카드 방지)', async ({ page }) => {
   await injectSafeArea(page, SAFE_AREA.phone402);
   await boot(page, PHONE_402);
   const phone = await zoneRatioMetrics(page);

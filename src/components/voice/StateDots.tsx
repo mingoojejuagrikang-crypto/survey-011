@@ -33,11 +33,13 @@ import { useEffect, useRef } from 'react';
  *    장시간 현장 세션의 배터리·발열 계약이다(종전 `VoiceWaveform`에서 그대로 승계). */
 export type DotGlyph = 'mic' | 'alert' | 'pause' | 'check';
 
-/** 격자 치수 — 열 13은 종전 파형 막대 수(`BAR_COUNT`)를 승계한다. 행 7은 마이크 글리프 높이. */
-export const FIELD_COLS = 13;
-export const FIELD_ROWS = 7;
+/** 격자 치수 — v0.44.0 §C5(F14, 민구 확정 §4-a 9): 13×7 → **18×10**(셀 91 → 180 ≈ 2.0배).
+ *  민구 원문 *"밀도를 2배로"*. 도트 지름은 세로 셀에서 산출하므로 행이 늘면 도트가 작아지고
+ *  촘촘해진다 — 격자 전체 크기는 그대로다(밴드 높이·2/3 폭 계약 불변). */
+export const FIELD_COLS = 18;
+export const FIELD_ROWS = 10;
 
-/** 좁은 비트맵을 13열 한가운데로 옮긴다(글리프마다 열 수가 달라도 격자는 고정). */
+/** 좁은 비트맵을 18열 한가운데로 옮긴다(글리프마다 열 수가 달라도 격자는 고정). */
 function center(rows: readonly string[]): string[] {
   return rows.map((r) => {
     const pad = FIELD_COLS - r.length;
@@ -46,18 +48,33 @@ function center(rows: readonly string[]): string[] {
   });
 }
 
-/** 상태 글리프 비트맵(`#`=켜짐). 전부 7행으로 맞춰 상태가 바뀌어도 격자 기하가 불변이다. */
+/** 상태 글리프 비트맵(`#`=켜짐). 전부 10행으로 맞춰 상태가 바뀌어도 격자 기하가 불변이다.
+ *  v0.44.0 §C5 — 18×10 격자에 맞춰 4종 전부 다시 그렸다(오라클: v0440-c5-dots [node]).
+ *  🔴 `mic`은 F19로 **화면에 더는 렌더되지 않는다**(listening 무음은 idle 웨이브가 대신한다).
+ *  비트맵을 남기는 이유: DotGlyph 타입 완전성 + 격자 재작성 계약(플랜 §C5 오라클 ③)이
+ *  4종 전부를 대상으로 한다. 되살릴 때는 F19(민구 확정)를 뒤집는 결정 기록이 먼저다. */
 const GLYPHS: Record<DotGlyph, string[]> = {
-  // 마이크: 캡슐 + 수음 아크 + 스탠드/받침.
-  mic: center(['.###.', '.###.', '.###.', '#...#', '.###.', '..#..', '.###.']),
+  // 마이크: 캡슐 + 수음 아크 + 스탠드/받침. (F19 이후 도달 불가 — 위 주석)
+  mic: center(['..###..', '..###..', '..###..', '..###..', '..###..', '#.....#', '.#####.', '...#...', '...#...', '..###..']),
   // 경고: **굵은 느낌표**(민구 확정 2026-07-27, 후보 1번 — fb-27-4 종결).
   //   종전 삼각형+느낌표는 외곽이 도트를 나눠 써서 획이 얇았다. 외곽을 버리고 획에 도트를
   //   몰아주면 같은 밴드 높이에서 획이 가장 굵어져 야외·원거리에서 가장 크게 읽힌다.
-  alert: center(['###', '###', '###', '###', '###', '...', '###']),
-  // 일시정지: 2칸 폭 막대 두 개.
-  pause: center(['##.##', '##.##', '##.##', '##.##', '##.##', '##.##', '##.##']),
+  alert: center(['###', '###', '###', '###', '###', '###', '###', '...', '###', '###']),
+  // 일시정지: 3칸 폭 막대 두 개(격자 밀도 2배에 맞춰 획도 굵어진다).
+  pause: center(['###.###', '###.###', '###.###', '###.###', '###.###', '###.###', '###.###', '###.###', '###.###', '###.###']),
   // 완료: 체크(짧은 하강 + 긴 상승).
-  check: center(['......#', '.....#.', '#...#..', '.#.#...', '..#....', '.......', '.......']),
+  check: center([
+    '...........',
+    '..........#',
+    '.........#.',
+    '........#..',
+    '#......#...',
+    '.#....#....',
+    '..#..#.....',
+    '...##......',
+    '...........',
+    '...........',
+  ]),
 };
 
 /** 호흡 주기 — EdgeGlow/voice-status-fade와 같은 상태별 cadence(경고는 빠르게, 일시정지는 느리게). */
@@ -126,7 +143,7 @@ export function StateDots({
           continue;
         }
         const on = lit[i] === true;
-        // C5 — 무음에서도 같은 91개 값을 ~30fps로 재기록하지 않는다. cache가 없거나
+        // C5 — 무음에서도 같은 180개 값을 ~30fps로 재기록하지 않는다. cache가 없거나
         // 신뢰할 수 없는 경계에서는 화면 동결보다 중복 쓰기가 안전하므로 전량 쓴다.
         if (!cacheTrusted || paintedLit![i] !== on) {
           el.style.opacity = on ? '1' : '0';
@@ -154,9 +171,40 @@ export function StateDots({
       return out;
     };
 
+    /** 열별 진폭 → 중앙에서 위아래 대칭으로 켠다. 짝수 행(10)이라 mid=4.5 — `amp + 0.5` 판정으로
+     *  amp 0도 중앙 2행이 남는다(0이면 열이 통째로 꺼져 파형이 이 빠진 듯 보인다). amp 상한 4 = 전 10행. */
+    const litFromAmps = (amps: number[]): boolean[] => {
+      const out = new Array<boolean>(FIELD_COLS * FIELD_ROWS).fill(false);
+      const mid = (FIELD_ROWS - 1) / 2;
+      for (let c = 0; c < FIELD_COLS; c++) {
+        for (let r = 0; r < FIELD_ROWS; r++) {
+          if (Math.abs(r - mid) <= amps[c] + 0.5) out[r * FIELD_COLS + c] = true;
+        }
+      }
+      return out;
+    };
+
+    /** §C5-①(F11·F19) — **idle 웨이브**: 무음에도 열마다 위상차를 준 저진폭 파동이 돈다.
+     *  amp ∈ {1, 2} → 열당 4~6행. 민구 원문 *"음성이 들리지 않아도 진동을 보여줘서 인식중이란 걸
+     *  알려라"* — 조용하면 화면이 죽은 것처럼 보이던 F11의 처방이고, 그래서 mic 글리프가
+     *  필요 없어졌다(F19와 같은 처방으로 수렴). 주기 1.6s(플랜 §C5 기대값 ①). */
+    const IDLE_PERIOD_MS = 1600;
+    const idleLit = (now: number): boolean[] => {
+      const amps = new Array<number>(FIELD_COLS);
+      for (let c = 0; c < FIELD_COLS; c++) {
+        const phase = Math.sin((now / IDLE_PERIOD_MS) * Math.PI * 2 + c * 0.7);
+        amps[c] = phase >= 0 ? 2 : 1;
+      }
+      return litFromAmps(amps);
+    };
+    /** reduced-motion·rAF 미가동 폴백 — 정적 저진폭 밴드(중앙 4행). 플랜 §C5 ①의 reduced 계약. */
+    const idleStaticLit = (): boolean[] => litFromAmps(new Array<number>(FIELD_COLS).fill(1));
+
     // 마운트 직후·glyph/active 변경으로 effect가 재생성된 직후는 cache를 신뢰하지 않는다.
-    paint(glyphLit(), true);
-    rootRef.current?.setAttribute('data-mode', 'glyph');
+    // 🔴 F19 — listening(mic)은 글리프를 그리지 않는다. 첫 페인트부터 idle 웨이브(정적 폼)다.
+    const listening = glyph === 'mic';
+    paint(listening ? idleStaticLit() : glyphLit(), true);
+    rootRef.current?.setAttribute('data-mode', listening ? 'idle' : 'glyph');
     if (reduced || !active || !getLevel) return;
 
     const buf = new Uint8Array(FFT);
@@ -165,19 +213,7 @@ export function StateDots({
     let lastFrameAt = 0;
     let visible = true;
     let lastLoudAt = 0;
-    let paintedMode: 'glyph' | 'wave' = 'glyph';
-
-    /** 열별 진폭(0~3) → 중앙 행에서 위아래로 대칭으로 켠다(막대 scaleY와 같은 읽기). */
-    const waveLit = (amps: number[]): boolean[] => {
-      const out = new Array<boolean>(FIELD_COLS * FIELD_ROWS).fill(false);
-      const mid = (FIELD_ROWS - 1) / 2;
-      for (let c = 0; c < FIELD_COLS; c++) {
-        for (let r = 0; r < FIELD_ROWS; r++) {
-          if (Math.abs(r - mid) <= amps[c]) out[r * FIELD_COLS + c] = true;
-        }
-      }
-      return out;
-    };
+    let paintedMode: 'glyph' | 'wave' | 'idle' = listening ? 'idle' : 'glyph';
 
     const schedule = () => {
       if (disposed || !visible || document.visibilityState === 'hidden') return; // onVis/IO가 재개
@@ -199,11 +235,20 @@ export function StateDots({
       const speaking = lastLoudAt > 0 && now - lastLoudAt < HANGOVER_MS;
 
       if (!speaking) {
-        // 파형→글리프 전환은 cache 경계다. 첫 글리프 프레임은 전량 써서 DOM을 재동기화한다.
-        const enteringGlyph = paintedMode !== 'glyph';
-        paint(glyphLit(), enteringGlyph);
-        paintedMode = 'glyph';
-        rootRef.current?.setAttribute('data-mode', 'glyph');
+        if (listening) {
+          // §C5-①(F19) — listening 무음은 mic 글리프가 아니라 idle 웨이브다. idle은 매 프레임
+          // 위상이 흐르므로 cache 경계는 모드 진입 프레임만 강제한다(이후는 diff 쓰기).
+          const enteringIdle = paintedMode !== 'idle';
+          paint(idleLit(now), enteringIdle);
+          paintedMode = 'idle';
+          rootRef.current?.setAttribute('data-mode', 'idle');
+        } else {
+          // 파형→글리프 전환은 cache 경계다. 첫 글리프 프레임은 전량 써서 DOM을 재동기화한다.
+          const enteringGlyph = paintedMode !== 'glyph';
+          paint(glyphLit(), enteringGlyph);
+          paintedMode = 'glyph';
+          rootRef.current?.setAttribute('data-mode', 'glyph');
+        }
         schedule();
         return;
       }
@@ -219,7 +264,8 @@ export function StateDots({
             const d = Math.abs(buf[start + k] - 128) / 128;
             if (d > peak) peak = d;
           }
-          amps[c] = Math.min(3, Math.max(0, Math.round(peak * 2.4 * 3)));
+          // §C5 — 10행 격자의 진폭 상한은 4(= 전 행). 종전 3은 7행 기준이었다.
+          amps[c] = Math.min(4, Math.max(0, Math.round(peak * 2.4 * 4)));
         }
       } else {
         // 폴백: 레벨 스칼라로 합성한 흐름(analyser 미가용 기기). 양끝은 envelope로 수렴.
@@ -227,12 +273,12 @@ export function StateDots({
         for (let c = 0; c < FIELD_COLS; c++) {
           const env = Math.sin((c / (FIELD_COLS - 1)) * Math.PI);
           const wave = 0.5 + 0.5 * Math.sin(c * 0.7 + t);
-          amps[c] = Math.min(3, Math.max(0, Math.round(lv * env * wave * 3 + 0.5)));
+          amps[c] = Math.min(4, Math.max(0, Math.round(lv * env * wave * 4 + 0.5)));
         }
       }
       // 글리프→파형 진입도 첫 프레임은 전량 쓴다. 이후 프레임부터 실제로 달라진 셀만 쓴다.
       const enteringWave = paintedMode !== 'wave';
-      paint(waveLit(amps), enteringWave);
+      paint(litFromAmps(amps), enteringWave);
       paintedMode = 'wave';
       rootRef.current?.setAttribute('data-mode', 'wave');
       schedule();
@@ -277,7 +323,7 @@ export function StateDots({
         // 실제 부모 높이를 상한으로 삼아 7행을 함께 축소한다 — overflow clip이나 transform이
         // 아니라 레이아웃 박스 자체가 밴드 안에 들어가는 계약이다.
         height: `min(${gridHeight}px, 100%)`,
-        // A안: 13열·91셀과 글리프 비트맵은 그대로 두고 열 피치만 화면 2/3로 넓힌다.
+        // A안: 열 피치만 화면 2/3로 넓힌다(§C5에서 격자는 18열·180셀이 됐다).
         // 도트 지름은 위의 세로 cell에서 산출하므로 가로로 늘어난 타원이 되지 않는다.
         width: 'min(66.6667vw, 100%)',
         maxWidth: '100%',

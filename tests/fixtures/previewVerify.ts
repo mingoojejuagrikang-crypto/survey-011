@@ -87,7 +87,10 @@ export async function fingerprint(page: Page): Promise<Fingerprint> {
         text: norm(el.textContent ?? '').slice(0, 160),
         fontSize: cs.fontSize,
         lineHeight: cs.lineHeight,
-        opacity: cs.opacity,
+        // v0.44.0 §C4 — mono 점멸(pauseMonoPulse)이 도는 노드의 opacity는 샘플링 위상에 따라
+        // 0.66~1 사이 아무 값이다. 라이브·프리뷰가 각자 다른 위상을 찍으므로 값 대신
+        // "점멸 중" 마커로 정규화한다 — 점멸 실동작 자체는 v0440-c4-mono가 잰다.
+        opacity: cs.animationName === 'pauseMonoPulse' ? 'animated(pauseMonoPulse)' : cs.opacity,
         rect: [round(r.x - origin.x), round(r.y - origin.y), round(r.width), round(r.height)],
       };
     }

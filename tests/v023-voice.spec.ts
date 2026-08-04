@@ -212,7 +212,9 @@ test('B1 — 이상치 카드가 중앙 흡수영역 안에 렌더 + 375px 긴�
   await setupAndStart(page);
 
   // 컨트롤바 기준 Y(입력 조절 토글) — 카드 표시 전.
-  const controlAnchor = page.locator('[data-testid="input-control-toggle"]');
+  // v0.44.0 §C5-b — 접힌 토글은 nav 전용 오버레이가 돼 anomaly/paused에서 사라진다.
+  // 이 테스트의 계약은 "하단 컨트롤바가 안 밀린다"이므로 앵커를 컨트롤바 자체로 바꾼다.
+  const controlAnchor = page.locator('[data-testid="voice-control-bar"]');
   await expect(controlAnchor).toBeVisible({ timeout: 5000 });
   const yBefore = (await controlAnchor.boundingBox())!.y;
 
@@ -255,7 +257,9 @@ test('B1 — 이상치 카드가 중앙 흡수영역 안에 렌더 + 375px 긴�
 //   중앙이 실제로 비었는지까지 함께 고정한다.
 test('B1 — 일시정지 전환에도 컨트롤바 Y 불변 + 중앙 비움(§[3])', async ({ page }) => {
   await setupAndStart(page);
-  const controlAnchor = page.locator('[data-testid="input-control-toggle"]');
+  // v0.44.0 §C5-b — 접힌 토글은 nav 전용 오버레이가 돼 anomaly/paused에서 사라진다.
+  // 이 테스트의 계약은 "하단 컨트롤바가 안 밀린다"이므로 앵커를 컨트롤바 자체로 바꾼다.
+  const controlAnchor = page.locator('[data-testid="voice-control-bar"]');
   await expect(controlAnchor).toBeVisible({ timeout: 5000 });
   const yBefore = (await controlAnchor.boundingBox())!.y;
 

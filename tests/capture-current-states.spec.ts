@@ -159,10 +159,17 @@ async function captureAndVerify(
     if (hasDots) {
       expect(mask, `${meta.name}: state-dots가 있는데 마스크 진단이 null`).not.toBeNull();
       expect(ov, `${meta.name}: state-dots가 있는데 overflow 진단이 null`).not.toBeNull();
-      expect(mask!.lit + mask!.partial + mask!.off, `${meta.name}: 13×7 도트 마스크`).toBe(91);
+      expect(mask!.lit + mask!.partial + mask!.off, `${meta.name}: 18×10 도트 마스크(§C5)`).toBe(180);
     }
-    expect(hits, `${meta.name}: 조절판 hit-test 진단이 null`).not.toBeNull();
-    expect(hits!.every((hit) => hit.ok), `${meta.name}: 조절판 타깃을 다른 상자가 가렸다`).toBe(true);
+    // v0.44.0 §C5-b — 접힌 토글은 nav 모드 전용 오버레이가 됐다. anomaly·paused에서는 종전의
+    // "비활성 스트립"조차 렌더하지 않으므로(오탭 겹침 원천 제거) hit-test 대상 자체가 없다.
+    const toggleHidden = meta.name === '04-anomaly' || meta.name === '07-paused';
+    if (toggleHidden) {
+      expect(hits, `${meta.name}: 숨긴 토글이 hit-test에 나타나면 §C5-b 회귀다`).toBeNull();
+    } else {
+      expect(hits, `${meta.name}: 조절판 hit-test 진단이 null`).not.toBeNull();
+      expect(hits!.every((hit) => hit.ok), `${meta.name}: 조절판 타깃을 다른 상자가 가렸다`).toBe(true);
+    }
     if (meta.name === '06-panel-open') {
       expect(hits!.map((hit) => hit.target), '펼친 조절판의 토글·스테퍼 3곳을 실제 hit-test한다')
         .toEqual(['input-control-toggle', 'stepper-tolerance', 'stepper-tts-rate']);

@@ -79,8 +79,13 @@ export function ActiveControlBar({
         //      사정권이 아니다: 이 컴포넌트는 `useFitScale`·`useFitGroup`을 쓰지 않는다.
         //      **fit이 사는 CenterStage 경계에는 새로 붙이지 않았다.**
         overflow: 'hidden',
-        display: 'flex', flexDirection: 'column', gap: 2,
-        padding: '0 12px 2px',
+        // §C5-b — 접힌 조절판 토글의 오버레이 기준점(아래 주석 참조).
+        position: 'relative',
+        // §C5-b — gap 2·하단 padding 2를 없앴다. 이 4px 프레임이 도트행 몫에서 빠져나가
+        // 402×874에서 24% 계약이 0.6%p 미달했다(zone-ratios 층2b 실측 23.38%). 행 구분은
+        // 버튼 자체 테두리가 이미 하고 있다.
+        display: 'flex', flexDirection: 'column',
+        padding: '0 12px',
       }}
     >
       {/* 🔴 조절판이 열리면 이 행을 **통째로 숨긴다**(민구 확정 2026-07-27).
@@ -173,12 +178,42 @@ export function ActiveControlBar({
         </>
       )}
 
-      <ActiveControlSteppers
-        uiCommand={uiCommand}
-        open={panelOpen}
-        canExpand={controlsExpandable}
-        onOpenChange={setControlsOpen}
-      />
+      {/* §C5-b(F08) — 접힌 토글을 **플로우에서 뺀다.** 종전엔 세 번째 행으로 쌓여 하단 트랙의
+          ~49px를 고정으로 먹었고, 그래서 도트행이 pool의 24%를 산술적으로 가질 수 없었다
+          (34% = 24% + 10% — 토글 몫이 0이어야 정확히 떨어진다). 접힌 토글은 인디케이터 행의
+          하단 중앙에 겹쳐 뜨는 필 하나다:
+          - nav 모드에서만 보인다(canExpand). anomaly/paused/exit에서는 종전에도 비활성 스트립
+            이었으므로 숨겨도 잃는 게 없고, 인디케이터가 버튼이 되는 anomaly에서 오탭 겹침이
+            원천적으로 없다(fb-27-6 계열 방지).
+          - 도트는 표시일 뿐 터치 대상이 아니라서 겹쳐도 오탭 경로가 없다.
+          열리면(panelOpen) 종전대로 행들을 통째로 숨기고 패널이 플로우를 가져간다(민구 확정
+          2026-07-27 — 겹칠 상자를 없애는 방식 유지). */}
+      {panelOpen ? (
+        <ActiveControlSteppers
+          uiCommand={uiCommand}
+          open
+          canExpand={controlsExpandable}
+          onOpenChange={setControlsOpen}
+        />
+      ) : controlsExpandable && (
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            bottom: `calc(${CONTROL_ROW_FRACTION * 100}% + 10px)`,
+            zIndex: 5,
+            maxWidth: 'calc(100% - 24px)',
+          }}
+        >
+          <ActiveControlSteppers
+            uiCommand={uiCommand}
+            open={false}
+            canExpand={controlsExpandable}
+            onOpenChange={setControlsOpen}
+          />
+        </div>
+      )}
     </div>
   );
 }

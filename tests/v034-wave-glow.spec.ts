@@ -185,7 +185,7 @@ test('B7 — 대기 카드: 화면 2/3 폭의 세로 도트 파형(13열), "듣�
   await expect(page.locator('text=듣는 중')).toHaveCount(0);
 
   // v0.40.0 — 인디케이터가 **도트 격자 하나**로 합쳐졌다([UI-WAVE-1] 구조적 해소).
-  // UI-e2 — 13×7 셀/원형 도트는 유지하고 열 피치만 화면 2/3로 넓힌다. 밴드 높이는 하단
+  // UI-e2 — 원형 도트는 유지하고 열 피치만 화면 2/3로 넓힌다(§C5에서 18×10). 밴드 높이는 하단
   // 1행이 정하며 60px 하한만 남는다. 제품 상수 import 없이 설계 리터럴을 독립 검증한다.
   const band = page.locator('[data-testid="live-listen-band"]');
   const wave = page.locator('[data-testid="state-dots"]');
@@ -207,7 +207,7 @@ test('B7 — 대기 카드: 화면 2/3 폭의 세로 도트 파형(13열), "듣�
     };
   });
   console.log(`band geometry: ${JSON.stringify(geometry)}`);
-  expect(geometry.cells, '13열 × 7행 격자').toBe(91);
+  expect(geometry.cells, '18열 × 10행 격자(§C5)').toBe(180);
   expect(geometry.bandHeight, '밴드는 하단 1행 높이를 전부 쓴다').toBeCloseTo(geometry.indicatorRowHeight, 0);
   expect(geometry.bandHeight, '밴드 가독 하한 60px').toBeGreaterThanOrEqual(60);
   expect(geometry.waveWidth, '파형 폭은 화면의 2/3').toBeCloseTo(geometry.expectedWaveWidth, 0);
