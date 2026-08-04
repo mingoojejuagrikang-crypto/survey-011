@@ -16,18 +16,14 @@ import { SheetConnectSection } from '../components/settings/SheetConnectSection'
 import { SessionOptionsSection } from '../components/settings/SessionOptionsSection';
 import { TypeReviewModal } from '../components/settings/TypeReviewModal';
 import { TablePreviewModal } from '../components/settings/TablePreviewModal';
-import { SettingsSummary } from '../components/settings/SettingsSummary';
 import { SettingsSummaryModal } from '../components/settings/SettingsSummaryModal';
 import { SettingsResetModal } from '../components/settings/SettingsResetModal';
 
 // ─── screen root ───────────────────────────────────────────────
-export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () => void } = {}) {
+export function SettingsScreen() {
   const s = useSettingsStore();
   // v0.32.0 설정탭 UX(Vance) B2 — 설정 요약 팝업(설정탭 전용).
   const [summaryOpen, setSummaryOpen] = useState(false);
-  // v0.35.0 FB-E(Vance) — 하단 인라인 설정 요약을 접기식·기본 접힘으로(온디맨드). 인라인 자체는
-  //   유지(제거하면 C10 스크롤 마찰 재발) — 헤더 탭으로만 펼친다. savedSheetsOpen과 동일 패턴.
-  const [summaryInlineOpen, setSummaryInlineOpen] = useState(false);
   // v0.23.0 설정탭#4(Vance) — `?` 도움말 팝업 열림 여부(카드별 `?` 또는 첫 진입 안내의 "자세히").
   const [helpOpen, setHelpOpen] = useState(false);
 
@@ -242,63 +238,10 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
         {/* 세션 옵션(세션명·빠른 인식·자동 캡처·비프음·TTS) — SessionOptionsSection으로 추출(Stage 2) */}
         <SessionOptionsSection prospectiveSessionLabel={prospectiveSessionLabel} />
 
-        {/* v0.34.0 C10(Vance) — 설정 요약 인라인(스크롤 영역 말미, 민구 요청: "설정 재확인에 페이지
-            최상단까지 가는 번거로움"). 상단 '설정 요약' 팝업 버튼은 유지하고, 같은 SettingsSummary
-            SSOT를 하단 액션바("총 N행 생성됨 (미리보기)") 바로 위에서 한 번 더 보여준다. 수치는
-            팝업(SettingsSummaryModal)과 동일 소스: computeTotalRows(s.columns) +
-            prospectiveSessionLabel(). footer(액션바, flexShrink:0 무스크롤 존)에 넣지 않는다 —
-            반드시 스크롤 영역 안. 캡션에 '생성됨'/'생성 예정' 부분문자열 금지(기존 text= 로케이터
-            보호) — 스펙 단언은 data-testid 기반. */}
-        {s.columns.length > 0 && (
-          <div
-            data-testid="settings-summary-inline"
-            style={{
-              margin: '18px 16px 0',
-              padding: 14,
-              background: T.card,
-              borderRadius: 16,
-              border: `1px solid ${T.line}`,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: summaryInlineOpen ? 10 : 0,
-            }}
-          >
-            {/* v0.35.0 FB-E — 헤더 탭으로만 펼침(기본 접힘). testid는 컨테이너에 상주(항상 마운트),
-                내용만 게이트. savedSheets 헤더와 동일 aria-expanded + 회전 셰브런 패턴. */}
-            <button
-              data-testid="settings-summary-toggle"
-              onClick={() => setSummaryInlineOpen((v) => !v)}
-              aria-expanded={summaryInlineOpen}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                background: 'transparent', border: 'none', cursor: 'pointer',
-                color: T.textDim, textAlign: 'left', width: '100%',
-                // v0.35.0 R2-FIX-4(리뷰 라운드2, a11y) — 44px 터치 타깃 확보(장갑 낀 현장 조작).
-                //   종전 padding:0 + 18~20px 텍스트라 타깃이 작았다.
-                minHeight: 44, padding: '4px 0',
-              }}
-            >
-              <span style={{ fontSize: 14, fontWeight: 800, color: T.textDim, letterSpacing: -0.2, flex: 1 }}>
-                설정 요약
-              </span>
-              <span
-                style={{
-                  flexShrink: 0, display: 'inline-flex',
-                  transform: summaryInlineOpen ? 'rotate(180deg)' : 'none', transition: 'transform 150ms',
-                }}
-              >
-                {I.chevDown(18, T.textMute)}
-              </span>
-            </button>
-            {summaryInlineOpen && (
-              <SettingsSummary
-                columns={s.columns}
-                totalRows={computeTotalRows(s.columns)}
-                sessionLabel={prospectiveSessionLabel()}
-              />
-            )}
-          </div>
-        )}
+        {/* v0.44.0 §C7 F26: v0.34.0 C10 인라인 설정 요약(+v0.35.0 FB-E 접기식) 폐기(민구 08-02)
+            — 되살리려면 §4-b를 먼저 읽어라. '설정 요약' 진입점은 상단 버튼→팝업 1개다. C10의
+            원 요청("설정 재확인에 페이지 최상단까지 가는 번거로움")은 생성 완료 액션바의
+            '설정요약' 바로가기(아래 F26 3버튼 행)가 대신 흡수한다. */}
 
         {/* Footer: version + build date */}
         <div
@@ -335,32 +278,58 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
             현재 설정으로 <span style={{ color: T.blue, fontWeight: 700 }}>{previewRowCount}행</span> 생성 예정
           </div>
         )}
+        {/* v0.44.0 §C7 F26 — 생성 완료 액션바는 3버튼 한 행: 설정요약 · 생성 테이블 보기 · 재생성.
+            종전 "총 N행 생성됨 (미리보기)"/"재생성" 2버튼 행을 여기로 재배치했다(같은 기능 버튼
+            중복 금지) — 행수·생성 상태 수치는 설정 요약 팝업("생성됨 · 총 N행")과 미리보기 팝업이
+            갖는다. '설정요약'은 무공백 표기가 계약: 정확 문구 "설정 요약"은 상단 진입점 1개 유지
+            스펙(v0440-c7-cleanup)이 개수==1로 잰다. '생성' 부분문자열은 액션바에선 종전에도 허용
+            (hasText:'생성' .last() 헬퍼는 게이트가 열린 동안만 쓰이고, 모달이 액션바보다 DOM 뒤에
+            마운트되므로 여전히 게이트 확인 버튼을 가리킨다). */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {s.tableGenerated ? (
             <>
               <button
+                type="button"
+                data-testid="settings-summary-shortcut"
                 onClick={() => {
-                  // v0.33.0 B-10 — 미리보기 팝업 열림 계측(생성 후 '미리보기' 버튼 경로).
+                  // v0.33.0 B-10 — 설정 요약 팝업 열림 계측(상단 버튼과 동일 extra).
+                  logger.log({ type: 'command', parsed: 'ui_open', extra: 'settings_summary' });
+                  setSummaryOpen(true);
+                }}
+                style={{
+                  flex: 1, height: 56, borderRadius: 28,
+                  border: `1px solid ${T.lineStrong}`, background: 'transparent',
+                  color: T.textDim, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
+                  whiteSpace: 'nowrap', cursor: 'pointer',
+                }}
+              >
+                설정요약
+              </button>
+              <button
+                type="button"
+                data-testid="settings-open-preview"
+                onClick={() => {
+                  // v0.33.0 B-10 — 미리보기 팝업 열림 계측(생성 후 버튼 경로, extra 불변).
                   logger.log({ type: 'command', parsed: 'ui_open', extra: 'table_preview' });
                   setTablePreviewOpen(true);
                 }}
                 style={{
                   flex: 1, height: 56, borderRadius: 28,
-                  background: 'rgba(57,255,20,0.12)',
-                  border: '1px solid rgba(57,255,20,0.35)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                  fontSize: 16, fontWeight: 700, color: T.green,
-                  cursor: 'pointer',
+                  border: '1px solid rgba(57,255,20,0.35)', background: 'rgba(57,255,20,0.12)',
+                  color: T.green, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
+                  whiteSpace: 'nowrap', cursor: 'pointer',
                 }}
               >
-                {I.check(20, T.green)} 총 {s.totalRows}행 생성됨 (미리보기)
+                생성 테이블 보기
               </button>
               <button
+                type="button"
                 onClick={onGenerate}
                 style={{
-                  height: 56, padding: '0 18px', borderRadius: 28,
+                  flex: 1, height: 56, borderRadius: 28,
                   border: `1px solid ${T.lineStrong}`, background: 'transparent',
-                  color: T.textDim, fontSize: 15, fontWeight: 700, cursor: 'pointer',
+                  color: T.textDim, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
+                  whiteSpace: 'nowrap', cursor: 'pointer',
                 }}
               >
                 재생성
@@ -382,30 +351,9 @@ export function SettingsScreen({ onNavigateToInput }: { onNavigateToInput?: () =
             </button>
           )}
         </div>
-        {/* v0.32.0 설정탭 UX(Vance) B4 — 생성 완료 후 다음 단계 안내 + 입력탭 이동(자동 전환 없음,
-            민구 확정). 캡션은 '생성됨'/'생성 예정' 부분문자열을 피한다(기존 text= 로케이터 보호). */}
-        {s.tableGenerated && (
-          <>
-            <div style={{ textAlign: 'center', fontSize: 12, color: T.textMute, lineHeight: 1.4 }}>
-              생성 완료 — 입력 탭에서 [음성 입력 시작]을 누르세요
-            </div>
-            <button
-              type="button"
-              data-testid="settings-go-input"
-              onClick={() => onNavigateToInput?.()}
-              style={{
-                width: '100%', height: 54, borderRadius: 28, border: 'none',
-                background: T.blue, color: '#fff',
-                fontSize: 17, fontWeight: 800, letterSpacing: -0.2,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                cursor: 'pointer',
-                boxShadow: `0 6px 18px ${T.blueGlow}`,
-              }}
-            >
-              입력탭으로 이동 →
-            </button>
-          </>
-        )}
+        {/* v0.44.0 §C7 F25: v0.32.0 B4 결정 폐기(민구 08-02) — 되살리려면 §4-b를 먼저 읽어라.
+            여기 있던 "생성 완료 — 입력 탭에서 [음성 입력 시작]을 누르세요" 안내문구와
+            "입력탭으로 이동 →" 버튼(settings-go-input)을 삭제했다(F26이 3버튼 행으로 대체). */}
       </div>
 
       {/* v0.19.0 W3 — '최종 설정값 확인' 게이트. 요약은 현재 columns에서 파생(stale 방지).

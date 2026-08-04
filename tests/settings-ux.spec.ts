@@ -5,7 +5,9 @@
  *        게이트 안 "생성될 테이블 미리보기"로 닫기 전용 테이블 미리보기를 오버레이.
  *   B2 — 설정 요약 팝업(설정탭 전용): 로그인/시트/생성 상태 + 요약 + 다이얼 한 줄, 무스크롤.
  *   B3 — 초기화: 기본값 복귀 + Google 로그인·시트 URL은 기본 보존, 체크박스로 opt-in 삭제.
- *   B4 — 생성 완료 후 "입력탭으로 이동 →" 버튼(자동 탭 전환 없음 — 민구 확정).
+ *   B4 — (폐기: v0.44.0 §C7 F25·F26, 민구 08-02) 이동 버튼·안내문구 → 3버튼 행으로 대체.
+ *        C10(v0.34.0) 인라인 요약도 같은 회차에 폐기 — 두 테스트는 폐기 계약으로 갱신됐고,
+ *        3버튼 행의 실동작 오라클은 v0440-c7-cleanup.spec.ts가 소유한다.
  *
  * 375×812 시뮬레이션(GL-005). 생성 게이트 테스트는 검증된 시트 출처를 v12 형식으로 시드한다.
  */
@@ -267,72 +269,24 @@ test('B3 — 초기화(체크박스 2개): 로그인 해제 + 시트 URL·저장
   console.log('✓ 초기화 + opt-in 삭제: 로그인 해제 · 시트 URL/저장 시트 삭제');
 });
 
-// ─── C10(v0.34.0). 설정 요약 인라인(하단 배치) ───────────────────────────────
+// ─── C10(v0.34.0)·B4(v0.32.0) → 폐기: v0.44.0 §C7 F25·F26(민구 08-02) ────────
 
-/** SettingsSummary pill(라벨 span + 값 span 2-child div)에서 라벨→값 맵 추출.
- *  '생성됨'/'생성 예정' 텍스트 로케이터에 민감한 기존 스펙 보호 — 단언은 testid + 구조 기반. */
-async function summaryPills(page: Page, scopeSelector: string): Promise<Record<string, string>> {
-  return page.locator(scopeSelector).evaluate((root) => {
-    const wanted = ['음성입력', '자동입력', '수동입력', '전체 항목', '총 행수'];
-    const out: Record<string, string> = {};
-    root.querySelectorAll('div').forEach((d) => {
-      if (
-        d.children.length === 2 &&
-        d.children[0].tagName === 'SPAN' &&
-        d.children[1].tagName === 'SPAN'
-      ) {
-        const label = d.children[0].textContent?.trim() ?? '';
-        if (wanted.includes(label)) out[label] = d.children[1].textContent?.trim() ?? '';
-      }
-    });
-    return out;
-  });
-}
-
-test('C10 — 설정 요약 인라인이 스크롤 말미(액션바 위)에 존재 + 팝업 요약과 동일 수치', async ({ page }) => {
+/** v0.44.0 §C7 F26 — C10 인라인 요약 폐기 계약: '설정 요약' 진입점은 상단 버튼→팝업 1개.
+ *  (구 C10 계약과 summaryPills 헬퍼는 이 갱신에서 삭제 — 팝업 내부 수치는 B2가 계속 잰다.) */
+test('C10 폐기(F26) — 인라인 요약 부재 + "설정 요약" 진입점은 상단 버튼 1개', async ({ page }) => {
   await freshSettings(page);
 
-  // ① 인라인 요약 존재(스크롤 영역 안 — 스크롤해야 보인다) + 상단 팝업 버튼은 그대로 유지.
+  await expect(page.locator('[data-testid="settings-summary-inline"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="settings-summary-toggle"]')).toHaveCount(0);
+  await expect(page.locator('button', { hasText: '설정 요약' })).toHaveCount(1);
   await expect(page.locator('[data-testid="settings-summary-open"]')).toBeVisible();
-  const inline = page.locator('[data-testid="settings-summary-inline"]');
-  await inline.scrollIntoViewIfNeeded();
-  await expect(inline).toBeVisible();
-
-  // ② 인라인이 footer(무스크롤 액션바)가 아니라 스크롤 영역 안에 있다:
-  //    scrollIntoView 없이도 위치가 스크롤에 따라 움직이는 요소인지 = offsetParent 체인이
-  //    overflowY:auto 조상 안에 있는지로 판정.
-  const inScrollArea = await inline.evaluate((el) => {
-    for (let n = el.parentElement; n; n = n.parentElement) {
-      const cs = getComputedStyle(n);
-      if (cs.overflowY === 'auto' || cs.overflowY === 'scroll') return true;
-    }
-    return false;
-  });
-  expect(inScrollArea, '인라인 요약이 스크롤 영역 안(footer 금지)').toBe(true);
-
-  // v0.35.0 FB-E — 기본 접힘(온디맨드): 헤더는 있으나 요약 내용(pill)은 마운트 전. 헤더 탭으로 펼친다.
-  const toggle = page.locator('[data-testid="settings-summary-toggle"]');
-  await expect(toggle).toBeVisible();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(inline.locator('text=전체 항목')).toHaveCount(0); // 접힘 상태엔 내용 없음
-  await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-
-  const inlinePills = await summaryPills(page, '[data-testid="settings-summary-inline"]');
-  expect(Object.keys(inlinePills).sort()).toEqual(['수동입력', '음성입력', '자동입력', '전체 항목', '총 행수'].sort());
-
-  // ③ 팝업 요약과 수치 대조(같은 SettingsSummary SSOT — 동일 소스이므로 글자까지 동일).
-  await page.locator('[data-testid="settings-summary-open"]').click();
-  await page.waitForTimeout(300);
-  await expect(page.locator('[data-testid="settings-summary-modal"]')).toBeVisible({ timeout: 2000 });
-  const modalPills = await summaryPills(page, '[data-testid="settings-summary-card"]');
-  expect(modalPills).toEqual(inlinePills);
-  console.log(`✓ 인라인 요약 = 팝업 요약: ${JSON.stringify(inlinePills)}`);
+  console.log('✓ C10 폐기 — 인라인 요약 없음, 진입점은 상단 버튼→팝업 1개');
 });
 
-// ─── B4. 생성 완료 → 입력탭 이동 ─────────────────────────────────────────────
-
-test('B4 — 생성 완료 시 "입력탭으로 이동 →" 버튼 → 입력탭 전환', async ({ page }) => {
+/** v0.44.0 §C7 F25·F26 — B4 폐기 계약: 안내문구·"입력탭으로 이동 →" 삭제, 그 자리 3버튼
+ *  (설정요약·생성 테이블 보기·재생성). 종전 "총 N행 생성됨 (미리보기)"/"재생성" 행도 이 3버튼
+ *  행으로 재배치됐다. 3버튼 실동작은 v0440-c7-cleanup.spec.ts가 잰다. */
+test('B4 폐기(F25·F26) — 생성 완료 시 이동 버튼·안내문구 대신 3버튼 행', async ({ page }) => {
   await seedSettings(page, {
     ...CONNECTED_SHEET,
     columns: DEFAULT_COLUMNS,
@@ -340,15 +294,12 @@ test('B4 — 생성 완료 시 "입력탭으로 이동 →" 버튼 → 입력탭
     tableGenerated: true,
   });
 
-  const goBtn = page.locator('[data-testid="settings-go-input"]');
-  await expect(goBtn).toBeVisible({ timeout: 3000 });
-  // 기존 생성됨/재생성 행도 그대로 남아 있다.
-  await expect(page.locator('text=생성됨').first()).toBeVisible();
-
-  await goBtn.click();
-  await page.waitForTimeout(400);
-
-  // 입력탭(VoiceScreen)으로 전환 — 시작 버튼이 보인다.
-  await expect(page.locator('text=음성 입력 시작').first()).toBeVisible({ timeout: 3000 });
-  console.log('✓ 입력탭으로 이동 버튼 → VoiceScreen 전환');
+  await expect(page.locator('[data-testid="settings-go-input"]')).toHaveCount(0);
+  await expect(page.getByText('입력탭으로 이동')).toHaveCount(0);
+  await expect(page.getByText('생성 완료 — 입력 탭에서')).toHaveCount(0);
+  await expect(page.getByText('생성됨')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '설정요약', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '생성 테이블 보기', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '재생성', exact: true })).toBeVisible();
+  console.log('✓ B4 폐기 — 3버튼 행(설정요약·생성 테이블 보기·재생성)');
 });

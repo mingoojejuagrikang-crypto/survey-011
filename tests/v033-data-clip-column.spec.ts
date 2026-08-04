@@ -4,7 +4,8 @@
  *   배경: 값 셀 안에 클립 재생 버튼(28px)이 붙어 있어 값을 탭하려다 클립을 오터치(민구 실사용 제보).
  *   변경: ① 클립이 있는 voice 컬럼 오른쪽에 44px 클립 전용 컬럼(ClipCell) — EditableCell은 값 전용.
  *         클립 없는 세션/컬럼엔 클립 컬럼이 아예 안 생긴다.
- *        ② 세션 카드에 미완료 행이 있으면 amber '작성중 N' 배지(완료 배지 패턴 재사용).
+ *        ② (폐기: v0.44.0 §C7 F24, 민구 08-02) '작성중 N' 배지 → 행수 `완료/전체행` 통합.
+ *          #9-4는 F24 계약으로 갱신됐다 — 배지 부재 + `N/M행` 표기.
  *
  * 402×874(iphone17 대리) 시뮬레이션. 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
@@ -21,7 +22,7 @@ const COLUMNS = [
 
 /** 세션 2개 시드:
  *  - sess_v033_clip  — 전 행 완료 + c8 클립 2개(c9는 voice지만 클립 없음 → 컬럼 없어야 함)
- *  - sess_v033_draft — 완료 1행 + 미완료(부분입력) 1행, 클립 없음 → 작성중 배지 + 클립 컬럼 없음 */
+ *  - sess_v033_draft — 완료 1행 + 미완료(부분입력) 1행, 클립 없음 → `1/2행` 표기 + 클립 컬럼 없음 */
 async function injectSessions(page: Page) {
   await page.evaluate(async (columns) => {
     const db = await new Promise<IDBDatabase>((res, rej) => {
@@ -47,11 +48,11 @@ async function injectSessions(page: Page) {
     const draftSession = {
       id: 'sess_v033_draft',
       date: '2026-07-12',
-      label: 'v033 작성중세션',
+      label: 'v033 부분입력세션',
       columns,
       rows: [
         { index: 1, values: { c6: '1', c8: '31.0', c9: '33.3' }, complete: true },
-        { index: 2, values: { c6: '2', c8: '1.0' }, complete: false }, // 부분입력(작성중)
+        { index: 2, values: { c6: '2', c8: '1.0' }, complete: false }, // 부분입력(미완료 행)
       ],
       completedRows: 1,
       syncedRows: 0,
@@ -152,28 +153,25 @@ test('#9-3 값 셀 탭 = 편집만 — 재생 시작 없이 input이 열린다',
   console.log('✓ Escape 취소 후 값 보존');
 });
 
-test('#9-4 작성중 배지 — 미완료 행 있는 세션에만 amber `작성중 N`', async ({ page }) => {
+test('#9-4 (F24로 갱신) 행수 통합 — 배지 없이 `완료/전체행` 표기', async ({ page }) => {
   await bootDataTab(page);
 
-  // 배지는 draft 세션 카드에 정확히 1개, '작성중 1'(rows 2 − completedRows 1).
-  const badge = page.locator('[data-testid="draft-badge"]');
-  await expect(badge).toHaveCount(1);
-  await expect(badge).toContainText('작성중');
-  await expect(badge).toContainText('1');
-  const owner = page.locator('button:has([data-testid="draft-badge"])');
-  await expect(owner).toContainText('v033 작성중세션');
-  console.log('✓ 작성중 1 배지는 부분입력 세션 카드에만');
+  // v0.44.0 §C7 F24(민구 08-02) — '작성중 N' 배지 폐기: 문자열·testid 모두 부재.
+  await expect(page.getByText('작성중')).toHaveCount(0);
+  await expect(page.locator('[data-testid="draft-badge"]')).toHaveCount(0);
 
-  // 전 행 완료 세션 카드에는 배지가 없다.
+  // 부분입력 세션(완료 1/전체 2)은 `1/2행`, 전 행 완료 세션은 `2/2행`.
+  const draftCard = page.locator('button', { hasText: 'v033 부분입력세션' });
+  await expect(draftCard).toContainText(/1\/2\s*행/);
   const cleanCard = page.locator('button', { hasText: 'v033 클립세션' });
-  await expect(cleanCard.locator('[data-testid="draft-badge"]')).toHaveCount(0);
-  console.log('✓ 완료 세션 카드엔 배지 없음');
+  await expect(cleanCard).toContainText(/2\/2\s*행/);
+  console.log('✓ F24 — 배지 부재 + 완료/전체행 통합 표기');
 });
 
 test('#9-5 402×874 — 클립 컬럼 추가/배지 표시에도 가로 오버플로 0', async ({ page }) => {
   await bootDataTab(page);
 
-  // 카드 리스트(작성중 배지 포함) 화면: 문서 가로 스크롤 없음.
+  // 카드 리스트(행수 통합 `N/M행` 표기 포함) 화면: 문서 가로 스크롤 없음.
   const listSw = await page.evaluate(() => ({
     sw: document.documentElement.scrollWidth,
     cw: document.documentElement.clientWidth,

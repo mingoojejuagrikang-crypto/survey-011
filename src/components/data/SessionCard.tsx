@@ -33,9 +33,10 @@ export function SessionCard({
     ? (dirtyCount > 0 ? `${dirtyCount}행 변경` : `${session.syncedRows}/${session.completedRows}`)
     : '미업로드';
   const syncColor = fullySynced ? T.green : partial ? T.amber : T.textMute;
-  // v0.33.0 #9 — 완료/작성중 구분(07-10 QA P1 #4). 부분입력 세션이 "0행"으로만 보여 데이터가
-  // 없다고 오판·삭제할 위험 → 미완료 행이 있으면 amber '작성중 N' 배지를 완료 배지 옆에 표시.
-  const draftRows = Math.max(0, session.rows.length - session.completedRows);
+  // v0.44.0 §C7 F24: v0.33.0 #9 '작성중 N' 배지 폐기(민구 08-02) — 되살리려면 §4-b를 먼저 읽어라.
+  // 같은 정보(미완료 행 수)를 배지와 행수로 두 번 보이던 중복을 삭제하고, 행수 표기를
+  // `완료/전체행`(예: 1/2행)으로 통합한다. 부분입력 세션이 "0행"으로 보이던 #9의 원 문제는
+  // 전체 행수가 분모로 항상 보이므로 여전히 생기지 않는다.
 
   return (
     <div
@@ -87,31 +88,10 @@ export function SessionCard({
                 fontFamily: 'JetBrains Mono, ui-monospace, monospace',
               }}
             >
-              {session.completedRows}
+              {session.completedRows}/{session.rows.length}
             </span>
             <span style={{ fontSize: 13, color: T.textMute, fontWeight: 600 }}>행</span>
           </div>
-          {draftRows > 0 && (
-            <div
-              data-testid="draft-badge"
-              title={`미완료(작성중) ${draftRows}행 — 카드를 열어 이어서 채울 수 있습니다`}
-              style={{
-                display: 'flex', alignItems: 'baseline', gap: 4,
-                padding: '6px 10px', borderRadius: 10,
-                background: 'rgba(255,234,0,0.10)',
-              }}
-            >
-              <span style={{ fontSize: 13, color: T.amber, fontWeight: 600 }}>작성중</span>
-              <span
-                style={{
-                  fontSize: 18, fontWeight: 800, color: T.amber,
-                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                }}
-              >
-                {draftRows}
-              </span>
-            </div>
-          )}
           <div
             style={{
               display: 'flex', alignItems: 'center', gap: 6,

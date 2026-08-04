@@ -228,13 +228,14 @@ export default function App() {
       {/* v0.18.0 1f — 비강제 "새 버전" 배너(상단 고정, 모든 탭 공통). 새 SW waiting 시에만 노출. */}
       <UpdateBanner />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* v0.32.0 설정탭 UX(Vance) B4 — 생성 완료 후 다음 단계(입력탭) 이동 버튼. 자동 탭 전환은
-            하지 않는다(민구 확정) — 사용자가 버튼으로 명시 이동. */}
-        {tab === 'settings' && <SettingsScreen onNavigateToInput={() => changeTab('voice')} />}
+        {/* v0.44.0 §C7 F25·F26: v0.32.0 B4 결정 폐기(민구 08-02) — 되살리려면 §4-b를 먼저 읽어라.
+            생성 완료 후 "입력탭으로 이동" 버튼(onNavigateToInput)을 삭제 — 탭 이동은 TabBar가 소유. */}
+        {tab === 'settings' && <SettingsScreen />}
         {/* v0.33.0 항목4 [STT-16] — keep-alive 렌더: 세션이 살아 있으면 다른 탭에서도 VoiceScreen을
             display:none으로 유지(unmount 금지). 인식기·워치독·클립 레코더가
             탭 전환에 인질로 잡히지 않는다(세션 상태 소유권이 컴포넌트 수명에서 분리). 세션이 없으면
-            기존대로 unmount — 입력탭 첫 진입 전 마이크 prewarm(getUserMedia)이 미리 뜨지 않는다. */}
+            기존대로 unmount(자원 위생). v0.44.0 §C8 F18 — 마운트 prewarm이 폐지돼 이제는 어느 탭
+            경로로도 getUserMedia가 미리 뜨지 않는다(권한 요청 = '음성 입력 시작' 클릭). */}
         {(tab === 'voice' || sessionLive) && (
           <div
             style={{

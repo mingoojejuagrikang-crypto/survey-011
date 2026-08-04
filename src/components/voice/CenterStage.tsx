@@ -63,6 +63,13 @@ const ALARM_TWO_COLUMN_LAYOUT = `
   [data-central-state="alarm"] [data-testid^="anomaly-"][data-testid$="-value"] {
     justify-self: center !important;
     text-align: center !important;
+  }
+  /* v0.44.0 §C6(F10, 민구 확정) — 빨강은 **원인 요소에만**: 현재값(next) 열이 원인이다.
+     과거값(prev — 07-29/255.5)은 비교 기준일 뿐이라 빨강 금지 → 팝업 인라인 회색
+     (textMute/textDim)이 그대로 보인다. 되돌려서 prev까지 빨갛게 칠하면
+     v0440-c6-redscope 오라클이 red다. */
+  [data-central-state="alarm"] [data-testid="anomaly-next-label"],
+  [data-central-state="alarm"] [data-testid="anomaly-next-value"] {
     color: ${T.red} !important;
   }
 `;

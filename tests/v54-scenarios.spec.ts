@@ -580,9 +580,10 @@ test('[공통] 설정 → 테이블 생성 → 음성 탭 시작 버튼 활성�
   // 테이블 생성
   await generateTable(page);
 
-  // "생성됨" 또는 "미리보기" 텍스트 확인
+  // 생성 완료 흔적 확인 — v0.44.0 §C7 F26: "총 N행 생성됨 (미리보기)"는 3버튼 행으로
+  // 재배치됐으므로 "생성 테이블 보기"가 생성 완료의 표식이다.
   const generatedText = await page.evaluate(() => document.body.innerText);
-  const hasGenerated = generatedText.includes('생성됨') || generatedText.includes('미리보기');
+  const hasGenerated = generatedText.includes('생성 테이블 보기');
   if (hasGenerated) {
     console.log('✓ 테이블 생성 완료 확인');
   }

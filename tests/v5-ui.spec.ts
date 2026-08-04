@@ -181,15 +181,16 @@ test('[설정] 테이블 생성 후 미리보기 팝업 (S1-C)', async ({ page }
     await page.locator('button', { hasText: '생성' }).last().click();
     await page.waitForTimeout(300);
 
-    // "총 N행 생성됨 (미리보기)" 버튼이 표시됨
-    const generatedBtn = page.locator('text=생성됨').first();
-    await expect(generatedBtn).toBeVisible({ timeout: 2000 });
-    console.log('✓ 게이트 확인 후 "총 N행 생성됨 (미리보기)" 버튼 표시 확인');
+    // v0.44.0 §C7 F26 — 종전 "총 N행 생성됨 (미리보기)" 버튼은 3버튼 행의
+    // "생성 테이블 보기"로 재배치됐다(설정요약·생성 테이블 보기·재생성).
+    const previewBtn = page.getByRole('button', { name: '생성 테이블 보기', exact: true });
+    await expect(previewBtn).toBeVisible({ timeout: 2000 });
+    console.log('✓ 게이트 확인 후 "생성 테이블 보기" 버튼 표시 확인');
 
     // 클릭하면 닫기 전용 미리보기 팝업 열림.
-    await generatedBtn.click();
+    await previewBtn.click();
     await expect(page.locator('text=테이블 미리보기')).toBeVisible({ timeout: 2000 });
-    console.log('✓ 생성됨 버튼 클릭 시 미리보기 재열림 확인');
+    console.log('✓ 생성 테이블 보기 클릭 시 미리보기 재열림 확인');
   }
 });
 
