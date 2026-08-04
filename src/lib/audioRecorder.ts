@@ -17,11 +17,11 @@
 
 import { logger } from './logger';
 import { TimeoutError, withTimeout } from './async';
-import { micTeardown, recoverTimeout, type ForegroundReturnTeardownResult } from './logEvents';
+import { audioInputClass, micTeardown, recoverTimeout, type ForegroundReturnTeardownResult } from './logEvents';
 import { processClip, type PrerollPcm } from './audioTrim';
 // [ENV-12] 마이크 PCM 캡처(링버퍼·레벨·파형)는 MicPrerollTap이 소유한다 — 이 클래스는 위임만.
 import { MicPrerollTap, PREROLL_MS } from './micPrerollTap';
-import { classifyInputDevice } from './inputDevice';
+import { classifyInputDevice, classifyAudioInputClass } from './inputDevice';
 
 interface ClipSlot {
   recorder: MediaRecorder;
@@ -251,6 +251,14 @@ export class AudioRecorder {
         type: 'session',
         extra: `input_device_changed:${reason}:${oldCat}→${newCat}`,
         text: `${oldLabel || '(빈)'}→${newLabel || '(빈)'}`,
+      });
+      // §5-1 ③(v0.44.0) — 장치 변경 감지 시의 입력장치 종류 계측. 라벨 실제 전이(old!==new)
+      // 게이트에 동승하므로 링버퍼 잠식이 없다. 분류 휴리스틱·한계(speakerphone 부재,
+      // [AUDIO-INPUT-2] frozen 라벨)는 classifyAudioInputClass 주석이 SSOT. 원시 라벨은 text에.
+      logger.log({
+        type: 'session',
+        extra: audioInputClass({ cls: classifyAudioInputClass(newLabel), src: 'device_change' }),
+        text: newLabel || '(빈)',
       });
     } catch { /* best-effort 계측 */ }
   }

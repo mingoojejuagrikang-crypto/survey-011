@@ -29,6 +29,9 @@ import {
   bgEnterSnapshot,
   orientationChange,
   lowConfidenceParsed,
+  audioInputClass,
+  fontRenderSnapshot,
+  bargeInTextSource,
 } from '../src/lib/logEvents';
 
 test('settingChanged — 기존 4개 콜사이트 산출과 바이트 동일', () => {
@@ -288,6 +291,49 @@ test('bgEnterSnapshot — 진입 시점 레코더·트랙·인식기 (계측 H)'
   expect(bgEnterSnapshot({
     rec: 'idle', track: 'muted', stt: 'suspended', phase: 'active',
   })).toBe('bg_enter_snapshot:rec=idle,track=muted,stt=suspended,phase=active');
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * v0.44.0 §5-1 계측 — "이게 들어가야 다음 실기기 로그부터는 로그만으로 판정된다" 백로그.
+ * 아래 리터럴이 SOP-003 파서와의 계약이다. 고치고 싶어지면 파서도 함께 고쳐야 한다.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** §5-1 ③ — 입력장치 종류(earphone/builtin). §D의 인과(스피커폰 half-duplex 필요)를 다음
+ *  실기기 로그에서 로그만으로 확정하기 위한 축. 🔴 `speakerphone`은 유니온에 **없다** —
+ *  출력 경로는 Web API로 직접 못 재므로(classifyAudioInputClass 주석), 스피커폰은 사후에
+ *  `cls=builtin` + barge-in 패턴(TTS 재생창 안 stt_barge_in 밀도)으로 추정한다. */
+test('audioInputClass — 입력장치 분류 바이트 계약 (§5-1 ③)', () => {
+  expect(audioInputClass({ cls: 'earphone', src: 'session_start' }))
+    .toBe('audio_input_class:cls=earphone,src=session_start');
+  expect(audioInputClass({ cls: 'builtin', src: 'session_start' }))
+    .toBe('audio_input_class:cls=builtin,src=session_start');
+  // 장치 변경 감지(라벨 실제 전이 시에만 — input_device_changed와 같은 게이트) 경로.
+  expect(audioInputClass({ cls: 'earphone', src: 'device_change' }))
+    .toBe('audio_input_class:cls=earphone,src=device_change');
+  expect(audioInputClass({ cls: 'builtin', src: 'device_change' }))
+    .toBe('audio_input_class:cls=builtin,src=device_change');
+});
+
+/** §5-1 ④ — 폰트 실렌더값. 실기기 점검 "곡선 3항만 값 변화"를 세 회차째 판정 못 한 공백.
+ *  px는 소수 1자리로 반올림한다(부동소수 꼬리가 파서 대조를 깨지 않도록 — beepPlay gain 계보).
+ *  `probe`는 그 슬롯이 실렌더 요소가 아니라 **프로브로 해석된 값**임을 남긴다('+' 연결 —
+ *  visibilityContext evidence 표기 계보). 계측이 자기 출처를 숨기면 판독이 거짓이 된다. */
+test('fontRenderSnapshot — 폰트 실렌더값 바이트 계약 (§5-1 ④)', () => {
+  expect(fontRenderSnapshot({
+    hero: 64, alarmLabel: 56.0004, alarmValue: 77.96, chipLabel: 46.23, chipValue: 52.26,
+    w: 402, h: 874, probe: 'hero+alarmLabel+alarmValue',
+  })).toBe('font_render:hero=64,alarmLabel=56,alarmValue=78,chipLabel=46.2,chipValue=52.3,w=402,h=874,probe=hero+alarmLabel+alarmValue');
+  // 전 슬롯이 실렌더였다면 probe=none — "프로브가 없었다"도 정보다(0건 이중의미 금지 원칙).
+  expect(fontRenderSnapshot({
+    hero: 90.13, alarmLabel: 89.2, alarmValue: 124.16, chipLabel: 46.2, chipValue: 52.3,
+    w: 640, h: 1024, probe: 'none',
+  })).toBe('font_render:hero=90.1,alarmLabel=89.2,alarmValue=124.2,chipLabel=46.2,chipValue=52.3,w=640,h=1024,probe=none');
+});
+
+/** §5-1 ② — stt_barge_in의 text가 빈 final 대신 같은 발화의 마지막 interim에서 채워졌다는 마커.
+ *  이 마커가 없으면 "final이 원래 그 텍스트였다"와 "interim 폴백이었다"가 로그에서 같아 보인다. */
+test('bargeInTextSource — stt_barge_in text 출처 마커 바이트 계약 (§5-1 ②)', () => {
+  expect(bargeInTextSource('interim')).toBe('text_src=interim');
 });
 
 /** 계측 I — 회전이 실제로 일어났는가 + 안내가 실제로 떴는가(별개 사실). */

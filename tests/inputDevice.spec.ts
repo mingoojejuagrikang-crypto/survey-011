@@ -14,7 +14,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { classifyInputDevice } from '../src/lib/inputDevice';
+import { classifyInputDevice, classifyAudioInputClass } from '../src/lib/inputDevice';
 
 test.describe('classifyInputDevice — CATEGORY heuristic', () => {
   const cases: Array<[string | null | undefined, string, string]> = [
@@ -43,6 +43,37 @@ test.describe('classifyInputDevice — CATEGORY heuristic', () => {
       const r = classifyInputDevice(label);
       expect(r.icon).toBe(icon);
       expect(r.text).toBe(text);
+    });
+  }
+});
+
+/** v0.44.0 §5-1 ③ — 계측용 입력장치 분류(earphone/builtin). 배지 CATEGORY(classifyInputDevice)를
+ *  SSOT로 재사용해 파생한다: 내장 → builtin, 그 외(블루투스·유선·미지 외장) → earphone.
+ *  🔴 'speakerphone'은 반환값에 없다 — 출력 경로(스피커 vs 이어피스)는 Web API로 못 잰다.
+ *  스피커폰 추정은 사후 분석(builtin + TTS 재생창 내 barge-in 밀도)의 몫이다. */
+test.describe('classifyAudioInputClass — §5-1 ③ 계측 분류 (fake 라벨 주입)', () => {
+  const cases: Array<[string | null | undefined, 'earphone' | 'builtin']> = [
+    // builtin: 빈/미정의 폴백 + 내장 계열 + default
+    ['', 'builtin'],
+    [undefined, 'builtin'],
+    [null, 'builtin'],
+    ['iPhone 마이크', 'builtin'],
+    ['Built-In Microphone', 'builtin'],
+    ['Default - MacBook Pro Microphone', 'builtin'],
+    // earphone: bluetooth/airpods/shokz 계열
+    ['AirPods Pro', 'earphone'],
+    ['OpenDots ONE by Shokz', 'earphone'],
+    ['Bluetooth Headphones', 'earphone'],
+    // earphone: 유선/USB/헤드셋 계열
+    ['USB Audio Device', 'earphone'],
+    ['Wired Headset', 'earphone'],
+    // earphone: 미지 외장(버즈류 상표명 등 — CATEGORY 휴리스틱의 "비어있지 않은 미지 → 외장" 폴백)
+    ['Galaxy Buds2 Pro', 'earphone'],
+    ['Fake Mic', 'earphone'],
+  ];
+  for (const [label, cls] of cases) {
+    test(`${JSON.stringify(label)} → ${cls}`, () => {
+      expect(classifyAudioInputClass(label)).toBe(cls);
     });
   }
 });

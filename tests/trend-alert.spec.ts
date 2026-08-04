@@ -412,7 +412,9 @@ test('[ALERT-COMPARE-1] 2열 비교 — 안 넘침·좌우 동일 크기(§C5-c)
   expect(metrics.valueFits, '값 둘 다 배정 폭 안').toBe(true);
   expect(metrics.labelSize, '좌우 라벨은 같은 크기(§C5-c)').toBeCloseTo(metrics.nextLabelSize, 3);
   expect(metrics.valueSize, '좌우 값은 같은 크기(§C5-c)').toBeCloseTo(metrics.nextValueSize, 3);
-  expect(metrics.valueColors, '비교값은 붉은 톤').toEqual(['rgb(255, 23, 68)', 'rgb(255, 23, 68)']);
+  // v0.44.0 §C6(F10, 민구 확정) — 빨강은 **원인 요소(현재값)에만**. 과거값은 회색(textDim).
+  // 종전 ['red','red'] 단언은 §C6 이전 CSS(전 셀 red !important) 체제의 것이다.
+  expect(metrics.valueColors, '현재값만 붉은 톤(§C6)').toEqual(['rgb(164, 168, 176)', 'rgb(255, 23, 68)']);
 
   await page.evaluate(() => {
     (window as unknown as { __mockSTT?: { fireInterim: (t: string, c: number) => void } })

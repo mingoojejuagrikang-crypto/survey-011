@@ -14,6 +14,7 @@ import { ChipZone } from './ChipZone';
 import { CenterStage } from './CenterStage';
 import { ActiveControlBar, type EdgeMode } from './ActiveControlBar';
 import { activeZoneRows } from './heroLayout';
+import { scheduleFontRenderSnapshot } from './fontRenderProbe';
 import type { DotGlyph } from './StateDots';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 
@@ -180,6 +181,10 @@ export function ActiveState({
     handledUiCommandSeqRef.current = uiCommand.seq;
     if (uiCommand.id === 'help') openCommandHelp();
   }, [uiCommand, openCommandHelp]);
+
+  // §5-1 ④(v0.44.0) — 폰트 실렌더값 세션당 1회 계측 예약. 1회 계약(sessionId 가드)·안정 시점·
+  // 프로브 규칙은 fontRenderProbe.ts가 SSOT로 소유한다. cleanup이 언마운트 시 대기 타이머를 끈다.
+  useEffect(() => scheduleFontRenderSnapshot(), []);
 
   // v0.37.0 리뷰#2 — 탭 전환 직전 overlayCloseSeq 증가 → 열린 시트/도움말을 닫아 STT를 재개한다.
   const overlayCloseSeq = useSessionStore((s) => s.overlayCloseSeq);

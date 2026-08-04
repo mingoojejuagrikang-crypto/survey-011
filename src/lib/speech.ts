@@ -70,7 +70,9 @@ export function createRecognition(): SpeechRecognitionLike | null {
 
 export interface SpeechCallbacks {
   onFinal: (text: string, alts: string[], confidence: number) => void;
-  onInterim?: (text: string) => void;
+  /** §5-1 ② — confidence는 엔진이 interim에 점수를 준 경우에만 실린다(대개 미보고 → undefined).
+   *  빈 final barge-in의 폴백(stt_barge_in text/confidence 채움)이 유일한 소비자다. */
+  onInterim?: (text: string, confidence?: number) => void;
   onError?: (kind: string) => void;
   onStart?: () => void;
   onEnd?: () => void;
@@ -352,7 +354,9 @@ export class SpeechController {
         synth?.cancel();
       }
       if (final) this.cb.onFinal(text, alts, confidence);
-      else this.cb.onInterim?.(text);
+      // §5-1 ② — interim에도 엔진 원시 confidence를 실어 보낸다(미보고면 undefined — `?? 1`
+      // 보정값을 흘리면 "엔진이 안 준 것"이 1.0으로 둔갑한다). 빈 final barge-in의 폴백 근거.
+      else this.cb.onInterim?.(text, confAbsent ? undefined : rawConf);
     };
     const onError = (e: Event) => {
       if (this.rec !== rec) return;

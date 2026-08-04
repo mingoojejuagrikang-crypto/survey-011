@@ -113,6 +113,12 @@ export interface DeviceInfo {
   language: string;
   screenW: number;
   screenH: number;
+  /** v0.44.0 §B4 — 실측 가시 뷰포트(innerWidth/innerHeight). 스크린샷(html2canvas)은 100dvh
+   *  (동적 가시 뷰포트)를 재는데 screenW/screenH는 정적 OS 해상도라, 실기기에서 iPhone 62px
+   *  (7.1%)·태블릿 31px(3.0%)만큼 어긋나 분석자가 잘림 좌표 판정을 그만큼 틀렸다.
+   *  기존 screenW/screenH는 과거 로그 호환으로 유지하고 두 축을 나란히 싣는다. */
+  viewportW: number;
+  viewportH: number;
   deviceMemory?: number;
   hardwareConcurrency?: number;
   appVersion: string;
@@ -143,6 +149,9 @@ export const logger = {
       language: nav.language,
       screenW: screen.width,
       screenH: screen.height,
+      // §B4 — 호출 시점의 실측 뷰포트(피드백 제출·로그 내보내기 순간의 값).
+      viewportW: window.innerWidth,
+      viewportH: window.innerHeight,
       deviceMemory: nav.deviceMemory,
       hardwareConcurrency: nav.hardwareConcurrency,
       appVersion: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?',

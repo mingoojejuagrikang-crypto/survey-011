@@ -18,7 +18,9 @@ import { AudioRecorder, type AudioTrackState, type ClipResult } from './audioRec
 import { logger } from './logger';
 import {
   anomalyAlertCleared,
+  audioInputClass,
   audioRouteRevalidate,
+  bargeInTextSource,
   bgMicAction,
   clipArmBlocked,
   lowConfidenceParsed,
@@ -44,7 +46,7 @@ import {
   shouldEmitRouteRevalidate,
   type ForegroundReturnState,
 } from './foregroundReturnPolicy';
-import { classifyInputDevice } from './inputDevice';
+import { classifyInputDevice, classifyAudioInputClass } from './inputDevice';
 
 
 /** 대기 셀 공통 좌표. */
@@ -173,7 +175,9 @@ export function useVoiceSession() {
   const lastConfidenceRef = useRef<number>(1);
   // v0.9.0 딜레이 계측 — 마지막 interim(중간) 결과의 텍스트·도착시각. final 시 (final.ts − 이 시각)
   // = EOS 꼬리(브라우저 무음 종료감지 대기)를 정량화한다(stt_eos_tail).
-  const lastInterimRef = useRef<{ text: string; at: number } | null>(null);
+  // §5-1 ②(v0.44.0) — confidence(엔진이 interim에 점수를 준 경우만) 추가: 빈 final barge-in의
+  // stt_barge_in text/confidence 폴백 근거. 신규 필드는 optional — 기존 소비자(EOS 꼬리) 불변.
+  const lastInterimRef = useRef<{ text: string; at: number; confidence?: number } | null>(null);
   // v0.9.0 빠른 인식(조기확정) — 같은 파싱값이 interim에서 안정되기 시작한 시각. 임계 시간 유지 시 커밋.
   const earlyCommitStableRef = useRef<{ value: string; since: number } | null>(null);
   const recorderRef = useRef<AudioRecorder | null>(null);
@@ -1675,7 +1679,22 @@ export function useVoiceSession() {
       const muted = ctrlRef.current?.isTtsMuted() ?? false;
       if (muted) {
         // 이어폰 barge-in: 재생 중 들어온 값을 폐기하지 않고 TTS를 끊고 그대로 처리.
-        logCell({ type: 'stt_barge_in', text, confidence, row: awaiting.row, colId: awaiting.colId });
+        // §5-1 ②(v0.44.0) — "무엇을 들었는지"를 채운다. 08-02 실기기 stt_barge_in 167건 전부
+        // text=''/confidence=0(브라우저가 빈 final을 확정)이라 §D2(종경 컬럼) 판정이 미결이었다.
+        // 빈 final이면 **같은 발화의 마지막 interim**(handleFinal 하단 :1697에서야 소거되므로
+        // 이 시점엔 아직 살아 있다)이 유일한 인식 증거다 — text·confidence를 그 값으로 폴백하고
+        // 출처 마커(text_src=interim)를 남긴다. final 원문이 있으면 종전 그대로(마커 없음 —
+        // 기존 이벤트 바이트 불변), interim조차 없으면 기존 폴백(''/0) 유지.
+        const interim = lastInterimRef.current;
+        const fromInterim = !text && !!interim?.text;
+        logCell({
+          type: 'stt_barge_in',
+          text: fromInterim ? interim!.text : text,
+          confidence: fromInterim ? interim!.confidence ?? 0 : confidence,
+          row: awaiting.row,
+          colId: awaiting.colId,
+          ...(fromInterim ? { extra: bargeInTextSource('interim') } : {}),
+        });
         cancelTts();
         epochRef.current++; // 진행 중인 advance/안내 체인 무효화
       }
@@ -2275,10 +2294,11 @@ export function useVoiceSession() {
   }, [advance, enterModifyMode, say, goNextRow, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
 
   // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
-  const handleInterim = useCallback((text: string) => {
+  const handleInterim = useCallback((text: string, confidence?: number) => {
     const now = Date.now();
     // EOS 계측: 마지막 interim 도착 시각 기록 — handleFinal이 final.ts와의 차로 꼬리를 산출.
-    lastInterimRef.current = { text, at: now };
+    // §5-1 ② — 엔진이 interim에 준 원시 confidence도 함께(미보고면 undefined 그대로).
+    lastInterimRef.current = { text, at: now, confidence };
 
     // v0.36.0 FB#2(Vance) — 미확정 인식 텍스트를 **표시 전용** store 필드에 기록(파형과 함께 "지금
     //   이렇게 들었다"를 원거리에 노출). 값-대기(value/trendConfirm) 문맥에서만 — 이동/종료 대기
@@ -2653,6 +2673,16 @@ export function useVoiceSession() {
           inputDeviceId: input.deviceId,
           inputDeviceLabel: input.label,
         },
+      });
+      // §5-1 ③(v0.44.0) — 입력장치 종류 계측: 세션 시작 시 best-effort 분류 + 원시 라벨 1회.
+      // §D의 인과(스피커폰 half-duplex 필요)를 다음 실기기 로그에서 로그만으로 확정하는 축이다.
+      // 분류 휴리스틱·한계(출력 경로 측정 불가 = speakerphone 부재, [AUDIO-INPUT-2] frozen 라벨)는
+      // classifyAudioInputClass 주석이 SSOT. 장치 변경 감지 시의 방출은 audioRecorder의
+      // emitInputDeviceChanged(라벨 실제 전이 게이트)에 동승한다 — 링버퍼 잠식 없음.
+      logCell({
+        type: 'session',
+        extra: audioInputClass({ cls: classifyAudioInputClass(input.label), src: 'session_start' }),
+        text: input.label,
       });
     }).catch(() => {});
 

@@ -185,12 +185,22 @@ test('제출(로그인+온라인) — 사용자 Drive 레그 업로드 + 경량 
 
   const fb = JSON.parse(await zip.files['feedback.json'].async('string')) as {
     text: string; hasScreenshot: boolean; context: { tab: string; sessionPhase: string }; userEmail: string | null;
+    device: { screenW: number; screenH: number; viewportW: number; viewportH: number };
   };
   expect(fb.text).toBe('알람 소리가 너무 작아요');
   expect(fb.context.tab).toBe('settings');
   expect(fb.context.sessionPhase).toBe('ready');
   expect(fb.userEmail).toBe('tester@example.com');
   expect(names.includes('screenshot.jpg')).toBe(fb.hasScreenshot); // 자기일관(캡처는 best-effort)
+
+  // v0.44.0 §B4 — 스크린샷(html2canvas)은 100dvh(동적 가시 뷰포트)를 재고 screenH는 정적 OS
+  // 해상도다(iPhone 62px·태블릿 31px 차 — 분석자가 잘림 좌표 판정을 그만큼 틀렸다). 실측 뷰포트
+  // 두 키를 리터럴로 고정한다(Playwright 기본 뷰포트 1280×720 — 제품 상수 import 금지).
+  expect(fb.device.viewportW).toBe(1280);
+  expect(fb.device.viewportH).toBe(720);
+  // 기존 screenW/screenH는 유지된다(과거 로그 호환) — 두 축이 함께 있어야 차이를 잴 수 있다.
+  expect(typeof fb.device.screenW).toBe('number');
+  expect(typeof fb.device.screenH).toBe('number');
 
   // events.json이 진짜 경량 로그를 담는다(부팅 계측 최소 1건 이상).
   const events = JSON.parse(await zip.files['events.json'].async('string')) as unknown[];
