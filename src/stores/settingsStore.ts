@@ -5,6 +5,7 @@ import type { Column, SheetConfig, SavedSheet, LegacyInputMode } from '../types'
 import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
 import { isFolderCache, type FolderCache } from '../lib/driveFolders';
 import { isCycling } from '../lib/autoValue';
+import { defaultDesignatedDate, localTodayIso } from '../lib/weekTuesday';
 import {
   DEFAULT_POSITIVE_BEEP_ID,
   DEFAULT_NEGATIVE_BEEP_ID,
@@ -151,6 +152,12 @@ interface SettingsState {
    *  다운그레이드(v5) 라운드트립 후 재업그레이드 시 사용자가 v6에서 새로 지정한 trendRule을
    *  다시 지우지 않도록 한다. 사용자 설정 아님(UI 미노출). */
   trendRuleClearedV6?: boolean;
+  /** v0.44.0 §C8 F28 — 입력값 설정을 마지막으로 손질한 **로컬 날짜**(ISO 'YYYY-MM-DD').
+   *  INPUT_SETTINGS_KEYS(컬럼·생성 테이블·세션명·음성/소리 옵션)가 바뀔 때마다 자동 스탬프되고,
+   *  부팅 시 오늘과 다르면 입력값 설정을 기본값으로 자동 복원한다(제외: 로그인·시트 주소·시트 탭 —
+   *  onRehydrateStorage의 F28 블록 참조). null = 설정한 적 없음/초기화 직후 → 발동하지 않음.
+   *  사용자 설정 아님(UI 미노출). */
+  inputSettingsDate: string | null;
 
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns' | 'saveSheet' | 'removeSavedSheet'>>) => void;
   updateColumn: (id: string, next: Column) => void;
@@ -251,7 +258,16 @@ export function makeSettingsDefaults(): SettingsDefaults {
     savedSheets: [],
     manualMode: false,
     // 신규 설치 기본 컬럼에도 샘플키 유추값을 미리 부여(prev===next → undefined일 때만 유추).
-    columns: structuredClone(MOCK_COLUMNS).map((c) => reconcileColumnFlags(c, c)),
+    // v0.44.0 §C8 F27 — 고정 날짜 샘플(기준일자 c2)의 기본값은 정적 과거 날짜가 아니라 호출 시점의
+    // "이번 주(일요일 시작)의 화요일"로 계산한다(민구 원문: "기준일자 기본값은 오늘 주차의 화요일").
+    // '오늘' 치환 컬럼(조사일자 c1)은 그대로 둔다 — 동적 치환은 autoValue가 담당.
+    columns: structuredClone(MOCK_COLUMNS).map((c) => {
+      const seeded =
+        c.type === 'date' && c.auto.kind === 'fixed' && c.auto.value !== '오늘'
+          ? { ...c, auto: { ...c.auto, value: defaultDesignatedDate() } }
+          : c;
+      return reconcileColumnFlags(seeded, seeded);
+    }),
     tableGenerated: false,
     totalRows: 50,
     ttsRate: 1.05,
@@ -268,6 +284,57 @@ export function makeSettingsDefaults(): SettingsDefaults {
     teamFolderCache: null,
     userLogFolderCache: null,
     roundDateColId: null,
+    inputSettingsDate: null,
+  };
+}
+
+/** v0.44.0 §C8 F28 — "입력값 설정"으로 간주하는 키(자동 초기화 대상 = 스탬프 갱신 대상).
+ *  범위 판단: 수동 '초기화'(useSettingsActions.onResetConfirm)가 기본 보존하는 로그인·시트
+ *  주소·시트 탭·계정 캐시를 뺀 **나머지 전부** — 컬럼(+출처는 항상 동반), 생성 테이블, 세션명,
+ *  음성/소리/검토 옵션. 민구 원문(F28): "초기화 기능 발동 조건 추가 … (로그인정보, 구글시트 주소,
+ *  시트 선택 탭은 제외)" — 즉 효과는 기존 초기화(보존 기본값)와 동일해야 한다. */
+const INPUT_SETTINGS_KEYS = [
+  'columns', 'tableGenerated', 'totalRows', 'manualMode',
+  'ttsRate', 'recognitionTolerance', 'fastRecognition', 'autoScreenCapture',
+  'beepPositiveId', 'beepNegativeId', 'beepVolume', 'preferredVoiceName',
+  'sessionLabelColId', 'sessionAutoLabel', 'sessionCustomLabel', 'roundDateColId',
+] as const;
+
+function touchesInputSettings(partial: Record<string, unknown>): boolean {
+  return INPUT_SETTINGS_KEYS.some((k) => k in partial);
+}
+
+/**
+ * v0.44.0 §C8 F28 — 입력값 설정 초기화 패치(SSOT). 수동 '초기화'(onResetConfirm)와 날짜 변경
+ * 자동 초기화가 **같은 패치**를 쓴다 — 두 경로의 범위가 어긋나면 "초기화 기능 발동 조건 추가"라는
+ * 민구 원문 계약이 깨진다. 로그인(googleConnected/userEmail)·시트 주소(sheetUrl/sheet/savedSheets)·
+ * 시트 탭(sheetTab/availableSheets)·계정 결합 폴더 캐시는 **건드리지 않는다**.
+ * inputSettingsDate:null 포함 — 초기화 직후에는 다음 손질 전까지 자동 발동하지 않는다.
+ */
+export function inputSettingsResetPatch(): Partial<SettingsState> {
+  const d = makeSettingsDefaults();
+  return {
+    columns: d.columns, // fresh copy — makeSettingsDefaults가 호출마다 새 객체를 만든다
+    // v0.38.0 리뷰#3 — 컬럼과 **출처는 항상 함께** 움직여야 한다(오래된 출처가 남으면 다음 재연결이
+    // 샘플 기본값을 "그 시트의 사용자 설정"으로 오인해 보존한다).
+    columnsSheetId: d.columnsSheetId,
+    columnsSheetTab: d.columnsSheetTab,
+    tableGenerated: false,
+    totalRows: d.totalRows,
+    ttsRate: d.ttsRate,
+    recognitionTolerance: d.recognitionTolerance,
+    fastRecognition: d.fastRecognition,
+    autoScreenCapture: d.autoScreenCapture,
+    beepPositiveId: d.beepPositiveId,
+    beepNegativeId: d.beepNegativeId,
+    beepVolume: d.beepVolume,
+    manualMode: d.manualMode,
+    preferredVoiceName: d.preferredVoiceName,
+    sessionLabelColId: d.sessionLabelColId,
+    sessionAutoLabel: d.sessionAutoLabel,
+    sessionCustomLabel: d.sessionCustomLabel,
+    roundDateColId: d.roundDateColId,
+    inputSettingsDate: null,
   };
 }
 
@@ -276,7 +343,15 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       ...makeSettingsDefaults(),
 
-      set: (partial) => set(partial),
+      // v0.44.0 §C8 F28 — 입력값 설정 키가 바뀌면 "언제 손질했는지"를 로컬 날짜로 스탬프한다.
+      // 호출부가 inputSettingsDate를 명시하면(초기화 패치의 null 등) 그 값을 존중한다.
+      set: (partial) => {
+        const stamped =
+          touchesInputSettings(partial as Record<string, unknown>) && !('inputSettingsDate' in partial)
+            ? { ...partial, inputSettingsDate: localTodayIso() }
+            : partial;
+        set(stamped);
+      },
       updateColumn: (id, next) =>
         set((state) => {
           const prev = state.columns.find((c) => c.id === id) ?? null;
@@ -296,8 +371,10 @@ export const useSettingsStore = create<SettingsState>()(
             merged = { ...next, ttsAnnounce: false };
           }
           // v0.7.0 — input/type 변경 시 sampleKey 재유추 + 부적격 trendRule 제거(columnFlags 규칙).
+          // F28 — 컬럼 손질도 입력값 설정 스탬프 갱신(내부 set은 공개 set 래퍼를 안 거친다).
           return {
             columns: state.columns.map((c) => (c.id === id ? reconcileColumnFlags(prev, merged) : c)),
+            inputSettingsDate: localTodayIso(),
           };
         }),
       addColumn: () =>
@@ -312,17 +389,20 @@ export const useSettingsStore = create<SettingsState>()(
           };
           // v0.7.0 — 신규 컬럼도 샘플키 유추 기본값을 받는다(auto+text → true).
           col.sampleKey = inferSampleKey(col);
-          return { columns: [...state.columns, col] };
+          return { columns: [...state.columns, col], inputSettingsDate: localTodayIso() };
         }),
       removeColumn: (id) =>
-        set((state) => ({ columns: state.columns.filter((c) => c.id !== id) })),
+        set((state) => ({
+          columns: state.columns.filter((c) => c.id !== id),
+          inputSettingsDate: localTodayIso(),
+        })),
       reorderColumns: (fromIdx, toIdx) =>
         set((state) => {
           if (fromIdx === toIdx) return state;
           const copy = [...state.columns];
           const [moved] = copy.splice(fromIdx, 1);
           copy.splice(toIdx, 0, moved);
-          return { columns: copy };
+          return { columns: copy, inputSettingsDate: localTodayIso() };
         }),
       saveSheet: (entry) =>
         set((state) => {
@@ -395,6 +475,25 @@ export const useSettingsStore = create<SettingsState>()(
             });
           }
         } catch { /* best-effort 계측 */ }
+        // v0.44.0 §C8 F28 — 날짜 변경 자동 초기화(민구 확정 08-02: "사용자가 입력값 설정후 날짜가
+        // 변경되면 기본값으로 자동 변경 … 로그인정보·구글시트 주소·시트 선택 탭은 제외").
+        // 트리거 = **달력 날짜**: 입력값 설정을 마지막으로 손질한 날(inputSettingsDate 스탬프)과
+        // 부팅일이 다르면 초기화 패치를 적용한다. 스토어 참조는 비동기로 미룬다 — 이 콜백은
+        // create() 도중에도 불릴 수 있어 동기 useSettingsStore 참조가 TDZ에 걸린다(위 loadSheetsRecord
+        // .then 패턴과 동일 이유). 한계: 부팅 시에만 검사한다 — 앱을 끄지 않고 자정을 넘긴 뒤
+        // 포그라운드 복귀만 하는 경우는 다음 부팅에서 잡힌다(진행 중 세션을 중간에 파괴하지 않기
+        // 위한 의도적 보수 — 세션 자체는 session.columns 스냅샷이라 어차피 안전).
+        void Promise.resolve().then(() => {
+          try {
+            const cur = useSettingsStore.getState();
+            const stamp = cur.inputSettingsDate;
+            const today = localTodayIso();
+            if (stamp && stamp !== today) {
+              cur.set(inputSettingsResetPatch());
+              logger.log({ type: 'app', extra: `input_settings_auto_reset:${stamp}->${today}` });
+            }
+          } catch { /* best-effort — 실패해도 부팅을 막지 않는다 */ }
+        });
       },
       migrate: (persisted: unknown, version: number) => {
         const s = persisted as Partial<SettingsState> & {
@@ -448,6 +547,11 @@ export const useSettingsStore = create<SettingsState>()(
         if (s.userLogFolderCache !== null && !isFolderCache(s.userLogFolderCache)) s.userLogFolderCache = null;
         // v0.7.0 — 조사시기(회차) 컬럼 id는 유지(UI만 v0.8.0 조회탭으로 이전 — WS4).
         if (typeof s.roundDateColId !== 'string' && s.roundDateColId !== null) s.roundDateColId = null;
+        // v0.44.0 §C8 F28 — 입력값 설정 스탬프. 구버전 영속본엔 없으므로 null(발동 안 함)로 치유
+        // (sessionCustomLabel과 같은 무조건 coercion 패턴). ISO 형식이 아니면 신뢰하지 않는다.
+        if (typeof s.inputSettingsDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s.inputSettingsDate)) {
+          s.inputSettingsDate = null;
+        }
 
         // v0.35.1 Stage 0 — 비교탭 영속 6필드 제거는 migrate가 아니라 **merge 단계의
         // DEPRECATED_PERSIST_KEYS strip**이 담당한다(아래 persist 옵션). 이유(리뷰 라운드1

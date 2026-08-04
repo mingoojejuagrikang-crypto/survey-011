@@ -1,6 +1,7 @@
 import { T } from '../../tokens';
 import type { Column } from '../../types';
 import { autoValue } from '../../lib/autoValue';
+import { defaultDesignatedDate } from '../../lib/weekTuesday';
 import { MiniInput } from './MiniInput';
 import { SegmentToggle } from './SegmentToggle';
 
@@ -57,8 +58,10 @@ export function AutoDetail({ col, onChange }: { col: Column; onChange: (c: Colum
               onChange({ ...col, auto: { kind: 'fixed', value: '오늘' } });
             } else {
               if (!isToday) return; // 이미 지정 — no-op
-              const today = new Date().toISOString().slice(0, 10);
-              onChange({ ...col, auto: { kind: 'fixed', value: today } });
+              // v0.44.0 §C8 F27(민구 확정 08-02) — '지정' 기본값 = 오늘이 속한 일요일 시작 주의
+              // 화요일(weekTuesday SSOT). 종전 toISOString() 오늘 채움은 ① 기본값 스펙과 다르고
+              // ② UTC 변환이라 KST 새벽에 어제로 밀리는 타임존 결함도 있었다.
+              onChange({ ...col, auto: { kind: 'fixed', value: defaultDesignatedDate() } });
             }
           }}
         />

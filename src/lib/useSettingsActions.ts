@@ -5,7 +5,7 @@
  * (SOP-003 파서 계약).
  */
 import { useEffect, useRef, useState } from 'react';
-import { makeSettingsDefaults, useSettingsStore } from '../stores/settingsStore';
+import { inputSettingsResetPatch, useSettingsStore } from '../stores/settingsStore';
 import { saveSheetsRecord } from './db';
 import {
   invalidatePastIndex,
@@ -421,31 +421,11 @@ export function useSettingsActions() {
    *  기본값(makeSettingsDefaults SSOT)으로 되돌린다. Google 로그인·시트 URL·저장된 시트는 기본
    *  **보존**(민구 확정) — 모달 체크박스로만 opt-in 삭제. 세션 데이터·클립·로그(IDB)는 건드리지 않는다. */
   const onResetConfirm = async ({ clearLogin, clearSheets }: { clearLogin: boolean; clearSheets: boolean }) => {
-    const d = makeSettingsDefaults();
-    s.set({
-      columns: d.columns, // fresh copy — makeSettingsDefaults가 호출마다 새 객체를 만든다
-      // v0.38.0 리뷰#3 — 컬럼과 **출처는 항상 함께** 움직여야 한다. 초기화가 컬럼만 샘플 기본값
-      // (농가명=이원창 등)으로 되돌리고 출처를 이전 시트로 남겨두면, 그 시트를 다시 불러올 때
-      // 샘플 기본값을 "그 시트의 사용자 설정"으로 오인해 새 표본보다 우선 보존한다.
-      columnsSheetId: d.columnsSheetId,
-      columnsSheetTab: d.columnsSheetTab,
-      tableGenerated: false,
-      totalRows: d.totalRows,
-      ttsRate: d.ttsRate,
-      recognitionTolerance: d.recognitionTolerance,
-      fastRecognition: d.fastRecognition,
-      // v0.33.0 항목10 — 자동 캡처·비프음 선택도 기본값으로(초기화 SSOT = makeSettingsDefaults).
-      autoScreenCapture: d.autoScreenCapture,
-      beepPositiveId: d.beepPositiveId,
-      beepNegativeId: d.beepNegativeId,
-      beepVolume: d.beepVolume, // v0.35.0 FIX-5(리뷰 라운드1) — 볼륨도 기본값 복원(누락 수리).
-      manualMode: d.manualMode,
-      preferredVoiceName: d.preferredVoiceName,
-      sessionLabelColId: d.sessionLabelColId,
-      sessionAutoLabel: d.sessionAutoLabel,
-      sessionCustomLabel: d.sessionCustomLabel,
-      roundDateColId: d.roundDateColId,
-    });
+    // v0.44.0 §C8 F28 — 초기화 필드 목록은 settingsStore.inputSettingsResetPatch가 SSOT.
+    // 날짜 변경 자동 초기화(onRehydrateStorage F28 블록)와 이 수동 경로가 같은 패치를 쓴다 —
+    // 종전의 인라인 목록(컬럼+출처 동반 v0.38.0 리뷰#3 · beepVolume 복원 v0.35.0 FIX-5 등)을
+    // 필드 단위 그대로 옮겼고, inputSettingsDate:null(초기화 직후 자동 발동 억제)만 추가됐다.
+    s.set(inputSettingsResetPatch());
     setPreferredVoiceName(''); // 라이브 speech 모듈도 스토어 기본값과 동기화
     setTypeReview(null);
     if (clearLogin) {

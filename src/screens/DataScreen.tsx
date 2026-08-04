@@ -14,6 +14,7 @@ import { SyncSessionModal } from '../components/data/SyncSessionModal';
 import { ExportModal } from '../components/data/ExportModal';
 import { RecoverModal } from '../components/data/RecoverModal';
 import { FailureModal } from '../components/data/FailureModal';
+import { SyncStatusModal } from '../components/data/SyncStatusModal';
 import { ConfirmModal } from '../components/data/ConfirmModal';
 import { ExportDoneModal } from '../components/data/ExportDoneModal';
 import { SessionCard } from '../components/data/SessionCard';
@@ -69,6 +70,8 @@ export function DataScreen() {
     exportModalOpen, setExportModalOpen,
     deleteTarget, setDeleteTarget,
     failureReport, setFailureReport,
+    syncStatus, setSyncStatus,
+    failureDetailOpen, setFailureDetailOpen,
     legacySyncPrompt, setLegacySyncPrompt,
     pendingZipIds, setPendingZipIds,
     recoverModalOpen, setRecoverModalOpen,
@@ -175,7 +178,7 @@ export function DataScreen() {
           <span style={{ flex: 1 }}>{busy || msg}</span>
           {failureReport && failureReport.failures.length > 0 && (
             <button
-              onClick={() => setFailureReport(failureReport)}
+              onClick={() => setFailureDetailOpen(true)}
               style={{
                 background: 'transparent', border: `1px solid ${T.line}`,
                 color: T.text, fontSize: 12, padding: '4px 10px', borderRadius: 6,
@@ -265,11 +268,23 @@ export function DataScreen() {
         />
       )}
 
-      {failureReport && (
+      {/* v0.44.0 §C8 F23 — 세션별 실패 상세는 자동 마운트에서 배너 '자세히' 명시 오픈으로 전환.
+          실패의 1차 표면은 아래 SyncStatusModal(사유+재시도/나중에)이 담당한다. */}
+      {failureDetailOpen && failureReport && (
         <FailureModal
           report={failureReport}
-          onClose={() => setFailureReport(null)}
+          onClose={() => setFailureDetailOpen(false)}
           onRetry={handleRetry}
+        />
+      )}
+
+      {/* v0.44.0 §C8 F23 — 동기화 상태 대형 팝업: 업로드 중 "시트에 추가중" · 성공 자동 닫힘 ·
+          실패 시 사유+[재시도]/[나중에]. 재시도는 실패 세션(failureReport) 우선, 없으면 직전 선택. */}
+      {syncStatus && (
+        <SyncStatusModal
+          status={syncStatus}
+          onRetry={() => { setSyncStatus(null); void handleRetry(); }}
+          onLater={() => setSyncStatus(null)}
         />
       )}
 

@@ -39,6 +39,13 @@ export interface ExportResult {
   kind: 'csv' | 'zip';
 }
 
+/** v0.44.0 §C8 F23 — 시트 동기화 상태 대형 팝업(SyncStatusModal)의 상태.
+ *  uploading = 업로드 중(자동 표시) · failed = 사유 + [재시도]/[나중에] · null = 팝업 없음(성공 포함).
+ *  타입은 lib이 소유하고 컴포넌트가 import한다(lib→components 역참조 금지 — v0.35.2 r1 규율). */
+export type SyncStatus =
+  | { phase: 'uploading' }
+  | { phase: 'failed'; reason: string };
+
 /** v0.6.0 — human label for a sync result that may both append and update rows in place.
  *  "N행 추가", "M행 갱신", or "N행 추가, M행 갱신" depending on what happened. */
 function syncCountLabel(report: SyncReport): string {
@@ -61,6 +68,10 @@ export function useDataActions() {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [failureReport, setFailureReport] = useState<SyncReport | null>(null);
+  // v0.44.0 §C8 F23 — 동기화 상태 대형 팝업(업로드 중/실패). 성공은 null(자동 닫힘).
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  // F23 — 세션별 실패 상세(FailureModal)는 이제 자동 마운트가 아니라 배너 '자세히'로만 연다.
+  const [failureDetailOpen, setFailureDetailOpen] = useState(false);
   const [legacySyncPrompt, setLegacySyncPrompt] = useState<LegacySyncPrompt | null>(null);
   // 다중 세션 로그 ZIP 내보내기 확인 대상 (v0.12 Codex MEDIUM): 여러 세션의 클립을 한 번에 압축하면
   // 용량/지연이 커질 수 있어 2개 이상일 때 확인 단계를 거친다. CSV는 가벼우니 확인 없이 즉시 진행.
@@ -194,6 +205,10 @@ export function useDataActions() {
     lastSelectedIdsRef.current = syncIds;
     setBusy('시트에 추가 중...');
     setMsg(null);
+    // F23 — 새 업로드 시작: 대형 팝업을 업로드 중으로, 직전 실패 상세/보고는 접는다.
+    setSyncStatus({ phase: 'uploading' });
+    setFailureDetailOpen(false);
+    setFailureReport(null);
     let backupOk = false;
     try {
       const report = await syncSelected(syncIds);
@@ -301,8 +316,22 @@ export function useDataActions() {
       } else {
         // 선택 세션 중 행 보유 세션이 없음 → 백업 대상 없음, backupOk false → autoDelete 차단
       }
+      // F23 — 대형 팝업 종료 판정. 시트 추가에 실패한 세션이 있으면 사유와 함께 실패 화면으로,
+      // 그 외(성공·변경 없음)는 자동 닫힘. needsLogin은 LoginRequiredModal(z=120)이 "다음 행동"을
+      // 전담하므로 실패 팝업을 겹쳐 띄우지 않는다(모달 스택 방지 — 재로그인 resume이 곧 재시도다).
+      if (!report.needsLogin && report.failed > 0) {
+        const first = report.failures[0]?.reason ?? '알 수 없는 오류';
+        setSyncStatus({
+          phase: 'failed',
+          reason: report.failed === 1 ? first : `${report.failed}개 세션 실패 — ${first}`,
+        });
+      } else {
+        setSyncStatus(null);
+      }
       return { report, backupOk };
     } catch (err) {
+      // 예외 경로(네트워크 단절 등)도 조용히 지나가지 않는다 — 사유 + 재시도/나중에.
+      setSyncStatus({ phase: 'failed', reason: (err as Error).message || '알 수 없는 오류' });
       setMsg('실패: ' + (err as Error).message);
       return null;
     } finally {
@@ -486,6 +515,8 @@ export function useDataActions() {
     exportModalOpen, setExportModalOpen,
     deleteTarget, setDeleteTarget,
     failureReport, setFailureReport,
+    syncStatus, setSyncStatus,
+    failureDetailOpen, setFailureDetailOpen,
     legacySyncPrompt, setLegacySyncPrompt,
     pendingZipIds, setPendingZipIds,
     recoverModalOpen, setRecoverModalOpen,
