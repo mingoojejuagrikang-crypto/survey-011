@@ -274,12 +274,13 @@ test('[EXIT-PERSIST-1] 끝 도달 뒤 완료 행을 이동해도 하단 4버튼�
   await waitForActiveChip(page, '종경');
   await fireStt(page, '41.3', 600);
 
-  const centralExit = page.locator('[data-testid="complete-summary"] button[title="입력 종료"]');
+  // v0.44.0 §C3(F15·F21) — 중앙 종료 버튼은 삭제됐다. 완료 상태의 종료 진입은 하단 ⏹뿐이다.
+  const centralExit = page.locator('[data-testid="complete-summary"] button');
   const persistentExit = page.locator('[data-testid="voice-status-control"][data-status="exit"]');
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
-  await expect(centralExit).toBeVisible();
+  await expect(centralExit).toHaveCount(0);
   await expect(persistentExit).toBeVisible();
-  await expect(persistentExit).toHaveText('⏹');
+  await expect(persistentExit).toHaveText('⏹︎');
   await expect(persistentExit).toHaveAttribute('aria-label', '종료');
   await expect(persistentExit).toHaveAttribute('title', '입력 종료');
 

@@ -152,6 +152,18 @@ input::placeholder {
   50% { opacity: 1; }
 }
 
+/* v0.44.0 §C3(F21) — 끝 도달 시 하단 종료 버튼 하이라이트 점멸. W2 실측: data-status="exit"만
+   있고 대응 애니메이션이 없어 F21이 미구현이었다. 주기 1.2s(0.83Hz)는 WCAG 2.3.1 한계 3Hz의
+   1/3.6로 §C4 mono 점멸과 같은 안전 주기다. 일시정지 중에는 멈춘다 — §C4 "하단 버튼은 점멸
+   대상이 아니다"와 같은 계약이라 :not([data-mode="paused"])로 가른다. */
+@keyframes exit-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(57, 255, 20, 0); background-color: rgba(57, 255, 20, 0.10); }
+  50% { box-shadow: 0 0 14px 2px rgba(57, 255, 20, 0.45); background-color: rgba(57, 255, 20, 0.22); }
+}
+[data-testid="voice-control-bar"]:not([data-mode="paused"]) button[data-status="exit"] {
+  animation: exit-pulse 1.2s ease-in-out infinite;
+}
+
 /* v0.36.0 코덱스 시안 — 화면 안쪽 가장자리를 따라 흐르는 스윕 바(transform 전용, 합성기 컴포지팅).
    가로 바는 화면폭의 42%, 세로 바는 높이의 29%로, 시계방향 순환처럼 읽히게 상/하·좌/우가 역방향. */
 @keyframes edge-sweep-x {
@@ -247,7 +259,8 @@ input::placeholder {
   [data-testid="modify-indicator"],
   [data-testid="paused-card"],
   [data-testid="state-dots"] span,
-  [data-testid="voice-status-control"] [data-status-symbol] {
+  [data-testid="voice-status-control"] [data-status-symbol],
+  [data-testid="voice-control-bar"] button[data-status="exit"] {
     animation: none !important;
     filter: none !important;
   }

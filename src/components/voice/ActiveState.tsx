@@ -331,7 +331,6 @@ export function ActiveState({
             reviewCommit={reviewCommit}
             modifyPrevValue={modPrev}
             modifyCurrentValue={modCurrent}
-            onExit={openExitConfirm}
           />
 
           <ActiveControlBar

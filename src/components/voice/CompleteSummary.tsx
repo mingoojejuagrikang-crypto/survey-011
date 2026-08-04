@@ -11,18 +11,19 @@ export const COMPLETE_RECEIPT_MS = 3000;
  *
  * ```
  *              16 / 18
- *           [   종료   ]
  * ```
  *  - `X / N` — X는 **실제로 값이 채워진 행 수**다. '다음' 스킵·샘플손실로 못 넣은 행은
  *    빠지므로 항상 N 이하다(sessionStore: `markRowComplete`가 완료 행만 `completedRows`에 넣고
  *    스킵 행은 `skippedRows`로 갈라 둔다 — 두 목록은 서로 배타적이다).
- *  - `종료` 버튼: 저장확인 인라인으로 이어진다(기존 위험행동 정책 그대로).
- *    `title="입력 종료"`/`aria-label="종료"` 셀렉터 계약은 종전 하단 종료 버튼에서 그대로 승계한다.
+ *  - 🔴 **중앙 `종료` 버튼은 없다** (v0.44.0 §C3, F15·F21 — 민구 확정 08-02).
+ *    하단 ⏹(`voice-status-control[data-status="exit"]`)과 완전히 같은 동작의 중복이었다.
+ *    와이어프레임 §[4]의 "요약+종료버튼" 재설계(v0.37.0)가 v0.33.0 FB#4의 삭제 결정을
+ *    덮어쓴 재발 사례다(W2 §3-2) — **여기 버튼을 되살리지 마라.** 종료 진입은 하단이 유일하다.
  *
  *  범위 밖(보고 대상): "데이터탭 업로드는 종료 버튼 활성 이후에만 가능"은 DataScreen의 업로드
  *  게이트라 입력화면 UI가 아니다 — 이번 라운드에서 구현하지 않았다. */
 export function CompleteSummary({
-  completedCount, totalRows, reviewCommit, onExit,
+  completedCount, totalRows, reviewCommit,
 }: {
   completedCount: number;
   totalRows: number;
@@ -35,7 +36,6 @@ export function CompleteSummary({
    *  **민구 확정(2026-07-25): 3초만 보여주고 와이어프레임대로 전환한다.** 값 확인 기회는 주되
    *  완료 화면의 최종 형태는 §[4] 그대로 두는 절충이다. */
   reviewCommit: { name: string; value: string } | null;
-  onExit: () => void;
 }) {
   // 3초 뒤 영수증을 걷는다. `reviewCommit`이 바뀌면(다른 값으로 재확정) 타이머를 다시 건다.
   // 언마운트·값 변경 시 정리해 좀비 타이머가 남지 않게 한다(ActiveControlSteppers의 미정리 타이머가
@@ -116,28 +116,6 @@ export function CompleteSummary({
       >
         {completedCount} / {totalRows}
       </span>
-      <button
-        type="button"
-        onClick={onExit}
-        title="입력 종료"
-        aria-label="종료"
-        style={{
-          minWidth: 'min(280px, 70%)',
-          minHeight: 'max(56px, calc(clamp(60px, 8vh, 76px) * var(--fit-lo, 1)))',
-          padding: '0 clamp(20px, 6vw, 40px)',
-          borderRadius: 18,
-          border: `2px solid ${T.green}`,
-          background: 'rgba(57,255,20,0.12)',
-          color: T.text,
-          fontSize: 'max(18px, calc(clamp(20px, min(6vw, 3.2vh), 30px) * var(--fit-lo, 1)))',
-          fontWeight: 900,
-          letterSpacing: -0.3,
-          cursor: 'pointer',
-          touchAction: 'manipulation',
-        }}
-      >
-        종료
-      </button>
     </div>
   );
 }

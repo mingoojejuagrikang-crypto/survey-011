@@ -236,6 +236,9 @@ export const VOICE_TYPE = {
   stoppingTitle: 'max(42px, calc(min(10.45vw, 4.81vh) * var(--fit-lo, 1)))',
   /** ExitConfirmInline 종료 확인 메인 문구 — 402×874 기준 38px 보존 */
   exitConfirmTitle: 'max(38px, calc(min(9.45vw, 4.35vh) * var(--fit-lo, 1)))',
+  /** ExitConfirmInline 3행 라벨·안내(v0.44.0 §C3) — 402×874 기준 20px 보존.
+   *  라벨과 안내는 같은 성격이라 같은 크기를 쓴다(F03 2원칙). */
+  exitConfirmLabel: 'max(20px, calc(min(4.98vw, 2.29vh) * var(--fit-lo, 1)))',
   /** ManualValueSheet 수동입력 시트 헤더 제목 — 402×874 기준 28px 보존 */
   sheetTitle: 'max(28px, calc(min(6.97vw, 3.20vh) * var(--fit-lo, 1)))',
   /** ActiveControlSteppers 스텝퍼 +/- 제어 버튼 심볼 — 402×874 기준 26px 보존 */

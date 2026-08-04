@@ -16,8 +16,11 @@ import { CONTROL_ROW_FRACTION, VOICE_TYPE } from './heroLayout';
  * |       인식률 45% / 안내 1.15x
  * ```
  *  - normal/paused/complete는 같은 4버튼 `[‹][⏹][⏸][›]`를 유지한다.
+ *    🔴 v0.44.0 §C2(F02): 4버튼 테두리는 **무채색 한 계열**이다 — `⏹` 빨강·`⏸` 노랑 기능색은
+ *    §4-b에서 폐기됐다(ui-standard §4의 옛 규정을 뒤집는 민구 확정 08-02). 심볼은 버튼 높이의 70%.
  *  - 알람은 해결 전 탐색을 허용하지 않으므로 확인/수정 2버튼을 유지한다(ui-standard §3-2).
- *  - 저장확인은 도트 없이 같은 자리를 `[‹][✕][✓][›]`로 바꾼다(ui-standard §3-6).
+ *  - 저장확인은 도트 없이 `[✕][✓]` **2버튼**이 4버튼 총 폭을 나눠 갖는다(v0.44.0 §C3, F16·F22 —
+ *    `‹ ›`는 렌더하지 않는다. 종료 확인은 탐색이 아니라 결정의 순간이다).
  *  - 상태별 **도트 인디케이터** → 음성 입력 시 **역동 세로파형**(StateIndicator).
  *  - 그 아래 옵션(인식률/안내)을 **얇게**(ActiveControlSteppers, 기본 접힘).
  *  - `title`/`aria-label`은 토글 상태에 따라 `일시정지`/`재시작`으로 바뀐다. */
@@ -64,6 +67,7 @@ export function ActiveControlBar({
   return (
     <div
       data-testid="voice-control-bar"
+      data-mode={mode}
       style={{
         borderTop: `1px solid ${T.line}`,
         height: '100%', minHeight: 0,
@@ -121,7 +125,7 @@ export function ActiveControlBar({
               style={{
                 flex: mode === 'exit' ? '1 1 0' : `0 0 ${CONTROL_ROW_FRACTION * 100}%`, minHeight: 44,
                 display: 'grid',
-                gridTemplateColumns: mode === 'anomaly'
+                gridTemplateColumns: mode === 'anomaly' || mode === 'exit'
                   ? 'repeat(2, minmax(0, 1fr))'
                   : 'repeat(4, minmax(0, 1fr))',
                 alignItems: 'stretch', gap: 8,
@@ -129,10 +133,8 @@ export function ActiveControlBar({
             >
               {mode === 'exit' ? (
                 <>
-                  <EdgeButton kind="icon" testId="voice-control-prev" label="이전" title="이전 행으로 이동" onClick={onPrevRow} icon="‹" />
                   <EdgeButton kind="icon" testId="exit-confirm-cancel" label="계속 입력" title="계속 입력" onClick={onExitCancel} icon="✕" accent={T.red} accentBg={T.redGlowFaint} />
                   <EdgeButton kind="icon" testId="exit-confirm-submit" label="종료" title="종료 확인" onClick={onExitConfirm} icon="✓" accent={T.green} accentBg={T.greenGlowFaint} />
-                  <EdgeButton kind="icon" testId="voice-control-next" label="다음" title="다음 행으로 이동" onClick={onNextRow} icon="›" />
                 </>
               ) : mode === 'anomaly' ? (
                 <>
@@ -150,9 +152,8 @@ export function ActiveControlBar({
                     label="종료"
                     title="입력 종료"
                     onClick={onExit}
-                    icon="⏹"
-                    accent={T.red}
-                    accentBg={T.redGlowFaint}
+                    // U+23F9 + U+FE0E — 텍스트 프레젠테이션 강제(§C2 ③, 이모지 렌더 차단).
+                    icon={'⏹︎'}
                   />
                   <EdgeButton
                     kind="icon"
@@ -162,9 +163,8 @@ export function ActiveControlBar({
                     label={mode === 'paused' ? '재시작' : '일시정지'}
                     title={mode === 'paused' ? '재시작' : '일시정지'}
                     onClick={onTogglePause}
-                    icon="⏸"
-                    accent={T.amber}
-                    accentBg={T.amberGlowFaint}
+                    // U+23F8 + U+FE0E — 텍스트 프레젠테이션 강제(§C2 ③).
+                    icon={'⏸︎'}
                   />
                   <EdgeButton kind="icon" testId="voice-control-next" label="다음" title="다음 행으로 이동" onClick={onNextRow} icon="›" />
                 </>
@@ -238,7 +238,10 @@ export function EdgeButton({
           aria-hidden
           style={{
             fontFamily: 'Arial, sans-serif',
-            fontSize: `calc(50cqh + ${accent ? 2 : 1}px)`,
+            // §C2(F02) — 문양 = 버튼 높이의 70%(50%에서 상향, 민구 확정 08-02).
+            // U+FE0E(텍스트 프레젠테이션)를 붙여 ⏹⏸가 iOS에서 이모지로 갈라지지 않게 한다 —
+            // `‹ ›`와 같은 단색 텍스트 계열로 렌더되는 것까지가 F02의 요구다.
+            fontSize: `calc(70cqh + ${accent ? 2 : 1}px)`,
             lineHeight: 1,
           }}
         >

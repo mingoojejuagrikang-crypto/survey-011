@@ -241,7 +241,7 @@ test('[음성-3] 일시정지 버튼 — PAUSE 상태 전환', async ({ page }) 
   // UI-e1: 토글은 텍스트 대신 ⏸ 심볼을 유지하고 상태명은 title/aria-label에 싣는다.
   const resumeBtn = page.locator('button[title="재시작"][aria-label="재시작"]');
   await expect(resumeBtn).toBeVisible();
-  await expect(resumeBtn).toHaveText('⏸');
+  await expect(resumeBtn).toHaveText('⏸︎');
   console.log('✓ 일시정지 상태 표시 확인 (재시작 title/aria + ⏸ 심볼)');
 });
 

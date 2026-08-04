@@ -479,7 +479,7 @@ test('§공통규칙5 — 인디케이터 아래 `[‹][⏹][⏸][›]` 4심볼(
   expect(pause!.x + pause!.width).toBeLessThanOrEqual(next!.x + 1);
   expect(band!.y + band!.height, '인디케이터는 행동행 위').toBeLessThanOrEqual(actionRow!.y + 1);
   await expect(page.locator('[data-testid="voice-nav-row"] [data-testid="control-symbol"]'))
-    .toHaveText(['‹', '⏹', '⏸', '›']);
+    .toHaveText(['‹', '⏹︎', '⏸︎', '›']);
   // 장갑 조작 터치 타깃(PRINCIPLES §2).
   for (const button of [prev!, stop!, pause!, next!]) expect(button.height).toBeGreaterThanOrEqual(44);
   // 도트 격자가 인디케이터 슬롯을 넘치지 않는다.
@@ -504,7 +504,7 @@ test('§공통규칙5 — 인디케이터 아래 `[‹][⏹][⏸][›]` 4심볼(
   await expect(page.locator('[data-testid="state-dots"]')).toHaveCount(1);
 });
 
-test('UI-e1 — 행동행 높이가 버튼을 정하고 심볼은 버튼 높이의 50%, 터치 하한은 44px', async ({ page }) => {
+test('UI-e1 — 행동행 높이가 버튼을 정하고 심볼은 버튼 높이의 70%, 터치 하한은 44px', async ({ page }) => {
   await boot(page, PHONE_375);
   const measure = () => page.locator('[data-testid="voice-control-bar"]').evaluate((bar) => {
     const row = bar.querySelector('[data-testid="voice-nav-row"]') as HTMLElement;
@@ -531,13 +531,14 @@ test('UI-e1 — 행동행 높이가 버튼을 정하고 심볼은 버튼 높이�
   expect(tall.rowHeight, '행동행도 하단 영역을 따라 커진다').toBeGreaterThan(short.rowHeight + 10);
   for (const [name, sample] of [['short', short], ['tall', tall]] as const) {
     expect(sample.buttonHeights, `${name}: 4버튼`).toHaveLength(4);
-    expect(sample.symbols.map((symbol) => symbol.text), `${name}: 심볼 순서`).toEqual(['‹', '⏹', '⏸', '›']);
+    expect(sample.symbols.map((symbol) => symbol.text), `${name}: 심볼 순서`).toEqual(['‹', '⏹︎', '⏸︎', '›']);
     for (const height of sample.buttonHeights) {
       expect(height, `${name}: 44px 터치 하한`).toBeGreaterThanOrEqual(44);
       expect(Math.abs(height - sample.rowHeight), `${name}: 버튼은 행동행 높이를 채운다`).toBeLessThan(1);
     }
     for (const symbol of sample.symbols) {
-      expect(symbol.fontSize / symbol.buttonHeight, `${name}: 심볼/버튼 높이`).toBeCloseTo(0.5, 1);
+      // v0.44.0 §C2(F02) — 50%에서 70%로 상향(민구 확정 08-02).
+      expect(symbol.fontSize / symbol.buttonHeight, `${name}: 심볼/버튼 높이`).toBeCloseTo(0.7, 1);
     }
   }
   console.log(`UI-e1 controls: short bar/row=${short.barHeight}/${short.rowHeight}, tall=${tall.barHeight}/${tall.rowHeight}`);
@@ -763,13 +764,13 @@ test('UI-e1 paused — 중앙·상단 상태어 비움 + 하단 4심볼 토글 +
   // 하단은 다른 화면과 같은 4버튼. 토글의 시각은 심볼이고 상태명은 title/aria가 싣는다.
   await expect(page.locator('button[title="재시작"]')).toHaveCount(1);
   await expect(page.locator('button[title="재시작"][aria-label="재시작"]')).toBeVisible();
-  await expect(page.locator('button[title="재시작"]'), '재시작 토글은 심볼로 그린다').toHaveText('⏸');
+  await expect(page.locator('button[title="재시작"]'), '재시작 토글은 심볼로 그린다').toHaveText('⏸︎');
   await expect(page.locator('button[aria-label="재개"]'), '옛 라벨은 남아 있지 않다').toHaveCount(0);
   await expect(page.locator('button[title="입력 종료"]')).toBeVisible();
   await expect(page.locator('button[aria-label="이전"]')).toBeVisible();
   await expect(page.locator('button[aria-label="다음"]')).toBeVisible();
   await expect(page.locator('[data-testid="voice-nav-row"] [data-testid="control-symbol"]'))
-    .toHaveText(['‹', '⏹', '⏸', '›']);
+    .toHaveText(['‹', '⏹︎', '⏸︎', '›']);
 
   // 도트는 일시정지 아이콘(||), 파형은 정지(rAF 미가동).
   await expect(page.locator('[data-testid="state-dots"]')).toHaveAttribute('data-glyph', 'pause');
@@ -912,8 +913,9 @@ test('UI-c complete — 중앙 `X / N` + aria 완료 상태, 체크 도트, 시�
   // X / N — X는 실제로 채워진 행 수(스킵·샘플손실 반영, ≤ N). 상태어는 aria에 남는다.
   await expect(page.locator('[data-testid="complete-count"]')).toHaveText('2 / 2');
   await expect(summary).toHaveAttribute('aria-label', '조사 완료, 전체 2행 중 2행 입력됨');
-  // 종료 버튼(중앙) — 데이터 영향 행동이라 확인 다이얼로그로 이어진다.
-  const exit = summary.locator('button[title="입력 종료"]');
+  // v0.44.0 §C3(F15·F21) — 중앙 종료 버튼은 삭제됐다. 종료 진입은 하단 ⏹이 유일하다.
+  await expect(summary.locator('button')).toHaveCount(0);
+  const exit = page.locator('[data-testid="voice-status-control"][data-status="exit"]');
   await expect(exit).toBeVisible();
   // 상단 "완료" 배지는 체크 문양·진행바와 중복이라 시각 미렌더.
   await expect(page.locator('[data-testid="session-complete-badge"]')).toHaveCount(0);
@@ -926,7 +928,7 @@ test('UI-c complete — 중앙 `X / N` + aria 완료 상태, 체크 도트, 시�
   // 완료도 같은 4버튼이며 일시정지 상태명은 title/aria에 남는다.
   await expect(page.locator('button[title="일시정지"][aria-label="일시정지"]')).toBeVisible();
   await expect(page.locator('[data-testid="voice-nav-row"] [data-testid="control-symbol"]'))
-    .toHaveText(['‹', '⏹', '⏸', '›']);
+    .toHaveText(['‹', '⏹︎', '⏸︎', '›']);
   await exit.click();
   await expect(page.locator('button[title="종료 확인"]')).toBeVisible();
 });
@@ -1065,11 +1067,16 @@ test('§[4] complete — 마지막 값을 3초 보여준 뒤 와이어프레임�
   // 사용자가 방금 넣은 값을 **한 번도 확인하지 못한 채** 완료 화면으로 넘어간다.
   await expect(receipt, '끝 도달 직후에는 마지막 값이 보인다').toBeVisible({ timeout: 3000 });
 
-  // 3초 뒤: 와이어프레임 §[4] 그대로(요약 + 종료 버튼)로 정착한다(민구 확정 2026-07-25).
+  // 3초 뒤: 요약만 남는다(민구 확정 2026-07-25). v0.44.0 §C3 — 중앙 종료 버튼은 삭제됐고
+  // 종료는 하단 ⏹(voice-status-control)이 유일하다(F15·F21, §4-b 폐기 기록).
   await expect(receipt, '3초 뒤 영수증이 걷힌다').toHaveCount(0, { timeout: 6000 });
   await expect(page.locator('[data-testid="complete-count"]'), '요약은 남는다').toBeVisible();
   await expect(
-    page.locator('[data-testid="complete-summary"] button[title="입력 종료"]'),
-    '종료 버튼은 남는다',
+    page.locator('[data-testid="complete-summary"] button'),
+    '중앙 버튼은 되살아나지 않는다',
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-testid="voice-status-control"][data-status="exit"]'),
+    '하단 종료가 유일한 진입점',
   ).toBeVisible();
 });

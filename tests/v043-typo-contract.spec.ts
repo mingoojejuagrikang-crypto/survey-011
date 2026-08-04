@@ -21,16 +21,17 @@ import * as path from 'node:path';
 const ALLOWLIST_ITEMS = [
   // 1. CompleteSummary:87 — 부채: 상한 26px 잔존 (규칙 2 위반, UI-g 이후 제거 대상)
   "'max(15px, calc(clamp(17px, min(5vw, 2.6vh), 26px) * var(--fit-lo, 1)))'",
-  // 2. CompleteSummary:132 — 부채: 상한 30px 잔존 (규칙 2 위반, UI-g 이후 제거 대상)
-  "'max(18px, calc(clamp(20px, min(6vw, 3.2vh), 30px) * var(--fit-lo, 1)))'",
+  // (구 2. CompleteSummary:132 — v0.44.0 §C3에서 중앙 종료 버튼 자체가 삭제돼 부채도 소멸.
+  //  상한 5건 부채 중 1건이 이렇게 닫혔다 — TODO.md 「상한 5건」 표 참조.)
   // 3. ReaskCue:39 — 부채: 상한 17px 잔존 (규칙 2 위반, UI-g 이후 제거 대상)
   "'calc(clamp(13px, min(4.2vw, 2.1vh), 17px) * var(--fit-lo, 1))'",
   // 4. ModifyIndicatorPill:57 — 부채: 상한 18px 잔존 (규칙 2 위반, UI-g 이후 제거 대상)
   "'max(12px, calc(clamp(14px, 2.1vh, 18px) * var(--fit-lo, 1)))'",
   // 5. ModifyIndicatorPill:88 — 부채: 상한 17px 잔존 (규칙 2 위반, UI-g 이후 제거 대상)
   "'max(12px, calc(clamp(14px, 2vh, 17px) * var(--fit-lo, 1)))'",
-  // 6. ActiveControlBar:241 — 영구 예외: calc(50cqh...)는 컨테이너 비례라 이미 상한이 없음. v039 0.5 비율 단정 보존.
-  'calc(50cqh + ',
+  // 6. ActiveControlBar — 영구 예외: calc(70cqh...)는 컨테이너 비례라 이미 상한이 없음.
+  //    (v0.44.0 §C2 F02: 50→70% 상향. 비율 단정은 v039 UI-e1과 v0440-c2c3-buttons가 잰다.)
+  'calc(70cqh + ',
 ] as const;
 
 const VALID_CONTRACT_PREFIXES = [
@@ -135,8 +136,9 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   // ⚠️ 합계(total) 단언은 **두지 않는다.** 위 네 값의 산술 귀결이라 지워도 green인
   //    「압력 없는 오라클」이었다(독립 리뷰 C2). 재발 방지 검사기가 그런 단언을 들고
   //    나가는 모양이 나쁘다 — `UI-b` 리뷰가 지적한 것과 같은 계열이다.
-  expect(contractCount, '계약 참조 (통과)').toBe(49);
-  expect(allowlistCount, 'ALLOWLIST (허용)').toBe(6);
+  // v0.44.0 §C2·C3: ExitConfirmInline 3행(+2 계약) · CompleteSummary 중앙 버튼 삭제(allowlist −1).
+  expect(contractCount, '계약 참조 (통과)').toBe(51);
+  expect(allowlistCount, 'ALLOWLIST (허용)').toBe(5);
   expect(commentCount, '주석 (skip)').toBe(1);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);
 });

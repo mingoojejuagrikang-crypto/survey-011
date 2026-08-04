@@ -19,7 +19,8 @@ test('[UI-e4 dotless 오라클] 저장확인만 20/70/10이고 375×650에서도
   const inline = await openExitConfirm(page);
   const metrics = await zoneMetrics(page);
   const zoneTotal = metrics.rootHeight - metrics.headerHeight;
-  const fontSize = await inline.evaluate((el) => parseFloat(getComputedStyle(el as HTMLElement).fontSize));
+  const fontSize = await inline.locator('[data-testid="exit-confirm-rows"]')
+    .evaluate((el) => parseFloat(getComputedStyle(el as HTMLElement).fontSize));
 
   console.log(
     `[UI-e4 dotless 375×650] chip=${metrics.chipHeight.toFixed(2)} center=${metrics.centerHeight.toFixed(2)} ` +
@@ -29,18 +30,21 @@ test('[UI-e4 dotless 오라클] 저장확인만 20/70/10이고 375×650에서도
   expect(metrics.centerHeight / zoneTotal, 'dotless 중앙 70%').toBeCloseTo(0.70, 2);
   expect(metrics.bottomHeight / zoneTotal, 'dotless 하단 10%').toBeCloseTo(0.10, 2);
   expect(metrics.chipHeight + metrics.centerHeight + metrics.bottomHeight, 'dotless 구역 합').toBeCloseTo(zoneTotal, 0);
-  expect(fontSize, '저장 후 종료합니다 38px').toBeCloseTo(38, 1);
-  await expect(inline).toHaveText('저장 후 종료합니다');
+  // v0.44.0 §C3(F21 "종료터치시 3줄안내") — 단일 문구가 3행(완료행 / N/M / ✓ 안내)이 됐다.
+  // 38px 계약(VOICE_TYPE.exitConfirmTitle)은 가운데 완료 수치 행이 승계한다.
+  expect(fontSize, '완료 수치 행 38px').toBeCloseTo(38, 1);
+  await expect(inline.locator('[data-testid="exit-confirm-rows-label"]')).toHaveText('완료행');
+  await expect(inline.locator('[data-testid="exit-confirm-rows"]')).toHaveText('0/2');
+  await expect(inline.locator('[data-testid="exit-confirm-hint"]')).toContainText('터치시 저장하고 종료합니다');
   await expect(inline).toHaveAttribute('role', 'status');
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
   await expect(page.locator('[data-testid="state-dots"]')).toHaveCount(0);
   await expect(page.locator('[data-testid="voice-indicator-row"]')).toHaveCount(0);
 
+  // v0.44.0 §C3(F16·F22) — `‹ ›`는 렌더하지 않고 2버튼이 4버튼 총 폭을 나눠 갖는다.
   const actionTitles = await page.locator('[data-testid="voice-nav-row"] > button')
     .evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title')));
-  expect(actionTitles, '하단은 [‹][✕][✓][›] 자리').toEqual([
-    '이전 행으로 이동', '계속 입력', '종료 확인', '다음 행으로 이동',
-  ]);
+  expect(actionTitles, '하단은 [✕][✓] 2버튼').toEqual(['계속 입력', '종료 확인']);
 
   await page.screenshot({ path: 'Deliverables/assets/2026-08-02-ui-e4/exit-inline-375x650.png' });
   await page.setViewportSize({ width: 402, height: 874 });

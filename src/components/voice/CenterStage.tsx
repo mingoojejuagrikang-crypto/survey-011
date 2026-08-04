@@ -84,7 +84,7 @@ const ALARM_TWO_COLUMN_LAYOUT = `
 export function CenterStage({
   exitConfirming, paused, anomalyAlert, endReached, modifyIndicator, currentCol,
   completedCount, totalRows, row, tone, reaskReason, completing, reviewCommit,
-  modifyPrevValue, modifyCurrentValue, onExit,
+  modifyPrevValue, modifyCurrentValue,
 }: {
   /** 저장확인 인라인 — 별도 레이어 없이 중앙과 하단 바의 의미만 바꾼다. */
   exitConfirming: boolean;
@@ -103,13 +103,12 @@ export function CenterStage({
   reviewCommit: { name: string; value: string } | null;
   modifyPrevValue?: string;
   modifyCurrentValue: string;
-  onExit: () => void;
 }) {
   let branch: 'exit' | 'paused' | 'anomaly' | 'end' | 'modify' | 'hero' = 'hero';
   let content: ReactNode = null;
   if (exitConfirming) {
     branch = 'exit';
-    content = <ExitConfirmInline />;
+    content = <ExitConfirmInline completedCount={completedCount} totalRows={totalRows} />;
   } else if (paused) {
     branch = 'paused';
     // 시각적으로는 완전히 빈 중앙이다. 이 100% surface는 레이아웃·픽셀을 추가하지 않고
@@ -147,7 +146,6 @@ export function CenterStage({
         completedCount={completedCount}
         totalRows={totalRows}
         reviewCommit={reviewCommit}
-        onExit={onExit}
       />
     );
   } else if (modifyIndicator) {
