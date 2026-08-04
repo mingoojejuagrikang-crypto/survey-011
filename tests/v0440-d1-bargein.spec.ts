@@ -20,6 +20,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { installVoiceMocks, fireStt, waitForTtsIdle } from './fixtures/stt';
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 import { beepVolumeToMultiplier } from '../src/lib/beepVariants';
 import { BASE } from './baseUrl';
 
@@ -88,6 +89,9 @@ const STT_COUNTER_SCRIPT = `
 
 async function boot(page: Page, opts: { seed?: Record<string, unknown>; ttsOnendDelayMs?: number } = {}) {
   await installVoiceMocks(page, opts.ttsOnendDelayMs !== undefined ? { ttsOnendDelayMs: opts.ttsOnendDelayMs } : undefined);
+  // v0.44.1 [CLIP-INIT-SILENT-1] — 헤드리스 기본 gUM 거부 시 시작 경고 TTS가 큐에 끼어든다.
+  // 이 스펙은 TTS 창 타이밍이 오라클이므로(정상 마이크 전제) 승인 스텁으로 그 간섭을 차단한다.
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await page.addInitScript({ content: STT_COUNTER_SCRIPT });
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(
