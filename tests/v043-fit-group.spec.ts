@@ -293,6 +293,10 @@ test('confirm 항목명 — 402·375에서 잘리지 않고 b84a08d 값 크기�
     await waitForTtsIdle(page);
     await fireStt(page, '100.0', 300);
     await expect(page.locator('[data-hero-state="confirm"]')).toBeVisible();
+    // §C7(v0.44.0) — echo TTS 창(advance 전)에는 판별식(활성칩==중앙항목)이 라벨을 숨긴다.
+    // 라벨 fit 측정은 칩이 다음 항목으로 옮겨가 라벨이 실제로 렌더된 창에서 한다(부하로 echo가
+    // 늘어지면 `label fit member 없음` throw가 새 flake 시그니처로 등재될 뻔한 지점).
+    await expect(page.locator('[data-hero-state="confirm"] [data-fit-group="label"]')).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(300);
     const metrics = await heroLabelMetrics(page);
@@ -337,6 +341,8 @@ for (const { labelKind, label, viewport } of [
     await fireStt(page, '-355.5', 300);
 
     await expect(page.locator('[data-hero-state="confirm"]')).toBeVisible({ timeout: 4000 });
+    // §C7(v0.44.0) — 라벨은 칩 이동 후에만 렌더된다(위 fit-confirm-label과 같은 안정화).
+    await expect(page.locator('[data-hero-state="confirm"] [data-fit-group="label"]')).toBeVisible();
     const confirmMetrics = await heroLabelMetrics(page);
     console.log(`[fit-matrix] state=confirm viewport=${viewport.width}x${viewport.height} label=${label} font=${confirmMetrics.fontSize.toFixed(2)}px box=${confirmMetrics.offsetHeight}px ratio=${confirmMetrics.lineBoxRatio.toFixed(2)} width=${confirmMetrics.scrollWidth}/${confirmMetrics.clientWidth} value=${confirmMetrics.valueFontSize.toFixed(2)}px floor=${confirmMetrics.fontSize <= HERO_MIN_FONT_PX.name + 0.05}`);
     expect(confirmMetrics.lineBoxRatio, 'confirm 라벨 line box').toBeGreaterThanOrEqual(0.9);

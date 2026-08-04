@@ -20,8 +20,9 @@ import type { Column } from '../../types';
  *
  *  1) 대기(listening): 중앙 항목명 없음. **인식 중이면 STT 원문 문자열(interimValue)을 크게**,
  *     "사십이 점…" 스타일 — FB#2). "듣는 중" 같은 중복 문구 없음(파형 밴드가 생존 신호).
- *  2) 커밋 직후(~1.5s): ✓ 항목명 + **확정값(80~100px, tabular)**. store `valueBurst`의 seq
- *     변화로 진입, CONFIRM_MS 뒤 대기 복귀.
+ *  2) 커밋 직후(~1.5s): **확정값(80~100px, tabular)** + ✓ 항목명은 **활성 칩이 다른 항목일
+ *     때만**(§C7 판별식 — 활성칩 == 중앙 항목이면 중복이라 숨긴다. 터미널 컬럼·echo 창 포함).
+ *     store `valueBurst`의 seq 변화로 진입, CONFIRM_MS 뒤 대기 복귀.
  *     ⚠️ 반드시 valueBurst.name/value에서만 읽는다 — advance()가 TTS 전에 포인터를 다음 항목으로
  *     옮기므로 currentCol을 쓰면 "다음 항목 값"으로 오해된다(v0.34.0 A4가 값 표시를 없앤 이유).
  *  3) 검토(phase 'complete'): **방금 입력한 값**. 활성 칩이 같은 항목을 가리키면 중앙 항목명은
@@ -92,11 +93,16 @@ export function VoiceHero({
   const value = review ? reviewCommit?.value : showConfirm ? confirmed?.value : interim;
   const interimValue = !review && !showConfirm;
   const labelIsPrimary = interimValue || !value;
-  // GL-007은 상태 이름이 아니라 실제 정보 채널로 판별한다. 일반 행 완료 review는 활성 칩(col)과
-  // 영수증 항목이 같으므로 숨긴다. 완료행 검토 중 다른 항목을 직접 수정하면 enterReviewWait가
-  // 활성 칩을 첫 컬럼으로 되돌리므로, 영수증 항목과 다를 때는 정보 유실을 막기 위해 남긴다.
-  // 영수증 없는 완료행 재방문의 `${row}행 완료` 시각 문구도 톤·진행·aria와 중복이라 숨긴다.
+  // GL-007은 상태 이름이 아니라 실제 정보 채널로 판별한다 — 판별식은 「활성 칩(col)이 그 항목을
+  // 가리키는가」 하나다(ui-standard §1). review: 일반 행 완료는 영수증 항목 == 활성 칩이라 숨기고,
+  // 완료행 검토 중 다른 항목을 수정하면 enterReviewWait가 활성 칩을 첫 컬럼으로 되돌려 다를 때만
+  // 남긴다. 영수증 없는 완료행 재방문의 `${row}행 완료` 시각 문구도 톤·진행·aria와 중복이라 숨긴다.
   const reviewLabelNeeded = review && reviewCommit !== null && reviewCommit.name !== col.name;
+  // confirm(§C7 F01·F05, v0.44.0): 종전엔 상태 이름으로 무조건 남겨 터미널 컬럼(종경 — 행의
+  // 마지막 음성 컬럼이라 커밋해도 칩이 못 넘어간다)에서 활성 칩과 중복됐다(세션당 18회).
+  // 같은 판별식으로 — echo TTS 창(advance 전)과 터미널 컬럼에서 숨고, 칩이 다음 항목으로
+  // 옮겨간 뒤에만 남는다. 항목명·값은 아래 aria-label이 항상 보존한다(삭제가 아니라 중복 제거).
+  const confirmLabelNeeded = showConfirm && confirmed !== null && confirmed.name !== col.name;
   const accent = tone === 'red' ? T.red : tone === 'amber' ? T.amber : T.green;
   const accessibleState = review
     ? `${row}행 완료, 명령 대기`
@@ -136,10 +142,13 @@ export function VoiceHero({
           보이고 활성 칩이 하이라이트되므로, 중앙의 같은 글자는 중복이다. 비운 공간은 인식값을
           크게 쓰는 데 쓴다.
 
-          ⚠️ confirm은 활성 칩이 이미 다음 항목으로 옮겨가므로 반드시 남긴다. review는 상태별로
-          다시 판별해 활성 칩과 영수증 항목이 다를 때만 남긴다. 렌더를 통째로 건너뛰므로 빈 줄
-          간격도 남지 않는다. */}
-      {!interimValue && (!review || reviewLabelNeeded) && (
+          🔴 §C7 F01·F05(v0.44.0) — confirm·review 모두 **판별식**으로 렌더한다:
+          `활성칩 == 중앙 항목`이면 중복이라 숨긴다(GL-007 원칙 1). 종전 이 주석이 "confirm은
+          활성 칩이 이미 다음 항목으로 옮겨가므로 반드시 남긴다"로 **상태 이름에 굳어 있었고**,
+          터미널 컬럼(종경)에서는 칩이 못 넘어가 그 전제가 거짓이었다 — 세션당 18회 중복.
+          칩이 실제로 다음 항목으로 옮겨간 뒤에만 남는다. 렌더를 통째로 건너뛰므로 빈 줄
+          간격도 남지 않는다. 오라클: v039-active-zones '§C7 F01·F05 — 터미널 컬럼 커밋'. */}
+      {!interimValue && (review ? reviewLabelNeeded : confirmLabelNeeded) && (
         <HeroNameLine
           checked={checked}
           accent={accent}

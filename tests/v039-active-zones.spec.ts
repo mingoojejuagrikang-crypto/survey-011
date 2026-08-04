@@ -17,8 +17,9 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   PHONE_402, PHONE_375,
   boot, injectLevel, zoneMetrics, triggerAnomaly, fillAllRows, PREV_ROUND,
+  COLUMNS, SETTINGS,
 } from './fixtures/activeZones';
-import { fireStt, fireSttInterim } from './fixtures/stt';
+import { fireStt, fireSttInterim, waitForTtsIdle } from './fixtures/stt';
 /** 🔴 v0.43.0 UI-b — 배분이 **25/50/25 → 20/50/30**으로 바뀌었다(ui-standard §2, 민구 확정).
  *
  *  🔴 **여기 숫자는 제품 상수에서 읽지 않는다. 설계 계약을 테스트에 직접 고정한다.**
@@ -356,6 +357,92 @@ test('UI-c 대비 — 커밋 직후에는 항목명이 **남는다**(칩이 이�
   await expect(page.locator('[data-testid="column-chip"][data-active="true"]'),
     '칩은 이미 다음 항목을 가리켜 방금 확정한 항목명을 대신할 수 없다')
     .toContainText('측정항목02');
+});
+
+// §C7 F01·F05(v0.44.0) — 위 대조군의 **반대쪽 절반**: 활성칩이 이동하지 **못한** 커밋.
+test('§C7 F01·F05 — 터미널 컬럼 커밋: 활성칩이 같은 항목을 가리키는 동안 중앙 항목명 미렌더(GL-007 판별식)', async ({ page }) => {
+  // 🔴 근본원인(R3, v0440 plan §1-a): 실운영 `종경`(c8)은 모든 행의 **마지막** 음성 컬럼이라
+  //    커밋해도 활성칩이 넘어갈 데가 없다. 판별식(`활성칩 == 중앙 항목`, ui-standard §1·GL-007
+  //    원칙 1)대로면 중앙 항목명은 중복이라 지워야 하는데, 종전 confirm 분기는 **상태 이름**으로만
+  //    렌더해 무조건 남았다 — 세션당 18회 재현(F05: "이미 수차례 지시했으나 지켜지지 않음").
+  //    echo TTS 창(advance 전)에는 **모든 컬럼**이 이 조건에 들어온다 — 터미널은 그 창이 끝나도
+  //    칩이 못 움직이는 극단이라 판별식의 반대쪽 절반을 대표한다.
+  // 🔴 커버리지 공백: 위 'UI-c 대비' 테스트는 활성칩이 **이동한** 케이스만 본다(그땐 항목명 유지가
+  //    맞다). 이 픽스처가 이동하지 **않는** 터미널 케이스를 고정한다 — 12컬럼 공용 SETTINGS 대신
+  //    음성 2컬럼 축소 부트로 측정항목02를 터미널로 만든다(v035-hero-confirm R3-FIX-5와 같은 접근).
+  // ⚠️ confirm 창은 echo TTS 길이(mock 200ms)만큼만 산다 — 순간을 폴링으로 겨냥하지 않고 rAF로
+  //    전이를 통째로 기록해 사후 판정한다(v035 R3-FIX-5와 같은 취지).
+  const TERM_VOICE = [1, 2].map((n) => ({
+    id: `t${n}`, name: `측정항목${String(n).padStart(2, '0')}`, type: 'float', input: 'voice',
+    ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false,
+  }));
+  const termSettings = {
+    ...SETTINGS,
+    state: { ...SETTINGS.state, columns: [...COLUMNS.slice(0, 3), ...TERM_VOICE], sessionAutoLabel: 'v0440-c7-terminal' },
+  } as typeof SETTINGS;
+  const termHeaders = ['조사일자', '농가명', '조사나무', ...TERM_VOICE.map((c) => c.name)];
+  const termRows = [
+    [PREV_ROUND, '이원창', '1', '', ''],
+    [PREV_ROUND, '이원창', '2', '', ''],
+  ];
+  await boot(page, PHONE_402, { settings: termSettings, headers: termHeaders, sheetRows: termRows });
+
+  // 1) 행 중간 컬럼 커밋 → 터미널(측정항목02) 대기 진입. 첫 커밋의 확인 플래시(1.5s)가 끝나
+  //    listening으로 돌아온 것까지 확인하고 기록을 시작한다(옛 confirm 프레임이 창 판정에 섞이지 않게).
+  await fireStt(page, '25.0', 300);
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]')).toContainText('측정항목02', { timeout: 4000 });
+  await expect(page.locator('[data-hero-state="listening"]')).toBeVisible({ timeout: 4000 });
+  await waitForTtsIdle(page);
+
+  // 2) rAF 기록 시작 → 터미널 커밋.
+  await page.evaluate(() => {
+    const w = window as unknown as { __c7Tl?: Array<{ st: string; chip: string; name: boolean; value: boolean; aria: string }> };
+    w.__c7Tl = [];
+    const tick = () => {
+      const hero = document.querySelector('[data-hero-state]');
+      const text = (hero as HTMLElement | null)?.innerText ?? '';
+      const f = {
+        st: hero?.getAttribute('data-hero-state') ?? 'none',
+        chip: document.querySelector('[data-testid="column-chip"][data-active="true"]')?.getAttribute('data-col-name') ?? '',
+        name: text.includes('측정항목02'),
+        value: text.includes('222'),
+        aria: hero?.getAttribute('aria-label') ?? '',
+      };
+      const tl = w.__c7Tl!;
+      const last = tl[tl.length - 1];
+      if (!last || JSON.stringify(last) !== JSON.stringify(f)) tl.push(f);
+      requestAnimationFrame(tick);
+    };
+    tick();
+  });
+  await fireStt(page, '222.2', 0);
+  await page.waitForTimeout(2500); // echo → 행완료 review → 다음 행 대기까지.
+  const tl = await page.evaluate(() => (window as unknown as {
+    __c7Tl: Array<{ st: string; chip: string; name: boolean; value: boolean; aria: string }>;
+  }).__c7Tl);
+  console.log('c7 terminal timeline:', JSON.stringify(tl));
+
+  // 3) 압력 확인([TEAMOPS-37]) — confirm 창이 실제로 페인트됐고 그 동안 활성칩이 터미널 항목이었다.
+  //    이 프레임이 0이면 아래 본 단언은 아무것도 재지 않은 것이다(공허 방지).
+  const windowFrames = tl.filter((f) => f.st === 'confirm' && f.chip === '측정항목02');
+  expect(windowFrames.length, 'confirm 창 프레임이 기록됐다(창을 못 봤으면 판정 불가)').toBeGreaterThan(0);
+  // 리뷰(08-04, Fable 콜드) 경미1 수용 — some → every: 메시지("내내")와 강도를 일치시킨다.
+  expect(windowFrames.every((f) => f.value), '확정값은 창 내내 보인다 — 지우는 건 항목명이지 값이 아니다').toBe(true);
+
+  // 4) 🔴 본 단언 — 판별식: 활성칩이 같은 항목을 가리키는 confirm 프레임에 중앙 항목명이 없다.
+  const dup = tl.filter((f) => f.st === 'confirm' && f.chip === '측정항목02' && f.name);
+  expect(dup, '활성칩==중앙항목인데 항목명 렌더 = F01·F05 재발(중복)').toEqual([]);
+
+  // 5) 시각 삭제한 정보는 접근 채널에 남는다(fb-27-2와 같은 계약 — 삭제가 아니라 중복 제거).
+  expect(
+    windowFrames.some((f) => f.aria.includes('측정항목02') && f.aria.includes('222.2')),
+    '항목명·값은 aria-label로 보존된다',
+  ).toBe(true);
+
+  // 6) 이후 정상 진행 — 행완료 review(값 전용, 기존 판별식)를 거쳐 다음 행 대기로.
+  expect(tl.some((f) => f.st === 'review' && f.chip === '측정항목02' && !f.name), '행완료 review도 항목명 미렌더 유지').toBe(true);
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '다음 행 첫 항목 대기')
+    .toContainText('측정항목01');
 });
 
 test('§공통규칙2·3 — 중앙 정보가 중앙 50% 안에서 가로+세로 중앙정렬', async ({ page }) => {
