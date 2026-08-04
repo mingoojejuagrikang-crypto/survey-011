@@ -33,6 +33,8 @@ export function ActiveHeaderStrip({
       </div>
       <div style={{ flex: 1, position: 'relative', height: 4, borderRadius: 2, background: T.line, minWidth: 0 }}>
         <div
+          // §C4 — mono 점멸 대상(진행바). global.css의 스코프 셀렉터와 오라클이 이 testid를 잡는다.
+          data-testid="voice-progress-fill"
           style={{
             position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 2,
             width: `${progressPct}%`,

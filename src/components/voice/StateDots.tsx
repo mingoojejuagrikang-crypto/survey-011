@@ -297,6 +297,11 @@ export function StateDots({
             key={i}
             ref={(el) => { cellsRef.current[i] = el; }}
             data-cell={`${r},${c}`}
+            // §C4 — mono 점멸 CSS가 켜진 셀만 잡는 앵커. 꺼진 셀에 애니메이션을 붙이면
+            // keyframe opacity가 인라인 0을 이겨 유령 도트가 된다([UI-DOT-GHOST-1]).
+            // 파형 모드의 셀 on/off는 명령형 경로가 갈아끼우지만 mono는 glyph(정지) 상태
+            // 전용이라 렌더 시점의 이 값이 정확하다.
+            data-on={on ? 'true' : 'false'}
             style={{
               gridColumn: c + 1,
               gridRow: r + 1,

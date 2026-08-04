@@ -29,6 +29,16 @@ export const T = {
   greenGlowFaint: 'rgba(57,255,20,0.14)',
   amberGlowFaint: 'rgba(255,234,0,0.14)',
   redGlowFaint: 'rgba(255,23,68,0.14)',
+  // v0.44.0 §C4(F12) — 일시정지 mono 톤. 4번째 **색**이 아니라 무채색이다(민구 확정 08-02).
+  //   peak 15.49:1(기존 amber 15.54:1과 광량 동급 — 글로우 강도·레이아웃 무변경 근거),
+  //   trough 7.55:1(AA 4.5:1 여유 통과 — 점멸 저점에서도 값이 읽힌다). 광량비 2.05×.
+  //   점멸 자체는 global.css `pauseMonoPulse`(1.2s)가 opacity로 만든다 — trough 상수는
+  //   설계 기준값 기록이다(배경 #0E0F11 위 peak×0.66 블렌드 ≈ trough).
+  mono: '#E5E7EB',
+  monoTrough: '#9CA3AF',
+  monoGlow: 'rgba(229,231,235,0.32)',
+  monoGlowStrong: 'rgba(229,231,235,0.60)',
+  monoGlowFaint: 'rgba(229,231,235,0.14)',
   google: '#4285F4',
 } as const;
 

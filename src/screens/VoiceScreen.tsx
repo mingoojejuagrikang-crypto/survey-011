@@ -46,6 +46,8 @@ export function VoiceScreen(props: {
     anomalyAlert: st.anomalyAlert,
     reaskReason: st.reaskReason,
     persistError: st.persistError,
+    // v0.44.0 §C4(F12) — 수정모드가 amber 톤을 갖는다. 톤 파생 SSOT(아래 glowTone)의 입력.
+    modifyIndicator: st.modifyIndicator,
   })));
   const voiceSession = useVoiceSession();
   useEffect(() => {
@@ -118,11 +120,15 @@ export function VoiceScreen(props: {
   }
 
   // v0.34.0 B8 — 글로우 톤 파생 SSOT(여기 1곳). ActiveState의 칩/진행색 파생(chipAccent/
-  //   progressAccent)과 같은 신호를 쓰되, anomalyPending은 여기서 한 번만 계산해 prop으로 내린다
-  //   (파생 중복 방지). 우선순위: 이상치/마이크 소실(red) > 일시정지(amber) > 입력 중(green).
+  //   progressAccent)은 이 tone을 prop으로 받아 TONE_BASE로 색만 바꾼다(파생 중복 방지).
+  //   v0.44.0 §C4(F12, 민구 확정 08-02): 일시정지 amber → **mono**(무채 점멸), amber는
+  //   **수정모드**로 이동. 우선순위: 이상치/마이크 소실(red) > 일시정지(mono) > 수정(amber) > 입력 중(green).
   const anomalyPending = !!sess.anomalyAlert && sess.anomalyAlert.status !== 'corrected';
   const glowTone: GlowTone =
-    anomalyPending || voiceSession.micLost ? 'red' : sess.phase === 'paused' ? 'amber' : 'green';
+    anomalyPending || voiceSession.micLost ? 'red'
+      : sess.phase === 'paused' ? 'mono'
+        : sess.modifyIndicator ? 'amber'
+          : 'green';
   const sessionLive =
     sess.phase === 'active' || sess.phase === 'paused' || sess.phase === 'complete';
   // v0.35.0 R2-FIX-5 — 루트 완료 플래시(flash-green) reduced-motion 판정.
@@ -132,6 +138,8 @@ export function VoiceScreen(props: {
 
   return (
     <div
+      // §C4 — 톤 점멸 CSS의 스코프 앵커(global.css `[data-voice-tone="mono"] …`). 오라클도 이걸 읽는다.
+      data-voice-tone={glowTone}
       style={{
         position: 'relative',
         height: '100%',

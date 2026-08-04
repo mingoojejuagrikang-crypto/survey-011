@@ -7,7 +7,7 @@ import type { Column } from '../../types';
 import { CommandHelpPopup } from './CommandHelpPopup';
 import { ManualValueSheet } from './ManualValueSheet';
 import { type ReaskReason } from './ReaskCue';
-import { type GlowTone } from './EdgeGlow';
+import { TONE_BASE, type GlowTone } from './EdgeGlow';
 import { useReviewCommit } from './VoiceHero';
 import { ActiveHeaderStrip } from './ActiveHeaderStrip';
 import { ChipZone } from './ChipZone';
@@ -152,8 +152,11 @@ export function ActiveState({
     if (v && c.id !== modCol) lastNonEmptyRef.current[c.id] = v;
   }
 
-  const chipAccent = anomalyPending ? T.red : T.green;
-  const progressAccent = anomalyPending ? T.red : paused ? T.amber : T.green;
+  // v0.44.0 §C4 — 칩/진행색은 tone(VoiceScreen SSOT)에서만 파생한다. 종전엔 여기서
+  // anomalyPending/paused를 다시 조합해 SSOT와 두 곳이었고, 일시정지 활성칩이 green으로
+  // 남아 점멸 대상(상태색 요소 전부 — 민구 확정 §4-a 8)에서 빠져 있었다.
+  const chipAccent = TONE_BASE[tone];
+  const progressAccent = TONE_BASE[tone];
 
   const openCommandHelp = useCallback(() => {
     if (!cmdHelpSuspendedRef.current) {

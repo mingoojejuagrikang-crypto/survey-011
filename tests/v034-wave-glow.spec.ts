@@ -376,7 +376,7 @@ test('B8 — 일시정지 시 edge-glow opacity가 baseline(≈0.55)으로 수�
   // 일시정지(levelActive=false) → --voice-level과 무관하게 baseline 0.55로 강제.
   await page.locator('button[title="일시정지"]').click();
   await page.waitForTimeout(300);
-  await expect(glow).toHaveAttribute('data-tone', 'amber'); // 일시정지 톤
+  await expect(glow).toHaveAttribute('data-tone', 'mono'); // 일시정지 톤(v0.44.0 §C4: amber→mono)
   const paused = await glow.evaluate((el) => parseFloat(getComputedStyle(el).opacity));
   console.log(`edge-glow opacity: active(level1)=${active} paused=${paused}`);
   expect(paused, '정지 시 직전 큰 레벨에 고착되지 않고 baseline으로').toBeCloseTo(0.55, 2);
@@ -421,7 +421,7 @@ test('B7 — listening 외 상태(일시정지) 무동작: hero 파동 대상 �
   // 일시정지에서는 hero 자체가 사라진다(중앙 비움 — §[3]). 대기 중엔 항목명이 없으므로
   // hero-primary가 아니라 **hero 상태 노드**로 판정한다.
   await expect(page.locator('[data-hero-state]')).toHaveCount(0);
-  await expect(page.locator('[data-testid="edge-glow"]')).toHaveAttribute('data-tone', 'amber');
+  await expect(page.locator('[data-testid="edge-glow"]')).toHaveAttribute('data-tone', 'mono');
 
   // 재시작 → 다시 듣는 중(green) + hero 복귀.
   await page.locator('button[title="재시작"]').click();
@@ -765,9 +765,9 @@ test('FB-A — 듣는 중(green): traveling sweep 바 4개가 edge-sweep 4엣지
     new Set(['edge-sweep-x', 'edge-sweep-x-reverse', 'edge-sweep-y', 'edge-sweep-y-reverse']),
   );
 
-  // 일시정지(amber) → sweep 제거(호흡만 — §5.2 배터리). "점멸만" 상태와 대비되는 대조군.
+  // 일시정지(mono, v0.44.0 §C4) → sweep 제거(호흡만 — §5.2 배터리). "점멸만" 상태와 대비되는 대조군.
   await page.locator('button[title="일시정지"]').click();
-  await expect(glow).toHaveAttribute('data-tone', 'amber');
+  await expect(glow).toHaveAttribute('data-tone', 'mono');
   expect(await sweepAnims(page), 'paused엔 sweep 없음(호흡만)').toHaveLength(0);
   // 와이어프레임 §[3](2026-07-24 확정) — 일시정지에서는 하단 `<`가 **재개** 버튼이므로 인디케이터를
   //   또 하나의 재개 버튼으로 두지 않는다(같은 행동의 중복 타깃 제거) → voice-status-control 부재.

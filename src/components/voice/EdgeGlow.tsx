@@ -17,19 +17,28 @@ import { useAudioLevelVar } from './useAudioLevelVar';
  *  전환한다. 매 프레임 갱신은 wrapper opacity(--voice-level, rAF)와 keyframe의 opacity/transform뿐.
  *  스윕 바는 transform 전용(합성기). prefers-reduced-motion이면 스윕·호흡·확산을 전부 끄고
  *  코어 링 + 블룸 + 톤(색)만 정적으로 남긴다. */
-export type GlowTone = 'green' | 'amber' | 'red';
+/** v0.44.0 §C4(F12) — 'mono' 추가: 일시정지 전용 무채색. amber는 수정모드로 의미가 옮겨갔다. */
+export type GlowTone = 'green' | 'amber' | 'red' | 'mono';
+
+/** 톤 → 기본색. 칩/진행바 등 tone을 색 하나로 소비하는 파생의 SSOT(§C4). */
+export const TONE_BASE: Record<GlowTone, string> = {
+  green: T.green, amber: T.amber, red: T.red, mono: T.mono,
+};
 
 const TONE_COLOR: Record<GlowTone, { base: string; soft: string; strong: string; faint: string }> = {
   green: { base: T.green, soft: T.greenGlow, strong: T.greenGlowStrong, faint: T.greenGlowFaint },
   amber: { base: T.amber, soft: T.amberGlow, strong: T.amberGlowStrong, faint: T.amberGlowFaint },
   red: { base: T.red, soft: T.redGlow, strong: T.redGlowStrong, faint: T.redGlowFaint },
+  mono: { base: T.mono, soft: T.monoGlow, strong: T.monoGlowStrong, faint: T.monoGlowFaint },
 };
-const TONES: readonly GlowTone[] = ['green', 'amber', 'red'];
+const TONES: readonly GlowTone[] = ['green', 'amber', 'red', 'mono'];
 
 /** 상태별 모션 cadence(§5.2). 색만 바꾸지 않는다 — 호흡 주기가 함께 달라진다.
  *  스윕 바는 리뷰 라운드1(Flash+Pro, 배터리) 수용으로 **듣는 중(green + levelActive)에만** 구동 —
  *  amber/red·비청취 구간은 호흡(edge-pulse)만 남긴다(무한 transform 애니메이션 상시 구동 방지). */
-const TONE_PULSE_S: Record<GlowTone, number> = { green: 1.75, amber: 2.4, red: 0.7 };
+// mono 1.2는 §C4 점멸 주기와 같은 값이지만 실제 mono 점멸은 global.css `pauseMonoPulse`가
+// !important로 이긴다 — 이 항목은 Record 완전성(타입)과 폴백 cadence용이다.
+const TONE_PULSE_S: Record<GlowTone, number> = { green: 1.75, amber: 2.4, red: 0.7, mono: 1.2 };
 const SWEEP_S = 1.75;
 
 // 4겹 안쪽 적층: 5px 코어는 border가 그리고, 블룸 3겹은 inset shadow(정적 1회 페인트).

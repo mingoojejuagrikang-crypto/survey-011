@@ -20,7 +20,7 @@ import { VOICE_TYPE } from './heroLayout';
  *  `LiveListenBand`(v0.36.0 상시 파형 밴드)의 후신이다. `data-testid="live-listen-band"`와
  *  밴드 높이 산식(뷰포트 비례, 상태 간 고정)은 그대로 유지한다 — 상태가 바뀌어도 인디케이터
  *  높이는 변하지 않아야 `<` `>`가 위아래로 튀지 않는다. */
-const TONE_COLOR: Record<GlowTone, string> = { green: T.green, amber: T.amber, red: T.red };
+const TONE_COLOR: Record<GlowTone, string> = { green: T.green, amber: T.amber, red: T.red, mono: T.mono };
 
 export function StateIndicator({
   glyph, tone, waveActive, levelActive, getAudioLevel, getTimeDomainData, control,
