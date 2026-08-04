@@ -66,7 +66,19 @@ export function MicReconnectBanner({
               wordBreak: 'keep-all', overflowWrap: 'anywhere', lineHeight: 1.2,
             }}
           >
-            마이크 연결 끊김
+            클립 녹음 끊김
+          </span>
+          {/* v0.44.1 F10 — 이 배너는 **클립 스트림**의 사망만 뜻한다. STT(값 입력)는 별도 파이프라인이라
+              대개 계속 동작하는데, 종전 문구("마이크 연결 끊김")는 그 구분이 없어 "입력은 되는데 끊김
+              알람"이라는 오탐 제보를 만들었다(2026-08-05 F10). 그리고 iOS 물림([MIC-B2])에서는 재연결이
+              페이지 수명 내내 실패하므로 실효 복구 수단(앱 재시작)을 배너가 직접 안내한다. */}
+          <span
+            style={{
+              fontSize: VOICE_TYPE.caption, fontWeight: 600, color: 'rgba(255,255,255,0.88)',
+              wordBreak: 'keep-all', overflowWrap: 'anywhere', lineHeight: 1.25,
+            }}
+          >
+            값 입력은 계속 됩니다 · 재연결이 안 되면 앱을 껐다 다시 여세요
           </span>
         </div>
         <button

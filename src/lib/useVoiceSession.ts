@@ -25,6 +25,7 @@ import {
   clipArmBlocked,
   lowConfidenceParsed,
   micAutoReconnect,
+  micInitFailed,
   rowMarked,
 } from './logEvents';
 import { resolveForegroundReturnEvent } from './foregroundReturnTelemetry';
@@ -2674,14 +2675,28 @@ export function useVoiceSession() {
     // #4 active mic: once init() resolves, emit a follow-up session event carrying the granted
     // input device. Done async (not awaited) so STT startup is never blocked; emitted as its own
     // event so analysis can attribute STT accuracy to the real device per session.
-    void recorderRef.current.init().then((ok) => {
+    const recAtStart = recorderRef.current;
+    void recAtStart.init().then((ok) => {
       // v0.34.0 D11b — UI 이펙트 자가검증 1건: 파동/글로우 활성 + 프리롤 캡처 경로. init 실패
       // (ok=false)여도 남긴다 — preroll=unavailable이 곧 "파동 무동작(레벨 0 폴백)" 판정 근거.
       logCell({
         type: 'session',
         extra: `ui_fx:wave=on,glow=on,preroll=${recorderRef.current?.getPrerollKind() ?? 'unavailable'}`,
       });
-      if (!ok) return;
+      if (!ok) {
+        // v0.44.1 [CLIP-INIT-SILENT-1] — 시작 마이크 획득 실패는 여기까지 **무음**이었다.
+        // 2026-08-05 실기기(sess_1785877588821): 85분 백그라운드 복귀 뒤 시작 클릭의 gUM이 즉시
+        // 거부됐는데([MIC-B2] 물림 클래스) 아무 경고가 없어 37분·63행이 클립 0개로 돌았고, 수동
+        // 재연결 16회도 전부 NotAllowedError였다(물림은 페이지 수명 내내 지속 — 실효 복구는 앱
+        // 재시작뿐). 값 커밋(STT)은 이 스트림과 무관해 정상이므로 세션은 막지 않는다. 대신
+        // ①실패 사유 계측 ②micLost 래치(재연결 배너를 첫 화면부터) ③TTS 1회 고지(현장은
+        // 화면을 안 본다)를 즉시 한다. TTS는 interrupt=false — 시작 안내를 끊지 않고 뒤에 잇는다.
+        if (disposedRef.current || recorderRef.current !== recAtStart) return;
+        logCell({ type: 'error', extra: micInitFailed(recAtStart.getLastInitError() ?? 'unknown') });
+        maybeAutoRecoverOrLatch('init_failed');
+        void say('주의. 음성 클립이 저장되지 않습니다. 재연결이 안 되면 앱을 껐다 다시 열어 주세요.', false).catch(() => {});
+        return;
+      }
       const input = recorderRef.current?.getActiveInput();
       if (!input) return;
       logCell({

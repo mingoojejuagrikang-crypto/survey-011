@@ -139,7 +139,9 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   // v0.44.0 §C2·C3: ExitConfirmInline 3행(+2 계약) · CompleteSummary 중앙 버튼 삭제(allowlist −1).
   // v0.44.0 §D1: ActiveControlSteppers 말끊기 토글(BargeInToggle) 4건(+4 계약 — captionXs·
   // stepperValue·captionXxs·stepperValueLg 전부 VOICE_TYPE 참조, 위반 0 유지).
-  expect(contractCount, '계약 참조 (통과)').toBe(55);
+  // v0.44.1 [CLIP-INIT-SILENT-1]: MicReconnectBanner 부제 1건(+1 계약 — VOICE_TYPE.caption,
+  // "값 입력은 계속 됩니다·앱 재시작" 안내줄. 위반 0 유지).
+  expect(contractCount, '계약 참조 (통과)').toBe(56);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(5);
   expect(commentCount, '주석 (skip)').toBe(1);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);

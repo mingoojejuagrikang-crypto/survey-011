@@ -63,6 +63,17 @@ export function recoverTimeout(reason: string, ms: number): string {
   return `clip_recorder_recover_timeout:${reason}:${kv({ ms })}`;
 }
 
+/** v0.44.1 [CLIP-INIT-SILENT-1] — 세션 시작 클릭의 선행 마이크 획득(F18 init)이 실패한 사건.
+ *
+ *  2026-08-05 실기기(sess_1785877588821): 85분 백그라운드 복귀 뒤 시작 클릭의 getUserMedia가
+ *  즉시 거부됐는데(iOS 오디오 세션 물림 — [MIC-B2] 클래스) **어떤 이벤트도 안 남아** 37분·63행이
+ *  클립 0개로 돌았다(첫 흔적이 40초 뒤 첫 커밋의 clip_empty). 이 이벤트가 그 공백을 메운다 —
+ *  `err`는 DOMException.name(NotAllowedError=거부/물림 · NotFoundError=장치 없음 등),
+ *  실패 사유를 몰랐으면 'unknown'. 시작 클릭당 최대 1건이라 링버퍼 잠식 없음. */
+export function micInitFailed(errName: string): string {
+  return `mic_init_failed:${kv({ err: errName })}`;
+}
+
 /** v0.38.1 [MIC-B2] 포그라운드 복귀 선-정리(`AudioRecorder.teardownAudioGraph`) 결과 —
  *  **실기기 판정 사다리의 핵심 바이트**.
  *

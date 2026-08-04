@@ -13,6 +13,7 @@ import {
   rowMarked,
   zombieRestart,
   micAutoReconnect,
+  micInitFailed,
   recoverTimeout,
   audioRouteRevalidate,
   foregroundReturn,
@@ -76,6 +77,11 @@ test('micAutoReconnect — 자동 재연결 시도/결과 신규 바이트 계�
 
 test('recoverTimeout — 마이크 재획득 타임아웃 신규 바이트 계약', () => {
   expect(recoverTimeout('auto', 7_000)).toBe('clip_recorder_recover_timeout:auto:ms=7000');
+});
+
+test('micInitFailed — v0.44.1 세션 시작 마이크 획득 실패 신규 바이트 계약', () => {
+  expect(micInitFailed('NotAllowedError')).toBe('mic_init_failed:err=NotAllowedError');
+  expect(micInitFailed('unknown')).toBe('mic_init_failed:err=unknown');
 });
 
 test('wakeLockEvent — 획득/재획득/해제 전 경로 바이트 계약', () => {

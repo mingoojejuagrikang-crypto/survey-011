@@ -13,6 +13,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 
 test.setTimeout(120_000);
 
@@ -105,6 +106,9 @@ async function setupAndStart(page: Page, tolerance: number) {
   await page.setViewportSize(PHONE_375);
   await stubSheets(page);
   await page.addInitScript(MOCK_INIT_SCRIPT);
+  // v0.44.1 [CLIP-INIT-SILENT-1] — 헤드리스 기본 gUM 거부가 이제 시끄럽다(재연결 배너가 상단
+  // 도움말 버튼 클릭을 가로챔 — T4·T5 실측). 이 스펙은 "정상 마이크" 전제이므로 승인 스텁을 깐다.
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(
     ({ settings, storeKey }) => {
