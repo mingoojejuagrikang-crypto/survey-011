@@ -172,7 +172,7 @@ async function glowVar(page: Page): Promise<string> {
 
 // ─── B7. 파동 — CSS 변수 반영 + 시각 변조 ──────────────────────────────────
 
-test('B7 — 대기 카드: 화면 2/3 폭의 세로 도트 파형(13열), "듣는 중" 텍스트 제거', async ({ page }) => {
+test('B7 — 대기 카드: 화면 2/3 폭의 세로 도트 파형(25열), "듣는 중" 텍스트 제거', async ({ page }) => {
   await boot(page, { width: 402, height: 874 });
   await startSession(page);
 
@@ -186,8 +186,10 @@ test('B7 — 대기 카드: 화면 2/3 폭의 세로 도트 파형(13열), "듣�
   await expect(page.locator('text=듣는 중')).toHaveCount(0);
 
   // v0.40.0 — 인디케이터가 **도트 격자 하나**로 합쳐졌다([UI-WAVE-1] 구조적 해소).
-  // UI-e2 — 원형 도트는 유지하고 열 피치만 화면 2/3로 넓힌다(§C5에서 18×10). 밴드 높이는 하단
-  // 1행이 정하며 60px 하한만 남는다. 제품 상수 import 없이 설계 리터럴을 독립 검증한다.
+  // UI-e2 — 원형 도트는 유지하고 열 피치만 화면 2/3로 넓힌다(§C5에서 18×10 → WP-G에서 25×14).
+  // 밴드 높이는 하단 1행이 정하며 60px 하한만 남는다. 제품 상수 import 없이 설계 리터럴을
+  // 독립 검증한다. ⚠️ 350셀 중 **하단 4행은 접힌 조절판 필의 자리**라 표시가 쓰지 않는다 —
+  // 그 계약은 `v0460-g-dot-pill.spec.ts`가 재고 여기서는 격자 기하만 본다.
   const band = page.locator('[data-testid="live-listen-band"]');
   const wave = page.locator('[data-testid="state-dots"]');
   await expect(wave).toBeVisible();
@@ -208,7 +210,7 @@ test('B7 — 대기 카드: 화면 2/3 폭의 세로 도트 파형(13열), "듣�
     };
   });
   console.log(`band geometry: ${JSON.stringify(geometry)}`);
-  expect(geometry.cells, '18열 × 10행 격자(§C5)').toBe(180);
+  expect(geometry.cells, '25열 × 14행 격자(WP-G — 종전 §C5의 18×10=180)').toBe(350);
   expect(geometry.bandHeight, '밴드는 하단 1행 높이를 전부 쓴다').toBeCloseTo(geometry.indicatorRowHeight, 0);
   expect(geometry.bandHeight, '밴드 가독 하한 60px').toBeGreaterThanOrEqual(60);
   expect(geometry.waveWidth, '파형 폭은 화면의 2/3').toBeCloseTo(geometry.expectedWaveWidth, 0);
