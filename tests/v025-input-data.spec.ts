@@ -42,7 +42,9 @@ async function makeOptionsColumn(page: Page) {
   }
   await expect(typeBtn).toContainText('리스트');
 
-  const addInput = card.getByPlaceholder('새 값 입력');
+  // v0.46.0 WP-J J-4 — 입력창이 "추가 전용"이 아니라 추가/삭제 토글이 되면서 플레이스홀더가
+  // 바뀌었다("값 입력 — 없으면 추가, 있으면 삭제"). testid로 고정해 문구 변경에 안 깨지게 한다.
+  const addInput = card.locator('[data-testid="opt-input-c4"]');
   await expect(addInput).toBeVisible();
   for (const v of ['A', 'B', 'C']) {
     await addInput.fill(v);

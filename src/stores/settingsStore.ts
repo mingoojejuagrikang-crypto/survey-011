@@ -169,6 +169,20 @@ interface SettingsState {
    *  onRehydrateStorage의 F28 블록 참조). null = 설정한 적 없음/초기화 직후 → 발동하지 않음.
    *  사용자 설정 아님(UI 미노출). */
   inputSettingsDate: string | null;
+  /** v0.46.0 WP-J J-5 (민구 R11 확정) — **컬럼별 선택지 제외 목록**(colId → 지운 값들).
+   *  사용자가 J-4로 선택지를 지우면 여기 들어가고, 이후 시트 자동 갱신이 그 값을 **건너뛴다**
+   *  ("한 번 지우면 계속 유지"). 「설정 초기화」는 이 맵도 함께 비운다 — 그래야 초기화가
+   *  *"리스트를 잃는 사고"* 가 아니라 *"선택지를 시트 기준으로 새로 받는 정상 동작"* 이 된다.
+   *
+   *  🔑 **왜 `Column` 안이 아니라 스토어 최상위 맵인가**(13번 세션 설계 인계):
+   *   ① `Column`에 필드를 늘리면 보존 필드를 나열하는 `columnFlags.ts`를 만져야 하는데 그 파일은
+   *      다른 레인(WP-A) 소유다. ② 더 중요한 건, 시트 재유추가 컬럼 배열을 **통째로 갈아끼워도**
+   *      최상위 맵은 살아남는다는 것이다 — 컬럼 안에 두면 자동 갱신이 제외 목록을 지워 R11이 깨진다.
+   *
+   *  ⚠️ 키인 colId는 `sheets.stableColumnId`가 **컬럼 이름에서 만든 해시**라, 다른 시트라도 이름이
+   *  같으면 같은 id가 된다. 그래서 컬럼 출처 시트가 바뀌면 이 맵을 비운다(useSettingsActions.loadHeaders)
+   *  — 안 그러면 감귤 시트에서 지운 값이 품질조사 시트의 동명 컬럼에 새어 붙는다. */
+  optionExclusions: Record<string, string[]>;
 
   set: (partial: Partial<Omit<SettingsState, 'set' | 'updateColumn' | 'addColumn' | 'removeColumn' | 'reorderColumns' | 'saveSheet' | 'removeSavedSheet'>>) => void;
   updateColumn: (id: string, next: Column) => void;
@@ -298,6 +312,7 @@ export function makeSettingsDefaults(): SettingsDefaults {
     userLogFolderCache: null,
     roundDateColId: null,
     inputSettingsDate: null,
+    optionExclusions: {},
   };
 }
 
@@ -311,6 +326,8 @@ const INPUT_SETTINGS_KEYS = [
   'ttsRate', 'recognitionTolerance', 'fastRecognition', 'autoScreenCapture',
   'beepPositiveId', 'beepNegativeId', 'beepVolume', 'bargeInEnabled', 'preferredVoiceName',
   'sessionLabelColId', 'sessionAutoLabel', 'sessionCustomLabel', 'roundDateColId',
+  // v0.46.0 WP-J J-5 — 선택지를 지우는 것도 "입력값 설정 손질"이다(컬럼과 같은 축).
+  'optionExclusions',
 ] as const;
 
 function touchesInputSettings(partial: Record<string, unknown>): boolean {
@@ -349,6 +366,9 @@ export function inputSettingsResetPatch(): Partial<SettingsState> {
     sessionCustomLabel: d.sessionCustomLabel,
     roundDateColId: d.roundDateColId,
     inputSettingsDate: null,
+    // v0.46.0 WP-J J-5 (민구 R11 확정) — 초기화는 **제외 목록도 비운다**. 그래야 다음 갱신이
+    // 시트 기준으로 선택지를 전부 재생성한다(초기화 = 리스트 유실이 아니라 재수신).
+    optionExclusions: {},
   };
 }
 

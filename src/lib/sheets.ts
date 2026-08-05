@@ -99,16 +99,26 @@ export async function fetchSpreadsheetMeta(spreadsheetId: string): Promise<Sprea
 }
 
 /**
- * Read first N rows of a sheet to:
+ * Read a sheet to:
  *  - get header (row 1)
- *  - sample data rows (rows 2..N) for type inference
+ *  - sample data rows (rows 2..끝) for type inference
+ *
+ * v0.46.0 WP-J J-1 — **행 상한을 없앴다**(종전 `A1:Z1001` = 앞에서 1,000행).
+ * 근인: 표본이 시트 **앞쪽에 고정**되면 타입 추론이 최근 데이터를 못 본다. 파생 피해가 두 겹이다.
+ *  ① `inferColumns`의 **리스트 승격 판정 자체가 이 표본으로 난다** — 앞 1,000행에서 고유값이
+ *     1개인 컬럼은 `options`가 되지 못하고, 그러면 호출부(useSettingsActions.loadHeaders)의
+ *     `fetchColumnUniqueValues`가 **아예 호출되지 않는다**. 즉 열 전체 수집만으로는 안 닫힌다.
+ *  ② `columnFlags.preserveUserColumnSettings`는 타입이 달라지면 사용자 설정을 버리고 재유추값을
+ *     쓴다(`isSemanticTypeChange`). 표본이 옛 데이터뿐이면 `options`→`text` 되돌림이 재연결마다 난다.
+ * 비용 판단: 이 앱은 **이미** 같은 흐름에서 시트 전량을 읽는다(`pastValues.ts` → `fetchAllRowsUnbounded`,
+ * 행·열 상한 없음). 전량 읽기는 새로 도입하는 비용이 아니라 이미 지불 중인 비용이고, 이 요청은
+ * 시트 연결·타입검토에서만 발생한다(행 입력마다가 아니다).
  */
 export async function fetchHeaderAndSample(
   spreadsheetId: string,
   sheetTitle: string,
-  sampleRows = 1000,
 ): Promise<{ headers: string[]; sample: string[][] }> {
-  const range = `${encodeURIComponent(sheetTitle)}!A1:Z${sampleRows + 1}`;
+  const range = encodeURIComponent(`${quoteSheetTitle(sheetTitle)}!A1:Z`);
   const r = await authFetch(`${API}/${spreadsheetId}/values/${range}`);
   if (!r.ok) throw new Error(`헤더 조회 실패: ${r.status}`);
   const d = (await r.json()) as { values?: string[][] };
@@ -139,27 +149,52 @@ export async function fetchHeaderRow(spreadsheetId: string, sheetTitle: string):
 }
 
 /**
- * Fetch unique values of a single column (by zero-based index), frequency-sorted.
+ * 값 목록 → 고유값, **최근 등장 우선**(마지막에 나온 값이 맨 앞).
+ *
+ * v0.46.0 WP-J J-1 (민구 R12 확정) — 종전 **빈도순**을 대체한다. 빈도순은 "옛날에 많이 쓴 값"을
+ * 위로 올려, 오늘 새로 조사한 농가가 목록 끝으로 밀렸다. 정렬은 눈에 보이지 않는 계약이라
+ * 오라클(tests/v0460-wp-j-options.spec.ts)이 이 함수를 직접 잰다 — 없으면 빈도순으로 조용히
+ * 되돌아가도 아무도 모른다.
+ *
+ * ⚠️ 정규화하지 않는다. `신례리 1365-1`(공백 있음)과 `신례리816-1`(공백 없음)은 **서로 다른 값**으로
+ * 남는다(J-6) — 손입력 표기 흔들림일 수도, 진짜 다른 농가일 수도 있어 앱이 판단할 근거가 없다.
+ * 합치는 것은 사용자의 몫이고, 그 수단이 J-4의 선택지 삭제다.
+ */
+export function uniqueValuesRecentFirst(values: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (let i = values.length - 1; i >= 0; i--) {
+    const v = (values[i] ?? '').toString().trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+/**
+ * Fetch unique values of a single column (by zero-based index), **최근 등장 우선**.
  * Used to surface options for text columns.
+ *
+ * v0.46.0 WP-J J-1 (민구 R12 확정) — 수집 범위가 **열 전체**(`A2:A`)다. 종전 `A2:A501`(앞 500행)은
+ * 민구 시트 2,902행 중 **앞 500행만** 봤고, 그 안에 든 농가 3곳이 앱이 실제로 보여준 3곳과 정확히
+ * 일치했다(원인 확정). 개수 상한도 없다 — 고유값은 어차피 유한하고(농가 수), 1컬럼 2,902행이
+ * 수십 KB라 비용이 무시할 수준이다. **「최근 N줄」이 아니라 「전체 수집 + 최근 정렬」인 이유**는
+ * 팀 공용 시트다: 시트에 작성자 구분 컬럼이 없어 앱이 누구 행인지 모르므로, 최근 N줄은 사람 수에
+ * 반비례해 약해진다(5명이 쓰면 내 몫은 1/5).
  */
 export async function fetchColumnUniqueValues(
   spreadsheetId: string,
   sheetTitle: string,
   colIndex: number,
-  maxRows = 500,
 ): Promise<string[]> {
   if (colIndex < 0 || colIndex > 25) return []; // simple A-Z support
   const colLetter = String.fromCharCode(65 + colIndex);
-  const range = `${encodeURIComponent(sheetTitle)}!${colLetter}2:${colLetter}${maxRows + 1}`;
+  const range = encodeURIComponent(`${quoteSheetTitle(sheetTitle)}!${colLetter}2:${colLetter}`);
   const r = await authFetch(`${API}/${spreadsheetId}/values/${range}`);
   if (!r.ok) return [];
   const d = (await r.json()) as { values?: string[][] };
-  const vals = (d.values || []).map((row) => (row[0] || '').toString().trim()).filter(Boolean);
-  const freq = new Map<string, number>();
-  for (const v of vals) freq.set(v, (freq.get(v) || 0) + 1);
-  return [...freq.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([v]) => v);
+  return uniqueValuesRecentFirst((d.values || []).map((row) => (row[0] || '').toString()));
 }
 
 /** Guess a DataType from a string sample value */
@@ -241,9 +276,14 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
     } else if (type === 'text') {
       if (uniqVals.size === 1) {
         auto = { kind: 'fixed', value: [...uniqVals][0] };
-      } else if (uniqVals.size > 0 && uniqVals.size <= 20) {
+      } else if (uniqVals.size > 0) {
+        // v0.46.0 WP-J J-2 (민구 R7-b 확정: "리스트는 무한") — 종전 `uniqVals.size <= 20` 상한을
+        // 폐지했다. 농가가 21곳이 되는 순간 리스트가 통째로 사라지던 절벽을 없앤다.
+        // 🔑 목록이 길어지는 문제는 상한이 아니라 J-4의 **선택지 삭제**가 푼다(제외 목록 = J-5).
         type = 'options';
-        const available = [...uniqVals];
+        // 최근 등장 우선 — fetchColumnUniqueValues와 같은 정렬 계약을 표본 경로에도 적용한다.
+        // 파생: 기본 선택값(slice(0,1))이 "표본에서 처음 본 값"이 아니라 "가장 최근에 쓴 값"이 된다.
+        const available = uniqueValuesRecentFirst(samples);
         auto = { kind: 'options', available, selected: available.slice(0, 1) };
       } else {
         auto = { kind: 'fixed', value: '' };

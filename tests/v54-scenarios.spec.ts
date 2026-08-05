@@ -687,8 +687,9 @@ test('[설정] options 타입 컬럼 선택지 입력', async ({ page }) => {
   await addColumn(page, { type: 'options' });
   await page.waitForTimeout(200);
 
-  // 선택지 입력 필드 (OptionsPanel의 "새 값 입력")
-  const optionInput = page.locator('input[placeholder="새 값 입력"]').first();
+  // 선택지 입력 필드. v0.46.0 WP-J J-4로 추가/삭제 토글이 되면서 플레이스홀더가 바뀌어
+  // ("값 입력 — 없으면 추가, 있으면 삭제") 부분 일치로 잡는다. 컬럼 id가 동적이라 testid는 못 쓴다.
+  const optionInput = page.getByPlaceholder('값 입력').first();
 
   if (!(await optionInput.isVisible().catch(() => false))) {
     console.log('ℹ options 입력 필드 없음 — 스킵');

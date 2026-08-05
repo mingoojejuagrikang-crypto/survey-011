@@ -33,6 +33,7 @@ import {
   readonlySheetsAuth,
 } from './sheets';
 import { mergeInferredColumnsForSheet } from './columnFlags';
+import { enrichOptionColumns } from './optionExclusions';
 import { computeTotalRows } from './autoValue';
 import { buildSessionLabel, pickSessionLabelValue } from './sessionLabel';
 import { getPickerApiKey, openDrivePicker } from './drivePicker';
@@ -225,21 +226,20 @@ export function useSettingsActions() {
         { spreadsheetId: current.columnsSheetId, sheetTab: current.columnsSheetTab },
         { spreadsheetId, sheetTab: sheetTitle },
       );
-      // For 'options' columns, fetch a richer set of unique values
-      const enriched = await Promise.all(
-        inferred.map(async (c, i) => {
-          if (c.type !== 'options' || c.auto.kind !== 'options') return c;
-          try {
-            const uniq = await fetchColumnUniqueValues(spreadsheetId, sheetTitle, i, 500);
-            return {
-              ...c,
-              auto: { kind: 'options' as const, available: uniq, selected: c.auto.selected },
-            };
-          } catch {
-            return c;
-          }
-        }),
-      );
+      // v0.46.0 WP-J J-5 — 출처 시트가 바뀌면 제외 목록을 **버린다**. colId는 stableColumnId가
+      // 컬럼 **이름**에서 만든 해시라 다른 시트라도 이름이 같으면 같은 id다 — 안 버리면 감귤
+      // 시트에서 지운 값이 품질조사 시트의 동명 컬럼에 새어 붙는다. (초기화 직후에도
+      // columnsSheetId가 null이라 여기 걸린다 = R11 "초기화는 제외 목록도 비운다".)
+      const sheetChanged =
+        current.columnsSheetId !== spreadsheetId || current.columnsSheetTab !== sheetTitle;
+      if (sheetChanged && Object.keys(current.optionExclusions).length > 0) {
+        useSettingsStore.getState().set({ optionExclusions: {} });
+      }
+      const exclusions = sheetChanged ? {} : current.optionExclusions;
+
+      // 'options' 컬럼의 선택지를 시트 열 전체의 고유값으로 보강하고 제외 목록을 적용한다(J-1·J-5).
+      const enriched = await enrichOptionColumns(inferred, exclusions, (i) =>
+        fetchColumnUniqueValues(spreadsheetId, sheetTitle, i));
       return enriched.length && isCurrentSheetRequest(requestSeq) ? enriched : null;
   };
 
@@ -450,6 +450,33 @@ export function useSettingsActions() {
       extra: `settings_reset:login=${clearLogin ? 'cleared' : 'kept'},sheet=${clearSheets ? 'cleared' : 'kept'}`,
     });
     setResetOpen(false);
+
+    // v0.46.0 WP-J J-3 (민구 확정 08-05) — 초기화 직후 **연결된 시트에서 즉시 다시 받는다.**
+    // 기본 컬럼 템플릿(MOCK_COLUMNS)의 '농가명'을 options로 바꾸는 원안 대신 이 형태를 택했다:
+    // 그 템플릿은 감귤 시트 전용 목업이라 "하나의 시트를 기준으로 정하지 마라"(민구 08-05)와
+    // 부딪힌다. 뒷단을 고치면 시트 불특정이면서 **모든 리스트 컬럼**이 그 시트 기준으로 재생성된다.
+    // 종전엔 여기 loadHeaders가 없어 다음 수동 재연결까지 목업 상태로 남았다(§3-J 실측 ①).
+    // best-effort — 오프라인·토큰 만료로 실패해도 초기화 자체는 이미 성립했다.
+    const after = useSettingsStore.getState();
+    const resetSheetId = clearSheets ? null : parseSpreadsheetId(after.sheetUrl);
+    if (!resetSheetId || !after.sheetTab || !after.googleConnected) return;
+    const requestSeq = beginSheetRequest();
+    try {
+      setLoading('시트에서 선택지 다시 받는 중...');
+      const columns = await loadHeaders(resetSheetId, after.sheetTab, requestSeq);
+      if (!columns || !isCurrentSheetRequest(requestSeq)) return;
+      useSettingsStore.getState().set({
+        columns,
+        columnsSheetId: resetSheetId,
+        columnsSheetTab: after.sheetTab,
+        tableGenerated: false,
+      });
+      logger.log({ type: 'app', extra: `settings_reset_refetch:ok,cols=${columns.length}` });
+    } catch (err) {
+      logger.log({ type: 'app', extra: `settings_reset_refetch:failed,${(err as Error).message.slice(0, 60)}` });
+    } finally {
+      if (isCurrentSheetRequest(requestSeq)) setLoading(null);
+    }
   };
 
   return {
