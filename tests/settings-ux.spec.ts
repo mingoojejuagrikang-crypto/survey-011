@@ -7,7 +7,9 @@
  *        🔴 v0.45.0 UI①(민구 확정 08-05) — 상단 유틸리티 행('설정 요약'+'초기화')이 삭제돼
  *        유일 진입점은 생성 완료 액션바의 '설정요약'(settings-summary-shortcut)이다.
  *   B3 — 초기화: 기본값 복귀 + Google 로그인·시트 URL은 기본 보존, 체크박스로 opt-in 삭제.
- *        (v0.45.0 UI① — '초기화' 버튼은 하단 액션바 상시 2행으로 이동, testid·모달 흐름 불변.)
+ *        🔴 v0.46.0 WP-H(민구 지시 08-05) — 버튼 이름이 '초기화' → **'설정 초기화'**, 위치는
+ *        하단 액션바 상시 2행(v0.45.0 UI①)에서 **스크롤 영역 맨 아래**로 내려갔다. testid·모달
+ *        흐름은 불변. 위치 계약의 오라클은 v0440-c7-cleanup이 소유한다(여기선 존재·이름만 잰다).
  *   B4 — (폐기: v0.44.0 §C7 F25·F26, 민구 08-02) 이동 버튼·안내문구 → 3버튼 행으로 대체.
  *        C10(v0.34.0) 인라인 요약도 같은 회차에 폐기 — 두 테스트는 폐기 계약으로 갱신됐고,
  *        3버튼 행의 실동작 오라클은 v0440-c7-cleanup.spec.ts가 소유한다.
@@ -282,7 +284,7 @@ test('B3 — 초기화(체크박스 2개): 로그인 해제 + 시트 URL·저장
  *  상단 유틸리티 행까지 삭제돼 '설정 요약'(공백 포함 정확 문구) 상호작용 요소는 이제 **0개**다.
  *  요약 팝업의 유일 진입점은 생성 완료 액션바의 '설정요약'(무공백) — 미생성이면 진입점이 없다.
  *  (구 C10 계약과 summaryPills 헬퍼는 이 갱신에서 삭제 — 팝업 내부 수치는 B2가 계속 잰다.) */
-test('C10 폐기(F26·v0.45.0 UI①) — 인라인 요약 부재 + "설정 요약" 진입점 0개(미생성) + 초기화 상시', async ({ page }) => {
+test('C10 폐기(F26·WP-H) — 인라인 요약 부재 + "설정 요약" 진입점 0개(미생성) + 설정 초기화 존재', async ({ page }) => {
   await freshSettings(page);
 
   await expect(page.locator('[data-testid="settings-summary-inline"]')).toHaveCount(0);
@@ -292,9 +294,11 @@ test('C10 폐기(F26·v0.45.0 UI①) — 인라인 요약 부재 + "설정 요�
   await expect(page.locator('[data-testid="settings-summary-open"]')).toHaveCount(0);
   // 미생성 상태에는 하단 바로가기도 없다(tableGenerated=true에서만 렌더) → 진입점 자체가 0개.
   await expect(page.locator('[data-testid="settings-summary-shortcut"]')).toHaveCount(0);
-  // v0.45.0 UI① — '초기화'는 하단 액션바 상시 2행: 미생성 상태에도 항상 존재한다.
-  await expect(page.locator('[data-testid="settings-reset-open"]')).toBeVisible();
-  console.log('✓ C10 폐기+UI① — 인라인·상단 진입점 없음, 미생성 진입점 0개, 초기화 상시');
+  // 🔴 v0.46.0 WP-H — '상시 2행' 계약은 철회됐다(정당 파손). '설정 초기화'는 스크롤 영역 맨
+  //    아래로 내려갔다. 여기서 재는 것은 **존재와 이름**뿐이고, 위치 계약은 v0440-c7-cleanup이
+  //    소유한다(조상 스크롤 컨테이너 소속 + Footer보다 뒤). 미생성 상태에도 존재한다는 축은 유지.
+  await expect(page.locator('[data-testid="settings-reset-open"]')).toHaveText('설정 초기화');
+  console.log('✓ C10 폐기+WP-H — 인라인·상단 진입점 없음, 미생성 진입점 0개, 설정 초기화 존재');
 });
 
 /** v0.44.0 §C7 F25·F26 — B4 폐기 계약: 안내문구·"입력탭으로 이동 →" 삭제, 그 자리 3버튼
@@ -314,8 +318,9 @@ test('B4 폐기(F25·F26) — 생성 완료 시 이동 버튼·안내문구 대�
   await expect(page.getByText('생성됨')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '설정요약', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '생성 테이블 보기', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '재생성', exact: true })).toBeVisible();
-  // v0.45.0 UI① — 3버튼 행 아래 '초기화' 상시 2행(스크롤 무관 액션바). 수치는 v0440-c7-cleanup이 잰다.
-  await expect(page.locator('[data-testid="settings-reset-open"]')).toBeVisible();
-  console.log('✓ B4 폐기 — 3버튼 행(설정요약·생성 테이블 보기·재생성) + 초기화 2행');
+  // 🔴 v0.46.0 WP-H — '재생성' → '테이블 재생성'(민구 지시 08-05). 기대값을 되돌리지 마라.
+  await expect(page.getByRole('button', { name: '테이블 재생성', exact: true })).toBeVisible();
+  // 🔴 v0.46.0 WP-H — '초기화 상시 2행' 철회. 존재·이름만 재고 위치는 v0440-c7-cleanup이 잰다.
+  await expect(page.locator('[data-testid="settings-reset-open"]')).toHaveText('설정 초기화');
+  console.log('✓ B4 폐기+WP-H — 3버튼 행(설정요약·생성 테이블 보기·테이블 재생성) + 설정 초기화');
 });

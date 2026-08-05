@@ -154,7 +154,7 @@ test('F26 — "설정 요약" 정확 문구 진입점 0개(v0.45.0 UI①): 인�
   console.log('✓ F26(v0.45.0 UI① 갱신) — 정확 문구 진입점 0개, 유일 진입점은 하단 설정요약');
 });
 
-test('F26 — "입력탭으로 이동" 부재, 그 자리 3버튼 실동작 + 초기화 상시 2행(v0.45.0 UI①)', async ({ page }) => {
+test('F26 — "입력탭으로 이동" 부재, 그 자리 3버튼 실동작 + 설정 초기화는 스크롤 말미(WP-H)', async ({ page }) => {
   await seedGeneratedSettings(page);
 
   // 종전 버튼·문구 부재.
@@ -166,34 +166,68 @@ test('F26 — "입력탭으로 이동" 부재, 그 자리 3버튼 실동작 + �
   // 3버튼 존재('설정요약'은 무공백 표기 — '설정 요약' 진입점 1개 계약 보호).
   const summaryBtn = page.getByRole('button', { name: '설정요약', exact: true });
   const previewBtn = page.getByRole('button', { name: '생성 테이블 보기', exact: true });
-  const regenBtn = page.getByRole('button', { name: '재생성', exact: true });
+  // 🔴 v0.46.0 WP-H — '재생성' → '테이블 재생성'(민구 지시 08-05). exact 기대값을 갱신했다.
+  //    되돌리지 마라 — '초기화' → '설정 초기화'와 짝을 이루는 명칭 정정이다.
+  const regenBtn = page.getByRole('button', { name: '테이블 재생성', exact: true });
   await expect(summaryBtn).toBeVisible();
   await expect(previewBtn).toBeVisible();
   await expect(regenBtn).toBeVisible();
+  // 종전 정확 문구('재생성' 단독)는 사라져야 한다 — 두 이름이 공존하면 정정이 반쪽이다.
+  await expect(page.getByRole('button', { name: '재생성', exact: true })).toHaveCount(0);
 
-  // v0.45.0 UI①(민구 확정 08-05) — 액션바 2행: '초기화' 상시 단독 행(settings-reset-open 유지).
-  // 높이 56·글자 13은 생성-후 3버튼 행과 동일해야 한다(민구: "버튼과 내부 글자 크기 동일하도록").
+  // 🔴 v0.46.0 WP-H — v0.45.0 UI①의 「액션바 2행 상시」 계약은 **철회**됐다(정당 파손).
+  //    새 계약: '설정 초기화'는 **스크롤 영역 안**, 액션바 **밖**, Footer(버전)보다 **뒤**다.
+  //    근거: 재생성은 일상이고 초기화는 예외인데(민구), 상시 배치가 그 빈도를 거꾸로 반영해
+  //    08-05 하루 settings_reset 6회(26초 간격 연타 포함)를 냈다. 되살리기 전에 이 줄을 읽어라.
+  //    🔴 판정은 **DOM 순서**로 한다. 첫 시도는 "조상 중 overflowY:auto가 있나"로 쟀는데
+  //    **액션바도 true가 나왔다** — 설정탭 스크롤 영역 위에 또 다른 스크롤 조상이 있어서
+  //    그 술어가 두 버튼을 못 가른다(실측 red). 순서는 그 혼선이 없다: 스크롤 영역이
+  //    액션바보다 **앞**이고, Footer(버전)는 스크롤 영역 안에서 초기화보다 **앞**이다.
+  //    높이 56·글자 13 동일 계약은 그대로 유지한다.
   const resetBtn = page.locator('[data-testid="settings-reset-open"]');
-  await expect(resetBtn).toBeVisible();
   const rowMetrics = await page.evaluate(() => {
     const reset = document.querySelector('[data-testid="settings-reset-open"]') as HTMLElement;
     const summary = document.querySelector('[data-testid="settings-summary-shortcut"]') as HTMLElement;
+    // Footer 버전 줄 — 텍스트로 특정한다(전용 testid가 없다).
+    const version = Array.from(document.querySelectorAll('div'))
+      .find((d) => /^v\d+\.\d+\.\d+\s/.test(d.textContent ?? '') && d.children.length === 1) as HTMLElement | undefined;
+    const FOLLOWING = Node.DOCUMENT_POSITION_FOLLOWING; // 인자가 기준 노드 **뒤**에 온다
+    let scroller: HTMLElement | null = null;
+    for (let p: HTMLElement | null = reset.parentElement; p; p = p.parentElement) {
+      if (p.scrollHeight > p.clientHeight + 1 && getComputedStyle(p).overflowY === 'auto') { scroller = p; break; }
+    }
     return {
       resetH: reset.getBoundingClientRect().height,
       resetFs: parseFloat(getComputedStyle(reset).fontSize),
       summaryH: summary.getBoundingClientRect().height,
       summaryFs: parseFloat(getComputedStyle(summary).fontSize),
+      // DOM 순서: 초기화 **앞에** 액션바가 오면 안 된다(액션바가 뒤여야 한다).
+      actionBarFollowsReset: !!(reset.compareDocumentPosition(summary) & FOLLOWING),
+      // Footer 버전 줄은 초기화보다 **앞**이다(초기화가 스크롤 영역의 마지막).
+      resetFollowsVersion: version ? !!(version.compareDocumentPosition(reset) & FOLLOWING) : null,
+      // 스크롤이 실제로 존재하는가 — "상시가 아니다"의 전제.
+      hasScroll: !!scroller,
       resetTop: reset.getBoundingClientRect().top,
-      summaryBottom: summary.getBoundingClientRect().bottom,
+      summaryTop: summary.getBoundingClientRect().top,
     };
   });
   expect(rowMetrics.resetH, '초기화 행 높이 56').toBeCloseTo(56, 0);
   expect(rowMetrics.resetFs, '초기화 글자 13').toBeCloseTo(13, 0);
   expect(rowMetrics.resetH, '3버튼 행과 동일 높이').toBeCloseTo(rowMetrics.summaryH, 0);
   expect(rowMetrics.resetFs, '3버튼 행과 동일 글자 크기').toBeCloseTo(rowMetrics.summaryFs, 0);
-  expect(rowMetrics.resetTop, '초기화는 3버튼 행 아래 2행이다').toBeGreaterThan(rowMetrics.summaryBottom);
+  expect(rowMetrics.actionBarFollowsReset, 'WP-H — 설정 초기화는 액션바보다 앞이다(= 스크롤 영역 안)').toBe(true);
+  expect(rowMetrics.resetFollowsVersion, 'WP-H — 설정 초기화는 Footer(버전)보다 뒤다').toBe(true);
+  // 상시가 아니다 — 스크롤 최상단에서는 액션바보다 아래(화면 밖)에 놓인다.
+  expect(rowMetrics.hasScroll, '설정탭 스크롤 영역이 실제로 넘친다(전제)').toBe(true);
+  expect(rowMetrics.resetTop, 'WP-H — 최상단에서 설정 초기화는 액션바 아래(비노출)').toBeGreaterThan(
+    rowMetrics.summaryTop,
+  );
+  // 이름도 함께 바뀌었다 — '초기화' 단독 문구는 남지 않는다.
+  await expect(resetBtn).toHaveText('설정 초기화');
+  // 🔴 안 재는 축: 스크롤해서 도달 가능한지(Playwright click이 자동 스크롤하므로 settings-ux B3가
+  //    간접 확인한다) · 오탭 빈도(실사용 계측 몫) · 모달 내부 동작(settings-ux B3가 소유).
 
-  // 375px에서 액션바(3버튼 행 + 초기화 행)가 가로 오버플로를 만들지 않는다.
+  // 375px에서 액션바(3버튼 행) + 스크롤 말미 초기화 행이 가로 오버플로를 만들지 않는다.
   const sw = await page.evaluate(() => ({
     sw: document.documentElement.scrollWidth,
     cw: document.documentElement.clientWidth,

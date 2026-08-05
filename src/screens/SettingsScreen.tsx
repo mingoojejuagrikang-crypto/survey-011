@@ -235,6 +235,29 @@ export function SettingsScreen() {
               능동 체크만 트리거(설치형에서 새 버전 반영 경로를 사용자가 직접 호출). */}
           <UpdateControl />
         </div>
+
+        {/* 🔴 v0.46.0 WP-H(민구 지시 08-05) — '설정 초기화'는 **스크롤 영역의 맨 아래**다.
+            액션바 상시 행(v0.45.0 UI①)에서 여기로 내렸다 — 근거는 액션바 쪽 주석에 있다.
+            🔑 위치가 계약이다: Footer(버전·업데이트)보다 **뒤**, 즉 설정탭에서 가장 마지막에
+            닿는 자리다. 일상 동작(테이블 재생성)은 액션바에 남고, 파괴적 동작만 여기 있다.
+            명칭도 '초기화' → **'설정 초기화'**(민구 지시) — 무엇이 초기화되는지 버튼이 말한다.
+            높이 56·글자 13은 액션바 3버튼 행과 동일하게 유지한다(민구: "버튼과 내부 글자 크기
+            동일하도록"). 확인 모달(SettingsResetModal) 흐름·testid는 불변. */}
+        <div style={{ display: 'flex', alignItems: 'center', padding: '4px 16px 16px' }}>
+          <button
+            type="button"
+            data-testid="settings-reset-open"
+            onClick={() => setResetOpen(true)}
+            style={{
+              flex: 1, height: 56, borderRadius: 28,
+              border: '1px solid rgba(255,23,68,0.40)', background: 'rgba(255,23,68,0.08)',
+              color: T.red, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
+              whiteSpace: 'nowrap', cursor: 'pointer',
+            }}
+          >
+            설정 초기화
+          </button>
+        </div>
       </div>
 
       {/* Action bar */}
@@ -308,7 +331,11 @@ export function SettingsScreen() {
                   whiteSpace: 'nowrap', cursor: 'pointer',
                 }}
               >
-                재생성
+                {/* 🔴 v0.46.0 WP-H — '재생성' → '테이블 재생성'(민구 지시 08-05). 무엇을 재생성하는지
+                    버튼이 말한다. 같은 회차에 '초기화' → '설정 초기화'로 짝을 맞췄다 — 둘 다
+                    "무엇에 대한 동작인가"를 이름에 넣는 정정이고, 초기화를 스크롤 맨 아래로 내린
+                    배치 변경과 한 묶음이다. 게이트 모달 제목('재생성 — 설정값 확인')은 불변. */}
+                테이블 재생성
               </button>
             </>
           ) : (
@@ -327,26 +354,15 @@ export function SettingsScreen() {
             </button>
           )}
         </div>
-        {/* v0.45.0 UI①(민구 확정 08-05) — '초기화' 상시 행. 종전 위치(스크롤 영역 첫 행)는 스크롤
-            하면 사라졌다 — "설정탭에서 스크롤과 무관하게 상시 보기에 하단에 배치"(민구 원문).
-            한 행 4버튼은 375px에서 좁아져 **2행 분리**(민구: "버튼과 내부 글자 크기 동일하도록" —
-            높이 56·글자 13을 생성-후 3버튼 행과 동일하게 맞춘다). 파괴적 동작이라 단독 행이
-            오탭 방지도 겸한다. 확인 모달(SettingsResetModal)은 종전 그대로다. */}
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <button
-            type="button"
-            data-testid="settings-reset-open"
-            onClick={() => setResetOpen(true)}
-            style={{
-              flex: 1, height: 56, borderRadius: 28,
-              border: '1px solid rgba(255,23,68,0.40)', background: 'rgba(255,23,68,0.08)',
-              color: T.red, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
-              whiteSpace: 'nowrap', cursor: 'pointer',
-            }}
-          >
-            초기화
-          </button>
-        </div>
+        {/* 🔴 v0.46.0 WP-H(민구 지시 08-05) — '초기화' 상시 행을 **철회**했다. 액션바에서 빠지고
+            스크롤 영역 맨 아래(Footer 아래)로 내려갔다. v0.45.0 UI①의 "스크롤과 무관하게 상시"
+            배치를 무르는 것이므로 되살리기 전에 아래 근거를 읽어라.
+            근거(민구): *"하루에 세션 여러개를 만들어서 음성입력"* — **재생성은 일상, 초기화는 예외**다.
+            상시 노출은 그 빈도를 거꾸로 반영했고, 실측이 대가를 보여줬다: 08-05 하루에
+            `settings_reset` **6회**(07:07:25 · 07:07:51 · 09:15:26 · 09:46:28 · 16:29:01 · 17:12:03)
+            — 07:07 두 건은 **26초 간격**이다. 초기화는 기본 컬럼 템플릿을 되돌려 리스트 선택지를
+            통째로 날린다(v0.46.0 §3-J). 즉 상시 배치가 파괴적 동작의 오탭 비용을 키웠다.
+            👉 파괴적 동작은 **찾아가서** 누르게 한다. 확인 모달은 종전 그대로 2단계로 남는다. */}
         {/* v0.44.0 §C7 F25: v0.32.0 B4 결정 폐기(민구 08-02) — 되살리려면 §4-b를 먼저 읽어라.
             여기 있던 "생성 완료 — 입력 탭에서 [음성 입력 시작]을 누르세요" 안내문구와
             "입력탭으로 이동 →" 버튼(settings-go-input)을 삭제했다(F26이 3버튼 행으로 대체). */}
