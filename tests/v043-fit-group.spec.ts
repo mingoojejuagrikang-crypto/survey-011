@@ -281,34 +281,38 @@ test('위로 열림 — live VoiceHero 320→402 배정 폭에서 정착 fontSiz
   console.log(`[fit-growth] width ${narrow.containerWidth}→${wide.containerWidth}px, font ${narrow.fontSize.toFixed(2)}→${wide.fontSize.toFixed(2)}px`);
 });
 
-test('confirm 항목명 — 402·375에서 잘리지 않고 b84a08d 값 크기도 줄지 않는다', async ({ page }) => {
-  // UI-c 실행 전 오라클 고정: b84a08d에서 `100.0` 커밋 후 hero-primary 실측은
-  // 402×874=189.98px, 375×667=174.73px다. 중복 제거가 confirm 항목명을 건드리면 안 된다.
+test('confirm — 라벨 미렌더(v0.45.0 UI③) + b84a08d 값 크기가 줄지 않는다', async ({ page }) => {
+  // 정당 파손(v0.45.0 UI③, 민구 08-05 추가요청2) — confirm '✓+항목명' 라벨은 **전면 삭제**됐다
+  // (§C7 판별식으로도 남던 잔여 표시 재지적. 성공 표시는 칩 V 마크가 승계 — v035-hero-confirm).
+  // 종전 이 테스트의 라벨 fit 축(line box·하한·예약 배선)은 측정 대상이 사라져 함께 내렸다.
+  // 남는 계약: 값 플래시(hero-primary)가 b84a08d 기준 크기(402=189.98px·375=174.73px)에서
+  // 줄지 않는다 — 라벨이 사라졌으니 값 공간은 오히려 넉넉해져야 정상이다.
   const cases = [
-    { viewport: PHONE_402, minFontPx: HERO_LABEL_BASELINE_PX.standard, baselineValuePx: 189.98 },
-    { viewport: PHONE_375, minFontPx: HERO_LABEL_BASELINE_PX.compact, baselineValuePx: 174.73 },
+    { viewport: PHONE_402, baselineValuePx: 189.98 },
+    { viewport: PHONE_375, baselineValuePx: 174.73 },
   ] as const;
-  for (const { viewport, minFontPx, baselineValuePx } of cases) {
+  for (const { viewport, baselineValuePx } of cases) {
     await boot(page, viewport);
     await waitForTtsIdle(page);
     await fireStt(page, '100.0', 300);
     await expect(page.locator('[data-hero-state="confirm"]')).toBeVisible();
-    // §C7(v0.44.0) — echo TTS 창(advance 전)에는 판별식(활성칩==중앙항목)이 라벨을 숨긴다.
-    // 라벨 fit 측정은 칩이 다음 항목으로 옮겨가 라벨이 실제로 렌더된 창에서 한다(부하로 echo가
-    // 늘어지면 `label fit member 없음` throw가 새 flake 시그니처로 등재될 뻔한 지점).
-    await expect(page.locator('[data-hero-state="confirm"] [data-fit-group="label"]')).toBeVisible();
+    await expect(page.locator('[data-hero-state="confirm"] [data-fit-group="label"]'),
+      'confirm 라벨은 어떤 창에서도 렌더되지 않는다(UI③)').toHaveCount(0);
+    // ⚠️ heroValueMetrics는 listening 스코프다(플래시가 끝나면 interim이 없어 member 부재 throw).
+    //   confirm 값은 플래시 창(1.5초) 안에서 confirm 스코프로 직접 잰다 — 대기도 짧게(120ms).
+    const valueLoc = page.locator('[data-hero-state="confirm"] [data-fit-group="value"]');
+    await expect(valueLoc).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
-    await page.waitForTimeout(300);
-    const metrics = await heroLabelMetrics(page);
-    console.log(`[fit-confirm-label] ${viewport.width}x${viewport.height} label=${metrics.fontSize.toFixed(2)}px box=${metrics.offsetHeight}px ratio=${metrics.lineBoxRatio.toFixed(2)} fit=${metrics.fitLabel} value=${metrics.valueFontSize.toFixed(2)}px`);
-    expect(metrics.lineBoxRatio, `${viewport.width}px 항목명 line box가 글자를 온전히 담는다`)
-      .toBeGreaterThanOrEqual(0.9);
-    expect(metrics.fontSize, `${viewport.width}px 항목명이 ba87426 기준 크기를 회복한다`)
-      .toBeGreaterThanOrEqual(minFontPx - 0.05);
-    expect(Number(metrics.fitLabel), `${viewport.width}px 프로덕션 라벨 예약 배선이 유지된다`)
-      .toBeGreaterThanOrEqual(HERO_LABEL_RESERVE_SCALE - 0.0001);
-    expect(metrics.valueFontSize, `${viewport.width}px confirm 값이 b84a08d보다 줄지 않는다`)
+    await page.waitForTimeout(120);
+    const metrics = await valueLoc.evaluate((member, fn) => ({
+      fontSize: parseFloat(getComputedStyle(member).fontSize),
+      // eslint-disable-next-line no-eval
+      ink: (eval(fn) as (el: HTMLElement) => InkBounds)(member),
+    }), INK_BOUNDS_FN);
+    console.log(`[fit-confirm-value] ${viewport.width}x${viewport.height} value=${metrics.fontSize.toFixed(2)}px`);
+    expect(metrics.fontSize, `${viewport.width}px confirm 값이 b84a08d보다 줄지 않는다`)
       .toBeGreaterThanOrEqual(baselineValuePx - 0.6);
+    expectWithinAllocation(metrics.ink, 'confirm 값');
   }
 });
 
@@ -341,20 +345,19 @@ for (const { labelKind, label, viewport } of [
     await fireStt(page, '-355.5', 300);
 
     await expect(page.locator('[data-hero-state="confirm"]')).toBeVisible({ timeout: 4000 });
-    // §C7(v0.44.0) — 라벨은 칩 이동 후에만 렌더된다(위 fit-confirm-label과 같은 안정화).
-    await expect(page.locator('[data-hero-state="confirm"] [data-fit-group="label"]')).toBeVisible();
-    const confirmMetrics = await heroLabelMetrics(page);
-    console.log(`[fit-matrix] state=confirm viewport=${viewport.width}x${viewport.height} label=${label} font=${confirmMetrics.fontSize.toFixed(2)}px box=${confirmMetrics.offsetHeight}px ratio=${confirmMetrics.lineBoxRatio.toFixed(2)} width=${confirmMetrics.scrollWidth}/${confirmMetrics.clientWidth} value=${confirmMetrics.valueFontSize.toFixed(2)}px floor=${confirmMetrics.fontSize <= HERO_MIN_FONT_PX.name + 0.05}`);
-    expect(confirmMetrics.lineBoxRatio, 'confirm 라벨 line box').toBeGreaterThanOrEqual(0.9);
-    expect(confirmMetrics.fontSize, 'confirm 라벨 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.name);
-    // 🔴 종전: `scrollWidth <= clientWidth + 1`. 라벨은 `inline-flex` + `justify-content:center`라
-    //    **`scrollWidth`가 좌측 오버플로를 아예 못 본다** — 402 실측에서 좌 1.25 / 우 1.25(총 2.5)로
-    //    넘치는데 `scrollWidth - clientWidth`는 1만 줬고, 그 1이 `+1` 관용에 흡수돼 green이었다.
-    //    양쪽 경계를 각각 재야 이 비대칭이 드러난다.
-    expectWithinAllocation(confirmMetrics.ink, 'confirm 라벨');
-    expect(confirmMetrics.ink.measuredBy, 'confirm 라벨을 잉크로 쟀다(폴백 아님)').toBe('ink');
-    expect(confirmMetrics.valueFontSize, 'confirm 확정값 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.value);
-    if (confirmMetrics.valueInk) expectWithinAllocation(confirmMetrics.valueInk, 'confirm 확정값');
+    // 정당 파손(v0.45.0 UI③) — confirm 라벨 전면 삭제(칩 V 마크가 승계). 라벨 fit 축(line box·
+    // 하한·잉크 좌우 대칭)은 측정 대상이 사라져 내렸고, confirm에서는 값 축만 잰다.
+    // (긴 라벨의 잉크 계측 축 자체는 아래 review-다른-항목 케이스가 아니라 칩존 스윕이 갖는다.)
+    await expect(page.locator('[data-hero-state="confirm"] [data-fit-group="label"]'),
+      'confirm 라벨은 렌더되지 않는다(UI③)').toHaveCount(0);
+    const confirmMetrics = await page.locator('[data-hero-state="confirm"] [data-fit-group="value"]').evaluate((member, fn) => ({
+      fontSize: parseFloat(getComputedStyle(member).fontSize),
+      // eslint-disable-next-line no-eval
+      ink: (eval(fn) as (el: HTMLElement) => InkBounds)(member),
+    }), INK_BOUNDS_FN);
+    console.log(`[fit-matrix] state=confirm viewport=${viewport.width}x${viewport.height} label=(미렌더) value=${confirmMetrics.fontSize.toFixed(2)}px`);
+    expect(confirmMetrics.fontSize, 'confirm 확정값 하한').toBeGreaterThanOrEqual(HERO_MIN_FONT_PX.value);
+    expectWithinAllocation(confirmMetrics.ink, 'confirm 확정값');
 
     await expect(page.locator('[data-hero-state="listening"]')).toBeVisible({ timeout: 4000 });
     await waitForTtsIdle(page);
