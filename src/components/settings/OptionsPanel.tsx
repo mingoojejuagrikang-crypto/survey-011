@@ -5,6 +5,24 @@ import { autoValue } from '../../lib/autoValue';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { withExclusion, withoutExclusion } from '../../lib/optionExclusions';
 
+/**
+ * v0.46.0 WP-C (제보 F12 · 민구 R4 확정) — **선택값 목록은 「상시 2줄」이다.**
+ *
+ * 민구 원문: *"카드 갯수를 늘린다는게 아니라, **카드 사이즈**를 늘린다는 의미.
+ * 1 무제한 스크롤, **상시 표현은 2줄**."* → 08-06 재확인: **2줄 제한 + 내부 스크롤**.
+ *
+ * 🔴 **높이를 px로 박지 않고 「칩 한 줄 × 2 + 간격」으로 유도한다.** 종전 `maxHeight: 200`은
+ *    칩 높이와 무관한 마법수라 폰트·패딩이 바뀌면 「2줄」이 3줄도 1.5줄도 됐다.
+ * 🔑 **`CHIP_H`를 선택/비선택 양쪽에 `minHeight`로 강제하는 것이 이 계약의 핵심이다.**
+ *    선택 칩은 22px 순번 뱃지 때문에 비선택보다 높았고, 그러면 「2줄」의 실제 높이가
+ *    **목록 구성에 따라 달라진다**(선택이 섞이면 잘리는 위치가 바뀐다).
+ * ⚠️ 개수·이름 가정 없음(§시트 불특정) — 1줄이면 1줄로 줄고, 넘치면 그 안에서 스크롤한다.
+ */
+const CHIP_H = 36;
+const CHIP_GAP = 6;
+const VISIBLE_ROWS = 2;
+const LIST_MAX_H = CHIP_H * VISIBLE_ROWS + CHIP_GAP * (VISIBLE_ROWS - 1);
+
 export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Column) => void }) {
   const [newOption, setNewOption] = useState('');
   // v0.46.0 WP-J J-5 — 제외 목록은 스토어 최상위 맵(colId → 지운 값들). 컬럼 안에 두면 시트
@@ -75,7 +93,17 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
         </span>
       </div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 200, overflowY: 'auto' }}>
+      <div
+        data-testid={`opt-list-${col.id}`}
+        style={{
+          display: 'flex', flexWrap: 'wrap', gap: CHIP_GAP,
+          // WP-C: 1줄이면 1줄(내용만큼), 2줄까지 보이고, 넘으면 여기서 스크롤한다.
+          maxHeight: LIST_MAX_H,
+          overflowY: 'auto',
+          // 스크롤이 칩 중간에서 멈춰 「반 줄」이 보이지 않게 — 줄 단위로 붙는다.
+          scrollSnapType: 'y proximity',
+        }}
+      >
         {available.length === 0 && (
           <span style={{ fontSize: 12, color: T.textMute, fontStyle: 'italic' }}>
             등록된 값이 없습니다. 아래에서 추가하세요.
@@ -108,6 +136,11 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
                 cursor: 'pointer',
                 display: 'flex', alignItems: 'center', gap: 6,
                 whiteSpace: 'nowrap',
+                // 🔴 WP-C — 선택/비선택의 높이를 같게 만든다. 22px 순번 뱃지 때문에 선택 칩이
+                //    더 높으면 「2줄」의 실제 높이가 목록 구성에 따라 흔들린다(위 CHIP_H 주석).
+                minHeight: CHIP_H,
+                boxSizing: 'border-box',
+                scrollSnapAlign: 'start',
               }}
             >
               {sel ? (

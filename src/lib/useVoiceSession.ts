@@ -1721,6 +1721,16 @@ export function useVoiceSession() {
       // v0.38.0 리뷰#1 — UI 전용 명령은 목록을 여기 복붙하지 않고 voiceCommands의 SSOT로 판정한다
       // (같은 목록이 resolveFinal의 이상치 분기에도 필요하다 — 복붙된 판단이 이번 회차 결함의 뿌리).
       if (isVoiceUiCommand(action.cmd)) {
+        // v0.46.0 WP-F — `screenOff`만 신호가 아니라 **전역 상태**로 간다. 나머지 UI 명령은
+        //   특정 컴포넌트(조절판·도움말)를 여는 것이라 seq 신호가 맞지만, 검은 화면은 앱 최상위
+        //   오버레이라 소비자가 없다. 🔑 그래도 `VOICE_UI_COMMAND_IDS`에 남겨두는 이유는 그 목록이
+        //   「값·행·세션을 건드리지 않는가」의 판정이고(resolveFinal의 이상치 분기가 그걸 읽는다),
+        //   dispatch 방식과는 다른 축이기 때문이다.
+        if (action.cmd === 'screenOff') {
+          useSessionStore.getState().setBlackout(true);
+          logCell({ type: 'command', parsed: 'screen_off', extra: 'src:voice' });
+          return;
+        }
         setUiCommand({ id: action.cmd, seq: ++uiCommandSeqRef.current });
         return;
       }

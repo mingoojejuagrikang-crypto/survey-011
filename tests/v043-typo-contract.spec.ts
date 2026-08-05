@@ -147,7 +147,9 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //   ② AlarmInterimStrip이 `STATE_TYPE.alarmInterim`을 새로 참조(계약 +1).
   //   ③ VoiceHero의 fontRenderProbe 유지 근거 주석 2줄(주석 +2 — 실렌더는 안쪽 span인데
   //      계측이 바깥 요소의 computed fontSize를 읽으므로 바깥 fontSize를 남긴다).
-  expect(contractCount, '계약 참조 (통과)').toBe(58);
+  // v0.46.0 WP-F: BlackoutOverlay 힌트 1건(+1 계약 — VOICE_TYPE.caption,
+  //   "길게 눌러 화면 켜기 / 음성 입력은 계속됩니다". 위반 0 유지).
+  expect(contractCount, '계약 참조 (통과)').toBe(59);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);

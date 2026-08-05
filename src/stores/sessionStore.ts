@@ -91,6 +91,13 @@ interface SessionState {
    *  resumeRecognitionForUi를 배선한다(세션 없으면 자연 no-op — 단일 배선·기능 격리).
    *  단일 작성자 = App.tsx(모달 소유자)뿐이므로 resetAll이 건드리지 않는다(세션 수명과 무관). */
   uiModalOpen: 'feedback' | null;
+  /** v0.46.0 WP-F (제보 F13② · 민구 R2) — **검은 화면 모드.** 화면만 끄고 **음성 세션은 계속 돈다.**
+   *  진입은 조절판 버튼 + 음성 `screenOff`('화면'), 해제는 **길게 누르기**(BlackoutOverlay).
+   *  🔴 **여기(메모리 전용 스토어)에 두는 것이 계약이다.** `settingsStore`(persist)에 두면 앱을
+   *  껐다 켜도 검은 화면이 남아 **사용자가 복구 방법을 모르는 상태로 갇힌다.** 새로고침 = 해제.
+   *  🔑 `resetAll`에도 넣는다 — 세션이 끝났는데 화면이 검으면 당황한다(uiModalOpen과 다른 판단:
+   *  그쪽은 세션 수명과 무관한 전역 모달이고, 이쪽은 세션 중 배터리 절약 수단이다). */
+  blackout: boolean;
   /** v0.35.0 R3-FIX-2(리뷰 라운드3, Codex High·데이터무결성) — **최종 저장(stop) 실패** 상태.
    *  persistSession()이 false(IDB 쓰기 실패: 용량부족·DB 연결 종료·트랜잭션 실패)를 반환하면
    *  stop()이 phase를 'ready'로 내리지 **않고** 이 플래그를 세운다. VoiceScreen이 이 값으로 종료
@@ -150,6 +157,7 @@ interface SessionState {
   pushCommitReceipt: (row: number, colId: string, name: string, value: string) => void;
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
   setUiModalOpen: (m: SessionState['uiModalOpen']) => void;
+  setBlackout: (b: boolean) => void;
   /** v0.37.0 리뷰#2 — 열린 오버레이 닫기 요청(탭 전환 직전). nonce를 1 증가시킨다. */
   requestOverlayClose: () => void;
   setPersistError: (e: SessionState['persistError']) => void;
@@ -185,6 +193,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   anomalyAlert: null,
   overlayCloseSeq: 0,
   uiModalOpen: null,
+  blackout: false,
   persistError: null,
   modifyIndicator: null,
   reaskReason: null,
@@ -218,6 +227,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setAnomalyAlert: (anomalyAlert) =>
     set(anomalyAlert ? { anomalyAlert, interimValue: null } : { anomalyAlert }),
   setUiModalOpen: (uiModalOpen) => set({ uiModalOpen }),
+  setBlackout: (blackout) => set({ blackout }),
   requestOverlayClose: () => set((s) => ({ overlayCloseSeq: s.overlayCloseSeq + 1 })),
   setPersistError: (persistError) => set({ persistError }),
   setModifyIndicator: (modifyIndicator) => set({ modifyIndicator }),
@@ -315,6 +325,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       skippedRows: [],
       returnRow: null,
       returnColIdx: null,
+      // WP-F — 세션이 끝나면 검은 화면도 함께 풀린다(위 blackout 주석).
+      blackout: false,
     }),
 }));
 

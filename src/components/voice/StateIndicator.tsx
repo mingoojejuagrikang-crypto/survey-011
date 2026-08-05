@@ -3,6 +3,7 @@ import { T } from '../../tokens';
 import { StateDots, type DotGlyph } from './StateDots';
 import type { GlowTone } from './EdgeGlow';
 import { VOICE_TYPE } from './heroLayout';
+import { useSessionStore } from '../../stores/sessionStore';
 
 /** 와이어프레임 §공통규칙5 — 하단 `<` `>` **가운데**에 놓이는 상태 인디케이터.
  *
@@ -46,6 +47,8 @@ export function StateIndicator({
     accentBg?: string;
   };
 }) {
+  // v0.46.0 WP-F — 검은 화면 모드면 도트 rAF를 멈춘다(아래 StateDots active 주석).
+  const blackout = useSessionStore((st) => st.blackout);
   const bandRef = useRef<HTMLDivElement | null>(null);
   const height = useBandHeight(bandRef);
   const color = TONE_COLOR[tone];
@@ -72,7 +75,12 @@ export function StateIndicator({
           glyph={glyph}
           color={color}
           size={height}
-          active={waveActive && levelActive}
+          // 🔴 v0.46.0 WP-F — 검은 화면 모드에서는 rAF를 **끈다**. 오버레이가 도트를 덮어
+          //    보이지 않는데 프레임은 계속 돌면 이 기능의 목적(배터리)과 정반대가 된다.
+          //    IntersectionObserver는 「뷰포트 밖」만 잡지 「덮였다」는 못 잡는다.
+          //    ⚠️ **언마운트가 아니라 active를 내리는 것**이 계약이다 — StateDots를
+          //    언마운트하면 rAF·IO teardown으로 [STT-16] 계열 사고가 된다(그 파일 헤더 주석).
+          active={waveActive && levelActive && !blackout}
           getLevel={getAudioLevel}
           getTimeDomainData={getTimeDomainData}
         />

@@ -13,6 +13,7 @@ import { buildSessionLabel } from '../lib/sessionLabel';
 import { EdgeGlow, type GlowTone } from '../components/voice/EdgeGlow';
 import { type ReaskReason } from '../components/voice/ReaskCue';
 import { PersistErrorBanner } from '../components/voice/PersistErrorBanner';
+import { BlackoutOverlay } from '../components/voice/BlackoutOverlay';
 import { StoppingState } from '../components/voice/StoppingState';
 import { ReadyState } from '../components/voice/ReadyState';
 import { ActiveState } from '../components/voice/ActiveState';
@@ -48,6 +49,8 @@ export function VoiceScreen(props: {
     persistError: st.persistError,
     // v0.44.0 §C4(F12) — 수정모드가 amber 톤을 갖는다. 톤 파생 SSOT(아래 glowTone)의 입력.
     modifyIndicator: st.modifyIndicator,
+    // v0.46.0 WP-F — 검은 화면 모드(오버레이 렌더 조건).
+    blackout: st.blackout,
   })));
   const voiceSession = useVoiceSession();
   useEffect(() => {
@@ -227,6 +230,13 @@ export function VoiceScreen(props: {
           retrying={sess.persistError.retrying}
           onRetry={() => { void voiceSession.retryFinalPersist(); }}
         />
+      )}
+      {/* v0.46.0 WP-F — 검은 화면 모드. **마지막에 둔다**(DOM 순서 = 모든 것을 덮는다).
+          🔴 `sessionLive &&`가 안전장치다 — 세션이 어떤 경로로든 끝났는데 오버레이만 남으면
+          사용자가 「길게 눌러도 아무 일 없는 검은 화면」에 갇힌다. blackout 자체도 resetAll이
+          내리지만(sessionStore 주석), 여기서 한 겹 더 막는다. */}
+      {sessionLive && sess.blackout && (
+        <BlackoutOverlay onRelease={() => useSessionStore.getState().setBlackout(false)} />
       )}
     </div>
   );

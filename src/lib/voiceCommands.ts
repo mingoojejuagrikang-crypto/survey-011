@@ -34,6 +34,7 @@ export type VoiceCommand =
   | 'recognitionUp'
   | 'guidanceSlower'
   | 'guidanceFaster'
+  | 'screenOff'
   | null;
 
 /** 화면 표시만 바꾸는 명령들 — 값·행·세션 상태를 건드리지 않는다(도움말 열기, 조절판 토글,
@@ -49,6 +50,9 @@ export const VOICE_UI_COMMAND_IDS = [
   'recognitionUp',
   'guidanceSlower',
   'guidanceFaster',
+  // v0.46.0 WP-F — 검은 화면 모드 진입. 값·행·세션을 건드리지 않고 표시만 바꾸므로
+  //   UI 명령이 맞다(해제는 화면 길게 누르기 — BlackoutOverlay).
+  'screenOff',
 ] as const;
 
 export type VoiceUiCommand = (typeof VOICE_UI_COMMAND_IDS)[number];
@@ -110,6 +114,11 @@ export const VOICE_COMMANDS: CommandSpec[] = [
   { id: 'recognitionUp',       word: '인식률높이기',     display: '인식률 높이기',    desc: '허용 인식률을 한 단계 높입니다' },
   { id: 'guidanceSlower',      word: '안내속도느리게',   display: '안내속도 느리게',  desc: '음성 안내 속도를 한 단계 낮춥니다' },
   { id: 'guidanceFaster',      word: '안내속도빠르게',   display: '안내속도 빠르게',  desc: '음성 안내 속도를 한 단계 높입니다' },
+  // v0.46.0 WP-F(F13② · 민구 R2) — word를 '화면끄기'가 아니라 **'화면'**으로 둔 것이 핵심이다.
+  //   detectCommand는 공백을 지우고 startsWith로 맞추므로(koreanNum.ts), 민구가 말한 **"화면 꺼"**는
+  //   '화면꺼'가 되어 '화면끄기'로는 **안 잡힌다.** '화면'이면 "화면 꺼"·"화면 끄기"·"화면꺼"가 전부 걸린다.
+  //   prefix 불변식 확인: 다른 14개 word 중 '화면'을 접두로 갖거나 '화면'의 접두인 것은 없다.
+  { id: 'screenOff',           word: '화면',             display: '화면 끄기',        desc: '화면을 꺼서 배터리를 아낍니다. 음성 입력은 계속됩니다 — 화면을 길게 눌러 다시 켭니다' },
 ];
 
 /** Commands shown in the compact on-screen hint row. */
