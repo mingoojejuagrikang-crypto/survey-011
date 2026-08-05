@@ -400,10 +400,13 @@ for (const viewport of [PHONE_402, PHONE_640]) {
         '알람 중 인식값 스트립이 차지 않았다 — 무판정이 된다',
       ).toHaveText(/\S/, { timeout: 4000 });
       await settle(page);
+      // 🔴 **member span을 재라.** `data-testid="interim-value"`는 바깥 flex 컨테이너에 있고
+      //    실제 fit 대상은 그 안의 `[data-fit-group="alarm-interim"]` span이다. 바깥을 재면
+      //    flex 컨테이너의 폭 판정이라 넘침이 안 잡혀 가짜 red가 난다(08-05 실측 16.00px).
       const r = await probeHeadroom(
         page,
+        '[data-central-state="alarm"] [data-fit-group="alarm-interim"]',
         '[data-central-state="alarm"] > [data-testid="interim-value"]',
-        '[data-central-state="alarm"]',
       );
       expectNoHeadroom(`대상④alarmInterim/${p.label}@${viewport.width}`, r);
     });

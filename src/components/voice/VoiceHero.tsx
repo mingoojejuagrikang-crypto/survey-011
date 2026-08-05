@@ -366,6 +366,13 @@ export function AlarmInterimStrip() {
         padding: '2px 8px',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         minWidth: 0,
+        // 🔴 `fontSize`를 **바깥에도 유지한다.** 실렌더 텍스트는 안쪽 member span에 있지만,
+        //    `data-testid="interim-value"` 계약을 갖는 것은 이 div이고 기존 계측·오라클이
+        //    이 요소의 `getComputedStyle().fontSize`를 읽는다(`fontRenderProbe` 계열).
+        //    안쪽으로만 옮겼더니 이 div가 상속 기본값 **16px**로 읽혀 하한 오라클이
+        //    "16px인데 여유가 있다"는 가짜 red를 냈다(08-05 실측). 두 곳이 같은 상수를 쓰므로
+        //    값은 언제나 일치한다.
+        fontSize: STATE_TYPE.alarmInterim,
         visibility: interim ? 'visible' : 'hidden',
       }}
     >
