@@ -94,7 +94,7 @@ async function openSettings(page: Page): Promise<void> {
   await page.locator('[data-testid="tab-settings"]').click();
 }
 
-async function readColumns(page: Page): Promise<Array<Record<string, never>>> {
+async function readColumns(page: Page): Promise<Array<Record<string, unknown>>> {
   return page.evaluate((key) => {
     const stored = JSON.parse(localStorage.getItem(key) ?? 'null');
     return stored?.state?.columns ?? [];
