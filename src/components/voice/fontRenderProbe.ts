@@ -151,8 +151,21 @@ export function scheduleFontRenderSnapshot(): () => void {
   };
 }
 
-/** v0.45.0 WP-1② — 확정(에코) 플래시가 실제로 그린 프레임의 hero 실렌더 계측. 세션당 1회. */
+/** v0.45.0 WP-1② — 확정(에코) 플래시가 실제로 그린 프레임의 hero 실렌더 계측. 세션당 1회.
+ *  리뷰 C9 — 모듈 변수는 reload에서 초기화되는데 세션은 reload를 넘어 복원된다(sessionId 보존).
+ *  sessionStorage를 병행 가드로 써서 같은 sessionId의 2중 방출을 막는다(같은 탭 수명 유지). */
 let echoEmittedForSession = '';
+const ECHO_EMIT_SS_KEY = 'survey-011.fontRenderEcho.sessionId';
+
+function echoAlreadyEmitted(sessionId: string): boolean {
+  if (echoEmittedForSession === sessionId) return true;
+  try { return sessionStorage.getItem(ECHO_EMIT_SS_KEY) === sessionId; } catch { return false; }
+}
+
+function markEchoEmitted(sessionId: string): void {
+  echoEmittedForSession = sessionId;
+  try { sessionStorage.setItem(ECHO_EMIT_SS_KEY, sessionId); } catch { /* 프라이빗 모드 등 — 모듈 가드만 */ }
+}
 
 /** 확정 플래시가 뜬 뒤 fit 이진탐색이 정착할 시간 — 플래시 창(1500ms)의 앞 1/5 지점에서 읽는다.
  *  즉시(rAF 2회만) 읽으면 useFitGroup의 rAF 스케줄 탐색 중간값을 실측으로 오인할 수 있다. */
@@ -166,14 +179,14 @@ const ECHO_SETTLE_MS = 300;
  */
 export function scheduleEchoFontRender(): void {
   const sessionId = useSessionStore.getState().sessionId;
-  if (!sessionId || echoEmittedForSession === sessionId) return;
+  if (!sessionId || echoAlreadyEmitted(sessionId)) return;
   window.setTimeout(() => {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (useSessionStore.getState().sessionId !== sessionId) return; // 세션이 이미 끝났다
-      if (echoEmittedForSession === sessionId) return; // 연속 확정 경합의 이중 방출 방지
+      if (echoAlreadyEmitted(sessionId)) return; // 연속 확정 경합의 이중 방출 방지
       const el = document.querySelector('[data-testid="hero-primary"]');
       if (!el) return;
-      echoEmittedForSession = sessionId;
+      markEchoEmitted(sessionId);
       logger.log({
         type: 'session',
         extra: fontRenderEcho({

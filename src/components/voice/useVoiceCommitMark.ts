@@ -12,10 +12,14 @@ import { useSessionStore } from '../../stores/sessionStore';
 
 export const VOICE_COMMIT_MARK_MS = 1500;
 
-/** 지금 V 마크를 표시할 칩의 colId(없으면 null). ActiveState가 구독해 ChipZone에 내린다. */
+/** 지금 V 마크를 표시할 칩의 colId(없으면 null). ActiveState가 구독해 ChipZone에 내린다.
+ *  리뷰 C13 — 칩존은 **현재 행**의 값을 렌더하므로, 마크 창(1.5초) 안에 행이 바뀌면(이전/다음·
+ *  터미널 컬럼 커밋의 자동 advance) 마크를 즉시 거둔다 — 다른 행의 셀에 "방금 확정" 표시가
+ *  이식되는 시각 오표시 방지. */
 export function useVoiceCommitMarkColId(): string | null {
   const burst = useSessionStore((st) => st.valueBurst);
-  const [colId, setColId] = useState<string | null>(null);
+  const activeRow = useSessionStore((st) => st.activeRow);
+  const [mark, setMark] = useState<{ colId: string; row: number } | null>(null);
   const seenSeqRef = useRef<number | null>(null);
   useEffect(() => {
     const seq = burst?.seq ?? 0;
@@ -23,9 +27,9 @@ export function useVoiceCommitMarkColId(): string | null {
     if (!burst || seq === seenSeqRef.current) return;
     seenSeqRef.current = seq;
     if (!burst.colId) return; // 구 발행 경로(colId 미동봉) 방어 — 마크 없음
-    setColId(burst.colId);
-    const t = window.setTimeout(() => setColId(null), VOICE_COMMIT_MARK_MS);
+    setMark({ colId: burst.colId, row: useSessionStore.getState().activeRow });
+    const t = window.setTimeout(() => setMark(null), VOICE_COMMIT_MARK_MS);
     return () => window.clearTimeout(t);
   }, [burst]);
-  return colId;
+  return mark && mark.row === activeRow ? mark.colId : null;
 }

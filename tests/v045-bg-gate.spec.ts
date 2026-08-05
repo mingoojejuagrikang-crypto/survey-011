@@ -173,6 +173,38 @@ test('T — hidden(유지) 중 임계 도달: 음성 고지·notify_perm·bg_kee
   expect((await trackStates(page)).last).toBe('ended');
 });
 
+// ─── T2: 임계 진행 중 복귀 경합 — 정지가 철회되고 세션이 산 채 유지된다(리뷰 C1 반증쌍) ─────
+test('T2 — 임계 시퀀스 진행 중 복귀하면 정지가 철회된다: threshold 미방출·트랙 생존·입력 계속', async ({ page }) => {
+  // 리뷰 C1(critical): 종전엔 await 사슬(고지 TTS~persist) 중 복귀해도 잔여 continuation이
+  // 포그라운드에서 STT·레코더를 죽였다. 세대 가드(bgOffGenRef) + 단계별 중단 검사의 반증쌍 —
+  // 이 가드를 지우면 threshold 바이트가 방출되고 트랙이 ended가 되어 이 테스트가 red다.
+  await boot(page);
+  await page.evaluate(() => { (window as unknown as { __bgOffMsForTest?: number }).__bgOffMsForTest = 1000; });
+  const before = (await trackStates(page)).count;
+
+  await setVisibility(page, 'hidden');
+  // 타이머 발화 직후(고지 TTS 목 200ms 창 안) 복귀 — 알림 탭 동선의 재현.
+  await page.waitForTimeout(1100);
+  await setVisibility(page, 'visible');
+
+  // 철회 확정 대기: 시퀀스가 완주했다면 3초 안에 threshold 바이트가 남는다 — 없어야 한다.
+  await page.waitForTimeout(3000);
+  expect((await bgMicExtras(page)).filter((x) => x.startsWith('edge=threshold')),
+    '복귀가 이겼으면 임계 정지는 철회된다').toHaveLength(0);
+  // 레코더는 dispose되지 않았다(재획득도 불필요 — 트랙 수 불변·live).
+  const tracks = await trackStates(page);
+  expect(tracks.count, '재획득이 필요 없었어야 한다(dispose 미실행)').toBe(before);
+  expect(tracks.last).toBe('live');
+
+  // 세션이 산 채다 — 값 입력이 그대로 계속된다(어느 인터리빙이든 이게 최종 계약이다).
+  await waitForTtsIdle(page);
+  await fireStt(page, '33.3', 800);
+  await expect.poll(
+    async () => (await loadLogEvents(page)).filter((e) => e.type === 'value').length,
+    { timeout: 4000 },
+  ).toBe(1);
+});
+
 // ─── R: 임계 후 복귀 — 자동 재획득 + 안내 + 브리핑 + 재개 ────────────────────────────────
 test('R — 임계 정지 후 복귀: 새 트랙 재획득 + BG_RESUME 안내 + 브리핑 + 값 입력 재개', async ({ page }) => {
   await boot(page);
@@ -214,9 +246,11 @@ test('Q3 — 일시정지 후 화면을 꺼도(재시작 음성 명령) 세션�
   await expect.poll(async () => (await ttsLog(page)).some((t) => t === '일시정지됨.'), { timeout: 4000 }).toBe(true);
 
   // 화면끔(hidden) — paused도 유지 집합이다(Q3 민구 확정: 일시정지 중 마이크 유지 OK).
+  // 리뷰 C5 바이트 정직화 — kept는 "돌던 것을 유지"다. pause()가 레코더를 이미 비웠으므로
+  // capture는 noop(유지할 캡처가 없었다는 정직한 기록), 살아 있는 인식기만 stt=kept.
   await setVisibility(page, 'hidden');
   await expect.poll(async () => (await bgMicExtras(page)).at(-1), { timeout: 4000 })
-    .toBe('edge=enter,stt=kept,capture=kept');
+    .toBe('edge=enter,stt=kept,capture=noop');
 
   // 화면 끈 채 "재시작" — 인식기가 살아 있어야 통한다.
   await fireStt(page, '재시작', 1000);
