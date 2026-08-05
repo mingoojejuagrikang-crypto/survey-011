@@ -149,6 +149,9 @@ export default function App() {
         //   앱이 방금 만든 상태를 찍어(`stt=suspended`) "진입 순간 무엇이 돌고 있었나"라는 이
         //   이벤트의 존재 이유가 사라진다 — 복귀 스냅샷과 대조할 축을 잃는다.
         //   세션이 안 돌고 있으면 suspendForBackground가 자연 no-op이다(bg_mic:stt=noop).
+        // 🔑 v0.45.0 WP-2 [D1] — 세션 중(active·paused·complete)이면 suspendForBackground가
+        //   **정지하지 않고 유지한다**(세션-활성 게이트 — bg_mic:stt=kept). 정지는 세션 밖과
+        //   장기 임계(10분)에서만. 경계·근거는 lib/backgroundSessionPolicy.ts.
         voiceTelemetryRef.current?.suspendForBackground();
       }
       if (document.visibilityState === 'visible') {

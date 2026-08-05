@@ -101,6 +101,10 @@ export interface SessionMeta {
   autoScreenCapture?: boolean;
   /** 이상치 알람 규칙(trendRule 또는 pctThreshold)이 걸린 컬럼 수 — 개수만, 컬럼명 제외. */
   anomalyRuleCount?: number;
+  /** v0.45.0 WP-1③ — 세션 시작 시 D1 말끊기(barge-in) 토글 스냅샷. 축 C(TTS·확인음) 판정의
+   *  전제 조건인데 세션 메타에 없어 로그만으로 D1 상태를 몰랐다(연구 A5). 세션 **중** 변경은
+   *  기존 `setting_changed:bargeInEnabled` 이벤트가 남긴다 — 판독은 둘을 짝으로 읽는다(SOP-003). */
+  bargeInEnabled?: boolean;
   /** Reserved slot for self-test vs real-field split. Defaults to 'field'; an explicit UI
    *  toggle is a Vance follow-up. userEmail (device.json) + value-pattern already allow
    *  crude post-hoc splitting today. */

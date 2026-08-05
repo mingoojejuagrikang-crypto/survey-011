@@ -21,7 +21,7 @@
  * tests/logEvents.spec.ts, 발화는 tests/v0440-instrumentation.spec.ts가 잰다).
  */
 import { logger } from '../../lib/logger';
-import { fontRenderSnapshot } from '../../lib/logEvents';
+import { fontRenderEcho, fontRenderSnapshot } from '../../lib/logEvents';
 import { useSessionStore } from '../../stores/sessionStore';
 import { CHIP_TYPE, HERO_TYPE, STATE_TYPE } from './heroLayout';
 
@@ -149,4 +149,39 @@ export function scheduleFontRenderSnapshot(): () => void {
     cancelled = true;
     window.clearTimeout(timer);
   };
+}
+
+/** v0.45.0 WP-1② — 확정(에코) 플래시가 실제로 그린 프레임의 hero 실렌더 계측. 세션당 1회. */
+let echoEmittedForSession = '';
+
+/** 확정 플래시가 뜬 뒤 fit 이진탐색이 정착할 시간 — 플래시 창(1500ms)의 앞 1/5 지점에서 읽는다.
+ *  즉시(rAF 2회만) 읽으면 useFitGroup의 rAF 스케줄 탐색 중간값을 실측으로 오인할 수 있다. */
+const ECHO_SETTLE_MS = 300;
+
+/**
+ * VoiceHero가 confirm 플래시 진입에서 호출한다(fire-and-forget). C3(확정값 잘림) 판정 축:
+ * 세션 시작 스냅샷(`font_render`)은 확정값 슬롯이 대개 프로브라, **확정 순간의 실렌더**가
+ * 로그에 없었다. hero-primary가 이미 사라졌으면(플래시 종료·상태 전환) 방출하지 않고 가드도
+ * 세우지 않는다 — 다음 확정에서 다시 시도한다(프로브 폴백 금지: fontRenderEcho 주석 참조).
+ */
+export function scheduleEchoFontRender(): void {
+  const sessionId = useSessionStore.getState().sessionId;
+  if (!sessionId || echoEmittedForSession === sessionId) return;
+  window.setTimeout(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (useSessionStore.getState().sessionId !== sessionId) return; // 세션이 이미 끝났다
+      if (echoEmittedForSession === sessionId) return; // 연속 확정 경합의 이중 방출 방지
+      const el = document.querySelector('[data-testid="hero-primary"]');
+      if (!el) return;
+      echoEmittedForSession = sessionId;
+      logger.log({
+        type: 'session',
+        extra: fontRenderEcho({
+          hero: computedPx(el),
+          w: window.innerWidth,
+          h: window.innerHeight,
+        }),
+      });
+    }));
+  }, ECHO_SETTLE_MS);
 }

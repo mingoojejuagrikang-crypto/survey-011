@@ -453,12 +453,18 @@ export function orientationChange(fields: {
  *  판정된다. 비용은 왕복당 2건 — 07-30 실측(세션당 `visibility_context` 12건) 기준 세션당
  *  ~24건으로 2000 링버퍼에 무해하다. */
 export function bgMicAction(fields: {
-  edge: 'enter' | 'return';
-  stt: 'stopped' | 'restored' | 'noop';
-  capture: 'off' | 'on' | 'noop';
+  // v0.45.0 WP-2 [D1] — 값 공간 확장(additive — 기존 바이트 불변):
+  //   edge 'threshold'  = 장기 백그라운드 임계(10분) 도달 시점의 정지.
+  //   stt/capture 'kept' = 세션-활성 게이트가 hidden에도 유지를 선택했다(정지 안 함).
+  //   enter가 kept인 사이클은 return에서 stt=noop이 정상이다(멈춘 게 없어 복원할 것도 없다) —
+  //   유지 구간의 생존 증거는 짝 이벤트 `bg_keep`이 담는다(bgKeep 주석).
+  edge: 'enter' | 'return' | 'threshold';
+  stt: 'stopped' | 'restored' | 'noop' | 'kept';
+  capture: 'off' | 'on' | 'noop' | 'kept';
 }): string {
   return kv({ edge: fields.edge, stt: fields.stt, capture: fields.capture });
 }
+
 
 /* ────────────────────────────────────────────────────────────────────────────
  * v0.44.0 §5-1 계측 백로그 — "이게 들어가야 다음 실기기 로그부터는 로그만으로 판정된다."
@@ -466,4 +472,8 @@ export function bgMicAction(fields: {
 
 // v0.44.0 §5-1 계측 빌더 3종(audioInputClass·fontRenderSnapshot·bargeInTextSource)은
 // logEventsInstrumentation.ts로 분리했다(500줄 게이트). 소비처 import 경로는 불변이다.
-export { audioInputClass, fontRenderSnapshot, bargeInTextSource } from './logEventsInstrumentation';
+// v0.45.0 WP-1·WP-2 — readyProbe·fontRenderEcho·bgKeep·notifyPerm 동거(같은 분리 파일·같은 계약).
+export {
+  audioInputClass, fontRenderSnapshot, bargeInTextSource,
+  readyProbe, fontRenderEcho, bgKeep, notifyPerm,
+} from './logEventsInstrumentation';

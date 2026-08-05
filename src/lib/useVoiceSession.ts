@@ -21,13 +21,17 @@ import {
   audioInputClass,
   audioRouteRevalidate,
   bargeInTextSource,
+  bgKeep,
   bgMicAction,
   clipArmBlocked,
   lowConfidenceParsed,
   micAutoReconnect,
   micInitFailed,
+  notifyPerm,
   rowMarked,
 } from './logEvents';
+import { shouldKeepInBackground, LONG_BACKGROUND_OFF_MS } from './backgroundSessionPolicy';
+import { requestNotifyPermissionOnce, showBackgroundOffNotification } from './backgroundNotify';
 import { resolveForegroundReturnEvent } from './foregroundReturnTelemetry';
 import { resolveFinal } from './voiceFinalResolver';
 import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
@@ -141,13 +145,25 @@ const BG_RESUME_MESSAGE = '자리를 비운 동안 입력이 중지됐습니다.
  *
  *  `SpeechController`의 `onStart`는 인식기 **인스턴스마다** 온다 — 워치독 재시작·EOS 후
  *  자동 재시작에서도 발화하므로(speech.ts가 매 `start` 이벤트에 건다), 클로저 안의 once
- *  가드가 없으면 백그라운드 복귀 뒤 **재시작할 때마다** 같은 안내를 반복한다. */
-function bgResumeAnnouncerOnce(say: (text: string) => Promise<void>): () => void {
+ *  가드가 없으면 백그라운드 복귀 뒤 **재시작할 때마다** 같은 안내를 반복한다.
+ *
+ *  v0.45.0 WP-3 (F14) — 안내 뒤에 **복귀 브리핑**(현재 행 요약 + 다음 항목)을 잇는다.
+ *  브리핑 텍스트는 발화 **시점**에 만든다(getBriefing 클로저) — 복원 예약 시점의 낡은 행
+ *  좌표를 읽지 않게. 안내는 "재개 성공"(onStart)에만 건다는 계약([MIC-B2])은 그대로다. */
+function bgResumeAnnouncerOnce(
+  say: (text: string, interrupt?: boolean) => Promise<void>,
+  getBriefing: () => string | null,
+): () => void {
   let announced = false;
   return () => {
     if (announced) return;
     announced = true;
-    void say(BG_RESUME_MESSAGE);
+    void say(BG_RESUME_MESSAGE)
+      .then(() => {
+        const briefing = getBriefing();
+        if (briefing) void say(briefing, false);
+      })
+      .catch(() => {});
   };
 }
 
@@ -257,6 +273,14 @@ export function useVoiceSession() {
    *  전이에서 소비한다. 이 플래그가 없으면 resume의 컨트롤러 생성부를 공유하는 다른 소스
    *  (`feedback_modal`·`manual_input`·`command_help`·`exit_confirm`)에서도 안내가 나간다. */
   const bgAnnouncePendingRef = useRef(false);
+  /** v0.45.0 WP-2 [D1] — 세션-활성 게이트가 hidden에 유지한 사이클의 생존 관측(WP-1④ bg_keep).
+   *  hidden 진입(유지 선택) 시 세우고, 복귀 또는 임계 도달에서 요약 1건으로 소비한다. */
+  const bgKeepRef = useRef<{ hiddenAt: number; finals: number } | null>(null);
+  /** WP-2 — 장기 임계(10분) 타이머. hidden(유지) 진입에 무장, 복귀·세션 종료·발화 시 해제.
+   *  iOS가 페이지를 얼리면 안 울릴 수 있다 — 그 경우 복귀 경로의 경과시간 검사가 받는다. */
+  const bgOffTimerRef = useRef<number | null>(null);
+  /** WP-2 — 임계 정지가 실제로 실행됐는가(복귀 시 레코더 재획득 + 재고지 트리거). */
+  const bgOffFiredRef = useRef(false);
   // v0.22.0 P0 — 클립 레코더 스트림이 실제로 죽었을 때만 true. v0.38.0 #5는 이 전이에서 기존
   // reconnectMic→recoverStream 경로를 자동으로 딱 1회 호출하고, 실패했을 때만 수동 배너를 노출한다.
   const [micLost, setMicLost] = useState(false);
@@ -609,6 +633,38 @@ export function useVoiceSession() {
     },
     [say],
   );
+
+  /** v0.45.0 WP-3 (F14, Q5 민구 확정) — 복귀·재시작 브리핑 텍스트.
+   *  "입력행의 첫 컬럼부터 지금 입력해야 되는 항목까지"(민구 원문)를 **음성안내(ttsAnnounce)가
+   *  켜진 항목만** 항목+값 순서로 읽는다: "나무 3, 과실 2, 횡경 45.1. 다음, 횡경."
+   *
+   *  - 표(테이블) 컬럼 순서 그대로, **현재 항목에서 멈춘다** — 그 뒤는 "다음" 꼬리가 담당.
+   *  - `includeNextName` true(복귀 — 뒤에 announceField가 없다)면 "다음, <항목명>."으로 끝나고,
+   *    false(재시작 — 곧바로 announceField가 "<항목명>."을 잇는다)면 "다음."으로 끝난다.
+   *  - active 밖(paused·complete)에서는 null — 일시정지 복귀 브리핑은 '재시작' 시점이 담당한다
+   *    (Q4-답 민구 확정 08-05: 이중 낭독 방지. PausedCard 상태 안내와의 충돌도 피한다).
+   *  - 읽을 것이 없으면 null — 억지 발화로 STT 무장을 지연시키지 않는다(barge-in OFF에선
+   *    낭독 길이만큼 인식이 죽는 창이다, speech.ts half-duplex 계약). */
+  const buildReturnBriefing = useCallback((includeNextName: boolean): string | null => {
+    const sess = useSessionStore.getState();
+    if (sess.phase !== 'active') return null;
+    const cols = getSessionColumns();
+    if (cols.length === 0) return null;
+    const row = sess.activeRow;
+    const auto = buildCyclingValues(cols, row);
+    const values = sess.getRowValues(row);
+    const cur = voiceColsList()[sess.activeColIdx] ?? null;
+    const parts: string[] = [];
+    for (const c of cols) {
+      if (cur && c.id === cur.id) break; // 현재 항목부터는 꼬리("다음, …")가 담당
+      if (!c.ttsAnnounce) continue;
+      const v = c.input === 'auto' ? auto[c.id] ?? '' : values[c.id] ?? '';
+      if (v !== '') parts.push(`${c.name} ${c.input === 'auto' ? v : formatForTts(v)}`);
+    }
+    const tail = includeNextName ? (cur ? `다음, ${cur.name}.` : null) : '다음.';
+    if (parts.length === 0) return includeNextName ? tail : null;
+    return tail ? `${parts.join(', ')}. ${tail}` : `${parts.join(', ')}.`;
+  }, []);
 
   /** [CLIP-VAL-1]① — start (or restart) the recording slot for a cell, with the full
    *  announceField choreography: mark the start refs, start the clip, and register it as the
@@ -968,7 +1024,7 @@ export function useVoiceSession() {
           ...(prevDirectValue != null ? { previousValue: prevDirectValue } : {}),
         });
         sess.setRecognized(parsed);
-        sess.pushValueBurst(target.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
+        sess.pushValueBurst(target.name, parsed, target.id); // I-3: 중앙 버스트 + 칩 V(UI③)
         await say(`수정 ${target.name} ${formatForTts(parsed)}`);
         // v0.33.0 — 검토 대기 출신 직접 수정: 값 수신 재안내 대신 검토 대기로 복귀
         // (수정 반영값 재낭독 + 대기 — bare 값 덮어쓰기 금지 계약 유지).
@@ -1429,6 +1485,8 @@ export function useVoiceSession() {
     // 진입한 순간을 찍어, 값 커밋 시점(아래 value 이벤트)까지의 경과ms를 commitLatencyMs로 동봉한다.
     // EOS 꼬리([STT-11], 브라우저 무음종료)와 달리 이건 **앱 파이프라인** 지연(파싱·추세검사·persist).
     const handleFinalAt = Date.now();
+    // v0.45.0 WP-1④ — hidden 유지 구간의 final 도착 카운트(bg_keep의 finals 축 — 유지 실효 증거).
+    if (bgKeepRef.current && document.visibilityState === 'hidden') bgKeepRef.current.finals += 1;
     // v0.36.0 FB#2(Vance) — final 진입 = interim 발화 종결. 미확정 표시값을 즉시 정리한다(확정 흐름이
     //   화면을 이어받으므로 흐린 임시값이 남지 않게). 순수 표시 정리 — 커밋/파싱/텔레메트리 무관.
     useSessionStore.getState().setInterimValue(null);
@@ -1974,7 +2032,7 @@ export function useVoiceSession() {
     // "정상 입력 내용이 한 번 더 팝업"되던 중복(민구 제보)이 발생한다. 정정-출처 커밋에선 burst를
     // 건너뛰어 중앙 팝업이 1회(초록 corrected)만 뜨게 한다. 일반(비-정정) 커밋의 burst는 그대로 유지.
     if (awaiting.kind !== 'trendConfirm') {
-      sess.pushValueBurst(awaiting.name, parsed); // I-3: 화면 중앙 "항목 : 값" 버스트
+      sess.pushValueBurst(awaiting.name, parsed, awaiting.colId); // I-3: 중앙 버스트 + 칩 V(UI③)
     }
     awaitingFieldRef.current = null;
 
@@ -2437,26 +2495,115 @@ export function useVoiceSession() {
         //   시도 시점에 "다시 시작합니다"라고 말하면 거짓말이 된다.
         //   ⚠️ `onStart`는 **워치독 재시작마다** 온다(speech.ts가 매 인스턴스 `start` 이벤트에
         //   건다) — 그래서 클로저 안에 once 가드가 필요하다. 플래그만으로는 부족하다.
-        ...(announceBgResume ? { onStart: bgResumeAnnouncerOnce(say) } : {}),
+        //   v0.45.0 WP-3 — 안내 뒤 복귀 브리핑을 잇는다(F14). 텍스트는 발화 시점에 조립.
+        ...(announceBgResume
+          ? { onStart: bgResumeAnnouncerOnce(say, () => buildReturnBriefing(true)) }
+          : {}),
       });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
     }
     return true;
-  }, [armClipForCell, handleFinal, handleInterim, say]);
+  }, [armClipForCell, handleFinal, handleInterim, say, buildReturnBriefing]);
 
-  // ── v0.43.0 #4 — 앱 이탈 시 마이크(plan §3-3) ──────────────────────────────
-  /** 백그라운드 진입: STT·클립 중지 + 캡처 off. `visibilitychange`(hidden)의 유일한 호출자는
-   *  `App.tsx onVis`다.
+  // ── v0.45.0 WP-2 [D1] — 세션-활성 게이트 (v0.43.0 #4 "이탈-중지"의 재검토 실행) ──────
+  /** WP-1④ — 유지 사이클의 생존 요약 1건(bg_keep). 복귀·임계 어느 쪽이 먼저 오든 한 번만. */
+  const emitBgKeepSummary = useCallback(() => {
+    const keep = bgKeepRef.current;
+    if (!keep) return;
+    bgKeepRef.current = null;
+    logCell({
+      type: 'app',
+      extra: bgKeep({
+        backgroundMs: Date.now() - keep.hiddenAt,
+        finals: keep.finals,
+        stt: ctrlRef.current ? 'ctrl' : 'gone',
+        track: recorderRef.current?.getTrackState() ?? 'none',
+      }),
+    });
+  }, []);
+
+  const clearBgOffTimer = useCallback(() => {
+    if (bgOffTimerRef.current !== null) {
+      window.clearTimeout(bgOffTimerRef.current);
+      bgOffTimerRef.current = null;
+    }
+  }, []);
+
+  /** WP-2 — 장기 임계(10분, Q2 민구 확정) 도달 시의 정지 시퀀스: ①음성 고지(best-effort —
+   *  iOS가 TTS를 이미 막았을 수 있어 Notification이 주 채널) ②기기 알림 ③저장 ④정지.
+   *  ④의 dispose가 곧 물림 예방 선-정리다 — prerollTap detach(무음 분석 AudioContext 해제,
+   *  WebKit bug 253951 클래스) + 전 트랙 stop. 복귀 시 자동 재획득 + 실패 시 v0.44.1 경보 재사용. */
+  const applyBackgroundOff = useCallback(async () => {
+    bgOffTimerRef.current = null;
+    if (document.visibilityState !== 'hidden') return; // 타이머 경합 — 이미 복귀했다
+    if (!shouldKeepInBackground(useSessionStore.getState().phase)) return; // 세션이 그 사이 끝났다
+    bgOffFiredRef.current = true;
+    emitBgKeepSummary();
+    // ① 음성 고지 — suspend가 cancelTts를 부르므로 **먼저** 시도하고 완료(또는 10초 워치독)를
+    //   기다린다. iOS가 막았으면 워치독이 해소하고, 복귀 재고지(onStart 안내)가 보강한다.
+    await say('10분 동안 자리를 비워 음성 입력을 정지합니다. 입력한 값은 저장되어 있습니다.', false)
+      .catch(() => {});
+    // ② 기기 알림 — 결과를 조건 거짓 포함 기록([FG-RETURN-LOG-1]).
+    const notified = await showBackgroundOffNotification();
+    logCell({ type: 'app', extra: notifyPerm({ src: 'threshold', result: notified }) });
+    // ③ 저장 — 진행 클립을 정상 마감(suspend가 stopClip) 후 pending save flush + 세션 영속.
+    const { sttStopped, latched } = suspendRecognitionForUi('app_background');
+    if (latched) bgAnnouncePendingRef.current = true;
+    await clipCapture.flushSaves(PAUSE_FLUSH_GRACE_MS);
+    await persistSession();
+    // ④ 정지 — dispose = 선-정리(preroll AudioContext detach + 전 트랙 stop). track.enabled
+    //   토글이 아니라 완전 해제인 이유: 10분 이상은 OS 재량 회수 영역이라 잡고 있어봐야 물림
+    //   (253951)만 키운다. 재개는 복귀 경로가 재획득한다(iOS 17+ 설치형 PWA는 영속 권한이라
+    //   제스처 밖 재획득이 성립하는 것이 pause→resume 경로로 실증돼 있다. 실패 시 경보).
+    recorderRef.current?.dispose();
+    recorderRef.current = null;
+    logCell({
+      type: 'command',
+      parsed: 'bg_mic',
+      extra: bgMicAction({ edge: 'threshold', stt: sttStopped ? 'stopped' : 'noop', capture: 'off' }),
+      row: useSessionStore.getState().activeRow,
+    });
+  }, [emitBgKeepSummary, say, suspendRecognitionForUi, clipCapture, persistSession]);
+  const applyBackgroundOffRef = useRef(applyBackgroundOff);
+  useEffect(() => { applyBackgroundOffRef.current = applyBackgroundOff; }, [applyBackgroundOff]);
+
+  /** 백그라운드 진입. `visibilitychange`(hidden)의 유일한 호출자는 `App.tsx onVis`다.
    *
-   *  🔴 **순서가 계약이다.** suspend가 먼저다 — 그게 진행 중 클립을 `stopClip()`으로 닫고
-   *  재개용으로 보관한다. 뒤집어서 트랙부터 끄면 클립이 **무음으로 채워진 채** 닫혀
-   *  `clip_too_small`/`clip_empty`가 그대로 재발한다(07-30 백그라운드 구간 5건의 형태 —
-   *  `enabled=false`는 녹음을 멈추는 게 아니라 무음을 흘린다, MDN).
+   *  🔑 **[D1] 세션-활성 게이트(v0.45.0, 민구 확정 08-05):** phase가 세션 중(active·paused·
+   *  complete)이면 **정지하지 않는다** — STT·TTS·클립 캡처를 hidden에도 유지하고 계측만 남긴다.
+   *  v0.43.0 #4("화면끔·이탈 둘 다 중지", 민구 지시 07-31)는 08-05 정정으로 **과잉 교정**으로
+   *  판정됐다(원 의도 = "세션 밖에서 돌지 마라". [MIC-BG-STOP-1] 재검토 갈래의 실행).
+   *  그 정지가 만들던 복귀 왕복(인식기 재생성 + BT HFP 재협상 1~2초 × 세션7 실측 6회)이 F15
+   *  ("한 번에 안 붙어")의 구조적 근원 후보였다(플랜 §1-③). 경계·임계는 backgroundSessionPolicy.
    *
-   *  ⚠️ 화면 끄기와 앱 이탈은 **구분할 수 없다**(plan §3-1: `visibility_context` 11건이 전부
-   *  `evidence=blur`). 민구 지시대로 **둘 다 비활성화**한다. */
+   *  세션 밖(ready·stopping)에서는 종전 그대로 확실히 정지한다 — 아래 suspend 경로.
+   *  🔴 **순서가 계약이다**(정지 경로에서). suspend가 먼저다 — 그게 진행 중 클립을 `stopClip()`
+   *  으로 닫고 재개용으로 보관한다. 뒤집어서 트랙부터 끄면 클립이 무음으로 채워진 채 닫혀
+   *  `clip_too_small`/`clip_empty`가 재발한다(07-30 실측 5건 — `enabled=false`는 녹음을 멈추는
+   *  게 아니라 무음을 흘린다, MDN).
+   *
+   *  ⚠️ 화면 끄기와 앱 이탈은 **구분할 수 없다**([SCREEN-LOCK-1]: 53/53 `evidence=blur`).
+   *  게이트는 그 구분을 전제하지 않는다 — phase 하나로 가른다. */
   const suspendForBackground = useCallback(() => {
+    if (shouldKeepInBackground(useSessionStore.getState().phase)) {
+      // [D1] 유지 — 정지 없음. 생존 관측(WP-1④)과 임계 타이머만 세운다.
+      bgKeepRef.current = { hiddenAt: Date.now(), finals: 0 };
+      clearBgOffTimer();
+      // 🔴 테스트 전용 우회(조용한 우회 금지 — __micSettleSkipForTest 계보): 픽스처가
+      //    `window.__bgOffMsForTest`를 세우면 **임계값만** 줄인다(시퀀스·계측 계약은 그대로).
+      //    기본값 10분은 tests/backgroundSessionPolicy 단언이 리터럴로 고정한다.
+      const offMs =
+        (window as unknown as { __bgOffMsForTest?: number }).__bgOffMsForTest ?? LONG_BACKGROUND_OFF_MS;
+      bgOffTimerRef.current = window.setTimeout(() => { void applyBackgroundOffRef.current(); }, offMs);
+      logCell({
+        type: 'command',
+        parsed: 'bg_mic',
+        extra: bgMicAction({ edge: 'enter', stt: 'kept', capture: 'kept' }),
+        row: useSessionStore.getState().activeRow,
+      });
+      return;
+    }
     // v0.43.0 리뷰 사소#1 — **두 축을 갈라 쓴다.**
     //   `latched`    → 복원 의무(안내 예약). 1c의 시작-TTS race에서는 아직 인식기가 없어도
     //                  뒤이은 `start()`가 `hadController`를 승격시켜 resume이 실제로 복원한다.
@@ -2471,24 +2618,58 @@ export function useVoiceSession() {
       extra: bgMicAction({ edge: 'enter', stt: sttStopped ? 'stopped' : 'noop', capture: captureOff ? 'off' : 'noop' }),
       row: useSessionStore.getState().activeRow,
     });
-  }, [suspendRecognitionForUi]);
+  }, [suspendRecognitionForUi, clearBgOffTimer]);
 
   /** 포그라운드 복귀: 캡처 on + STT 복원. 안내는 여기서 하지 않는다 — 복원된 인식기의
    *  `onStart`가 낸다(위 `announceBgResume`).
+   *
+   *  [D1] 유지 사이클의 복귀는 대개 **복원할 것이 없다**(stt=noop이 정상) — 생존 요약(bg_keep)을
+   *  남기고 임계 타이머를 해제한다. 임계 정지(threshold)가 실행됐던 복귀만 레코더를 재획득한다.
    *
    *  🔴 캡처를 **먼저** 켠다(진입의 역순). 복원된 인식기·클립이 무음을 먹지 않게 한다.
    *  🔑 캡처 복구는 **무조건** 돈다 — 백그라운드 중 세션이 끝나 래치가 비어도(`clearUiSuspendLatch`)
    *  트랙이 꺼진 채 남으면 다음 세션이 조용히 무음을 녹음한다. */
   const resumeFromBackground = useCallback(() => {
+    // WP-3 브리핑 게이트 — 유지 사이클이 실제로 있었는가(스퓨리어스 visible 이벤트 방어).
+    const hadKeepCycle = bgKeepRef.current !== null;
+    clearBgOffTimer();
+    emitBgKeepSummary();
     const captureOn = recorderRef.current?.setCaptureEnabled(true) ?? false;
     const restored = resumeRecognitionForUi('app_background');
+    // WP-2 — 임계 정지 후 복귀: 자동 재획득(pause→resume과 동일 경로). 실패는 v0.44.1 경보
+    //   재사용([CLIP-INIT-SILENT-1] — 무음 실패 금지: 계측 + 배너 래치 + TTS 고지).
+    if (bgOffFiredRef.current) {
+      bgOffFiredRef.current = false;
+      if (!recorderRef.current && shouldKeepInBackground(useSessionStore.getState().phase)) {
+        const rec = new AudioRecorder();
+        recorderRef.current = rec;
+        void rec.init().then((ok) => {
+          if (recorderRef.current !== rec) return; // 그 사이 세션 경계를 지났다
+          if (!ok) {
+            logCell({ type: 'error', extra: micInitFailed(rec.getLastInitError() ?? 'unknown') });
+            maybeAutoRecoverOrLatch('init_failed');
+            void say('주의. 음성 클립이 저장되지 않습니다. 재연결이 안 되면 앱을 껐다 다시 열어 주세요.', false).catch(() => {});
+            return;
+          }
+          micLostLatchedRef.current = false;
+          setMicLost(false);
+        });
+      }
+    }
     logCell({
       type: 'command',
       parsed: 'bg_mic',
       extra: bgMicAction({ edge: 'return', stt: restored ? 'restored' : 'noop', capture: captureOn ? 'on' : 'noop' }),
       row: useSessionStore.getState().activeRow,
     });
-  }, [resumeRecognitionForUi]);
+    // v0.45.0 WP-3 (F14, Q4-답 민구 확정) — **유지 사이클의 복귀 브리핑.** 인식기가 안 죽었으니
+    //   onStart 슬롯이 없다 — 여기서 직접 낸다. active만: paused 복귀는 '재시작' 시점이 담당
+    //   (이중 낭독 방지), 정지 사이클 복귀(restored=true)는 onStart 안내+브리핑이 담당.
+    if (hadKeepCycle && !restored && useSessionStore.getState().phase === 'active') {
+      const briefing = buildReturnBriefing(true);
+      if (briefing) void say(briefing, false).catch(() => {});
+    }
+  }, [resumeRecognitionForUi, clearBgOffTimer, emitBgKeepSummary, maybeAutoRecoverOrLatch, say, buildReturnBriefing]);
 
   // ── v0.34.0 A2 — 개선요청(피드백) 팝업 열림 중 STT 일시정지 ──
   // App.tsx가 sessionStore.uiModalOpen('feedback')을 올리고/내리는 단일 신호를 구독한다.
@@ -2538,6 +2719,15 @@ export function useVoiceSession() {
     //    (실측: v026 [리뷰#1] red — 세션 B에서 도움말이 저절로 열림).
     uiCommandSeqRef.current = 0;
     setUiCommand(null);
+    // v0.45.0 WP-2 — 알림 권한 요청은 이 클릭의 **동기 구간**에서만 성립한다(iOS 제스처 요건).
+    //   앱 수명당 1회, 이미 결정돼 있으면 skipped(무로깅 — 요청 자체가 없었다). 임계 10분 알림
+    //   (Q2)의 주 채널이 이 권한이다. gUM 프롬프트와 같은 제스처에 얹히는 것은 의도된 비용 —
+    //   첫 세션 1회뿐이고, 임계 알림 없이는 10분 정지가 무음이 된다.
+    void requestNotifyPermissionOnce().then((result) => {
+      if (result !== 'skipped') {
+        logCell({ type: 'app', extra: notifyPerm({ src: 'session_start', result }) });
+      }
+    });
 
     // ── v0.44.0 §C8 F18(민구 확정 08-02) — 마이크 권한 요청 시점 = **이 클릭** ─────────
     // 종전 v0.25.0 WS-2는 입력탭 마운트에서 prewarm(getUserMedia)을 돌렸다 — 탭에 들어가기만
@@ -2579,6 +2769,10 @@ export function useVoiceSession() {
     //   재개·언마운트/리마운트 등)로 래치가 남아 들어와도 새 세션은 항상 깨끗한 상태에서 시작한다.
     //   already-false면 no-op(로그도 없음).
     clearUiSuspendLatch('start');
+    // v0.45.0 WP-2 — 같은 방어: 이전 세션의 임계 타이머·유지 관측이 새 세션으로 새지 않게.
+    clearBgOffTimer();
+    bgKeepRef.current = null;
+    bgOffFiredRef.current = false;
 
     const startTs = Date.now();
     sessionIdRef.current = `sess_${startTs}`;
@@ -2653,6 +2847,8 @@ export function useVoiceSession() {
         beepNegativeId: s.beepNegativeId,
         autoScreenCapture: s.autoScreenCapture,
         anomalyRuleCount,
+        // v0.45.0 WP-1③ — D1 말끊기 스냅샷(축 C 판정 전제). :2512가 이미 읽는 같은 s를 재사용.
+        bargeInEnabled: s.bargeInEnabled,
         // NOTE: session label intentionally NOT logged — buildAutoLabel derives it from the first
         // fixed auto column (농가명 = grower name), a PII vector. Reach is fully computable from
         // sessionId + appVersion + totalRows + completedRows. The label still lives on the Session
@@ -2764,6 +2960,10 @@ export function useVoiceSession() {
     // v0.35.0 R3-FIX-1 — 종료 확인 '확인' 경로는 resume 없이 여기로 온다. 래치를 여기서 풀지 않으면
     //   다음 세션의 모달 suspend가 전부 조기 반환돼 STT가 안 멈춘다. 복원은 불필요(세션 종료 중).
     clearUiSuspendLatch('stop');
+    // v0.45.0 WP-2 — 세션 경계: 임계 타이머·유지 관측·정지 플래그 정리(다음 세션 오염 방지).
+    clearBgOffTimer();
+    bgKeepRef.current = null;
+    bgOffFiredRef.current = false;
     // #1 reach telemetry: session-meta on stop. `extra:'stop'` preserved; new fields additive.
     // completedRows here is the denominator-complement for reach/completion-rate aggregation.
     {
@@ -2865,7 +3065,7 @@ export function useVoiceSession() {
     sessionColumnsRef.current = null;
     setSessionColumns(null);
     return true;
-  }, [persistSession]);
+  }, [persistSession, clearBgOffTimer]);
 
   /** Pause STT value processing without stopping the controller.
    *  The controller stays active so the user can say '재시작' to resume.
@@ -2927,8 +3127,13 @@ export function useVoiceSession() {
     const vc = voiceColsList();
     const cur = vc[sess.activeColIdx];
     await say('재시작.');
+    // v0.45.0 WP-3 (F14) — 재시작 브리핑: 현재 행 요약("나무 3, … 45.1. 다음.") 뒤에
+    // announceField가 항목명을 잇는다(Q5 형식 완성: "…, 다음, 횡경."). 일시정지 중 복귀는
+    // 브리핑을 생략하고 이 '재시작' 시점이 담당한다(Q4-답 — 이중 낭독 방지).
+    const briefing = buildReturnBriefing(false);
+    if (briefing) await say(briefing, false);
     if (cur) await announceField(cur);
-  }, [announceField, handleFinal, handleInterim, say]);
+  }, [announceField, handleFinal, handleInterim, say, buildReturnBriefing]);
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
   useEffect(() => { resumeRef.current = resume; }, [resume]);
@@ -3188,6 +3393,11 @@ export function useVoiceSession() {
     recorderRef.current?.dispose();
     // dispose된 recorder도 StrictMode 2차 setup/prewarm에서 새 인스턴스로 재생성되게 수명을 끝낸다.
     recorderRef.current = null;
+    // v0.45.0 WP-2 — 언마운트가 임계 타이머를 살려두면 죽은 클로저가 10분 뒤 깨어난다.
+    if (bgOffTimerRef.current !== null) {
+      window.clearTimeout(bgOffTimerRef.current);
+      bgOffTimerRef.current = null;
+    }
   }, []);
 
   /** v0.33.0 항목6 — 셀 값 영속 공유 코어. 터치 인라인 편집(commitTouchValue)과 수동 입력 시트

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { T } from '../../tokens';
 import { I } from '../icons';
 import { useSettingsStore } from '../../stores/settingsStore';
@@ -5,9 +6,12 @@ import { isSpeechSupported } from '../../lib/speech';
 import { ConnectionStatusCard } from '../ConnectionStatusCard';
 import { isSheetSourceBlocked } from '../../lib/sheetConnection';
 import { VOICE_TYPE } from './heroLayout';
+import { emitReadyProbe } from './readyProbe';
 
 export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => void }) {
   const s = useSettingsStore();
+  // v0.45.0 WP-1① — 시작 전 입·출력 상태 프로브(F15 근원 판정용). 스로틀·계약은 readyProbe.ts.
+  useEffect(() => { emitReadyProbe(); }, []);
   const sourceBlocked = isSheetSourceBlocked(s);
   const ready = s.tableGenerated && !sourceBlocked && totalRows > 0 && isSpeechSupported();
   const autoCount = s.columns.filter((c) => c.input === 'auto').length;

@@ -28,7 +28,7 @@ interface SessionState {
   lastTts: string;
   /** I-3: most recent recognized value, shown as a screen-centered "항목 : 값" burst.
    *  `seq` increments per recognition so the UI can re-key and replay the animation. */
-  valueBurst: { name: string; value: string; seq: number } | null;
+  valueBurst: { name: string; value: string; colId?: string; seq: number } | null;
   /** v0.37.0 리뷰#1(Codex High, 민구: 커밋 영수증) — **방금 성공적으로 커밋된 셀**의 영수증.
    *  모든 커밋 경로(음성 최종·수동 시트·이상치 정정)가 커밋 직후 원자적으로 발행한다. 검토(complete)
    *  화면이 "방금 입력한 값"을 이 영수증에서 파생한다(valueBurst는 음성 확인 플래시·이상치 중복 억제
@@ -144,7 +144,8 @@ interface SessionState {
   setRecognized: (v: string) => void;
   setInterimValue: (v: string | null) => void;
   setLastTts: (v: string) => void;
-  pushValueBurst: (name: string, value: string) => void;
+  /** v0.45.0 UI③ — colId는 칩 V 마크(방금 음성 확정된 칩)의 판별 축. 음성 커밋 경로만 발행. */
+  pushValueBurst: (name: string, value: string, colId?: string) => void;
   /** v0.37.0 리뷰#1 — 커밋 영수증 발행(seq 자동 증가). 모든 성공 커밋 경로가 커밋 직후 호출한다. */
   pushCommitReceipt: (row: number, colId: string, name: string, value: string) => void;
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
@@ -207,8 +208,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setRecognized: (recognizedValue) => set({ recognizedValue }),
   setInterimValue: (interimValue) => set({ interimValue }),
   setLastTts: (lastTts) => set({ lastTts }),
-  pushValueBurst: (name, value) =>
-    set((s) => ({ valueBurst: { name, value, seq: (s.valueBurst?.seq ?? 0) + 1 } })),
+  pushValueBurst: (name, value, colId) =>
+    set((s) => ({ valueBurst: { name, value, colId, seq: (s.valueBurst?.seq ?? 0) + 1 } })),
   pushCommitReceipt: (row, colId, name, value) =>
     set((s) => ({ commitReceipt: { row, colId, name, value, seq: (s.commitReceipt?.seq ?? 0) + 1 } })),
   // v0.36.0 리뷰 라운드1(Codex+Flash, 수용) — 알람이 **서는** 순간 미확정 interim 표시를 함께

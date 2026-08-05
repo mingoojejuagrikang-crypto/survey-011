@@ -1,28 +1,26 @@
 /**
- * v0.43.0 #4 — **앱 이탈 시 마이크**(plan §3-3) 회귀.
+ * v0.45.0 WP-2 [D1] — **세션-활성 게이트**(hidden 정책) 회귀. (v0.43.0 #4 "이탈-중지"의 재검토 실행)
  *
- * 결함(07-30 실기기): 세션 중 백그라운드로 들어가면 iOS가 트랙을 `muted`로 만드는데
- *   `bg_enter_snapshot:rec=recording,track=muted,stt=listening` — **녹음과 STT는 계속 돌고
- *   소리만 안 들어왔다.** 클립 에러 5건(`clip_too_small` 3 · `clip_empty` 2)이 전부 그 구간에
- *   몰려 있다. 앱이 할 일은 ① 그 사실을 알고 ② 헛도는 녹음·STT를 멈추고 ③ 복귀 시 되살리는 것.
+ * 역사: v0.43.0 #4는 "화면끔·앱이탈 둘 다 중지"(민구 지시 07-31)였다. 08-05 실사용 정정으로
+ *   그 지시의 원 의도가 **"세션 밖에서 돌지 마라"**였음이 확인됐다([MIC-BG-STOP-1] 재검토 갈래) —
+ *   세션 안까지 정지한 것은 과잉 교정이었고, 복귀마다의 인식기 재생성 + BT HFP 재협상 왕복이
+ *   F15("한 번에 안 붙어")의 구조적 근원 후보였다(플랜 §1-③, 세션7 실측 6회).
  *
- * 오라클:
- *   A 진입 — 트랙 캡처가 실제로 꺼지고(`enabled=false`) STT가 멈춘다. 배경 발화는 커밋되지 않는다.
- *   B 복귀 — 캡처가 되살아나고(`enabled=true`) STT가 복원되며 **안내가 정확히 1회** 나간다.
- *   C 🔴 안내는 백그라운드 복귀 **전용**이다 — 개선요청 모달을 닫을 때는 나가지 않는다.
- *     (resume의 컨트롤러 생성부가 모든 모달과 **공유**되므로 원샷 플래그 없이는 매번 발화한다.)
- *   D 중지를 **실제로 수행하지 않았으면** 안내가 없다(세션 미가동). 캡처 복구는 그래도 돈다.
- *   E 🔴 백그라운드 중 세션 경계(`clearUiSuspendLatch`)가 지나가면 안내 예약이 **폐기**된다.
- *     안 그러면 래치가 비어 resume이 조기 반환하고, 플래그가 살아남아 **다음 모달에서 발화**한다.
+ * 🔴 이 파일의 A·B·C·F는 **v0.43.0 오라클의 의도적 뒤집기**다(정당 파손 — v0.45.0 [D1]):
+ *   A' 진입(세션 중) — 트랙·STT를 **유지**한다. 배경 발화가 **커밋된다**(화면 끄고 진행 — E2' 전제).
+ *   B' 복귀(유지 사이클) — 복원할 것이 없다(stt=noop). BG_RESUME 안내 **0회**, 대신 복귀
+ *      브리핑(F14: "…​. 다음, <항목>.")이 나간다.
+ *   C' 모달 닫기 — 안내·브리핑 모두 없다(종전 계약 유지 + 브리핑 누출 없음).
+ *   D  세션 미가동(ready) 왕복 — **종전 그대로** 정지 경로의 noop(세션 밖 = 확실히 정지 축).
+ *   E  백그라운드 중 세션 경계 — **종전 그대로** 안내 예약 폐기.
+ *   F' 유지 구간 생존 요약(bg_keep) — hidden 중 final 수·트랙 상태가 복귀 시 1건으로 남는다(WP-1④).
  *
- * ⛔ **`track.stop()`이 아니라 `track.enabled` 토글이다**([IOS-5]) — iOS는 재획득에 사용자
- *   제스처를 요구해 복귀 자동 재개가 구조적으로 불가능해진다. A/B가 그 축을 직접 본다.
+ * 장기 임계(10분)·paused 재시작·임계 후 재획득은 tests/v045-bg-gate.spec.ts가 잰다.
  *
- * 🔑 **가짜 마이크가 필요하다.** 이 환경의 `getUserMedia`는 실패한다(다른 스펙의 `clip_no_stream`이
- *   그 증거) — 그러면 트랙이 없어 `enabled`를 관찰할 축 자체가 사라진다. `AudioContext`의
- *   `MediaStreamDestination`으로 **진짜 `MediaStreamTrack`** 을 만들어 주입한다(가짜 장치 플래그
- *   불필요, `enabled` 시맨틱은 네이티브 그대로).
+ * ⛔ 유지 경로는 트랙을 **만지지 않는다**(enabled=true 그대로). 정지 경로(세션 밖·임계)만
+ *   enabled 토글/dispose를 쓴다([IOS-5]: track.stop()은 임계 OFF의 dispose에서만 — 재획득 경로 동반).
  *
+ * 🔑 가짜 마이크: AudioContext MediaStreamDestination의 **진짜 MediaStreamTrack** 주입(아래 스크립트).
  * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다([ORCH-27]).
  */
 import { test, expect, type Page } from '@playwright/test';
@@ -33,8 +31,10 @@ test.setTimeout(120_000);
 
 const STORE_KEY = 'survey-011-settings-v3';
 
-/** plan §3-3의 안내 문구(민구 확정). useVoiceSession의 BG_RESUME_MESSAGE와 글자 일치해야 한다. */
+/** 정지 사이클 복원 시에만 나가는 안내(useVoiceSession BG_RESUME_MESSAGE와 글자 일치). */
 const BG_MSG = '자리를 비운 동안 입력이 중지됐습니다. 다시 시작합니다.';
+/** v0.45.0 WP-3 — 복귀 브리핑(Q5 형식). row1·값 미입력 상태의 기대 문장. */
+const BRIEFING_ROW1 = '조사나무 1. 다음, 횡경.';
 
 const SETTINGS = {
   state: {
@@ -102,9 +102,14 @@ async function bgMicExtras(page: Page): Promise<string[]> {
     .map((e) => e.extra ?? '');
 }
 
-/** 안내가 몇 번 발화됐는가. TTS 목이 문구를 그대로 적재한다. */
+/** BG_RESUME 안내가 몇 번 발화됐는가. */
 async function announceCount(page: Page): Promise<number> {
   return (await ttsLog(page)).filter((t) => t === BG_MSG).length;
+}
+
+/** 복귀 브리핑이 몇 번 발화됐는가(WP-3). */
+async function briefingCount(page: Page): Promise<number> {
+  return (await ttsLog(page)).filter((t) => t === BRIEFING_ROW1).length;
 }
 
 /** 첫 번째 마이크 트랙의 `enabled`. 트랙이 없으면 null(= 관찰 불가, false와 구분한다). */
@@ -142,9 +147,7 @@ async function waitForActiveChip(page: Page, colName: string, timeout = 6000) {
   );
 }
 
-/** 세션을 시작하지 않고 입력탭까지만 간다.
- *  v0.44.0 §C8 F18 — 마운트 prewarm 폐지: 이 상태에서 레코더·트랙은 **없다**(getUserMedia 0회).
- *  트랙이 필요한 테스트는 startSession을 거쳐야 한다. */
+/** 세션을 시작하지 않고 입력탭까지만 간다(F18: 이 상태에서 레코더·트랙은 없다). */
 async function bootIdle(page: Page, settings = SETTINGS) {
   await page.addInitScript({ content: FAKE_MIC_SCRIPT });
   await installVoiceMocks(page);
@@ -176,47 +179,47 @@ async function boot(page: Page, settings = SETTINGS) {
   await startSession(page);
 }
 
-// ─── A: 진입 — 캡처가 실제로 꺼지고 STT가 멈춘다 ────────────────────────────────────────
-test('A — hidden 진입 시 트랙 캡처가 꺼지고(enabled=false) STT가 멈춘다(배경 발화 미커밋)', async ({ page }) => {
+// ─── A': 진입(세션 중) — [D1] 유지. 트랙·STT가 살아 있고 배경 발화가 커밋된다 ───────────────
+test("A' — hidden 진입에도 세션 중에는 트랙·STT가 유지되고 배경 발화가 커밋된다([D1] 게이트)", async ({ page }) => {
   await boot(page);
-  // 가짜 마이크가 실제로 물렸는지부터 확인한다 — 안 물렸으면 이 스펙 전체가 무의미한 통과다.
   expect(await trackEnabled(page), '가짜 마이크 트랙이 확보돼야 관찰이 성립한다').toBe(true);
 
   await setVisibility(page, 'hidden');
 
+  // 🔴 v0.43.0 A의 의도적 뒤집기(v0.45.0 [D1]) — 정지가 아니라 유지가 계약이다.
   await expect.poll(() => bgMicExtras(page), { timeout: 4000 })
-    .toEqual(['edge=enter,stt=stopped,capture=off']);
-  // ⛔ stop()이 아니라 enabled 토글이다 — 트랙은 살아 있어야 복귀 자동 재개가 가능하다([IOS-5]).
-  expect(await trackEnabled(page)).toBe(false);
+    .toEqual(['edge=enter,stt=kept,capture=kept']);
+  expect(await trackEnabled(page), '유지 경로는 트랙을 만지지 않는다').toBe(true);
   expect(await page.evaluate(() => {
     const tracks = (window as unknown as { __micTracks?: MediaStreamTrack[] }).__micTracks ?? [];
     return tracks[tracks.length - 1].readyState;
-  }), 'track.stop()을 쓰면 ended가 된다 — 그러면 복귀 재개가 불가능해진다').toBe('live');
+  })).toBe('live');
 
-  // 백그라운드에서 들어온 발화는 값이 되지 않는다(07-30 구간에서 STT가 계속 돌던 축).
+  // 화면 끈 채 발화 = 정상 입력이다(민구 원 의도: "세션이 진행중엔 음성 입력 출력 모두 가능하게").
   await fireStt(page, '33.3', 600);
-  const committed = (await loadLogEvents(page)).filter((e) => e.type === 'value');
-  expect(committed, '백그라운드 발화가 셀에 커밋되면 안 된다').toHaveLength(0);
+  await expect.poll(
+    async () => (await loadLogEvents(page)).filter((e) => e.type === 'value').length,
+    { timeout: 4000 },
+  ).toBe(1);
 });
 
-// ─── B: 복귀 — 캡처 복원 + STT 복원 + 안내 1회 ──────────────────────────────────────────
-test('B — visible 복귀 시 캡처가 살아나고 STT가 복원되며 안내가 정확히 1회 나간다', async ({ page }) => {
+// ─── B': 복귀(유지 사이클) — 복원할 것이 없다. 안내 0회, 브리핑 1회 ─────────────────────────
+test("B' — 유지 사이클 복귀는 stt=noop이고 BG_RESUME 안내 대신 복귀 브리핑(F14)이 나간다", async ({ page }) => {
   await boot(page);
   await setVisibility(page, 'hidden');
-  await expect.poll(() => trackEnabled(page), { timeout: 4000 }).toBe(false);
-  expect(await announceCount(page), '백그라운드에서는 안내가 나갈 수 없다(iOS가 막는다)').toBe(0);
+  await expect.poll(() => bgMicExtras(page), { timeout: 4000 })
+    .toEqual(['edge=enter,stt=kept,capture=kept']);
 
   await setVisibility(page, 'visible');
 
   await expect.poll(() => bgMicExtras(page), { timeout: 4000 })
-    .toEqual(['edge=enter,stt=stopped,capture=off', 'edge=return,stt=restored,capture=on']);
-  expect(await trackEnabled(page)).toBe(true);
+    .toEqual(['edge=enter,stt=kept,capture=kept', 'edge=return,stt=noop,capture=noop']);
+  // 멈춘 게 없으니 "다시 시작합니다"는 거짓말이다 — 나가면 안 된다.
+  expect(await announceCount(page)).toBe(0);
+  // 대신 "어디부터?"를 답하는 브리핑이 나간다(Q5 형식: 항목+값, "다음, <항목>").
+  await expect.poll(() => briefingCount(page), { timeout: 5000 }).toBe(1);
 
-  // 🔑 안내는 **"재개 성공"** 에 걸린다 — 인식기의 onStart다([MIC-B2]: 복귀 32.5초 뒤
-  //   audio-capture 오류가 난 전례라 "시도" 시점 안내는 거짓말이 된다).
-  await expect.poll(() => announceCount(page), { timeout: 5000 }).toBe(1);
-
-  // 복원된 인식기로 값이 다시 들어간다(복원이 말뿐이 아님).
+  // STT는 끊긴 적이 없다 — 복귀 후 값이 그대로 들어간다.
   await waitForTtsIdle(page);
   await fireStt(page, '33.3', 600);
   await expect.poll(
@@ -225,39 +228,39 @@ test('B — visible 복귀 시 캡처가 살아나고 STT가 복원되며 안내
   ).toBe(1);
 });
 
-// ─── C: 🔴 안내는 백그라운드 전용 — 모달을 닫을 때는 나가지 않는다 ──────────────────────────
-test('C — 개선요청 모달을 닫아도 안내가 나가지 않는다(resume 컨트롤러 생성부 공유 축)', async ({ page }) => {
+// ─── C': 모달 닫기 — 안내·브리핑 모두 나가지 않는다 ─────────────────────────────────────
+test("C' — 개선요청 모달을 닫아도 안내·브리핑이 나가지 않는다(컨트롤러 생성부 공유 축)", async ({ page }) => {
   await boot(page);
 
-  // ① 백그라운드 왕복 전에 모달만 열고 닫는다 — 여기서 발화하면 원샷 플래그가 없는 것이다.
+  // ① 모달 왕복 — 여기서 발화하면 원샷/게이트가 없는 것이다.
   await page.locator('[data-testid="tab-feedback"]').click();
   await expect(page.locator('[data-testid="feedback-modal"]')).toBeVisible({ timeout: 15_000 });
   await page.locator('[data-testid="feedback-cancel"]').click();
   await expect(page.locator('[data-testid="feedback-modal"]')).toHaveCount(0);
   await page.waitForTimeout(600);
-  expect(await announceCount(page), '백그라운드를 겪지 않은 모달 복귀는 안내 대상이 아니다').toBe(0);
+  expect(await announceCount(page)).toBe(0);
+  expect(await briefingCount(page), '모달 복귀는 브리핑 대상이 아니다(hidden 사이클이 아니다)').toBe(0);
 
-  // ② 백그라운드 왕복 — 여기서만 1회.
+  // ② 백그라운드 왕복 — 유지 사이클이므로 안내는 여전히 0, 브리핑만 1회.
   await setVisibility(page, 'hidden');
-  await expect.poll(() => trackEnabled(page), { timeout: 4000 }).toBe(false);
   await setVisibility(page, 'visible');
-  await expect.poll(() => announceCount(page), { timeout: 5000 }).toBe(1);
+  await expect.poll(() => briefingCount(page), { timeout: 5000 }).toBe(1);
+  expect(await announceCount(page)).toBe(0);
 
-  // ③ 그 뒤 다시 모달을 열고 닫아도 **늘지 않는다**(플래그가 소비됐다).
+  // ③ 그 뒤 다시 모달을 열고 닫아도 브리핑이 늘지 않는다(hidden 사이클 게이트).
   await waitForTtsIdle(page);
   await page.locator('[data-testid="tab-feedback"]').click();
   await expect(page.locator('[data-testid="feedback-modal"]')).toBeVisible({ timeout: 15_000 });
   await page.locator('[data-testid="feedback-cancel"]').click();
   await expect(page.locator('[data-testid="feedback-modal"]')).toHaveCount(0);
   await page.waitForTimeout(800);
-  expect(await announceCount(page)).toBe(1);
+  expect(await briefingCount(page)).toBe(1);
+  expect(await announceCount(page)).toBe(0);
 });
 
-// ─── D: 중지를 실제로 수행하지 않았으면 안내가 없다 ─────────────────────────────────────
-// v0.44.0 §C8 F18 적응 — 구 전제(prewarm으로 트랙만 확보된 유휴 상태)는 prewarm 폐지로 제품에서
-// 사라졌다. 유휴 = **레코더·트랙 자체가 없음**(getUserMedia 0회). 그래서 capture 축도 off/on이
-// 아니라 noop/noop이 된다(끌 트랙이 없다). "캡처 복구는 무관하게 돈다" 계약은 세션 가동 테스트
-// (위 A~C의 trackEnabled false→true 왕복)가 계속 고정한다.
+// ─── D: 세션 미가동(ready) — 종전 그대로 정지 경로의 noop. "세션 밖 = 확실히 정지" 축 ─────────
+// v0.44.0 §C8 F18 적응 — 유휴 = 레코더·트랙 자체가 없음(getUserMedia 0회). [D1] 게이트는
+// ready를 유지 집합에 넣지 않으므로 이 왕복은 v0.43.0 정지 경로 그대로다(안 바뀐 것이 계약이다).
 test('D — 세션 미가동 왕복에는 안내가 없다(stt=noop). 유휴엔 만질 트랙도 없다(F18)', async ({ page }) => {
   await bootIdle(page); // 세션 시작 없음 — F18: 마이크 미획득 상태
   expect(await trackEnabled(page), 'F18: 입력탭 진입만으로 트랙이 생기면 안 된다').toBe(null);
@@ -265,33 +268,26 @@ test('D — 세션 미가동 왕복에는 안내가 없다(stt=noop). 유휴엔 
   await setVisibility(page, 'hidden');
   await setVisibility(page, 'visible');
 
-  // 🔴 v0.43.0 리뷰(Codex 사소#1, 2026-07-31 수용) — **여기가 제목과 반대를 고정하고 있었다.**
-  //   제목은 `stt=noop`인데 단언은 `edge=enter,stt=stopped`였다. 근인은 앱 쪽:
-  //   `suspendRecognitionForUi`의 반환 boolean이 "실제로 STT를 멈췄나"가 아니라 **래치 전이**만
-  //   뜻했고, 그걸 그대로 `stt`에 실었다. 세션이 안 돌던 이 회차엔 멈출 인식기가 없었으므로
-  //   `stopped`는 거짓 기록이다 — 실제 중지 횟수를 집계하면 유휴 왕복이 분자에 섞인다.
-  //   반환을 `{latched, sttStopped}`로 가르고 `stt`는 `sttStopped`를 쓰게 고쳤다. 이제 계약대로다.
-  //   ⚠️ `latched`(복원 의무·안내 예약)는 **종전 그대로**다 — 1c의 시작-TTS race 복원이 걸려 있다.
+  // 🔴 v0.43.0 리뷰(Codex 사소#1) — stt 축은 "실제로 멈췄나"다. 유휴엔 멈출 인식기가 없다.
   await expect.poll(() => bgMicExtras(page), { timeout: 4000 })
     .toEqual(['edge=enter,stt=noop,capture=noop', 'edge=return,stt=noop,capture=noop']);
   // 🔑 복원할 인식기가 없었으므로 "다시 시작합니다"는 거짓말이다 — 나가면 안 된다.
   expect(await announceCount(page)).toBe(0);
+  // [D1]에서도 세션 밖 왕복은 브리핑 대상이 아니다(세션이 없다).
+  expect(await briefingCount(page)).toBe(0);
   // F18: 왕복 후에도 여전히 트랙 없음(유휴 왕복이 마이크를 만들지 않는다).
   expect(await trackEnabled(page)).toBe(null);
 });
 
-// ─── E: 🔴 백그라운드 중 세션 경계가 지나가면 안내 예약이 폐기된다 ────────────────────────
+// ─── E: 백그라운드 중 세션 경계가 지나가면 안내 예약이 폐기된다(종전 그대로) ─────────────────
 test('E — 백그라운드 중 세션 시작(clearUiSuspendLatch)이 안내 예약을 폐기한다', async ({ page }) => {
   await bootIdle(page);
 
-  // hidden에서 suspend가 걸려 안내가 예약된다(래치 reasons = {app_background}).
-  // F18 — 유휴엔 트랙이 없어(trackEnabled=null) 트랙 관찰 대신 bg_mic enter 이벤트로 래치를 확인.
+  // hidden에서 suspend가 걸려 안내가 예약된다(ready phase — 정지 경로. 래치 reasons={app_background}).
   await setVisibility(page, 'hidden');
   await expect.poll(async () => (await bgMicExtras(page)).some((x) => x.startsWith('edge=enter')), { timeout: 4000 }).toBe(true);
 
-  // 🔑 hidden인 채로 세션을 시작한다 → start()의 clearUiSuspendLatch('start')가 래치를 통째로
-  //   비운다. 그러면 아래 visible의 resume은 **조기 반환**해 플래그를 소비할 주체가 사라진다.
-  //   플래그를 여기서 함께 끄지 않으면 살아남아 **다음 모달을 닫을 때 발화한다.**
+  // 🔑 hidden인 채로 세션을 시작한다 → start()의 clearUiSuspendLatch('start')가 래치·예약을 비운다.
   await startSession(page);
   await setVisibility(page, 'visible');
   await page.waitForTimeout(600);
@@ -306,26 +302,28 @@ test('E — 백그라운드 중 세션 시작(clearUiSuspendLatch)이 안내 예
   expect(await announceCount(page), '세션 경계를 넘어 살아남은 예약이 있으면 여기서 터진다').toBe(0);
 });
 
-// ─── F: 짧은 전환 — 현행 동작을 정직하게 고정한다(해석 (a)) ─────────────────────────────
-test('F — 세션 중 짧은 왕복에도 안내가 나간다(해석 (a) 고정 — (b)를 원하면 시간 임계가 필요하다)', async ({ page }) => {
-  // 🔴 **검수 기준의 두 번째 반증 축이다** — 브리핑 §3: *"짧은 전환에는 안내가 안 나가는지."*
-  //   그런데 처방(plan §3-3)이 말하는 억제 조건은 *"중지를 **실제로 수행**했을 때만 안내한다"*
-  //   뿐이다. 이 둘은 갈린다:
-  //     (a) **수행 여부** 기준 — 세션이 돌고 있었으면 200ms 왕복에도 suspend가 실제로 도므로
-  //         안내가 나간다. 원샷 플래그로 자연히 충족되고 **임계값이 필요 없다**.
-  //     (b) **체류 시간** 기준 — 그걸 막으려면 시간 임계(예: 1.5초 미만 무안내)가 필요한데
-  //         **처방에 없다.** 임의로 넣으면 처방 이탈이다.
-  //   → 처방에 있는 것만 집행해 (a)로 갔다(코더→Larry 질의, 2026-07-31, 미회신).
-  //   이 테스트는 그 선택의 **결과를 명시적으로 박제**한다 — 침묵하면 리뷰어가 "짧은 전환
-  //   억제가 구현됐다"고 오독한다. (b)가 확정되면 **이 단언을 0으로 뒤집고** 임계를 얹으면 된다.
-  //   (#3-2 착수 전 `failReason.toBeNull()`을 고정해 둔 것과 같은 패턴.)
+// ─── F': 유지 구간 생존 요약(bg_keep) — WP-1④. hidden 중 final 수가 복귀 시 1건으로 남는다 ────
+test("F' — 유지 사이클의 bg_keep 요약: hidden 중 final 2건이 finals=2로, 사이클당 정확히 1건", async ({ page }) => {
   await boot(page);
-
   await setVisibility(page, 'hidden');
-  await expect.poll(() => trackEnabled(page), { timeout: 4000 }).toBe(false);
-  await setVisibility(page, 'visible'); // 체류 시간 사실상 0 — 최단 왕복
 
-  await expect.poll(() => bgMicExtras(page), { timeout: 4000 })
-    .toEqual(['edge=enter,stt=stopped,capture=off', 'edge=return,stt=restored,capture=on']);
-  await expect.poll(() => announceCount(page), { timeout: 5000 }).toBe(1);
+  // hidden 중 발화 2건(횡경 → 종경) — 유지가 실효라는 가장 강한 증거.
+  await fireStt(page, '33.3', 900);
+  await waitForTtsIdle(page);
+  await fireStt(page, '21.1', 900);
+
+  await setVisibility(page, 'visible');
+
+  await expect.poll(async () => {
+    const keeps = (await loadLogEvents(page)).filter((e) => e.extra?.startsWith('bg_keep:'));
+    return keeps.map((e) => e.extra);
+  }, { timeout: 4000 }).toHaveLength(1);
+  const keep = (await loadLogEvents(page)).find((e) => e.extra?.startsWith('bg_keep:'))!;
+  // bg_s는 짧은 왕복이라 0~10초대, finals=2, 인식기·트랙 생존.
+  expect(keep.extra).toMatch(/^bg_keep:bg_s=\d+,finals=2,stt=ctrl,track=live$/);
+
+  // 재-hidden 없이 visible 이벤트가 또 와도(스퓨리어스) 두 번째 bg_keep은 없다.
+  await setVisibility(page, 'visible');
+  await page.waitForTimeout(400);
+  expect((await loadLogEvents(page)).filter((e) => e.extra?.startsWith('bg_keep:'))).toHaveLength(1);
 });

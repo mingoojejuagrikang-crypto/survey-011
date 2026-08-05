@@ -33,6 +33,11 @@ import {
   audioInputClass,
   fontRenderSnapshot,
   bargeInTextSource,
+  bgMicAction,
+  bgKeep,
+  notifyPerm,
+  readyProbe,
+  fontRenderEcho,
 } from '../src/lib/logEvents';
 
 test('settingChanged — 기존 4개 콜사이트 산출과 바이트 동일', () => {
@@ -340,6 +345,61 @@ test('fontRenderSnapshot — 폰트 실렌더값 바이트 계약 (§5-1 ④)', 
  *  이 마커가 없으면 "final이 원래 그 텍스트였다"와 "interim 폴백이었다"가 로그에서 같아 보인다. */
 test('bargeInTextSource — stt_barge_in text 출처 마커 바이트 계약 (§5-1 ②)', () => {
   expect(bargeInTextSource('interim')).toBe('text_src=interim');
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * v0.45.0 WP-1·WP-2 계측 — [D1] 세션-활성 게이트와 그 판정 축. 리터럴 = SOP-003 파서 계약.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** WP-2 — bg_mic 값 공간 확장(additive). 기존 바이트(stopped/restored/noop·off/on/noop)는
+ *  위 v043 스펙들이 계속 고정한다 — 여기서는 신규 값만 잰다. */
+test('bgMicAction — v0.45.0 신규 값(kept·threshold) 바이트 계약 (WP-2)', () => {
+  // 세션-활성 게이트가 유지를 선택했다 — 정지 없음, 계측만.
+  expect(bgMicAction({ edge: 'enter', stt: 'kept', capture: 'kept' }))
+    .toBe('edge=enter,stt=kept,capture=kept');
+  // 장기 임계(10분) 도달 시점의 정지 — dispose라 capture는 off.
+  expect(bgMicAction({ edge: 'threshold', stt: 'stopped', capture: 'off' }))
+    .toBe('edge=threshold,stt=stopped,capture=off');
+  // 유지 사이클의 복귀 — 멈춘 게 없어 복원할 것도 없다(noop이 정상).
+  expect(bgMicAction({ edge: 'return', stt: 'noop', capture: 'noop' }))
+    .toBe('edge=return,stt=noop,capture=noop');
+});
+
+/** WP-1④ — 유지 구간 생존 요약. hidden 사이클당 1건(시계열 금지 — [F5] 링버퍼 보호). */
+test('bgKeep — 세션-활성 게이트 유지 구간 생존 요약 바이트 계약 (WP-1④)', () => {
+  // bg_s는 초 단위 반올림(foregroundReturn bg_s 계보).
+  expect(bgKeep({ backgroundMs: 84_600, finals: 3, stt: 'ctrl', track: 'live' }))
+    .toBe('bg_keep:bg_s=85,finals=3,stt=ctrl,track=live');
+  // finals=0 + track=ended — "발화가 없었다"가 아니라 "OS가 죽였다"로 읽히는 형태.
+  expect(bgKeep({ backgroundMs: 300_000, finals: 0, stt: 'gone', track: 'ended' }))
+    .toBe('bg_keep:bg_s=300,finals=0,stt=gone,track=ended');
+});
+
+/** WP-2 — 알림 권한·표시 결과. 조건 거짓(no_permission 등)도 기록([FG-RETURN-LOG-1]). */
+test('notifyPerm — 알림 권한 요청·임계 표시 결과 바이트 계약 (WP-2)', () => {
+  expect(notifyPerm({ src: 'session_start', result: 'granted' }))
+    .toBe('notify_perm:src=session_start,result=granted');
+  expect(notifyPerm({ src: 'threshold', result: 'no_permission' }))
+    .toBe('notify_perm:src=threshold,result=no_permission');
+  expect(notifyPerm({ src: 'threshold', result: 'shown' }))
+    .toBe('notify_perm:src=threshold,result=shown');
+});
+
+/** WP-1① — ready 화면 입출력 프로브. 세션 전(sessionId=__app__)이라 시간축으로 조인한다. */
+test('readyProbe — 시작 전 입출력 상태 바이트 계약 (WP-1①)', () => {
+  expect(readyProbe({ stt: 'yes', synth: 'idle', voicesKo: 3, mics: 2, perm: 'granted' }))
+    .toBe('ready_probe:stt=yes,synth=idle,voicesKo=3,mics=2,perm=granted');
+  // 🔴 물림 시그니처 — synth=paused(iOS가 백그라운드에서 얼린 채 복귀).
+  expect(readyProbe({ stt: 'yes', synth: 'paused', voicesKo: 0, mics: 'unknown', perm: 'prompt' }))
+    .toBe('ready_probe:stt=yes,synth=paused,voicesKo=0,mics=unknown,perm=prompt');
+});
+
+/** WP-1② — 확정(에코) 순간 hero 실렌더. px 소수 1자리(fontRenderSnapshot 계보). */
+test('fontRenderEcho — 확정 순간 실렌더 바이트 계약 (WP-1②)', () => {
+  expect(fontRenderEcho({ hero: 90.1349, w: 402, h: 874 }))
+    .toBe('font_render_echo:hero=90.1,w=402,h=874');
+  expect(fontRenderEcho({ hero: 64, w: 375, h: 812 }))
+    .toBe('font_render_echo:hero=64,w=375,h=812');
 });
 
 /** 계측 I — 회전이 실제로 일어났는가 + 안내가 실제로 떴는가(별개 사실). */
