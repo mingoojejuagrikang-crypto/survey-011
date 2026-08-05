@@ -4,6 +4,7 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { logger } from '../../lib/logger';
 import { inputControlPanelOpened, settingChanged } from '../../lib/logEvents';
 import { speak, setBargeInEnabled } from '../../lib/speech';
+import { CHIP_SWEEP_MAX_SECONDS, CHIP_SWEEP_STEP_SECONDS } from '../../lib/chipSweep';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 import { VOICE_TYPE } from './heroLayout';
 
@@ -71,6 +72,22 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
     s.set({ bargeInEnabled: next });
     setBargeInEnabled(next);
     logger.log({ type: 'app', extra: settingChanged('bargeInEnabled', next) });
+  };
+  // 🔴 v0.46.0 WP-D(민구 R3 · 제보 F17) — **네 번째 서랍 항목: 칩 왕복**.
+  //    민구 원문이 *"입력탭의 진행설정"* 이었고, 이 서랍이 그 자리다(08-05 확정 — 설정탭
+  //    SessionOptionsSection이 아니다. 「진행설정」이라는 이름의 UI는 이 레포에 없었다).
+  //    🔑 **왜 여기인가:** 이 값은 *"2~3m 떨어져서 읽히는가"* 가 판정 기준이라 **칩존을 보면서**
+  //    맞춰야 한다. 설정탭에 두면 조사 중에 탭을 나갔다 와야 한다.
+  //    값의 의미(편도 초·0=끔)와 상한은 src/lib/chipSweep.ts가 SSOT — 여기는 스텝퍼만.
+  //    로깅은 ttsRate·recognitionTolerance와 같은 350ms 디바운스(연타가 링버퍼를 잠식하지 않게).
+  const sweepLogDebounceRef = useRef<number | null>(null);
+  const setChipSweep = (next: number) => {
+    const value = Math.min(CHIP_SWEEP_MAX_SECONDS, Math.max(0, Math.round(next)));
+    s.set({ chipSweepSeconds: value });
+    if (sweepLogDebounceRef.current !== null) window.clearTimeout(sweepLogDebounceRef.current);
+    sweepLogDebounceRef.current = window.setTimeout(() => {
+      logger.log({ type: 'app', extra: settingChanged('chipSweepSeconds', value) });
+    }, 350);
   };
   const handledUiCommandSeqRef = useRef(0);
   useEffect(() => {
@@ -163,6 +180,24 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
             onPlus={() => setTtsRate(s.ttsRate + 0.05)}
           />
           <BargeInToggle on={s.bargeInEnabled} onToggle={() => setBargeIn(!s.bargeInEnabled)} />
+          {/* v0.46.0 WP-D — 말끊기와 같은 전폭 1행(375 폭에서 3항목 가로 배치는 48px 터치 타깃이
+              나오지 않는다). ⚠️ 접힌 요약 필(summary)에는 **넣지 않는다** — 문자열이 길어지면
+              375 폭 오버레이 필이 줄바꿈돼 §C5-b 겹침 관례를 해치고, heroLayout.ts:124가 고정으로
+              쓰는 **접힌 토글 49px**(WP-G 소유 계약)이 흔들린다. 이 행은 **펼친 높이만** 늘린다. */}
+          <StepperControl
+            testId="stepper-chip-sweep"
+            fullWidth
+            label="칩 왕복"
+            value={s.chipSweepSeconds > 0 ? `${s.chipSweepSeconds}초` : '끔'}
+            detail="편도 · 0초=끔"
+            accent={s.chipSweepSeconds > 0 ? T.text : T.textMute}
+            minusLabel="칩 왕복 빠르게(0초면 끔)"
+            plusLabel="칩 왕복 느리게"
+            canMinus={s.chipSweepSeconds > 0}
+            canPlus={s.chipSweepSeconds < CHIP_SWEEP_MAX_SECONDS}
+            onMinus={() => setChipSweep(s.chipSweepSeconds - CHIP_SWEEP_STEP_SECONDS)}
+            onPlus={() => setChipSweep(s.chipSweepSeconds + CHIP_SWEEP_STEP_SECONDS)}
+          />
         </div>
       )}
     </div>
@@ -234,6 +269,7 @@ function BargeInToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) 
 
 function StepperControl({
   testId, label, value, detail, accent, minusLabel, plusLabel, canMinus, canPlus, onMinus, onPlus,
+  fullWidth = false,
 }: {
   testId: string;
   label: string;
@@ -246,11 +282,14 @@ function StepperControl({
   canPlus: boolean;
   onMinus: () => void;
   onPlus: () => void;
+  /** v0.46.0 WP-D — 2열 그리드에서 한 행을 통째로 쓴다(BargeInToggle과 같은 관례). */
+  fullWidth?: boolean;
 }) {
   return (
     <div
       data-testid={testId}
       style={{
+        ...(fullWidth ? { gridColumn: '1 / -1' } : null),
         minWidth: 0,
         borderRadius: 16,
         border: `1px solid ${T.lineStrong}`,

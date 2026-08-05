@@ -11,6 +11,7 @@ import {
   DEFAULT_NEGATIVE_BEEP_ID,
   isBeepVariantId,
 } from '../lib/beepVariants';
+import { CHIP_SWEEP_DEFAULT_SECONDS, normalizeChipSweepSeconds } from '../lib/chipSweep';
 import {
   saveSettingsBackup,
   loadSettingsBackup,
@@ -127,6 +128,10 @@ interface SettingsState {
   /** v0.33.0 10-B — 입력화면 자동 캡처(음성입력 반응 시점 JPEG 저장, 로그 zip 동봉). 기본 on
    *  (민구 확정). 가드(2초 스로틀·세션당 100장)는 src/lib/screenshot.ts가 SSOT. */
   autoScreenCapture: boolean;
+  /** v0.46.0 WP-D(민구 R3, 제보 F17) — 칩존 좌우 왕복 스크롤의 **편도** 초. `0` = 끔.
+   *  기본 8초(민구 확정: *"기본값은 8초, 0초는 OFF"*). 편도로 읽는 근거·왕복 산술·상한은
+   *  src/lib/chipSweep.ts가 SSOT — 여기는 값만 담는다. */
+  chipSweepSeconds: number;
   /** v0.33.0 10-C — 비프음 선택(긍정=값 수용, 부정=이상치 알람). 값은 beepVariants.ts의 변형 id.
    *  기본 = 현행 사운드(상승/하강 스윕). 해석(kind→극성→변형)은 src/lib/beep.ts가 SSOT. */
   beepPositiveId: string;
@@ -283,6 +288,7 @@ export function makeSettingsDefaults(): SettingsDefaults {
     sessionCustomLabel: null,
     fastRecognition: false,
     autoScreenCapture: true,
+    chipSweepSeconds: CHIP_SWEEP_DEFAULT_SECONDS,
     beepPositiveId: DEFAULT_POSITIVE_BEEP_ID,
     beepNegativeId: DEFAULT_NEGATIVE_BEEP_ID,
     beepVolume: 0.5,
@@ -541,6 +547,9 @@ export const useSettingsStore = create<SettingsState>()(
         // v0.33.0 10-B/10-C — 자동 캡처·비프음 선택 신설. sessionCustomLabel과 같은 무조건
         // coercion 패턴으로 구버전 누락/손상을 안전 기본값으로 치유한다.
         if (typeof s.autoScreenCapture !== 'boolean') s.autoScreenCapture = true;
+        // v0.46.0 WP-D — 칩 왕복 편도 초. 구버전 영속본엔 없으므로 기본 8로 치유(autoScreenCapture와
+        // 같은 무조건 coercion 패턴). 0(끔)은 **유효값**이라 통과한다 — 판정은 chipSweep.ts가 SSOT.
+        s.chipSweepSeconds = normalizeChipSweepSeconds(s.chipSweepSeconds);
         if (!isBeepVariantId(s.beepPositiveId, 'positive')) s.beepPositiveId = DEFAULT_POSITIVE_BEEP_ID;
         if (!isBeepVariantId(s.beepNegativeId, 'negative')) s.beepNegativeId = DEFAULT_NEGATIVE_BEEP_ID;
         // v0.35.0 FB-D — 비프 마스터 볼륨. version 11 유지(무조건 coercion 한 줄, beepPositiveId 패턴).

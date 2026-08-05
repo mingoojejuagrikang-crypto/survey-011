@@ -57,6 +57,14 @@ export const SETTINGS = {
     ttsRate: 1.05,
     recognitionTolerance: 0.6,
     sessionLabelColId: null,
+    // 🔴 v0.46.0 WP-D — 칩 왕복 **끔**. 이 픽스처를 쓰는 스펙들(v039 우측끝 6단언 · 72조합 스윕 ·
+    //    프리뷰 캡처 재현)은 전부 칩존 `scrollLeft`를 **정지 상태로** 잰다.
+    //    ① 무엇을 대체했나: 07-27 「활성 칩 우측 끝 고정」 계약 — **폐기가 아니다.** 여기서 0을
+    //       넣음으로써 그 계약은 「왕복 OFF일 때의 동작」으로 **명시적으로 살아남는다.**
+    //    ② 왜: 제보 F17(멀리서 진행 상황이 안 보인다) · 민구 R3(기본 8초, 0초 OFF).
+    //    ③ 되살리려면: src/components/voice/ChipZone.tsx의 대체 주석(①②③)을 먼저 읽어라.
+    //    ⚠️ 이 줄을 지우면 기본값 8초가 살아나 왕복이 돌고, 위 스펙들이 시간에 따라 흔들린다.
+    chipSweepSeconds: 0,
     sessionAutoLabel: 'f3-active-zones',
     preferredVoiceName: '',
     roundDateColId: null,
