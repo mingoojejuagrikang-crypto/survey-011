@@ -141,8 +141,14 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   // stepperValue·captionXxs·stepperValueLg 전부 VOICE_TYPE 참조, 위반 0 유지).
   // v0.44.1 [CLIP-INIT-SILENT-1]: MicReconnectBanner 부제 1건(+1 계약 — VOICE_TYPE.caption,
   // "값 입력은 계속 됩니다·앱 재시작" 안내줄. 위반 0 유지).
-  expect(contractCount, '계약 참조 (통과)').toBe(56);
-  expect(allowlistCount, 'ALLOWLIST (허용)').toBe(5);
-  expect(commentCount, '주석 (skip)').toBe(1);
+  // v0.46.0 WP-B(중앙 유동 크기): **정당 파손 — 방향이 계약 쪽이다. 위반은 0 그대로.**
+  //   ① CompleteSummary 영수증이 인라인 리터럴 `max(15px, calc(clamp(17px,…,26px)*--fit-lo))`
+  //      → `STATE_TYPE.completeReceipt` 참조로 **승격**(allowlist −1, 계약 +1).
+  //   ② AlarmInterimStrip이 `STATE_TYPE.alarmInterim`을 새로 참조(계약 +1).
+  //   ③ VoiceHero의 fontRenderProbe 유지 근거 주석 2줄(주석 +2 — 실렌더는 안쪽 span인데
+  //      계측이 바깥 요소의 computed fontSize를 읽으므로 바깥 fontSize를 남긴다).
+  expect(contractCount, '계약 참조 (통과)').toBe(58);
+  expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
+  expect(commentCount, '주석 (skip)').toBe(3);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);
 });

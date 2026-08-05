@@ -208,10 +208,15 @@ test.describe('WP-D 왕복 배선 — 입력화면', () => {
     await expect(active, '왕복 시작 전 활성 칩 1개').toHaveCount(1);
     const nameBefore = await active.first().innerText();
 
-    const start = (await chipZoneMetrics(page)).scrollLeft;
-    await page.waitForTimeout(1400); // 편도 1초 초과 — 반환점을 지난다
-    const moved = Math.abs((await chipZoneMetrics(page)).scrollLeft - start);
     // 공허 방지 — 왕복이 실제로 진행된 뒤의 하이라이트를 재는 것이 이 테스트의 전부다.
+    // 🔴 v0.46.0 세션3 정정: 종전엔 «1400ms 뒤 한 시점의 |ΔscrollLeft|»를 봤는데, 등속 왕복이라
+    //    그 값은 **측정 위상에 좌우된다** — 반환점 부근에서 시작하면 왕복이 정상인데도 0에 가깝다.
+    //    실측으로 `moved === 5`(단언은 `> 5`)가 나와 경계에서 red가 됐다. 위상 의존 flaky다.
+    //    👉 ③과 같은 **표본 spread**로 바꾼다. 어느 위상에서 시작하든 1.5초 창 안에서 최대·최소가
+    //    벌어지므로 위상과 무관하게 «움직였다»를 판정한다.
+    const samples = await sampleScrollLeft(page, 15, 100); // 1.5초 — 편도 1초 초과(반환점을 지난다)
+    const moved = Math.max(...samples) - Math.min(...samples);
+    console.log(`sweep-highlight: spread=${moved.toFixed(1)} samples=${samples.length}`);
     expect(moved, '왕복이 실제로 진행됐다').toBeGreaterThan(5);
 
     await expect(active, '왕복은 「보기」 수단이지 활성 표시를 대체하지 않는다').toHaveCount(1);

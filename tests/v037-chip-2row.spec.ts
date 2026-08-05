@@ -70,6 +70,9 @@ const VOICE_COLS = Array.from({ length: 12 }, (_, i) => ({
 
 const SETTINGS = {
   state: {
+    // 🔴 왕복 OFF — 켜져 있으면 칩 클릭이 Playwright `stable` 체크에서 데드락한다.
+    //    기전·실측은 tests/fixtures/activeZones.ts의 chipSweepSeconds 주석이 정본.
+    chipSweepSeconds: 0,
     googleConnected: false, userEmail: null, sheet: null,
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_TEST_1/edit', sheetTab: 'Sheet1',
     columnsSheetId: 'SHEET_TEST_1', columnsSheetTab: 'Sheet1',

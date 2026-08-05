@@ -21,6 +21,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installVoiceMocks, fireStt, fireSttInterim } from './fixtures/stt';
 import { boot, PHONE_402 } from './fixtures/activeZones';
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
@@ -72,6 +73,14 @@ function bargeSettings() {
 
 async function bootBarge(page: Page, ttsOnendDelayMs: number) {
   await installVoiceMocks(page, { ttsOnendDelayMs });
+  // 🔴 v0.44.1 [CLIP-INIT-SILENT-1] — 이 스텁이 없으면 헤드리스 기본 gUM **거부**가 시작 init을
+  //    실패시키고, 그 실패가 v0.44.1부터 **의도적으로 시끄럽다**(mic_lost 래치 + 재연결 배너 +
+  //    고지 TTS). 그러면 `waitForTtsWindow`가 잡는 재생창이 「항목 안내」가 아니라 「마이크 실패
+  //    고지」가 되고, 그 창에는 `awaiting`이 없어 handleFinal이 barge-in 블록 앞에서 return한다
+  //    → `stt_barge_in` 0건. **제품 결함이 아니라 하네스 결함이다**(같은 시퀀스의
+  //    v0440-d1-bargein D1-T4는 이 스텁을 깔고 green).
+  //    아래 `boot`(activeZones)를 쓰는 §5-1 ③④가 통과해온 이유도 그 픽스처가 gUM을 목업해서다.
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(
     ({ s, storeKey }) => {

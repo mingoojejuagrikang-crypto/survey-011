@@ -37,6 +37,9 @@ const STORE_KEY = 'survey-011-settings-v3';
 /** 기본 다이얼 0.6 → minConf 0.6. 아래 신뢰도들이 게이트 양쪽에 걸치도록 고른 값이다. */
 const SETTINGS = {
   state: {
+    // 🔴 왕복 OFF — 켜져 있으면 칩 클릭이 Playwright `stable` 체크에서 데드락한다.
+    //    기전·실측은 tests/fixtures/activeZones.ts의 chipSweepSeconds 주석이 정본.
+    chipSweepSeconds: 0,
     googleConnected: false, userEmail: null, sheet: null,
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_V043/edit', sheetTab: 'Sheet1',
     columnsSheetId: 'SHEET_V043', columnsSheetTab: 'Sheet1',
@@ -208,6 +211,9 @@ const PREV_ROUND = (() => {
  *  c8 횡경 `trendRule:'increase'` = 커지면 알람. 직전 100.0 → 오늘 120.5 발화 → 위반. */
 const SETTINGS_TREND = {
   state: {
+    // 🔴 왕복 OFF — 켜져 있으면 칩 클릭이 Playwright `stable` 체크에서 데드락한다.
+    //    기전·실측은 tests/fixtures/activeZones.ts의 chipSweepSeconds 주석이 정본.
+    chipSweepSeconds: 0,
     googleConnected: true, userEmail: 'tester@example.com',
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_V043_TREND/edit', sheetTab: 'Sheet1',
     columnsSheetId: 'SHEET_V043_TREND', columnsSheetTab: 'Sheet1',

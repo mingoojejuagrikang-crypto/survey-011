@@ -56,6 +56,9 @@ const COLUMNS = [
 
 const SETTINGS = {
   state: {
+    // 🔴 왕복 OFF — 켜져 있으면 칩 클릭이 Playwright `stable` 체크에서 데드락한다.
+    //    기전·실측은 tests/fixtures/activeZones.ts의 chipSweepSeconds 주석이 정본.
+    chipSweepSeconds: 0,
     googleConnected: true,
     userEmail: 'tester@example.com',
     sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_V035_HC/edit',

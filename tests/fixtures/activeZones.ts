@@ -64,6 +64,22 @@ export const SETTINGS = {
     //    ② 왜: 제보 F17(멀리서 진행 상황이 안 보인다) · 민구 R3(기본 8초, 0초 OFF).
     //    ③ 되살리려면: src/components/voice/ChipZone.tsx의 대체 주석(①②③)을 먼저 읽어라.
     //    ⚠️ 이 줄을 지우면 기본값 8초가 살아나 왕복이 돌고, 위 스펙들이 시간에 따라 흔들린다.
+    //
+    // 🔴🔴 **기전 — 이 픽스처 밖의 스펙에도 왜 이 줄이 필요한가** (v0.46.0 세션3 실측, 정본):
+    //    왕복이 켜져 있으면 칩을 클릭하는 **모든** 스펙이 죽는다. "흔들린다"가 아니라 **확정적으로
+    //    타임아웃**이다. Playwright의 `click()`은 actionability 체크(visible·enabled·**stable**)를
+    //    통과해야 pointer 이벤트를 보내는데, `stable`은 «두 연속 프레임에서 bounding box가 같을 것»
+    //    이다. 등속 왕복 중인 칩은 **그 조건을 영원히 만족하지 못한다** → `element is not stable`을
+    //    반복하다 테스트 타임아웃(120s).
+    //    🔑 **제품에는 방어가 있다** — ChipZone이 `pointerdown`에서 왕복을 멈춘다(장갑 오탭 대비).
+    //       그런데 Playwright는 **stable 체크가 pointerdown보다 먼저**라 그 방어에 도달하지 못한다.
+    //       **데드락이고, 실사용 결함이 아니다**(사람 손가락은 stable 체크를 안 거친다).
+    //    실측 A/B (`manual-input`, 같은 두 테스트):
+    //       왕복 ON  → 2.0분 × 2건 **실패**(`locator.click` 타임아웃)
+    //       왕복 OFF → 7.9초 · 8.9초 **통과** — 약 15배.
+    //    👉 그래서 칩을 클릭·단언하는 스펙은 이 픽스처를 쓰지 않더라도 자기 설정에
+    //       `chipSweepSeconds: 0`을 **직접** 넣어야 한다. 왕복 자체의 계약은
+    //       `tests/v046-chip-sweep.spec.ts`가 명시적으로 켜서 잰다(그쪽이 정본 게이트).
     chipSweepSeconds: 0,
     sessionAutoLabel: 'f3-active-zones',
     preferredVoiceName: '',

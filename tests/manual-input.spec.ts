@@ -32,6 +32,9 @@ const STORE_KEY = 'survey-011-settings-v3';
 
 const BASE_SETTINGS = {
   state: {
+    // 🔴 왕복 OFF — 켜져 있으면 칩 클릭이 Playwright `stable` 체크에서 데드락한다.
+    //    기전·실측은 tests/fixtures/activeZones.ts의 chipSweepSeconds 주석이 정본.
+    chipSweepSeconds: 0,
     googleConnected: false,
     userEmail: null,
     sheet: null,
@@ -61,6 +64,9 @@ const BASE_SETTINGS = {
 const OPTIONS_SETTINGS = {
   ...BASE_SETTINGS,
   state: {
+    // 🔴 왕복 OFF — 켜져 있으면 칩 클릭이 Playwright `stable` 체크에서 데드락한다.
+    //    기전·실측은 tests/fixtures/activeZones.ts의 chipSweepSeconds 주석이 정본.
+    chipSweepSeconds: 0,
     ...BASE_SETTINGS.state,
     columns: [
       { id: 'c6', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 3 } },
@@ -425,6 +431,9 @@ async function setupTrendAndStart(page: Page) {
   const PREV_ROUND = localISO(new Date(Date.now() - 86_400_000));
   const TREND_SETTINGS = {
     state: {
+      // 🔴 왕복 OFF — 켜져 있으면 칩 클릭이 Playwright `stable` 체크에서 데드락한다.
+      //    기전·실측은 tests/fixtures/activeZones.ts의 chipSweepSeconds 주석이 정본.
+      chipSweepSeconds: 0,
       googleConnected: true,
       userEmail: 'tester@example.com',
       sheetUrl: 'https://docs.google.com/spreadsheets/d/SHEET_A1_MANUAL/edit',
