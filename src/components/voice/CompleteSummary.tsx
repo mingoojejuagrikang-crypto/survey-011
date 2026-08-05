@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { T } from '../../tokens';
-import { COMPLETE_SUMMARY_BASE_FONT_PX, STATE_TYPE } from './heroLayout';
+import { COMPLETE_RECEIPT_BASE_FONT_PX, COMPLETE_SUMMARY_BASE_FONT_PX, STATE_TYPE } from './heroLayout';
 import { useFitGroup } from './useFitGroup';
 
 /** 마지막 커밋 영수증을 완료 화면에 띄워 두는 시간(민구 확정 2026-07-25).
@@ -50,15 +50,26 @@ export function CompleteSummary({
   const showReceipt = reviewCommit !== null && receiptVisible;
 
   const countFitRef = useRef<HTMLSpanElement>(null);
+  const receiptFitRef = useRef<HTMLSpanElement>(null);
   // UI-c 규칙 1: 시각 상태어를 지운 폭은 완료 수치가 가져간다. 고정 px 상한을 올리는 대신
   // 실제 중앙 영역과 `X / N` 렌더 폭을 읽어 열린 배율을 찾는다(GL-007 원칙 2·4).
+  //
+  // 🔴 v0.46.0 WP-B — 영수증도 같은 계약으로 끌어온다(민구 확정 08-05, 안 (a)).
+  //  그룹 배열 **순서가 우선순위**다: `X / N`(주 정보)이 먼저 공간을 가져가고 영수증이 뒤를 받는다.
   const fitRef = useFitGroup<HTMLDivElement>(
     [completedCount, totalRows, reviewCommit?.value, showReceipt],
-    [{
-      variable: '--fit-summary',
-      members: [countFitRef],
-      searchBasePx: COMPLETE_SUMMARY_BASE_FONT_PX,
-    }],
+    [
+      {
+        variable: '--fit-summary',
+        members: [countFitRef],
+        searchBasePx: COMPLETE_SUMMARY_BASE_FONT_PX,
+      },
+      {
+        variable: '--fit-receipt',
+        members: [receiptFitRef],
+        searchBasePx: COMPLETE_RECEIPT_BASE_FONT_PX,
+      },
+    ],
   );
   return (
     <div
@@ -78,13 +89,19 @@ export function CompleteSummary({
     >
       {showReceipt && reviewCommit && (
         <span
+          ref={receiptFitRef}
           data-testid="complete-receipt"
+          data-fit-group="receipt"
           aria-label={`${reviewCommit.name} ${reviewCommit.value} 입력됨`}
           style={{
-            display: 'inline-flex', alignItems: 'baseline', gap: '0.3em',
-            maxWidth: '100%',
+            display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: '0.3em',
+            // 🔴 `maxWidth`가 아니라 `width: 100%`다 — `maxWidth`만 두면 박스가 잉크에 딱 붙는
+            //    shrink-to-fit이 되어 **넘침 경계가 잉크와 함께 움직여** 이진탐색이 상한을 못
+            //    찾는다(`AnomalyAlertPopup.tsx:191-194`가 같은 이유로 같은 처방을 쓴다).
+            width: '100%', maxWidth: '100%',
             color: T.textDim,
-            fontSize: 'max(15px, calc(clamp(17px, min(5vw, 2.6vh), 26px) * var(--fit-lo, 1)))',
+            // 🔴 인라인 하드코딩에서 상수 계층으로 승격 + 26px 고정 상한 삭제(v0.46.0 WP-B).
+            fontSize: STATE_TYPE.completeReceipt,
             fontWeight: 850,
             lineHeight: 1.1,
             letterSpacing: -0.3,

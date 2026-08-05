@@ -4,6 +4,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useFitGroup } from './useFitGroup';
 import {
   STATE_TYPE,
+  STATE_ALARM_INTERIM_BASE_PX,
   HERO_BASE_FONT_PX,
   HERO_GAP_PX,
   HERO_LABEL_RESERVE_SCALE,
@@ -336,8 +337,25 @@ function HeroPrimaryLine({
  *  interimValue를 **자체 구독**한다(칩·컨트롤 리렌더 회피). */
 export function AlarmInterimStrip() {
   const interim = useSessionStore((st) => st.interimValue);
+  // 🔴 v0.46.0 WP-B — 스트립에 **자기 fit 그룹**을 준다(민구 확정 08-05, 안 (a)).
+  //  종전엔 `STATE_TYPE.alarmInterim`이 `var(--fit-hi)`를 곱했는데 **그 배율이 여기 도달하지
+  //  않았다**: `--fit-hi`를 심는 것은 `AnomalyAlertPopup`의 `useFitScale`이고 이 스트립은 그
+  //  **형제**(CenterStage 알람 div의 두 번째 행)라 상속 경로가 없다 — 늘 fallback 1이었다.
+  //  게다가 `--fit-hi`는 축소 전용이라 1을 넘지도 않는다. 즉 **위로 여는 경로가 없었다.**
+  //  ⚠️ 컨테이너를 스트립 자신(`height:auto`)으로 두므로 높이는 판정에 안 걸리고, `nowrap` +
+  //     `ellipsis`인 폭이 배율을 정한다 — 이 슬롯에서 의도한 계약 그대로다.
+  const valueFitRef = useRef<HTMLSpanElement>(null);
+  const fitRef = useFitGroup<HTMLDivElement>(
+    [interim],
+    [{
+      variable: '--fit-alarm-interim',
+      members: [valueFitRef],
+      searchBasePx: STATE_ALARM_INTERIM_BASE_PX,
+    }],
+  );
   return (
     <div
+      ref={fitRef}
       data-testid={interim ? 'interim-value' : undefined}
       aria-label={interim ? `인식 중: ${interim}` : undefined}
       aria-hidden={interim ? undefined : true}
@@ -347,21 +365,33 @@ export function AlarmInterimStrip() {
         width: '100%', height: 'auto', minHeight: 'clamp(46px, 6.5vh, 68px)',
         padding: '2px 8px',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: T.text,
-        // 🔴 인라인 하드코딩 금지([TYPO-CONTRACT-1]) — heroLayout의 상수 계층을 소비한다.
-        //    종전 인라인 값이 실기기에서 32.16px로 렌더돼 fb-27-7("너무 작음")의 근인이었다.
-        fontSize: STATE_TYPE.alarmInterim,
-        fontWeight: 900,
-        lineHeight: 1.15,
-        letterSpacing: -0.8,
-        textAlign: 'center',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
+        minWidth: 0,
         visibility: interim ? 'visible' : 'hidden',
       }}
     >
-      {interim}
+      <span
+        ref={valueFitRef}
+        data-fit-group="alarm-interim"
+        style={{
+          color: T.text,
+          // 🔴 인라인 하드코딩 금지([TYPO-CONTRACT-1]) — heroLayout의 상수 계층을 소비한다.
+          //    종전 인라인 값이 실기기에서 32.16px로 렌더돼 fb-27-7("너무 작음")의 근인이었다.
+          fontSize: STATE_TYPE.alarmInterim,
+          fontWeight: 900,
+          lineHeight: 1.15,
+          letterSpacing: -0.8,
+          textAlign: 'center',
+          // 🔴 `maxWidth`가 아니라 `width: 100%`다 — `maxWidth`만 두면 박스가 잉크에 딱 붙는
+          //    shrink-to-fit이 되어 **넘침 경계가 잉크와 함께 움직여** 이진탐색이 상한을 못
+          //    찾는다(`AnomalyAlertPopup.tsx:191-194`가 같은 이유로 같은 처방을 쓴다).
+          display: 'block', width: '100%',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {interim}
+      </span>
     </div>
   );
 }

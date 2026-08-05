@@ -7,6 +7,12 @@ export const HERO_MIN_FONT_PX = { name: 22, value: 26, interim: 24 } as const;
 export const HERO_BASE_FONT_PX = { name: 34, value: 64, interim: 44 } as const;
 export const COMPLETE_SUMMARY_MIN_FONT_PX = 24;
 export const COMPLETE_SUMMARY_BASE_FONT_PX = 40;
+/** 알람 중 실시간 인식값의 이진탐색 첫 probe 유도값(상한이 아니다 — `STATE_TYPE.alarmInterim` 참조). */
+export const STATE_ALARM_INTERIM_BASE_PX = 44;
+/** 완료 화면 커밋 영수증(`✓ 항목명 값`). 종전 `clamp(17px, …, 26px)`의 하한·기준을 이어받는다
+ *  — 🔴 **26px 상한은 v0.46.0 WP-B가 삭제했다**(`STATE_TYPE.completeReceipt` 참조). */
+export const COMPLETE_RECEIPT_MIN_FONT_PX = 15;
+export const COMPLETE_RECEIPT_BASE_FONT_PX = 17;
 
 /** 🔴 프로덕션 라벨 예약용 잠정 하한 — ui-standard §7-2의 민구 확정값이 오면 이 한 곳을 대체한다.
  *  ba87426 402px 실측 61.67px의 90%를 보존하며, 상한이 아니므로 fit은 더 커질 수 있다. */
@@ -189,8 +195,21 @@ export const CONTROL_ROW_FRACTION = 10 / 34;
  *  HERO_TYPE과 같은 계약: 절대 px 단독 금지(전부 clamp + min(vw,vh) 비례 + --fit 배율),
  *  **상태별 인라인 폰트 정의 금지**(민구 지적: "상태에 따라 식별이 불가할 만큼 작아지는 경우"). */
 export const STATE_TYPE = {
-  /** 경보행 `<추세|범위>알람 : <넘어선 정도>` — 값 **위**에 오고 값을 가리지 않는다(§[2]). */
-  alarmLabel: 'max(17px, calc(clamp(22px, min(6.6vw, 3.6vh), 36px) * var(--fit-lo, 1)))',
+  /** 경보행 `<추세|범위>알람 : <넘어선 정도>` — 값 **위**에 오고 값을 가리지 않는다(§[2]).
+   *
+   *  🔴 **v0.46.0 WP-B — 계약이 바뀌었다**(민구 확정 08-05, 안 (a)):
+   *  종전 `max(17px, calc(clamp(22px, min(6.6vw,3.6vh), **36px**) * var(--fit-lo, 1)))`
+   *  → **`36px` 고정 상한 삭제 + 뷰포트 비례 기준을 고정 기준px로 교체 + 축소 전용 `--fit-lo`를
+   *    열린 `--fit-alarm-label`로 교체.** 이제 크기는 배정 영역이 정한다(ui-standard 규칙 2).
+   *  ⚠️ 상한만 지우는 처방으로는 안 됐다 — 402×874에서 상한은 **애초에 비활성**이었는데
+   *     (`min(6.6vw=26.5, 3.6vh=31.5)` = 26.5 < 36) 하한 오라클이 red였다. 진짜 막은 것은
+   *     **축소 전용 배율**이다(`--fit-lo`는 `useFitScale`이 내리며 1을 넘지 않는다).
+   *  🔴 함께 바뀐 것: `AnomalyAlertPopup`의 경보행이 **`nowrap` 한 줄**이 된다. 종전
+   *     `wordBreak:keep-all`/`overflowWrap:anywhere`로 줄바꿈하던 것을 바꾼 이유는,
+   *     **줄바꿈 텍스트는 폭이 배율을 못 묶기 때문**이다 — 글자를 키우면 줄 수만 늘어
+   *     `fitGroups`의 상향 탐색이 끝까지 열려 버린다. 값 대표라인(`HeroPrimaryLine`)이
+   *     이미 쓰는 계약(`nowrap` + `ellipsis` + fit)과 같은 형태로 맞춘 것이다. */
+  alarmLabel: fittedHeroType(17, 22, '--fit-alarm-label'),
   /** 2열 비교의 열 라벨(`mm-dd` / `현재`). 402px 폭에서 56px이고, 더 넓은 영역에서는
    *  함께 커진다. `clamp(..., max)`를 다시 넣으면 T6의 상한 재발이다.
    *  v0.44.0 §C0 — `--fit-compare-label`(AnomalyAlertPopup의 `useFitGroup`)이 각 칸 폭 안에
@@ -205,13 +224,38 @@ export const STATE_TYPE = {
     COMPLETE_SUMMARY_BASE_FONT_PX,
     '--fit-summary',
   ),
+  /** 🔴 v0.46.0 WP-B — 완료 화면 커밋 영수증(`✓ 항목명 값`). **계약이 바뀌었다**(민구 확정 08-05).
+   *  종전 `CompleteSummary.tsx` 인라인 `max(15px, calc(clamp(17px, min(5vw,2.6vh), **26px**)
+   *  * var(--fit-lo, 1)))` → **`26px` 고정 상한 삭제 + 축소 전용 `--fit-lo`를 열린
+   *  `--fit-receipt`로 교체 + 인라인에서 이 상수 계층으로 승격**([TYPO-CONTRACT-1]).
+   *  ⚠️ `--fit-lo`는 `useFitScale`(구 훅) 전용이고 `CompleteSummary`에는 그 훅이 없어
+   *  **늘 fallback 1이었다** — 상한 26px가 사실상 고정 크기로 작동했다. */
+  completeReceipt: fittedHeroType(
+    COMPLETE_RECEIPT_MIN_FONT_PX,
+    COMPLETE_RECEIPT_BASE_FONT_PX,
+    '--fit-receipt',
+  ),
   /** 🔴 알람 중 **실시간 인식값**(fb-27-7 5항 "정상 진행될때의 수준만큼 커야 함").
    *  종전 `AlarmInterimStrip`이 이 값을 **인라인 하드코딩**(`clamp(24px, min(8vw,4.8vh), 42px)`)해
    *  실기기에서 32.16px로 렌더됐다 — 정상 진행 InterimLine(90.13px)의 36%. [TYPO-CONTRACT-1]이
    *  "상태별 인라인 정의 금지"로 막으려던 바로 그 증상이 계약을 우회한 코드에서 재현된 것이다.
    *  그래서 여기 상수로 승격한다. **다시 인라인으로 내리지 마라.**
-   *  크기는 HERO_TYPE.interim과 같은 급으로 맞추되, 알람 카드가 같은 트랙을 쓰므로 상한만 낮춘다. */
-  alarmInterim: 'max(24px, calc(clamp(44px, min(19vw, 11vh), 96px) * var(--fit-hi, 1)))',
+   *
+   *  🔴 **v0.46.0 WP-B — 계약이 바뀌었다**(민구 확정 08-05, 안 (a)):
+   *  종전 `max(24px, calc(clamp(44px, min(19vw,11vh), **96px**) * var(--fit-hi, 1)))`
+   *  → **`96px` 고정 상한 삭제 + 뷰포트 비례(`vw`/`vh`) 기준을 고정 기준px로 교체 +
+   *    축소 전용 `--fit-hi`를 열린 `--fit-alarm-interim`으로 교체.**
+   *  ⚠️ 상한만 지우는 처방으로는 안 됐다. 실측(08-05 하한 오라클):
+   *   ① 402×874에서 상한은 **애초에 비활성**이었다(`min(19vw=76.4, 11vh=96.1)` = 76.4 < 96) —
+   *      그런데도 여유 프로브가 red였다. 즉 상한이 유일한 원인이 아니다.
+   *   ② `--fit-hi`는 `useFitScale`(구 훅)이 내리는 **축소 전용 배율이라 1을 넘지 않는다**
+   *      (`heroLayout.ts` VOICE_TYPE 주석 참조). **위로 여는 경로가 아예 없었다.**
+   *   ③ 게다가 `AlarmInterimStrip`은 `AnomalyAlertPopup`의 **형제**라 카드의 `useFitScale`이
+   *      심는 `--fit-hi`를 **상속조차 받지 못한다**(항상 fallback 1).
+   *  👉 그래서 **여는 변수를 새로 만들고 `VoiceHero.tsx`의 스트립에 `useFitGroup`을 배선했다.**
+   *     이제 크기는 배정 영역이 정한다(ui-standard 규칙 2). 기준 44px은 상한이 아니라
+   *     이진탐색의 첫 probe 유도값이다. */
+  alarmInterim: fittedHeroType(24, 44, '--fit-alarm-interim'),
 } as const;
 
 /** v0.43.0 UI-f — 현장 화면(`src/components/voice/`) 인라인 fontSize 계약 SSOT.

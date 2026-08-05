@@ -81,6 +81,12 @@ export function AnomalyAlertPopup({
   // 둘 다 공유한다(§C5-c: "같은 줄에 같은 성격의 데이터가 존재하면 작은 크기에 맞추어 통일").
   // 이 카드 자체는 여전히 구 훅(useFitScale, 위 fitRef)이 돈다 — 신 훅은 비교 그리드 안쪽에만
   // 적용된다(v043-fit-group.spec.ts "fit 기제 경계"가 이 경계를 지킨다).
+  // 🔴 v0.46.0 WP-B — 경보행을 여는 그룹. 컨테이너는 전용 래퍼다(카드 루트 아님 — 위 배선 주석).
+  const headlineValueRef = useRef<HTMLSpanElement>(null);
+  const headlineFitRef = useFitGroup<HTMLDivElement>(
+    [alarmLabel],
+    [{ variable: '--fit-alarm-label', members: [headlineValueRef], searchBasePx: 22 }],
+  );
   const prevLabelRef = useRef<HTMLSpanElement>(null);
   const prevValueRef = useRef<HTMLSpanElement>(null);
   const nextLabelRef = useRef<HTMLSpanElement>(null);
@@ -111,17 +117,33 @@ export function AnomalyAlertPopup({
       }}
     >
       {alarmLabel !== null && (
-        <span
-          data-testid="anomaly-headline"
-          style={{
-            maxWidth: '100%', color: accent,
-            fontSize: STATE_TYPE.alarmLabel,
-            fontWeight: 900, lineHeight: 1.08,
-            wordBreak: 'keep-all', overflowWrap: 'anywhere',
-          }}
-        >
-          {alarmLabel}
-        </span>
+        // 🔴 v0.46.0 WP-B — 경보행 전용 fit 그룹의 컨테이너(민구 확정 08-05, 안 (a)).
+        //  **카드 루트에 붙이지 않는다.** 루트에는 이미 구 훅 `useFitScale`의 ref가 있어서,
+        //  같은 요소에 신 훅을 겹치면 두 fit 기제가 한 박스를 동시에 조작해 ResizeObserver가
+        //  서로를 발화시킨다 — `v043-fit-group.spec.ts`의 「fit 기제 경계」가 지키는 바로 그 선이다.
+        //  전용 래퍼를 쓰면 경계를 넘지 않고도 경보행만 열 수 있다.
+        <div ref={headlineFitRef} style={{ width: '100%', minWidth: 0, display: 'flex', justifyContent: 'center' }}>
+          <span
+            ref={headlineValueRef}
+            data-fit-group="alarm-label"
+            data-testid="anomaly-headline"
+            style={{
+              // 🔴 `maxWidth`가 아니라 `width: 100%` — shrink-to-fit이면 넘침 경계가 잉크와 함께
+              //    움직여 이진탐색이 상한을 못 찾는다(아래 `COMPARE_LABEL` 주석과 같은 이유).
+              width: '100%', maxWidth: '100%',
+              color: accent,
+              fontSize: STATE_TYPE.alarmLabel,
+              fontWeight: 900, lineHeight: 1.08,
+              // 🔴 종전 `wordBreak:keep-all`/`overflowWrap:anywhere`(줄바꿈)에서 바꿨다 —
+              //    줄바꿈 텍스트는 글자를 키워도 줄 수만 늘어 **폭이 배율을 못 묶는다**.
+              //    값 대표라인과 같은 계약(`nowrap` + `ellipsis` + fit)으로 맞춘다.
+              display: 'block', textAlign: 'center',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+          >
+            {alarmLabel}
+          </span>
+        </div>
       )}
       {/* 직전/현재는 상하 2줄을 유지하되, 각 행을 같은 폭의 라벨/값 영역으로 나눈다.
           2026-07-29 민구 제보 #3 — 각 영역 중앙정렬은 글자 크기 차이 때문에 시각 무게가 오른쪽으로
