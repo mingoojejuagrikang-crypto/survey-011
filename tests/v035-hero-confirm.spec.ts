@@ -7,6 +7,11 @@
  *  ⚠️ 확인 카드는 valueBurst.name/value에서만 읽는다(currentCol이 이미 다음 항목이므로 — v0.34.0
  *     A4가 값 표시를 없앤 이유). 그래서 대기 카드와 시각적으로 구분(밝은 초록 채움 + ✓)된다.
  *
+ *  🔴 v0.45.0 UI③(민구 확정 08-05, 추가요청2) 갱신 — confirm의 '✓+항목명' 라벨은 **전면 삭제**
+ *  됐다(§C7 판별식으로도 남던 잔여 표시 재지적). 남는 것은 **값 플래시**(1.5초, hero-primary)와
+ *  aria-label(항목명·값 보존)이고, 성공 표시는 방금 확정된 칩의 "V" 마크(chip-commit-mark,
+ *  음성 커밋 전용·같은 1.5초 리듬)가 승계한다 — 파일 하단 UI③ 절이 그 계약을 고정한다.
+ *
  *  ── v0.35.0 R3-FIX-5(리뷰 라운드3, Codex Medium) 재작성 ──────────────────────────────────
  *  종전 스펙은 **음성 컬럼이 1개**였다. 그러면 그 커밋이 곧 **행의 마지막 음성 컬럼** 커밋이라,
  *  advance()가 phase를 'complete'로 올리고 "N행 완료"를 안내한 뒤 다음 행에서 'active'로 복귀한다
@@ -29,6 +34,9 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
+// v0.45.0 UI③ 신규 절(칩 V 마크)은 신규 스펙 계약(PRINCIPLES §7 픽스처 SSOT)대로 픽스처로 부트한다.
+import { installVoiceMocks, fireStt as fireSttFixture } from './fixtures/stt';
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 
 test.setTimeout(120_000);
 
@@ -164,7 +172,7 @@ async function fireStt(page: Page, transcript: string) {
   }, transcript);
 }
 
-test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1.5초 유지된 뒤 다음 항목 대기로 복귀', async ({ page }) => {
+test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 값 플래시가 ~1.5초 유지된 뒤 다음 항목 대기로 복귀', async ({ page }) => {
   await boot(page);
   await startSession(page);
 
@@ -184,6 +192,11 @@ test('FB-A/C/F — 행 중간 음성 컬럼 커밋: 확인 카드(✓+값)가 ~1
   const confirm = page.locator('[data-hero-state="confirm"]');
   await expect(confirm).toBeVisible({ timeout: 2000 });
   await expect(page.locator('[data-testid="hero-primary"]')).toHaveText('30.7');
+  // 정당 파손(v0.45.0 UI③, 민구 08-05 추가요청2) — confirm의 '✓+항목명' 라벨은 전면 삭제됐다.
+  // 값 플래시만 남고, 항목명·값은 aria-label이 보존한다(성공 표시는 칩 V 마크가 승계 — 하단 절).
+  await expect(confirm, "confirm에 '✓+항목명' 라벨 미렌더").not.toContainText('당도');
+  await expect(confirm, '체크 심볼도 전면 삭제').not.toContainText('✓');
+  await expect(confirm, '항목명·값은 접근 채널에 남는다').toHaveAttribute('aria-label', '당도 30.7 입력 완료');
   // v0.36.0 코덱스 시안(민구 확정) — 파형은 **상시 밴드**(hero 밖 독립 row)로 이동해 확인 상태에서도
   // 유지된다(§6.2 "팝업/확인/경고 상태에서도 유지"). 종전 "확인 중 파형 미표시(count 0)" 단언을
   // 상시 유지 단언으로 교체 — 확인 플래시 자체(CONFIRM_MS·review>confirm)는 아래에서 계속 검증한다.
@@ -357,4 +370,79 @@ test('리뷰#2 — skip-완료 검토는 방금 커밋된 앞 셀(당도)을 보
     '검토는 방금 커밋된 앞 셀 당도(30.7)를 보인다 — 건너뛴 산도(4.2)가 아니다',
   ).toHaveText('30.7');
   console.log('✓ skip-완료 검토: 당도 30.7(방금 커밋) — 산도 4.2 오표시 없음');
+});
+
+// ─── v0.45.0 UI③ — 칩 "V" 마크(음성 커밋 승계 표시) ─────────────────────────────────────────
+//   중앙 '✓+항목명' 라벨 삭제(위 정당 파손)의 승계: 방금 **음성으로** 확정된 칩의 항목명 앞에
+//   "V"(data-testid=chip-commit-mark)가 값 플래시와 같은 리듬(VOICE_COMMIT_MARK_MS = CONFIRM_MS
+//   = 1.5초)으로 표시된다. `valueBurst`는 음성 커밋 경로만 발행하므로(수동·터치·이상치 정정은
+//   commitReceipt) 그 자체가 "음성 입력 칩만 V"의 판별식이다 — 아래 수동 커밋 대조군이 그 반쪽.
+//   신규 절은 픽스처 SSOT(tests/fixtures/stt.ts·gum.ts)로 부트한다(인라인 목 복붙 금지 계약).
+
+async function bootWithFixtures(page: Page) {
+  await page.setViewportSize(PHONE_402);
+  await stubSheets(page);
+  await installVoiceMocks(page);
+  await page.addInitScript(GUM_GRANT_SCRIPT);
+  // F18 정착 지연(1초)만 생략하는 공식 테스트 심 — 목이 아니라 대기 축약이다(심 오라클: v0440-c8-flow).
+  await page.addInitScript(() => {
+    (window as unknown as { __micSettleSkipForTest?: boolean }).__micSettleSkipForTest = true;
+  });
+  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(
+    ({ settings, storeKey }) => {
+      localStorage.clear();
+      localStorage.setItem('gs10_google_token', JSON.stringify({
+        access_token: 'test-token', expires_at: Date.now() + 3600_000, email: 'tester@example.com',
+      }));
+      localStorage.setItem(storeKey, JSON.stringify(settings));
+    },
+    { settings: SETTINGS, storeKey: STORE_KEY },
+  );
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(500);
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(200);
+}
+
+test('UI③ — 음성 커밋: 확정 칩에 V 마크가 뜨고 값 플래시와 같은 1.5초 뒤 소멸한다', async ({ page }) => {
+  await bootWithFixtures(page);
+  await startSession(page);
+  await expect(page.locator('[data-testid="chip-commit-mark"]'), '커밋 전엔 마크 없음').toHaveCount(0);
+
+  // 행 중간 컬럼(당도) 음성 커밋 → 활성 칩은 산도로 넘어가고, 방금 확정된 당도 칩에 V.
+  await fireSttFixture(page, '30.7', 300);
+  const mark = page.locator('[data-testid="column-chip"][data-col-name="당도"] [data-testid="chip-commit-mark"]');
+  await expect(mark, '방금 음성 확정된 칩의 항목명 앞에 V 마크').toBeVisible({ timeout: 2000 });
+  await expect(mark).toHaveText('V');
+  await expect(page.locator('[data-testid="chip-commit-mark"]'), '마크는 확정 칩 하나뿐').toHaveCount(1);
+  await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '활성 칩은 이미 다음 항목(산도)')
+    .toContainText('산도');
+
+  // 값 플래시(CONFIRM_MS)와 같은 리듬 — 창의 중간에도 살아 있고, 1.5초가 지나면 꺼진다.
+  await page.waitForTimeout(600);
+  await expect(mark, '1.5초 창 중간에도 유지된다(한 프레임 깜빡임이 아니다)').toBeVisible();
+  await expect(page.locator('[data-testid="chip-commit-mark"]'), 'VOICE_COMMIT_MARK_MS 경과 후 소멸')
+    .toHaveCount(0, { timeout: 3000 });
+  console.log('✓ UI③ — 음성 커밋 칩 V 마크: 표시 → 1.5초 유지 → 소멸');
+});
+
+test('UI③ — 수동(터치) 커밋에는 V 마크가 붙지 않는다(음성 전용 판별식)', async ({ page }) => {
+  await bootWithFixtures(page);
+  await startSession(page);
+
+  // 활성 칩(당도)을 탭 → 수동 키패드로 31.5 커밋. valueBurst(음성)가 아니라 commitReceipt 경로다.
+  await page.locator('[data-testid="column-chip"][data-col-name="당도"]').click();
+  await expect(page.locator('[data-testid="manual-value-sheet"]')).toBeVisible({ timeout: 3000 });
+  for (const k of ['3', '1', '.', '5']) await page.locator(`[data-testid="manual-key-${k}"]`).click();
+  await page.locator('[data-testid="manual-commit"]').click();
+  await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="column-chip"][data-col-name="당도"]')).toContainText('31.5');
+
+  // 마크 창(1.5초)을 통째로 덮는 구간을 표집 — 어느 순간에도 마크가 떠서는 안 된다.
+  for (let i = 0; i < 4; i++) {
+    await expect(page.locator('[data-testid="chip-commit-mark"]'), '수동 커밋엔 V 마크 없음').toHaveCount(0);
+    await page.waitForTimeout(400);
+  }
+  console.log('✓ UI③ — 수동 커밋 무마크(음성 전용)');
 });

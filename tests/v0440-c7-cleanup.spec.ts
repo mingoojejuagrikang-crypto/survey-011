@@ -4,9 +4,12 @@
  * 재는 축: ① F24 — 데이터탭에서 '작성중' 문자열·draft-badge 부재 + 행수 표기가 `완료/전체행`
  *             (`1/2행`·`2/2행`)으로 통합(v0.33.0 #9 배지 폐기 — 같은 정보를 한 곳에서).
  *          ② F25 — 생성 완료 안내문구("생성 완료 — 입력 탭에서 …") 부재(v0.32.0 B4 폐기).
- *          ③ F26 — '설정 요약' 진입점 1개(상단 버튼→팝업): 인라인 아코디언(v0.34.0 C10) 부재 +
- *             '입력탭으로 이동' 부재 + 그 자리 3버튼(설정요약·생성 테이블 보기·재생성) 실동작.
- *             종전 "총 N행 생성됨 (미리보기)"/"재생성" 행은 3버튼 행으로 **재배치**됐다(중복 금지).
+ *          ③ F26 — 인라인 아코디언(v0.34.0 C10) 부재 + '입력탭으로 이동' 부재 + 그 자리
+ *             3버튼(설정요약·생성 테이블 보기·재생성) 실동작. 종전 "총 N행 생성됨 (미리보기)"/
+ *             "재생성" 행은 3버튼 행으로 **재배치**됐다(중복 금지).
+ *             🔴 v0.45.0 UI①(민구 08-05) 갱신 — 종전 "'설정 요약' 상단 버튼 1개" 계약은 폐기:
+ *             상단 유틸리티 행이 삭제돼 정확 문구 진입점은 **0개**, 유일 진입점은 하단
+ *             '설정요약'(무공백)이다. '초기화'는 액션바 상시 2행(높이 56·글자 13, 모달 흐름 불변).
  * 안 재는 축: 팝업 내부 수치 정합(settings-ux B2가 소유) · 재생성 게이트 흐름(B1이 소유) ·
  *             동기화 라벨(`N/M`, '행' 없음)의 표기 — F24 대상 아님.
  *
@@ -135,20 +138,23 @@ test('F25 — 생성 완료 후에도 안내문구("생성 완료 — 입력 탭
 
 // ─── F26. 설정 요약 진입점 1개 + 입력탭 이동 → 3버튼 대체 ────────────────────
 
-test('F26 — "설정 요약" 진입점 1개: 인라인 아코디언(v0.34.0 C10) 부재', async ({ page }) => {
+test('F26 — "설정 요약" 정확 문구 진입점 0개(v0.45.0 UI①): 인라인 아코디언 부재 + 유일 진입점은 하단 설정요약', async ({ page }) => {
   await seedGeneratedSettings(page);
 
   // 인라인 아코디언(컨테이너·토글) 부재.
   await expect(page.locator('[data-testid="settings-summary-inline"]')).toHaveCount(0);
   await expect(page.locator('[data-testid="settings-summary-toggle"]')).toHaveCount(0);
 
-  // '설정 요약'(정확 표기) 상호작용 요소는 상단 버튼 하나뿐이다.
-  await expect(page.locator('button', { hasText: '설정 요약' })).toHaveCount(1);
-  await expect(page.locator('[data-testid="settings-summary-open"]')).toBeVisible();
-  console.log('✓ F26 — 설정 요약 진입점 1개(상단 버튼→팝업)');
+  // 정당 파손(v0.45.0 UI①, 민구 08-05 추가요청3): 종전 "'설정 요약' 상단 버튼 count==1" 단언
+  // 뒤집기 — 상단 유틸리티 행이 삭제돼 정확 문구 상호작용 요소는 0개가 맞다.
+  await expect(page.locator('button', { hasText: '설정 요약' })).toHaveCount(0);
+  await expect(page.locator('[data-testid="settings-summary-open"]')).toHaveCount(0);
+  // 요약 팝업의 유일 진입점 = 생성 완료 액션바의 '설정요약'(무공백, settings-summary-shortcut).
+  await expect(page.locator('[data-testid="settings-summary-shortcut"]')).toBeVisible();
+  console.log('✓ F26(v0.45.0 UI① 갱신) — 정확 문구 진입점 0개, 유일 진입점은 하단 설정요약');
 });
 
-test('F26 — "입력탭으로 이동" 부재, 그 자리 3버튼(설정요약·생성 테이블 보기·재생성) 실동작', async ({ page }) => {
+test('F26 — "입력탭으로 이동" 부재, 그 자리 3버튼 실동작 + 초기화 상시 2행(v0.45.0 UI①)', async ({ page }) => {
   await seedGeneratedSettings(page);
 
   // 종전 버튼·문구 부재.
@@ -165,7 +171,29 @@ test('F26 — "입력탭으로 이동" 부재, 그 자리 3버튼(설정요약·
   await expect(previewBtn).toBeVisible();
   await expect(regenBtn).toBeVisible();
 
-  // 375px에서 3버튼 행이 가로 오버플로를 만들지 않는다.
+  // v0.45.0 UI①(민구 확정 08-05) — 액션바 2행: '초기화' 상시 단독 행(settings-reset-open 유지).
+  // 높이 56·글자 13은 생성-후 3버튼 행과 동일해야 한다(민구: "버튼과 내부 글자 크기 동일하도록").
+  const resetBtn = page.locator('[data-testid="settings-reset-open"]');
+  await expect(resetBtn).toBeVisible();
+  const rowMetrics = await page.evaluate(() => {
+    const reset = document.querySelector('[data-testid="settings-reset-open"]') as HTMLElement;
+    const summary = document.querySelector('[data-testid="settings-summary-shortcut"]') as HTMLElement;
+    return {
+      resetH: reset.getBoundingClientRect().height,
+      resetFs: parseFloat(getComputedStyle(reset).fontSize),
+      summaryH: summary.getBoundingClientRect().height,
+      summaryFs: parseFloat(getComputedStyle(summary).fontSize),
+      resetTop: reset.getBoundingClientRect().top,
+      summaryBottom: summary.getBoundingClientRect().bottom,
+    };
+  });
+  expect(rowMetrics.resetH, '초기화 행 높이 56').toBeCloseTo(56, 0);
+  expect(rowMetrics.resetFs, '초기화 글자 13').toBeCloseTo(13, 0);
+  expect(rowMetrics.resetH, '3버튼 행과 동일 높이').toBeCloseTo(rowMetrics.summaryH, 0);
+  expect(rowMetrics.resetFs, '3버튼 행과 동일 글자 크기').toBeCloseTo(rowMetrics.summaryFs, 0);
+  expect(rowMetrics.resetTop, '초기화는 3버튼 행 아래 2행이다').toBeGreaterThan(rowMetrics.summaryBottom);
+
+  // 375px에서 액션바(3버튼 행 + 초기화 행)가 가로 오버플로를 만들지 않는다.
   const sw = await page.evaluate(() => ({
     sw: document.documentElement.scrollWidth,
     cw: document.documentElement.clientWidth,

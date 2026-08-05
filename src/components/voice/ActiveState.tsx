@@ -9,6 +9,7 @@ import { ManualValueSheet } from './ManualValueSheet';
 import { type ReaskReason } from './ReaskCue';
 import { TONE_BASE, type GlowTone } from './EdgeGlow';
 import { useReviewCommit } from './VoiceHero';
+import { useVoiceCommitMarkColId } from './useVoiceCommitMark';
 import { ActiveHeaderStrip } from './ActiveHeaderStrip';
 import { ChipZone } from './ChipZone';
 import { CenterStage } from './CenterStage';
@@ -98,6 +99,8 @@ export function ActiveState({
   const row = sess.activeRow;
   // v0.37.0 리뷰 #1(민구: 커밋 영수증) — 검토 표시값 파생을 **여기(항상 마운트)** 에서 한다.
   const reviewCommit = useReviewCommit(completing, row);
+  // v0.45.0 UI③ — 방금 음성 확정된 칩의 V 마크(중앙 ✓+항목명 라벨 삭제의 승계 표시).
+  const commitMarkColId = useVoiceCommitMarkColId();
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
   const activeChipValue = currentColId ? rowValues[currentColId] : undefined;
@@ -285,6 +288,7 @@ export function ActiveState({
         // 와이어프레임 §[4] — "마지막 행 확정, **활성 강조 없음**". 조사가 끝나면 가리킬 다음 칸이
         //   없으므로 하이라이트·점멸을 거둔다(끝났는데 무언가를 기다리는 것처럼 보이지 않게).
         currentColId={endReached ? undefined : currentColId}
+        commitMarkColId={commitMarkColId}
         activeTone={chipAccent}
         anomalyPending={anomalyPending}
         editingColId={editingColId}

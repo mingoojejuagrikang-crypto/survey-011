@@ -14,7 +14,8 @@ import { CHIP_TYPE } from './heroLayout';
  *  표시·활성 스크롤 추적. data-testid="column-chip"·data-col-name·data-active 동일 노드 유지
  *  (테스트 직접 클릭 계약). */
 export function ColumnChip({
-  col, value, isActive, activeTone, isDone, isEditing, onActivate, onCommit, onCancel, containerRef, compact = false,
+  col, value, isActive, activeTone, isDone, isEditing, onActivate, onCommit, onCancel, containerRef,
+  compact = false, justCommitted = false,
 }: {
   col: Column;
   value: string;
@@ -28,6 +29,9 @@ export function ColumnChip({
   compact?: boolean;
   // v0.19.0 W5 — 활성 칩에만 전달되어 칩 스크롤영역에서 scrollIntoView 대상이 된다.
   containerRef?: Ref<HTMLDivElement>;
+  /** v0.45.0 UI③(민구 확정 08-05) — 방금 음성으로 확정된 칩. 항목명 **앞**에 "V"를 잠깐 표시
+   *  ("V 횡경" — 민구 원문 표기). 중앙 '✓+항목명' 확인 라벨 삭제의 승계 표시. */
+  justCommitted?: boolean;
 }) {
   const [local, setLocal] = useState(value);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -121,6 +125,7 @@ export function ColumnChip({
           fontSize: CHIP_TYPE.name,
           fontWeight: 700,
           whiteSpace: 'nowrap',
+          // (V 마크는 아래 자식 span — 크기는 이 라벨을 상속한다. [TYPO-CONTRACT-1] 인라인 금지)
           // 🔴 v0.43.0 UI-b — `normal`(≈1.27)이 폰트 크기의 27%를 **빈 라인박스**로 먹고 있었다.
           //   402×874 실측 59.0px/fs 46.2 · 390×568 47.0px/fs 36.9. 바로 아래 값 span은 이미
           //   `lineHeight: fontSize`(=1.0)로 조여져 있어 **라벨만 안 조여진 상태**였다.
@@ -132,6 +137,15 @@ export function ColumnChip({
           maxWidth: '100%',
         }}
       >
+        {justCommitted && (
+          <span
+            data-testid="chip-commit-mark"
+            aria-hidden
+            style={{ color: T.green, fontWeight: 800, marginRight: '0.3em' }}
+          >
+            V
+          </span>
+        )}
         {col.name}
       </span>
       {isEditing ? (

@@ -36,7 +36,7 @@ const CHIP_PAD_Y = 3;
 
 export function ChipZone({
   columns, rowValues, row, currentColId, activeTone, anomalyPending, editingColId,
-  activeChipRef, gridRef, onActivate, onCommit, onCancel,
+  activeChipRef, gridRef, onActivate, onCommit, onCancel, commitMarkColId,
 }: {
   columns: Column[];
   rowValues: Record<string, string>;
@@ -51,6 +51,8 @@ export function ChipZone({
   onActivate: (c: Column) => void;
   onCommit: (c: Column, value: string, prevValue: string) => void;
   onCancel: () => void;
+  /** v0.45.0 UI③ — 방금 음성 확정된 칩(V 마크 대상)의 colId. null=마크 없음. */
+  commitMarkColId?: string | null;
 }) {
   return (
     <div
@@ -99,6 +101,7 @@ export function ChipZone({
             activeTone={activeTone}
             isDone={(isVoice || isTouch) && hasValue}
             isEditing={editingColId === c.id}
+            justCommitted={commitMarkColId != null && c.id === commitMarkColId}
             onActivate={() => onActivate(c)}
             onCommit={(newValue) => onCommit(c, newValue, value)}
             onCancel={onCancel}

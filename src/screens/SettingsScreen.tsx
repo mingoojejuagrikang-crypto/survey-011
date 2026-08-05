@@ -107,39 +107,11 @@ export function SettingsScreen() {
           </div>
         )}
 
-        {/* v0.32.0 설정탭 UX(Vance) B2/B3 — 유틸리티 행(항상 첫 콘텐츠 행): 설정 요약 팝업 + 초기화.
-            버튼 문구에 '생성' 부분문자열 금지(기존 스펙의 hasText:'생성' .last() 헬퍼 보호). */}
-        <div style={{ padding: '8px 16px 10px', display: 'flex', gap: 8 }}>
-          <button
-            type="button"
-            data-testid="settings-summary-open"
-            onClick={() => {
-              // v0.33.0 B-10 — 설정 요약 팝업 열림 계측.
-              logger.log({ type: 'command', parsed: 'ui_open', extra: 'settings_summary' });
-              setSummaryOpen(true);
-            }}
-            style={{
-              flex: 1, minHeight: 40, borderRadius: 12,
-              border: `1px solid ${T.lineStrong}`, background: T.card,
-              color: T.textDim, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
-              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            }}
-          >
-            {I.table(15, T.textDim)} 설정 요약
-          </button>
-          <button
-            type="button"
-            data-testid="settings-reset-open"
-            onClick={() => setResetOpen(true)}
-            style={{
-              minHeight: 40, padding: '0 16px', borderRadius: 12,
-              border: '1px solid rgba(255,23,68,0.40)', background: 'rgba(255,23,68,0.08)',
-              color: T.red, fontSize: 13, fontWeight: 800, letterSpacing: -0.2, cursor: 'pointer',
-            }}
-          >
-            초기화
-          </button>
-        </div>
+        {/* 🔴 v0.45.0 UI①(민구 확정 08-05, 추가요청3=F5 재지적) — 종전 유틸리티 행(v0.32.0 B2/B3:
+            '설정 요약'+'초기화', 항상 첫 콘텐츠 행)을 **삭제했다.** '설정 요약' 진입점은 하단
+            액션바의 '설정요약'(settings-summary-shortcut — "이미 하단의 테이블 보기 버튼 옆에
+            배치되어 있음", 수차례 요청 재지적)만 남고, '초기화'는 하단 상시 영역(액션바 2행)으로
+            이동했다("스크롤과 무관하게 상시 보기에 하단에 배치"). 되살리려면 이 결정부터 봐라. */}
 
         {/* Section 1 - Google + Sheet URL (+ 연결 3상태 카드) — SheetConnectSection으로 추출(Stage 2) */}
         <SheetConnectSection
@@ -350,6 +322,26 @@ export function SettingsScreen() {
               {I.table(20, '#fff')} 입력 테이블 생성
             </button>
           )}
+        </div>
+        {/* v0.45.0 UI①(민구 확정 08-05) — '초기화' 상시 행. 종전 위치(스크롤 영역 첫 행)는 스크롤
+            하면 사라졌다 — "설정탭에서 스크롤과 무관하게 상시 보기에 하단에 배치"(민구 원문).
+            한 행 4버튼은 375px에서 좁아져 **2행 분리**(민구: "버튼과 내부 글자 크기 동일하도록" —
+            높이 56·글자 13을 생성-후 3버튼 행과 동일하게 맞춘다). 파괴적 동작이라 단독 행이
+            오탭 방지도 겸한다. 확인 모달(SettingsResetModal)은 종전 그대로다. */}
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <button
+            type="button"
+            data-testid="settings-reset-open"
+            onClick={() => setResetOpen(true)}
+            style={{
+              flex: 1, height: 56, borderRadius: 28,
+              border: '1px solid rgba(255,23,68,0.40)', background: 'rgba(255,23,68,0.08)',
+              color: T.red, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
+              whiteSpace: 'nowrap', cursor: 'pointer',
+            }}
+          >
+            초기화
+          </button>
         </div>
         {/* v0.44.0 §C7 F25: v0.32.0 B4 결정 폐기(민구 08-02) — 되살리려면 §4-b를 먼저 읽어라.
             여기 있던 "생성 완료 — 입력 탭에서 [음성 입력 시작]을 누르세요" 안내문구와

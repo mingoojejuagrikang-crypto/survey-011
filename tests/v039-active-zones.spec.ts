@@ -344,18 +344,28 @@ test('fb-27-2 — 대기 중엔 중앙 항목명을 렌더하지 않는다(칩�
   expect(m.valueSlotHeight, '인식값 슬롯은 유지된다(발화 시 레이아웃 점프 방지)').toBeGreaterThan(40);
 });
 
-test('UI-c 대비 — 커밋 직후에는 항목명이 **남는다**(칩이 이미 다음 항목이라 정보 유실 방지)', async ({ page }) => {
-  // 🔴 이 대조군이 없으면 "항목명을 전부 지웠다"와 구별되지 않는다. 커밋 직후의 항목명은
-  //    "지금 무엇을 입력하나"가 아니라 **"방금 무엇을 확정했나"** 이고, 그 시점엔 활성 칩이
-  //    이미 다음 항목으로 옮겨가 칩존이 그 정보를 주지 못한다.
+test('UI-c 대비 → v0.45.0 UI③ 갱신 — 커밋 직후에도 중앙 항목명 미렌더(승계: 칩 V 마크 + aria)', async ({ page }) => {
+  // 🔴 정당 파손(v0.45.0 UI③, 민구 확정 08-05 추가요청2) — 종전 이 대조군은 "활성칩이 다음
+  //    항목으로 옮겨간 커밋 직후엔 항목명이 **남는다**"(§C7 판별식의 이동-한 쪽 절반)를 고정했다.
+  //    민구가 판별식으로도 남는 잔여 표시를 재지적("여전히 잠깐씩 표시되고 있음")해 confirm의
+  //    '✓+항목명' 라벨을 **조건 없이 전면 삭제**했다. 정보 유실은 아니다 — ① 방금 확정된 칩의
+  //    "V" 마크(chip-commit-mark)+칩에 찍힌 값, ② hero aria-label이 항목명·값을 보존한다.
   await boot(page);
   await fireStt(page, '25.0', 300);
   const confirmHero = page.locator('[data-hero-state="confirm"]');
-  await expect(confirmHero, '커밋 직후 확인 카드').toBeVisible({ timeout: 3000 });
-  await expect(confirmHero, '확정한 항목명이 보인다').toContainText('측정항목01');
-  await expect(confirmHero, '확정값도 함께').toContainText('25');
+  await expect(confirmHero, '커밋 직후 값 플래시').toBeVisible({ timeout: 3000 });
+  await expect(confirmHero, '확정값은 유지 — 지우는 건 항목명이지 값이 아니다').toContainText('25');
+  // 종전 "확정한 항목명이 보인다" 단언 뒤집기(v0.45.0 UI③ 전면 삭제).
+  await expect(confirmHero, "'✓+항목명' 라벨 미렌더").not.toContainText('측정항목01');
+  await expect(confirmHero, '항목명·값은 접근 채널에 남는다')
+    .toHaveAttribute('aria-label', /^측정항목01 .*입력 완료$/);
+  // 승계 표시 — 방금 확정된 칩의 V 마크. 활성 칩은 이미 다음 항목이라 마크가 그 공백을 채운다.
+  await expect(
+    page.locator('[data-testid="column-chip"][data-col-name="측정항목01"] [data-testid="chip-commit-mark"]'),
+    '성공 표시는 칩존이 승계한다(음성 커밋 칩 V 마크)',
+  ).toBeVisible();
   await expect(page.locator('[data-testid="column-chip"][data-active="true"]'),
-    '칩은 이미 다음 항목을 가리켜 방금 확정한 항목명을 대신할 수 없다')
+    '칩은 이미 다음 항목을 가리킨다(방금 확정한 항목은 V 마크 칩이 알려준다)')
     .toContainText('측정항목02');
 });
 
@@ -367,8 +377,9 @@ test('§C7 F01·F05 — 터미널 컬럼 커밋: 활성칩이 같은 항목을 �
   //    렌더해 무조건 남았다 — 세션당 18회 재현(F05: "이미 수차례 지시했으나 지켜지지 않음").
   //    echo TTS 창(advance 전)에는 **모든 컬럼**이 이 조건에 들어온다 — 터미널은 그 창이 끝나도
   //    칩이 못 움직이는 극단이라 판별식의 반대쪽 절반을 대표한다.
-  // 🔴 커버리지 공백: 위 'UI-c 대비' 테스트는 활성칩이 **이동한** 케이스만 본다(그땐 항목명 유지가
-  //    맞다). 이 픽스처가 이동하지 **않는** 터미널 케이스를 고정한다 — 12컬럼 공용 SETTINGS 대신
+  // 🔴 커버리지 공백: 위 'UI-c 대비' 테스트는 활성칩이 **이동한** 케이스만 본다(당시엔 항목명
+  //    유지가 스펙이었다 — v0.45.0 UI③가 전면 미렌더로 갱신, 위 테스트 참조). 이 픽스처는
+  //    이동하지 **않는** 터미널 케이스를 고정한다 — 12컬럼 공용 SETTINGS 대신
   //    음성 2컬럼 축소 부트로 측정항목02를 터미널로 만든다(v035-hero-confirm R3-FIX-5와 같은 접근).
   // ⚠️ confirm 창은 echo TTS 길이(mock 200ms)만큼만 산다 — 순간을 폴링으로 겨냥하지 않고 rAF로
   //    전이를 통째로 기록해 사후 판정한다(v035 R3-FIX-5와 같은 취지).

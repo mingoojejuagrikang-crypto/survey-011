@@ -11,6 +11,7 @@ import {
   HERO_VALUE_SLOT_MIN_PX,
 } from './heroLayout';
 import { ReaskCue, type ReaskReason } from './ReaskCue';
+import { scheduleEchoFontRender } from './fontRenderProbe';
 import type { GlowTone } from './EdgeGlow';
 import type { Column } from '../../types';
 
@@ -64,6 +65,10 @@ export function VoiceHero({
 
   // 렌더 우선순위(명시적 — 타이머 레이스 무관): review > confirm > listening.
   const showConfirm = !review && confirmed !== null;
+  // v0.45.0 WP-1② — 확정 플래시가 뜬 프레임의 hero 실렌더 계측(세션당 1회 — 가드는 fontRenderProbe).
+  useEffect(() => {
+    if (showConfirm) scheduleEchoFontRender();
+  }, [showConfirm]);
   const labelFitRef = useRef<HTMLSpanElement>(null);
   const valueFitRef = useRef<HTMLSpanElement>(null);
   const fitRef = useFitGroup<HTMLDivElement>(
@@ -98,11 +103,11 @@ export function VoiceHero({
   // 완료행 검토 중 다른 항목을 수정하면 enterReviewWait가 활성 칩을 첫 컬럼으로 되돌려 다를 때만
   // 남긴다. 영수증 없는 완료행 재방문의 `${row}행 완료` 시각 문구도 톤·진행·aria와 중복이라 숨긴다.
   const reviewLabelNeeded = review && reviewCommit !== null && reviewCommit.name !== col.name;
-  // confirm(§C7 F01·F05, v0.44.0): 종전엔 상태 이름으로 무조건 남겨 터미널 컬럼(종경 — 행의
-  // 마지막 음성 컬럼이라 커밋해도 칩이 못 넘어간다)에서 활성 칩과 중복됐다(세션당 18회).
-  // 같은 판별식으로 — echo TTS 창(advance 전)과 터미널 컬럼에서 숨고, 칩이 다음 항목으로
-  // 옮겨간 뒤에만 남는다. 항목명·값은 아래 aria-label이 항상 보존한다(삭제가 아니라 중복 제거).
-  const confirmLabelNeeded = showConfirm && confirmed !== null && confirmed.name !== col.name;
+  // 🔴 v0.45.0 UI③(민구 확정 08-05, 추가요청2) — **confirm의 '✓+항목명' 라벨은 전면 삭제.**
+  // §C7 판별식(활성칩 != 중앙 항목일 때만 표시)으로도 남던 잔여 표시("여전히 잠깐씩 표시되고
+  // 있음" — 민구 재지적)를 조건 없이 거둔다. 성공 표시는 칩존이 승계한다: 방금 확정된 칩의
+  // "V" 마크(useVoiceCommitMark) + 하이라이트. **값 플래시(1.5초)는 유지**(민구 선택 — 방금
+  // 인식된 값의 시각 확인 + font_render_echo 계측 대상). 항목명·값은 아래 aria-label이 보존.
   const accent = tone === 'red' ? T.red : tone === 'amber' ? T.amber : T.green;
   const accessibleState = review
     ? `${row}행 완료, 명령 대기`
@@ -148,7 +153,7 @@ export function VoiceHero({
           터미널 컬럼(종경)에서는 칩이 못 넘어가 그 전제가 거짓이었다 — 세션당 18회 중복.
           칩이 실제로 다음 항목으로 옮겨간 뒤에만 남는다. 렌더를 통째로 건너뛰므로 빈 줄
           간격도 남지 않는다. 오라클: v039-active-zones '§C7 F01·F05 — 터미널 컬럼 커밋'. */}
-      {!interimValue && (review ? reviewLabelNeeded : confirmLabelNeeded) && (
+      {!interimValue && review && reviewLabelNeeded && (
         <HeroNameLine
           checked={checked}
           accent={accent}
