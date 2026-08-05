@@ -7,7 +7,8 @@
  *     modify는 "성공/실패"가 아닌 "모드 전환" 신호라 극성 팔레트에 편입하지 않는다(현행 보존).
  *  기본 설정(beepPositiveId='pos-rise', beepNegativeId='neg-fall')에서는 소리가 이전과 동일하다.
  */
-import { useSettingsStore } from '../stores/settingsStore';
+// v0.46.0 WP-I — settingsStore import는 제거됐다. 재생 파라미터(변형·볼륨)가 전부 고정이라
+// 이 모듈은 더 이상 설정을 읽지 않는다. 되살릴 땐 FIXED_* 상수와 함께 이 import를 되돌려라.
 import {
   buildBeepSchedule,
   getBeepVariant,
@@ -22,20 +23,38 @@ import { beepPlay } from './logEvents';
 // 재노출(기존 import 경로 호환). 매핑·상한 SSOT는 beepVariants.ts(순수·단위 테스트 대상).
 export { BEEP_VOLUME_MAX };
 
-type BeepKind = 'alert' | 'corrected' | 'modify';
+/** v0.46.0 WP-E(F7②) — 'commit' 신설: 값이 저장될 때 울리는 **커밋 확인음**. 긍정 극성이다.
+ *  종전엔 정상 커밋에 소리가 아예 없었다(alert·corrected·modify 3종뿐) — 민구 제보 F7②의
+ *  "확인음이 없다"가 그것이다. 호출부는 useVoiceSession의 커밋 경로 하나이고, **확인음 →
+ *  인식값 TTS** 순서가 계약이다(민구 지정 순서). */
+type BeepKind = 'alert' | 'corrected' | 'modify' | 'commit';
 
 /** modify(수정 모드 진입) 중립음 — 현행 값 그대로. */
 const MODIFY_TONE: ScheduledTone = {
   startMs: 0, stopMs: 150, freq: 660, endFreq: null, gain: 0.04, wave: 'sine',
 };
 
-/** store beepVolume(0~1)을 마스터 게인 배수로. 조회 실패/손상 시 순수 매핑이 기본 0.5로 치유. */
+/** 🔴 v0.46.0 WP-I(민구 지시 08-05) — 소리는 **고정**이다. 고를 수 없다.
+ *
+ *  민구 지시: *"확인음 = 화음 · 경고음 = 트릴 · 볼륨 100% 고정 · 설정 UI 숨김
+ *  (고를 게 없으면 안 보여준다)"*.
+ *
+ *  🔑 **왜 store가 아니라 여기서 고정하나** — 기본값만 바꾸면 이미 persist된 사용자 값
+ *  (민구 기기의 `pos-rise`·`beepVolume:0.5`)이 그대로 남아 앱이 계속 옛 소리를 낸다.
+ *  재생 경로에서 고정하면 마이그레이션 없이 즉시 일치한다. store의 beepPositiveId·
+ *  beepNegativeId·beepVolume 필드는 **남아 있지만 재생에 쓰이지 않는다**(선택 UI를 되살릴 때
+ *  이 세 상수를 지우면 종전 동작으로 돌아온다 — 그것이 되돌리는 방법이다).
+ *
+ *  ⚠️ 클리핑 검산(BEEP_VOLUME_MAX=12 기준): pos-triad·neg-trill은 **순차 발음**이라 동시 합이
+ *  없고 단일 최대 gain 0.045 → 0.045×12 = 0.54 < 1. 안전하다. 동시발음 변형(pos-bell 0.07)을
+ *  고정값으로 바꾸려면 이 검산을 다시 해라. */
+const FIXED_POSITIVE_ID = 'pos-triad';  // 화음 — 확인음(커밋·정정 완료)
+const FIXED_NEGATIVE_ID = 'neg-trill';  // 트릴 — 경고음(이상치 알람)
+const FIXED_VOLUME = 1;                 // 100% 고정
+
+/** 마스터 게인 배수 — WP-I로 **100% 고정**. store beepVolume은 더 이상 읽지 않는다. */
 function masterMultiplier(): number {
-  try {
-    return beepVolumeToMultiplier(useSettingsStore.getState().beepVolume);
-  } catch {
-    return beepVolumeToMultiplier(0.5);
-  }
+  return beepVolumeToMultiplier(FIXED_VOLUME);
 }
 
 let ctx: AudioContext | null = null;
@@ -139,12 +158,14 @@ export function playBeep(kind: BeepKind): void {
   let outcome: PlaybackOutcome;
   try {
     if (kind === 'modify') {
+      // modify는 "성공/실패"가 아닌 "모드 전환" 신호라 극성 팔레트 밖의 중립음이다(현행 보존).
       outcome = playSchedule([MODIFY_TONE]);
     } else {
-      const s = useSettingsStore.getState();
-      const variant = kind === 'corrected'
-        ? getBeepVariant(s.beepPositiveId, 'positive')
-        : getBeepVariant(s.beepNegativeId, 'negative');
+      // 🔴 v0.46.0 WP-I — store가 아니라 고정 상수를 쓴다(위 FIXED_* 주석의 근거).
+      //    'commit'(WP-E 신설)·'corrected'는 긍정 = 화음, 'alert'는 부정 = 트릴.
+      const variant = kind === 'alert'
+        ? getBeepVariant(FIXED_NEGATIVE_ID, 'negative')
+        : getBeepVariant(FIXED_POSITIVE_ID, 'positive');
       outcome = playSchedule(buildBeepSchedule(variant));
     }
   } catch {

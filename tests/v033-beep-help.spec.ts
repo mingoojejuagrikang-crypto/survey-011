@@ -107,33 +107,37 @@ test('[UI] 10-A — 설정 도움말 팝업에 데이터형 6항목(이름=자�
   console.log('✓ 데이터형 6항목 + 이름 자동 전환 문구 + 기존 항목 보존');
 });
 
-test('[UI] 10-C — 비프 칩 10개, 기본 선택 = 현행 사운드, 탭=선택 전환 + 영속', async ({ page }) => {
+/** 🔴 v0.46.0 WP-I(민구 지시 08-05) — 종전 '[UI] 10-C 비프 칩 10개 + 선택 전환 + 영속'을
+ *  **뒤집었다(정당 파손).** 소리가 고정되면서 선택 UI가 통째로 사라졌다:
+ *  확인음 = 화음(pos-triad) · 경고음 = 트릴(neg-trill) · 볼륨 100% — 민구: *"고를 게 없으면
+ *  안 보여준다."* 그래서 이 자리의 오라클은 **"선택 UI가 없다"** 로 바뀐다.
+ *
+ *  ⚠️ **변형 10종 자체는 죽지 않았다** — 위 `[node]` 절이 계속 스펙(주파수·길이·게인 제약)을
+ *  잰다. 사라진 것은 **고르는 UI**이지 팔레트가 아니다. 되살리려면 SessionOptionsSection의
+ *  <BeepPicker /> 렌더와 beep.ts의 FIXED_* 상수를 함께 되돌린다.
+ *
+ *  🔴 이 삭제가 제보 **F1(미리듣기 버튼 작동안함)** 도 함께 없앤다 — 고친 게 아니라 소멸했다.
+ *  **원인은 미규명으로 남는다.** 같은 오디오 경로를 WP-E 커밋 확인음이 쓰므로 실기기 확인이 필수다.
+ *
+ *  안 재는 축: 고정 재생 파라미터의 실제 적용(beep-release.spec.ts가 커밋 확인음 경로에서
+ *  마스터 게인 12와 세그먼트 3개로 잰다) · 실기기 가청 여부. */
+test('[UI] WP-I — 소리 설정 UI 부재: 비프 선택기·칩·미리듣기 진입점이 0개다(고정)', async ({ page }) => {
   await goToSettings(page);
-  const picker = page.locator('[data-testid="beep-picker"]');
-  await picker.scrollIntoViewIfNeeded();
-  await expect(picker).toBeVisible();
 
+  // 선택기 컨테이너 자체가 없다.
+  await expect(page.locator('[data-testid="beep-picker"]')).toHaveCount(0);
+
+  // 칩 10종 전부 부재 — 하나라도 남으면 "고정"이 반쪽이다.
   for (const v of BEEP_VARIANTS) {
-    await expect(picker.locator(`[data-testid="beep-chip-${v.id}"]`)).toBeVisible();
+    await expect(page.locator(`[data-testid="beep-chip-${v.id}"]`), `${v.id} 칩 부재`).toHaveCount(0);
   }
-  await expect(picker.locator('[data-testid="beep-chip-pos-rise"]')).toHaveAttribute('aria-pressed', 'true');
-  await expect(picker.locator('[data-testid="beep-chip-neg-fall"]')).toHaveAttribute('aria-pressed', 'true');
-  console.log('✓ 칩 10개 + 기본 선택(상승/하강)');
 
-  // 긍정 '벨' 선택 → aria-pressed 이동, 부정 선택은 불변.
-  await picker.locator('[data-testid="beep-chip-pos-bell"]').click();
-  await page.waitForTimeout(200);
-  await expect(picker.locator('[data-testid="beep-chip-pos-bell"]')).toHaveAttribute('aria-pressed', 'true');
-  await expect(picker.locator('[data-testid="beep-chip-pos-rise"]')).toHaveAttribute('aria-pressed', 'false');
-  await expect(picker.locator('[data-testid="beep-chip-neg-fall"]')).toHaveAttribute('aria-pressed', 'true');
+  // 미리듣기 진입점(F1의 그 버튼)도 함께 사라진다.
+  await expect(page.getByText('미리듣기')).toHaveCount(0);
 
-  // 영속(persist) — reload 후에도 선택 유지.
-  await page.reload();
-  await page.waitForLoadState('networkidle');
-  await page.locator('[data-testid="tab-settings"]').click();
-  await page.waitForTimeout(300);
-  await expect(page.locator('[data-testid="beep-chip-pos-bell"]')).toHaveAttribute('aria-pressed', 'true');
-  console.log('✓ 탭=선택 전환 + reload 영속');
+  // 🟢 대조군: 같은 카드의 다른 설정은 살아 있다 — 섹션을 통째로 지운 게 아니라 소리만 뺐다.
+  await expect(page.locator('[data-testid="auto-capture-toggle"]')).toBeVisible();
+  console.log('✓ WP-I — 비프 선택기·칩 10종·미리듣기 부재, 자동 캡처 토글은 보존');
 });
 
 test('[UI] 10-B/10-C — persist migrate coercion: 구버전(v10) 손상/누락 → 기본값 치유, 최신 version으로 승격', async ({ page }) => {
@@ -187,9 +191,12 @@ test('[UI] 10-B/10-C — persist migrate coercion: 구버전(v10) 손상/누락 
   const toggle = page.locator('[data-testid="auto-capture-toggle"]');
   await toggle.scrollIntoViewIfNeeded();
   await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('[data-testid="beep-chip-pos-rise"]')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('[data-testid="beep-chip-neg-fall"]')).toHaveAttribute('aria-pressed', 'true');
-  console.log('✓ v10 손상값 → migrate coercion 치유 + version 12');
+  // 🔴 v0.46.0 WP-I — 종전의 비프 칩 aria-pressed 확인 2줄은 **제거**했다(정당 파손):
+  //    소리 선택 UI가 사라져 확인할 칩이 없다. 🔑 **store coercion 자체는 그대로 검증한다**
+  //    (위 beepPositiveId·beepNegativeId·beepVolume 단언) — 필드는 살아 있고 재생만 고정값을
+  //    쓴다(beep.ts FIXED_*). 즉 이 테스트가 재는 migrate 계약은 온전하고, 사라진 것은
+  //    "치유 결과가 UI에 보이나"라는 표시 축뿐이다. UI 부재는 위 WP-I 절이 잰다.
+  console.log('✓ v10 손상값 → migrate coercion 치유 + version 12 (칩 UI 축은 WP-I로 제거)');
 });
 
 test('[UI] 10-B — 자동 캡처 토글: 기본 on, 탭=off 전환 + 영속', async ({ page }) => {

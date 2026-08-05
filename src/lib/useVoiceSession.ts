@@ -2321,6 +2321,7 @@ export function useVoiceSession() {
     // 전혀 갱신하지 않아 옛 이상치 값이 남은 채 echo TTS("수정 …")만 새 값을 말해 시각/청각이 어긋났다.
     // 팝업 닫힘은 advance()의 착지점(다음 필드·끝 도달·검토 대기)이 clearAnomalyAlert로 담당하므로,
     // echo TTS가 발화되는 동안 초록 팝업이 노출되고 착지 직전에 전수 계측과 함께 내려간다.
+    let beeped = false;
     if (awaiting.kind === 'trendConfirm') {
       const cur = useSessionStore.getState().anomalyAlert;
       if (cur) {
@@ -2330,10 +2331,21 @@ export function useVoiceSession() {
           status: 'corrected',
         });
         playBeep('corrected');
+        beeped = true;
       }
     } else if (awaiting.kind === 'modify') {
       playBeep('modify');
+      beeped = true;
     }
+
+    // 🔴 v0.46.0 WP-E(제보 F7② — 민구 지시 08-05) — **커밋 확인음**. 종전엔 정상 커밋 경로에
+    // 소리가 아예 없었다(alert·corrected·modify 3종뿐). 값이 저장되는 모든 커밋에 확인음이 난다.
+    // 🔑 **순서가 계약이다: 확인음 → 인식값 TTS**(민구 지정). 그래서 아래 echo speak() 바로 앞이다.
+    // `beeped` 가드는 **중복 방지 전용**이다 — 정정 완료(corrected)·수정 진입(modify)은 이미
+    // 자기 소리를 냈고 그 위에 확인음을 겹치면 두 신호가 한 순간에 섞여 구분이 안 된다.
+    // ⚠️ trendConfirm인데 팝업(anomalyAlert)이 이미 내려간 경우는 corrected 비프가 안 나므로
+    // 여기서 확인음이 난다 — 커밋은 성공했으니 소리가 없는 편이 더 나쁘다.
+    if (!beeped) playBeep('commit');
 
     const echoText = isModifyLike(awaiting)
       ? `수정 ${awaiting.name} ${formatForTts(parsed)}`

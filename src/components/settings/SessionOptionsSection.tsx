@@ -3,7 +3,8 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { buildSessionLabel, pickSessionLabelValue } from '../../lib/sessionLabel';
 import { logger } from '../../lib/logger';
 import { settingChanged } from '../../lib/logEvents';
-import { BeepPicker } from './BeepPicker';
+// v0.46.0 WP-I — BeepPicker 렌더 제거(소리 고정·UI 숨김). 파일은 남아 있다 — 되살리는 방법은 아래 렌더 지점 주석 참조.
+// import { BeepPicker } from './BeepPicker';
 import { TtsVoiceSelector } from './TtsVoiceSelector';
 
 /** v0.35.2 Stage 2 — 설정탭 세션 옵션 섹션: 세션명 컬럼 선택/자유입력/미리보기 + 빠른 인식 토글 +
@@ -209,9 +210,15 @@ export function SessionOptionsSection({ prospectiveSessionLabel }: { prospective
               세션당 최대 100장, 2초에 1장 이하로만 저장돼 측정을 느리게 하지 않습니다.
             </div>
 
-            {/* v0.33.0 항목10-C — 비프음 선택(긍정/부정 각 5종 중 1, 민구 확정). 탭 = 미리듣기 + 선택.
-                세그먼트 스펙은 beepVariants.ts, 재생 해석(kind→극성→변형)은 beep.ts가 SSOT. */}
-            <BeepPicker />
+            {/* 🔴 v0.46.0 WP-I(민구 지시 08-05) — 비프음 선택 UI(<BeepPicker />)를 **숨겼다**.
+                민구: *"확인음 = 화음 · 경고음 = 트릴 · 볼륨 100% 고정 · 설정 UI 숨김"* —
+                🔑 **고를 게 없으면 안 보여준다.** 재생 파라미터는 beep.ts의 FIXED_* 상수가 SSOT다.
+                ⚠️ 이 삭제가 제보 **F1(미리듣기 버튼 작동안함)** 도 함께 없앤다 — 그 버튼이
+                BeepPicker 안에 있었다. **고친 것이 아니라 소멸한 것이다**: 원인은 미규명으로 남고,
+                같은 오디오 경로를 WP-E(커밋 확인음)가 쓰므로 **실기기에서 소리가 나는지 반드시
+                확인**해야 한다(v0.46.0 플랜 §3-G).
+                컴포넌트 파일(BeepPicker.tsx)과 store 필드는 남겨뒀다 — 되살리려면 이 줄을
+                <BeepPicker />로 되돌리고 beep.ts의 FIXED_* 상수를 지운다. */}
 
             {/* v0.8.0 — 추세 검증 전역 마스터 토글 제거(이상치 알람은 컬럼별 규칙 유무로 활성).
                 조사시기(회차) 컬럼 선택은 조회탭으로 이전(WS4) — roundDateColId 필드는 유지. */}
