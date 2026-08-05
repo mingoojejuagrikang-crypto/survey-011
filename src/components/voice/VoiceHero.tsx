@@ -106,7 +106,7 @@ export function VoiceHero({
   // 🔴 v0.45.0 UI③(민구 확정 08-05, 추가요청2) — **confirm의 '✓+항목명' 라벨은 전면 삭제.**
   // §C7 판별식(활성칩 != 중앙 항목일 때만 표시)으로도 남던 잔여 표시("여전히 잠깐씩 표시되고
   // 있음" — 민구 재지적)를 조건 없이 거둔다. 성공 표시는 칩존이 승계한다: 방금 확정된 칩의
-  // "V" 마크(useVoiceCommitMark) + 하이라이트. **값 플래시(1.5초)는 유지**(민구 선택 — 방금
+  // '✓' 마크(useVoiceCommitMark) + 하이라이트. **값 플래시(1.5초)는 유지**(민구 선택 — 방금
   // 인식된 값의 시각 확인 + font_render_echo 계측 대상). 항목명·값은 아래 aria-label이 보존.
   const accent = tone === 'red' ? T.red : tone === 'amber' ? T.amber : T.green;
   const accessibleState = review

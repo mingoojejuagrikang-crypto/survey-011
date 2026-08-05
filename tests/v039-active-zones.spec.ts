@@ -349,7 +349,7 @@ test('UI-c 대비 → v0.45.0 UI③ 갱신 — 커밋 직후에도 중앙 항목
   //    항목으로 옮겨간 커밋 직후엔 항목명이 **남는다**"(§C7 판별식의 이동-한 쪽 절반)를 고정했다.
   //    민구가 판별식으로도 남는 잔여 표시를 재지적("여전히 잠깐씩 표시되고 있음")해 confirm의
   //    '✓+항목명' 라벨을 **조건 없이 전면 삭제**했다. 정보 유실은 아니다 — ① 방금 확정된 칩의
-  //    "V" 마크(chip-commit-mark)+칩에 찍힌 값, ② hero aria-label이 항목명·값을 보존한다.
+  //    '✓' 마크(chip-commit-mark)+칩에 찍힌 값, ② hero aria-label이 항목명·값을 보존한다.
   await boot(page);
   await fireStt(page, '25.0', 300);
   const confirmHero = page.locator('[data-hero-state="confirm"]');

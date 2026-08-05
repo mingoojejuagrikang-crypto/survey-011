@@ -29,8 +29,11 @@ export function ColumnChip({
   compact?: boolean;
   // v0.19.0 W5 — 활성 칩에만 전달되어 칩 스크롤영역에서 scrollIntoView 대상이 된다.
   containerRef?: Ref<HTMLDivElement>;
-  /** v0.45.0 UI③(민구 확정 08-05) — 방금 음성으로 확정된 칩. 항목명 **앞**에 "V"를 잠깐 표시
-   *  ("V 횡경" — 민구 원문 표기). 중앙 '✓+항목명' 확인 라벨 삭제의 승계 표시. */
+  /** v0.45.0 UI③(민구 확정 08-05) — 방금 음성으로 확정된 칩. 항목명 **앞**에 체크표시 '✓'를
+   *  잠깐 표시한다. 중앙 '✓+항목명' 확인 라벨 삭제의 승계 표시.
+   *  🔴 v0.46.0 WP-0 정정: v0.45.0은 민구 원문 표기 "V"를 **알파벳 그대로** 렌더했다.
+   *     민구 정정(08-05) — *"V는 체크표시를 이야기한거야."* 제보 F7의 " V 횡경 "도
+   *     당시 렌더되던 '✓+항목명'을 텍스트로 옮겨 적은 것이었다. **표기의 이름이지 문자가 아니다.** */
   justCommitted?: boolean;
 }) {
   const [local, setLocal] = useState(value);
@@ -143,7 +146,7 @@ export function ColumnChip({
             aria-hidden
             style={{ color: T.green, fontWeight: 800, marginRight: '0.3em' }}
           >
-            V
+            ✓
           </span>
         )}
         {col.name}

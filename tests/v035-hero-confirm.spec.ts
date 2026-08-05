@@ -9,7 +9,7 @@
  *
  *  🔴 v0.45.0 UI③(민구 확정 08-05, 추가요청2) 갱신 — confirm의 '✓+항목명' 라벨은 **전면 삭제**
  *  됐다(§C7 판별식으로도 남던 잔여 표시 재지적). 남는 것은 **값 플래시**(1.5초, hero-primary)와
- *  aria-label(항목명·값 보존)이고, 성공 표시는 방금 확정된 칩의 "V" 마크(chip-commit-mark,
+ *  aria-label(항목명·값 보존)이고, 성공 표시는 방금 확정된 칩의 '✓' 마크(chip-commit-mark,
  *  음성 커밋 전용·같은 1.5초 리듬)가 승계한다 — 파일 하단 UI③ 절이 그 계약을 고정한다.
  *
  *  ── v0.35.0 R3-FIX-5(리뷰 라운드3, Codex Medium) 재작성 ──────────────────────────────────
@@ -372,11 +372,13 @@ test('리뷰#2 — skip-완료 검토는 방금 커밋된 앞 셀(당도)을 보
   console.log('✓ skip-완료 검토: 당도 30.7(방금 커밋) — 산도 4.2 오표시 없음');
 });
 
-// ─── v0.45.0 UI③ — 칩 "V" 마크(음성 커밋 승계 표시) ─────────────────────────────────────────
+// ─── v0.45.0 UI③ — 칩 '✓' 마크(음성 커밋 승계 표시) ─────────────────────────────────────────
 //   중앙 '✓+항목명' 라벨 삭제(위 정당 파손)의 승계: 방금 **음성으로** 확정된 칩의 항목명 앞에
-//   "V"(data-testid=chip-commit-mark)가 값 플래시와 같은 리듬(VOICE_COMMIT_MARK_MS = CONFIRM_MS
+//   '✓'(data-testid=chip-commit-mark)가 값 플래시와 같은 리듬(VOICE_COMMIT_MARK_MS = CONFIRM_MS
 //   = 1.5초)으로 표시된다. `valueBurst`는 음성 커밋 경로만 발행하므로(수동·터치·이상치 정정은
-//   commitReceipt) 그 자체가 "음성 입력 칩만 V"의 판별식이다 — 아래 수동 커밋 대조군이 그 반쪽.
+//   commitReceipt) 그 자체가 "음성 입력 칩만 ✓"의 판별식이다 — 아래 수동 커밋 대조군이 그 반쪽.
+//   🔴 v0.46.0 WP-0 — 기대 문자가 알파벳 'V'에서 체크표시 '✓'로 **정정**됐다. 민구의 "V"는
+//   처음부터 체크표시의 표기였다(민구 정정 08-05). 이 기대값을 'V'로 되돌리지 마라.
 //   신규 절은 픽스처 SSOT(tests/fixtures/stt.ts·gum.ts)로 부트한다(인라인 목 복붙 금지 계약).
 
 async function bootWithFixtures(page: Page) {
@@ -405,16 +407,16 @@ async function bootWithFixtures(page: Page) {
   await page.waitForTimeout(200);
 }
 
-test('UI③ — 음성 커밋: 확정 칩에 V 마크가 뜨고 값 플래시와 같은 1.5초 뒤 소멸한다', async ({ page }) => {
+test('UI③ — 음성 커밋: 확정 칩에 ✓ 마크가 뜨고 값 플래시와 같은 1.5초 뒤 소멸한다', async ({ page }) => {
   await bootWithFixtures(page);
   await startSession(page);
   await expect(page.locator('[data-testid="chip-commit-mark"]'), '커밋 전엔 마크 없음').toHaveCount(0);
 
-  // 행 중간 컬럼(당도) 음성 커밋 → 활성 칩은 산도로 넘어가고, 방금 확정된 당도 칩에 V.
+  // 행 중간 컬럼(당도) 음성 커밋 → 활성 칩은 산도로 넘어가고, 방금 확정된 당도 칩에 ✓.
   await fireSttFixture(page, '30.7', 300);
   const mark = page.locator('[data-testid="column-chip"][data-col-name="당도"] [data-testid="chip-commit-mark"]');
-  await expect(mark, '방금 음성 확정된 칩의 항목명 앞에 V 마크').toBeVisible({ timeout: 2000 });
-  await expect(mark).toHaveText('V');
+  await expect(mark, '방금 음성 확정된 칩의 항목명 앞에 ✓ 마크').toBeVisible({ timeout: 2000 });
+  await expect(mark).toHaveText('✓');
   await expect(page.locator('[data-testid="chip-commit-mark"]'), '마크는 확정 칩 하나뿐').toHaveCount(1);
   await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '활성 칩은 이미 다음 항목(산도)')
     .toContainText('산도');

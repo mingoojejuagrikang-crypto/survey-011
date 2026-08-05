@@ -235,7 +235,7 @@ export function ActiveState({
     // 아니라 window 이벤트만 읽으므로 useFitScale에서 경계한 자기관측 루프가 생기지 않는다.
     window.addEventListener('resize', alignActiveChip);
     return () => window.removeEventListener('resize', alignActiveChip);
-    // 리뷰 C12(v0.45.0) — V 마크(commitMarkColId)가 활성 칩 왼쪽 칩의 폭을 1.5초간 키웠다
+    // 리뷰 C12(v0.45.0) — '✓' 마크(commitMarkColId)가 활성 칩 왼쪽 칩의 폭을 1.5초간 키웠다
     // 되돌린다. 정렬 산술이 마크 삽입·소멸 렌더 뒤에도 다시 돌아야 활성 칩 우측 끝 계약(C4)이
     // 그 창에서도 유지된다 — deps에 포함.
   }, [currentColId, row, activeChipValue, commitMarkColId]);
