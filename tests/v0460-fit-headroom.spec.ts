@@ -234,7 +234,11 @@ const PROFILES = {
     colName: '당도',
     prevValue: '9',
     spoken: '8',
-    trendRule: 'increase' as const,
+    // 🔴 `decrease` = **작아지면** 알람(`trendCheck.ts:11`). 아래 `spoken`이 `prevValue`보다
+    //    작으므로 이 규칙이어야 알람이 뜬다. 08-05에 `increase`(커지면 알람)로 잘못 적어
+    //    **알람이 한 번도 안 떴고**, 대상 테스트 전부가 `red`가 아니라 `anomaly-alert`
+    //    waitFor **타임아웃 = 무판정**이었다(§C0가 경고한 바로 그 형태 — "red가 아니라 무판정").
+    trendRule: 'decrease' as const,
   },
   long: {
     label: '🔴긴 항목명·값(§8 시트 불특정)',
@@ -242,7 +246,11 @@ const PROFILES = {
     colName: '과실종경측정값',
     prevValue: '1234.56',
     spoken: '1189.42',
-    trendRule: 'increase' as const,
+    // 🔴 `decrease` = **작아지면** 알람(`trendCheck.ts:11`). 아래 `spoken`이 `prevValue`보다
+    //    작으므로 이 규칙이어야 알람이 뜬다. 08-05에 `increase`(커지면 알람)로 잘못 적어
+    //    **알람이 한 번도 안 떴고**, 대상 테스트 전부가 `red`가 아니라 `anomaly-alert`
+    //    waitFor **타임아웃 = 무판정**이었다(§C0가 경고한 바로 그 형태 — "red가 아니라 무판정").
+    trendRule: 'decrease' as const,
   },
 } as const;
 
