@@ -194,7 +194,7 @@ export function diffFingerprints(live: Fingerprint, preview: Fingerprint): strin
     // 정상이다(§C4 pauseMonoPulse의 opacity 정규화와 같은 클래스 — 위 nodes 주석 참조).
     // v0.44.0 §C8 F18이 세션 시작 타이밍을 프레임 경계만큼 옮기면서 이 위상 어긋남이 실측됐다
     // (09-chipzone-overflow: lit 88↔92 플레이크). idle 모드는 mode 일치만 대조하고 셀 수는
-    // 건너뛴다 — 격자 무결성(18×10=180)은 capture 스펙이 라이브 마스크로 따로 고정한다.
+    // 건너뛴다 — 격자 무결성(25×14=350)은 capture 스펙이 라이브 마스크로 따로 고정한다.
     const idlePhaseFlows = live.dotMask.mode === 'idle' && preview.dotMask.mode === 'idle';
     for (const key of ['mode', 'lit', 'partial', 'off'] as const) {
       if (idlePhaseFlows && key !== 'mode') continue;

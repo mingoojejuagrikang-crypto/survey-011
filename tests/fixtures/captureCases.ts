@@ -50,7 +50,7 @@ export const CASES: StateCase[] = [
     group: '입력화면 현재상태',
     title: '저레벨 입력 — 단일 도트 파형',
     feedback: 'fb-27-1 (F4)',
-    why: 'B세션 실측 평균 레벨 0.06 주입. 별도 파형 레이어 없이 같은 18×10 도트 격자가 파형 모드로 전환된다.',
+    why: 'B세션 실측 평균 레벨 0.06 주입. 별도 파형 레이어 없이 같은 25×14 도트 격자가 파형 모드로 전환된다.',
     drive: async (page) => { await injectLevel(page, 0.06); },
   },
   {
@@ -58,7 +58,7 @@ export const CASES: StateCase[] = [
     group: '입력화면 현재상태',
     title: '고레벨 입력 — 단일 도트 파형',
     feedback: 'fb-27-1 대조군',
-    why: 'A세션 실측 평균 레벨 0.20 주입. 같은 18×10 도트 격자가 더 큰 진폭의 파형을 그리는 상태.',
+    why: 'A세션 실측 평균 레벨 0.20 주입. 같은 25×14 도트 격자가 더 큰 진폭의 파형을 그리는 상태.',
     drive: async (page) => { await injectLevel(page, 0.20); },
   },
   {

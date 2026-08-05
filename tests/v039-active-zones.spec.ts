@@ -502,7 +502,7 @@ test('§공통규칙5 — 인디케이터 아래 `[‹][⏹][⏸][›]` 4심볼(
       cells: el.querySelectorAll('span').length,
     };
   });
-  expect(dotsFit.cells, '18×10 격자(§C5 밀도 2배)').toBe(180);
+  expect(dotsFit.cells, '25×14 격자(WP-G 밀도 2배 — 종전 §C5 18×10=180)').toBe(350);
   expect(dotsFit.overflow, '격자가 밴드를 넘치지 않는다').toBeLessThan(1);
 
   // 와이어프레임 §공통규칙5 — 대기(무음)에는 **상태 글리프**, 음성이 들어오면 같은 격자가 **파형**이 된다.
@@ -621,7 +621,7 @@ function expectNoGhostDots(
   snapshot: Awaited<ReturnType<typeof dotOpacitySnapshot>>,
   label: string,
 ) {
-  expect(snapshot.cellCount, `${label}: 18×10 격자가 실제로 존재한다(§C5)`).toBe(180);
+  expect(snapshot.cellCount, `${label}: 25×14 격자가 실제로 존재한다(WP-G)`).toBe(350);
   expect(snapshot.litIndices.length, `${label}: 켜진 셀이 존재한다`).toBeGreaterThan(0);
   expect(snapshot.off.length, `${label}: 꺼진 셀이 존재한다`).toBeGreaterThan(0);
   expect(snapshot.litIndices.length + snapshot.off.length, `${label}: 모든 셀을 켜짐/꺼짐으로 분류했다`)
@@ -709,7 +709,7 @@ for (const vp of [
     const entryWrites = await page.evaluate(() => (
       window as unknown as { __dotOpacityWriteMeter: { count: number } }
     ).__dotOpacityWriteMeter.count);
-    expect(entryWrites, '파형 진입 첫 프레임은 180셀 전량 쓰기로 재동기화한다').toBeGreaterThanOrEqual(180);
+    expect(entryWrites, '파형 진입 첫 프레임은 350셀 전량 쓰기로 재동기화한다').toBeGreaterThanOrEqual(350);
 
     await page.evaluate(() => {
       const meter = (window as unknown as {

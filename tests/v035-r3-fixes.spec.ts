@@ -414,7 +414,7 @@ test('P2 — Observer API 둘 다 없어도 입력 화면과 정적 파형이 �
   //   계약은 그대로다: Observer 둘 다 undefined여도 입력 화면 + 정적 인디케이터가 pageerror 없이
   //   렌더되고, 오디오/레벨 0이면 상태 글리프가 정적으로 표시된다(움직이지 않는다).
   const cells = wave.locator('span');
-  await expect(cells).toHaveCount(180); // 18열 × 10행 격자가 실제로 렌더됐다(§C5)
+  await expect(cells).toHaveCount(350); // 25열 × 14행 격자가 실제로 렌더됐다(WP-G — 종전 §C5 18×10)
   const litCount = async () => cells.evaluateAll(
     (els) => els.filter((el) => Number(getComputedStyle(el as HTMLElement).opacity) > 0.02).length,
   );
