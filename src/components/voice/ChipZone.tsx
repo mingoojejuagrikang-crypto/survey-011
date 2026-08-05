@@ -109,17 +109,20 @@ function useChipSweep(
     };
     const hold = () => { held = true; };
     const release = () => { held = false; };
+    // 🔴 뗌은 **window에서** 듣는다. 두 실패 모드를 동시에 막는 유일한 조합이다:
+    //    · 요소에만 걸면 — 손가락이 칩존 밖으로 나가서 떼는 순간(드래그는 늘 그렇다) `pointerup`이
+    //      이 요소로 오지 않아 `held`가 **영영 true**가 되고 왕복이 조용히 죽는다.
+    //    · `pointerleave`를 뗌으로 치면 — 손가락이 **아직 닿아 있는데** 경계를 넘는 순간 재개돼
+    //      사용자의 손과 싸운다.
     el.addEventListener('pointerdown', hold);
-    el.addEventListener('pointerup', release);
-    el.addEventListener('pointercancel', release);
-    el.addEventListener('pointerleave', release);
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
     raf = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(raf);
       el.removeEventListener('pointerdown', hold);
-      el.removeEventListener('pointerup', release);
-      el.removeEventListener('pointercancel', release);
-      el.removeEventListener('pointerleave', release);
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
     };
   }, [elRef, seconds, resyncRef]);
 }

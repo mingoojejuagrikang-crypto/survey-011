@@ -20,6 +20,7 @@ import {
  *  |---|---|---|
  *  | ① | **0초 = 끔** — 안 움직인다 | 2.4초 동안 `scrollLeft` 표본 12개가 전부 같다 |
  *  | ② | **기본값이 8초다** | 저장본에 필드가 없을 때 merge가 8을 채운다(`data-chip-sweep`) |
+ *  | ②-b | 🔴 **배포 기본값 8초에서 실제로 돈다** | 공유 픽스처가 24개 스펙 전부를 `0`으로 끄고 축 ③은 1초로 축약하므로, **이 테스트가 없으면 사용자가 받는 경로를 아무도 안 돌린다** |
  *  | ③ | **켜지면 왕복한다** — 변하고 **되돌아온다** | 표본 시퀀스에 유의한 **상승**과 **하강**이 둘 다 있다(단방향 스크롤이 아니다) |
  *  | ④ | **왕복 중에도 활성 칩 하이라이트가 유지된다** | 왕복이 실제로 진행된 뒤에도 `[data-active="true"]` 칩이 정확히 1개 |
  *  | ⑤ | **칩이 다 보이면 왕복하지 않는다**(§시트 불특정) | 넓은 뷰포트에서 `maxScroll === 0`이면 `scrollLeft` 불변 |
@@ -154,6 +155,26 @@ test.describe('WP-D 왕복 배선 — 입력화면', () => {
     const m = await chipZoneMetrics(page);
     expect(m.sweepAttr, '구버전 영속본은 기본 8초로 치유된다').toBe(String(CHIP_SWEEP_DEFAULT_SECONDS));
     expect(CHIP_SWEEP_DEFAULT_SECONDS, '민구 확정값').toBe(8);
+  });
+
+  test('②-b 🔴 **배포 기본값 그대로** 왕복이 실제로 돈다(축약값 아님)', async ({ page }) => {
+    // 🔴 왜 이게 따로 필요한가 — **공유 픽스처 `tests/fixtures/activeZones.ts`가 24개 스펙 전부에
+    //    `chipSweepSeconds: 0`을 넣는다.** 그리고 축 ③은 편도 1초로 **축약**해서 잰다. 그래서
+    //    ②-b가 없으면 **사용자가 실제로 받는 8초 경로를 스위트 전체에서 아무도 돌리지 않는다** —
+    //    `useChipSweep`이 기본값에서만 죽어도 1189건이 전부 green이다.
+    //    비용은 2초다(편도 8초의 1/4 = maxScroll의 ~25%가 움직인다. 한 바퀴 16초를 기다리지 않는다).
+    await boot(page, PHONE_402, { settings: settingsWithoutSweep(), preserveAnimations: true });
+    const before = await chipZoneMetrics(page);
+    expect(before.sweepAttr, '축약값이 아니라 배포 기본값이다').toBe('8');
+    expect(before.maxScroll, '칩이 넘치는 상태여야 의미가 있다').toBeGreaterThan(50);
+
+    const samples = await sampleScrollLeft(page, 10, 200); // ≈2.0초
+    const spread = Math.max(...samples) - Math.min(...samples);
+    // 편도 8초 등속이면 2초에 maxScroll의 약 25%가 움직인다. 하한은 그 절반으로 넉넉히 잡는다
+    // (rAF가 부하로 밀려도 방향 자체는 사라지지 않는다 — ms를 단언하지 않는 이유와 같다).
+    const floor = before.maxScroll * 0.12;
+    console.log(`sweep-default-8s: max=${Math.round(before.maxScroll)} spread=${spread.toFixed(1)} floor=${floor.toFixed(1)}`);
+    expect(spread, '기본 8초에서도 칩존이 실제로 움직인다').toBeGreaterThan(floor);
   });
 
   test('③ 켜지면 왕복한다 — 오른쪽으로 갔다가 **되돌아온다**', async ({ page }) => {
