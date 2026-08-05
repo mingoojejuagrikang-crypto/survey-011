@@ -2,13 +2,24 @@
  * §C5·§C5-b (v0.44.0 플랜 — F11·F14·F19·F08) 오라클.
  *
  * 재는 축: ① idle 진폭 — 레벨 0에서도 켜진 셀의 행 span ≥ 3(조용하면 화면이 죽어 보이는
- *            F11의 처방) · data-mode="idle" ② 밀도 2배 — 격자 18×10 = 180셀 리터럴
+ *            F11의 처방) · data-mode="idle" ② 밀도 — 격자 25×14 = 350셀 리터럴
  *          ③ F19 — listening에서 mic 글리프를 렌더하지 않는다(항상 파형/idle 웨이브)
- *          ④ 글리프 비트맵 4종이 전부 10행이다([node] 정적 — mic은 화면 도달 불가라 DOM으로 못 잰다)
+ *          ④ 글리프 비트맵 4종이 전부 10행(USABLE_ROWS)이다([node] 정적 — mic은 화면 도달
+ *            불가라 DOM으로 못 잰다)
  *          ⑤ F08 — TabBar가 화면 최하단에 붙는다(box.y + height가 뷰포트 높이 8px 이내)
+ *
+ * 🔴 **밀도 리터럴의 이력이 둘이다 — 왜 또 바뀌었나가 여기 있다.**
+ *   - **v0.44.0 §C5(F14)**: 13×7(91셀) → **18×10 = 180셀**. 민구 원문 *"밀도를 2배로"*.
+ *   - **v0.46.0 WP-G(민구 확정 2026-08-05)**: 18×10 → **25×14 = 350셀**. 같은 요청이 한 번 더
+ *     왔고, 이번엔 **하단 4행을 접힌 조절판 필의 자리로 예약**하는 처방과 묶였다(§3-G).
+ *     그래서 행이 10 → 14인데 **글리프·웨이브가 쓰는 행은 여전히 10**이다(④가 10행을 재는 이유).
+ *     겹침 자체를 재는 오라클은 `v0460-g-dot-pill.spec.ts`다 — 이 파일은 **겹침을 안 잰다.**
+ *
  * 안 재는 축: 하단 1행 24%·버튼 10%는 `v0440-zone-ratios.spec.ts` 층2가 잰다(@pending-c5b 해제) ·
  *             도트 원형(maxDotSkew)은 v034-wave-glow의 기존 계약이 잰다 · idle 주기 1.6s의
- *             시간 정밀도(rAF 위상은 디플레이크 주입과 무관하지만 주기 실측은 flaky 축이라 뺀다).
+ *             시간 정밀도(rAF 위상은 디플레이크 주입과 무관하지만 주기 실측은 flaky 축이라 뺀다) ·
+ *             **접힌 필과의 겹침**(`v0460-g-dot-pill.spec.ts` 소관 — 이 파일이 180셀 시절 green인
+ *             채로 겹침 버그를 통과시킨 바로 그 구멍이다).
  */
 import { test, expect } from '@playwright/test';
 import * as fs from 'node:fs';
@@ -17,7 +28,7 @@ import { boot, PHONE_402, injectLevel } from './fixtures/activeZones';
 
 test.setTimeout(120_000);
 
-test('C5 — 격자는 18×10(180셀)이고 레벨 0에서도 idle 웨이브가 최소 3행을 켠다', async ({ page }) => {
+test('C5 — 격자는 25×14(350셀)이고 레벨 0에서도 idle 웨이브가 최소 3행을 켠다', async ({ page }) => {
   await boot(page, PHONE_402);
   const dots = page.locator('[data-testid="state-dots"]');
 
@@ -29,9 +40,9 @@ test('C5 — 격자는 18×10(180셀)이고 레벨 0에서도 idle 웨이브가 
       rows: style.gridTemplateRows.split(' ').length,
     };
   });
-  expect(geometry.cells, '18×10 격자').toBe(180);
-  expect(geometry.cols, '열 18').toBe(18);
-  expect(geometry.rows, '행 10').toBe(10);
+  expect(geometry.cells, '25×14 격자(v0.46.0 WP-G — 종전 18×10=180)').toBe(350);
+  expect(geometry.cols, '열 25').toBe(25);
+  expect(geometry.rows, '행 14(표시 10 + 필 자리 예약 4)').toBe(14);
 
   // ① 레벨 0(무음) — 종전엔 mic 글리프(가로 한 줄로 보이던 F11의 원인). 이제 idle 웨이브다.
   await injectLevel(page, 0);
@@ -73,7 +84,7 @@ test('C5 — 일시정지·알람·완료 글리프는 유지된다(mic만 뺀�
   expect(pauseLit, '⏸ 글리프가 실제로 켜져 있다').toBeGreaterThan(0);
 });
 
-test('[node] C5 — GLYPHS 4종 비트맵이 전부 10행이다(18×10 재작성 검증)', () => {
+test('[node] C5 — GLYPHS 4종 비트맵이 전부 10행이다(25×14 재작성 검증)', () => {
   // mic 글리프는 F19로 화면 도달 불가라 DOM 오라클이 못 잰다 — 소스를 정적으로 읽는다
   // (v043-typo-contract와 같은 정적 검사기 패턴. 제품 상수 import가 아니라 원문 검사다).
   const source = fs.readFileSync(
@@ -82,9 +93,11 @@ test('[node] C5 — GLYPHS 4종 비트맵이 전부 10행이다(18×10 재작성
   for (const name of ['mic', 'alert', 'pause', 'check']) {
     const entry = block.match(new RegExp(`${name}: center\\(\\[([\\s\\S]*?)\\]\\)`))?.[1] ?? '';
     const rows = entry.match(/'[.#]+'/g) ?? [];
-    expect(rows.length, `${name} 글리프 10행`).toBe(10);
+    // 🔴 격자는 14행인데 비트맵은 **10행**이다 — 하단 4행은 접힌 필의 자리라 비트맵에
+    //    존재하지 않는다(StateDots.tsx `USABLE_ROWS`). 여기서 14를 기대하면 안 된다.
+    expect(rows.length, `${name} 글리프 10행(USABLE_ROWS — 격자 14행 중 하단 4행은 필 자리)`).toBe(10);
     for (const row of rows) {
-      expect(row.length - 2, `${name} 행 폭 ≤ 18`).toBeLessThanOrEqual(18);
+      expect(row.length - 2, `${name} 행 폭 ≤ 25`).toBeLessThanOrEqual(25);
     }
   }
 });
