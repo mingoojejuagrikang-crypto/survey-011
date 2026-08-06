@@ -158,7 +158,17 @@ export const logger = {
       viewportH: window.innerHeight,
       deviceMemory: nav.deviceMemory,
       hardwareConcurrency: nav.hardwareConcurrency,
-      appVersion: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?',
+      // 🔴 v0.46.0 (민구 지시 08-06) — 테스트 배포본은 **버전 문자열 자체에** 표식을 단다.
+      //   왜: 프리뷰는 bump를 안 해서(게이트 통과 후에만) **프로덕션과 버전 숫자가 같아진다.**
+      //   08-06 실측으로 둘 다 `0.45.0`이었고, 민구 제보 2건이 어느 빌드에서 왔는지 가르려고
+      //   라이브 번들을 `curl`로 받아 회차 전용 문자열을 grep해야 했다(`SOP-003` 수확 절차 밖의
+      //   임시 방편). 이 한 줄이면 **`device.json`만 보고 판정된다.**
+      //   ⚠️ `appVersion`은 이 레포에서 **비교·파싱되지 않는다**(기록 전용 — `sessionSnapshot`도
+      //   문자열로 담기만 한다). 확인하고 붙였다.
+      appVersion:
+        typeof __APP_VERSION__ !== 'undefined'
+          ? `${__APP_VERSION__}${typeof __PREVIEW_BUILD__ !== 'undefined' && __PREVIEW_BUILD__ ? '-preview' : ''}`
+          : '?',
     };
   },
 
