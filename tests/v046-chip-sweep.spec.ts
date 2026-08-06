@@ -290,20 +290,33 @@ test.describe('WP-D 설정 UI — 서랍 4번째 항목', () => {
     });
   }
 
-  // 🔴 **알려진 미해결 — 민구 판단 대기(BLOCKING).** 서랍 항목이 3개 → 4개가 되면서 최소 지원
-  //    규격(375×667)에서 칩 왕복 행이 화면 아래로 **약 23px 넘친다**(실측 rowBottom 689.8 vs 667).
-  //    내부 스크롤이냐 재배치냐는 민구가 볼 화면의 문제라 워커가 임의로 정하지 않는다(_ASK-wp-d.md Q4).
-  //    ⚠️ `test.fail()`이라 **해소되면 이 테스트가 빨개진다** — 그때 이 블록과 Q4를 함께 지워라.
-  //    조용히 통과시키지 않기 위한 표시다(게이트를 오염시키지 않으면서 사실을 남긴다).
-  test('⑦-c [미해결] 375×667에서 서랍 전체가 화면 안에 들어온다 — 현재 ~23px 초과', async ({ page }) => {
-    // 🔴 `test.fail()`은 **반드시 본문 안**에서 부른다 — describe 스코프에서 인자 없이 부르면
-    //    같은 블록의 뒤따르는 테스트까지 전부 "실패 예상"으로 뒤집힌다(⑦-b가 조용히 무력화된다).
-    test.fail();
-    await boot(page, PHONE_375, { settings: settingsWithSweep(0), preserveAnimations: true });
-    const m = await drawerMetrics(page);
-    console.log(`drawer-overflow@375: rowBottom=${m.rowBottom.toFixed(1)} vh=${m.viewportH} overflow=${m.overflow.toFixed(1)}`);
-    expect(m.rowBottom, '칩 왕복 행이 화면 밖으로 나가지 않는다').toBeLessThanOrEqual(m.viewportH);
-  });
+  /* ⑦-c는 **삭제됐다** (2026-08-06, FB-B 해소). 되살리지 마라 — 아래를 읽어라.
+   *
+   *  ## 무엇이었나
+   *  `test.fail()`로 *"375×667에서 서랍 전체가 화면 안에 들어온다 — 현재 ~23px 초과"* 를
+   *  잰 「알려진 미해결」 표시였다(`rowBottom <= viewportH`). 민구 판단 대기(`_ASK-wp-d.md` Q4).
+   *
+   *  ## 🔴 왜 지웠나 — **문제의 범위와 처방이 둘 다 달랐다**
+   *  민구 제보(08-06): *"서랍에서 칩 자동 스크롤 속도 조절할 수 있는 메뉴가 없다."*
+   *  실측으로 갈라 보니 **375×667 전용 23px 초과**가 아니었다:
+   *
+   *  ```
+   *  402×812(실기기 viewport): 패널 289px vs voice-control-bar 트랙 226px → 63px 클리핑
+   *  402×874                 : 289 vs 248 → 41px      375×667: 289 vs 177 → 112px
+   *  ```
+   *  **전 뷰포트에서 트랙을 넘고, 부모의 `overflow:hidden`이 잘라내고 있었다.**
+   *  (탭바 침범이 아니다 — 컨트롤바 bottom과 탭바 top은 정확히 맞닿는다: 723=723 · 785=785.)
+   *  처방은 민구 4택 중 **ⓐ 트랙 안에서의 내부 스크롤**로 확정·구현됐다.
+   *
+   *  ## 🔴 그래서 이 단언은 이제 **틀린 질문**이다
+   *  내부 스크롤에서는 `rowBottom`이 뷰포트를 넘는 것이 **정상**이다(스크롤 콘텐츠니까).
+   *  그대로 두면 영원히 red인 채 *"아직 미해결"* 이라는 **거짓 신호**를 보낸다.
+   *
+   *  ## 👉 정본은 `tests/v0460-fb-b-drawer-reachable.spec.ts`
+   *  「보이는가」를 `rowBottom`이 아니라 **`document.elementFromPoint`(가림·클리핑 동시 판정)** 로
+   *  잰다. `toBeVisible()`도 `getBoundingClientRect`도 조상의 클리핑을 반영하지 않는다 —
+   *  그게 ⑦이 green인데 실기기에서 안 보였던 이유다(`gates/15` `[TEAMOPS-86]`).
+   *  ⚠️ **기준선 카운트가 1 줄었다**(`test.fail()` 1건 제거). 회귀 대조 시 감안해라. */
 
   test('⑦-b 접힌 서랍의 높이·요약 문자열은 **불변**이다(heroLayout 49px 계약 — WP-G 소유)', async ({ page }) => {
     // 🔴 민구 A1 주의①: 새 항목은 **펼친 높이만** 늘려야 한다. 접힌 토글은 heroLayout.ts:124가
