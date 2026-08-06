@@ -1,7 +1,7 @@
 import { T } from '../../tokens';
 import { I } from '../icons';
 import type { Column } from '../../types';
-import { nestedAutoValue, buildCyclingValues } from '../../lib/autoValue';
+import { nestedAutoValue, buildCyclingValues, isUserInputColumn } from '../../lib/autoValue';
 import { SegmentToggle } from './SegmentToggle';
 import { ColumnDetailRow, ColumnGridCell } from './ColumnPreviewParts';
 import { SettingsSummary } from './SettingsSummary';
@@ -160,7 +160,11 @@ export function TablePreviewModal({
                     {rowIndex}
                   </div>
                   {columns.map((c, ci) => {
-                    const val = c.input === 'voice'
+                    // 🔴 v0.46.0 FB-A — 종전엔 `voice`만 빈칸으로 그리고 **수동(touch)은 자동과
+                    //    같은 가지**라 auto 설정 잔재가 표시됐다. 민구가 그걸 보고 *"수동인데 이미
+                    //    입력됨"* 을 제보했다. 사람이 넣는 컬럼은 둘 다 미리보기에서 비운다 —
+                    //    근거 SSOT는 `autoValue.ts`의 `isUserInputColumn`.
+                    const val = isUserInputColumn(c)
                       ? <span style={{ color: T.textMute, opacity: 0.4 }}>—</span>
                       : (nestedAutoValue(columns, c, rowIndex) || auto[c.id] || (
                         <span style={{ color: T.textMute, opacity: 0.3 }}>빈값</span>
@@ -171,7 +175,8 @@ export function TablePreviewModal({
                         style={{
                           width: colWidths[ci], padding: '7px 8px',
                           fontSize: 13, fontWeight: 700,
-                          color: c.input === 'voice' ? T.textMute : T.text,
+                          // v0.46.0 FB-A — 값 색도 「사람이 넣는 칸」 기준으로 통일한다(위 val과 짝).
+                          color: isUserInputColumn(c) ? T.textMute : T.text,
                           borderRight: `1px solid ${T.line}`,
                           fontFamily: 'JetBrains Mono, ui-monospace, monospace',
                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',

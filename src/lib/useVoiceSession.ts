@@ -10,7 +10,7 @@ import { attemptParseValue, parseValueForCol } from './valueParseAttempt';
 import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiCommandSignal } from './voiceCommands';
 import { decimalReaskPrompt } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, setBargeInEnabled, refreshVoices, resumeTtsEngine } from './speech';
-import { computeTotalRows, buildCyclingValues, nestedAutoValue } from './autoValue';
+import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColumn } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep } from './beep';
@@ -3856,7 +3856,9 @@ export function useVoiceSession() {
 function autoNonCyclingValues(columns: Column[], row: number): Record<string, string> {
   const out: Record<string, string> = {};
   for (const c of columns) {
-    if (c.input === 'voice') continue;
+    // v0.46.0 FB-A — 수동(touch)도 사람이 넣는 값이라 자동 합성에서 뺀다. 근거는
+    // `autoValue.ts`의 `isUserInputColumn` 주석이 SSOT(이 경로가 시트 기록에 닿는다).
+    if (isUserInputColumn(c)) continue;
     out[c.id] = nestedAutoValue(columns, c, row);
   }
   return out;

@@ -195,7 +195,11 @@ export function ActiveControlBar({
       <div
         style={
           panelOpen
-            ? { minHeight: 0 }
+            /* 🔴 v0.46.0 FB-B — `minHeight:0`만으로는 부족하다. 이 래퍼가 **트랙의 남은 높이를
+             *  실제로 받아야**(`flex:1 1 auto`) 안쪽 스크롤 컨테이너에 경계가 생긴다. 종전엔
+             *  래퍼가 내용 높이(289px)를 그대로 갖고 트랙(226px) 밖으로 나가 부모의
+             *  `overflow:hidden`에 잘렸다. `display:flex`는 패널이 이 높이를 물려받게 한다. */
+            ? { minHeight: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column' }
             : controlsExpandable
               ? {
                   position: 'absolute',

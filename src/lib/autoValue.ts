@@ -125,6 +125,26 @@ export function computeRowFromAutoChange(
   return r + 1;
 }
 
+/** 🔴 v0.46.0 FB-A(민구 제보 08-06) — **사용자가 채우는 컬럼은 자동값 합성에서 빠진다.**
+ *
+ *  민구 원문: *"비고란 수동입력 설정이나, 테이블 미리보기에 이미 입력됨"* + 정정 시 질문
+ *  *"비고란에 값이 있으면 텍스트로 배정시 자동으로 따라 붙는 게 아닌가 싶었어."*
+ *  → **답은 「그렇다, 그리고 그건 결함이다」.**
+ *
+ *  종전엔 `input === 'voice'`만 건너뛰어 **수동(`touch`)이 자동(`auto`)과 동일 취급**됐다.
+ *  `input`을 '자동'→'수동'으로 바꿔도 `auto` 설정이 컬럼에 남아 있어 그 잔재가 계산돼 들어갔고,
+ *  🔴 **미리보기 표시만이 아니라 `composeRowValues` → `persistSession` 경로로 실제 시트에도
+ *  기록됐다**(사용자가 그 행을 손대지 않으면 덮이지 않는다).
+ *
+ *  🔑 `voice`와 `touch`는 **둘 다 「사람이 넣는 값」**이다. 값의 출처가 세션 스토어이지 자동
+ *  계산이 아니라는 점에서 같다 — 그래서 한 술어로 묶는다. 키가 빠지면 소비처가 `?? ''`로
+ *  받는다(`useVoiceSession:472`·`sheets.ts:167`) — **음성 컬럼이 이미 그 경로로 동작해 왔다.**
+ *
+ *  ⚠️ `auto` 설정 자체는 **지우지 않는다.** '수동'→'자동'으로 되돌릴 때 설정을 잃지 않게 한다. */
+export function isUserInputColumn(c: Column): boolean {
+  return c.input === 'voice' || c.input === 'touch';
+}
+
 /**
  * Cycling values that are auto-derived for the given row. Useful for diffing
  * "changed since previous row" announcements.
@@ -135,7 +155,7 @@ export function buildCyclingValues(
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const c of columns) {
-    if (c.input === 'voice') continue;
+    if (isUserInputColumn(c)) continue;
     out[c.id] = nestedAutoValue(columns, c, row);
   }
   return out;

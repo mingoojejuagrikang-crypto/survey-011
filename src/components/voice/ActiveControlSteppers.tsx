@@ -116,6 +116,22 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
+        /* 🔴 v0.46.0 FB-B(민구 제보 08-06 *"서랍에서 칩 자동 스크롤 속도 조절할 수 있는 메뉴가
+         *  없다"*) — **펼친 패널이 배정 트랙보다 크면 부모의 `overflow:hidden`이 아래를 잘라낸다.**
+         *  실측(402×812): 패널 **289px** vs `voice-control-bar` 트랙 **226px** → **63px 손실**,
+         *  4번째 항목(칩 왕복, 행 높이 69px)이 거의 통째로 사라졌다. 375×667은 112px 손실.
+         *
+         *  ⚠️ **탭바가 덮은 게 아니다.** 컨트롤바 bottom과 탭바 top이 정확히 맞닿아 있다
+         *  (실측 723=723 · 785=785 · 578=578). 그 `overflow:hidden`은 v0.43.0 UI-b의 **의도된
+         *  방어**이고 제대로 동작했다 — 탭바를 침범하는 대신 자기 내용을 잘랐을 뿐이다.
+         *  👉 그래서 처방은 「하단 여백」이 아니라 **트랙 안에서의 내부 스크롤**이다.
+         *
+         *  🔑 원인은 WP-D가 **서랍 항목을 3개 → 4개로 늘린 것**이다. 패널은 커졌고 트랙은 안 늘었다.
+         *  트랙을 늘리는 길은 막혀 있다 — 그 비율은 `heroLayout.ts` zone 계약(WP-G 소유)이다.
+         *
+         *  ⚠️ **접힘 상태에는 걸지 않는다**(`open` 가드). 접힌 토글 49px은 `heroLayout.ts:124`가
+         *  고정으로 쓰는 계약이라 flex 축을 건드리면 그 계산이 흔들린다. */
+        ...(open ? { minHeight: 0, flex: '1 1 auto' } : null),
       }}
     >
       <button
@@ -152,6 +168,25 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
         <span aria-hidden style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }}>⌄</span>
       </button>
       {open && (
+        /* 🔴 v0.46.0 FB-B — 트랙이 모자라면 **여기서** 스크롤한다(패널 헤더 주석의 처방).
+         *  · `minHeight:0` 없이 `flex:1 1 auto`만 주면 flex item의 `min-height:auto`가 축소를
+         *    막아 종전과 똑같이 잘린다 — 이 레포가 이미 데인 함정이다(UI-a 함정 1의 사촌).
+         *  · `overscrollBehavior:'contain'` — 서랍 끝에서 스크롤이 **뒤 화면으로 새지 않게** 한다.
+         *    현장은 장갑 낀 손이라 관성 스크롤이 부모로 넘어가면 칩존이 딸려 움직인다.
+         *  · 접힌 토글은 이 컨테이너 **밖**이라 항상 보인다(49px 계약 불변).
+         *  ⚠️ 스크롤이 생겼다는 사실 자체는 **실기기 판정 대상**이다 — 2~3m 거리·장갑에서
+         *    4번째 항목에 닿는 것이 실제로 편한지는 민구가 본다. 대안(ⓒ재배치·ⓓ요약필 승격)은
+         *    `_ASK-wp-d.md` Q4에 그대로 있다. */
+        <div
+          data-testid="input-control-scroll"
+          style={{
+            minHeight: 0,
+            flex: '1 1 auto',
+            overflowY: 'auto',
+            overscrollBehavior: 'contain',
+            WebkitOverflowScrolling: 'touch',
+          }}
+        >
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <StepperControl
             testId="stepper-tolerance"
@@ -198,6 +233,7 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
             onMinus={() => setChipSweep(s.chipSweepSeconds - CHIP_SWEEP_STEP_SECONDS)}
             onPlus={() => setChipSweep(s.chipSweepSeconds + CHIP_SWEEP_STEP_SECONDS)}
           />
+        </div>
         </div>
       )}
     </div>
