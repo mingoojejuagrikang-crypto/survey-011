@@ -60,7 +60,8 @@ async function reachable(page: import('@playwright/test').Page, testId: string) 
     if (!el) return { found: false, hit: false };
     const b = el.getBoundingClientRect();
     const top = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
-    return { found: true, hit: !!(top && (el === top || el.contains(top))) };
+    // `el.contains(el)`은 true이므로 자기 자신도 이 한 조건에 포함된다(R1-9: 잉여 제거).
+    return { found: true, hit: !!(top && el.contains(top)) };
   }, testId);
 }
 

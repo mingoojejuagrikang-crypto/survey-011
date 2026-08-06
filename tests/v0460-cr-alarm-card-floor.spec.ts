@@ -3,7 +3,16 @@ import { boot } from './fixtures/activeZones';
 import { fireStt, fireSttInterim, waitForTtsIdle } from './fixtures/stt';
 
 /** 🔴 카드가 「쓸모 있는」 최소 높이. 알람 카드는 수정·확인 버튼(44px 터치 타깃 계약)과
- *  비교값 행을 담는다. **실측으로 정한다** — 처방 전 측정치를 이 파일 §실측에 남긴다. */
+ *  비교값 행을 담는다.
+ *
+ *  ## §실측 (08-07 · 처방 후)
+ *  | 뷰포트 | 스테이지 | 인식값 있을 때 카드 | 없을 때 카드 |
+ *  |---|---|---|---|
+ *  | 375×667 | 248.7px | **124.3px** | 202.7px |
+ *  | 402×812 | 318.3px | 159.1px | 265.5px |
+ *  | 402×874 | 348.0px | 174.0px | 291.2px |
+ *  → 최소 지원 규격(375)의 **124.3px가 하한**이고, 임계 `120`은 그 아래 4.3px 여유다.
+ *  ⚠️ 처방 전에는 세 뷰포트 모두 **카드 0px · 도달 실패**였다. */
 const CARD_MIN_H = 120;
 
 /**
@@ -111,7 +120,7 @@ async function measure(page: Page): Promise<Measured> {
     let reachable = false;
     if (card && cb && cb.height > 0) {
       const top = document.elementFromPoint(cb.left + cb.width / 2, cb.top + cb.height / 2);
-      reachable = !!(top && (card === top || card.contains(top)));
+      reachable = !!(top && card.contains(top));   // contains는 자기 자신을 포함한다
     }
     return {
       cardH: cb?.height ?? 0,

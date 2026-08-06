@@ -88,6 +88,10 @@ export function BlackoutOverlay({ onRelease }: { onRelease: () => void }) {
       onKeyUp={(e) => {
         if (e.key === 'Enter' || e.key === ' ') stopHold();
       }}
+      // 🔴 R1-6 — 포인터엔 `onPointerLeave` 취소가 있는데 키보드는 비대칭이었다.
+      //    누른 채로 포커스를 잃으면(탭 전환·스크린리더 이동) `keyup`이 오지 않아 hold가
+      //    **떠 있는 채로 남는다** → 다음 진입에서 예상보다 빨리 해제된다.
+      onBlur={stopHold}
       style={{
         position: 'fixed',
         inset: 0,
