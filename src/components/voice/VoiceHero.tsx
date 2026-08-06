@@ -342,8 +342,20 @@ export function AlarmInterimStrip() {
   //  않았다**: `--fit-hi`를 심는 것은 `AnomalyAlertPopup`의 `useFitScale`이고 이 스트립은 그
   //  **형제**(CenterStage 알람 div의 두 번째 행)라 상속 경로가 없다 — 늘 fallback 1이었다.
   //  게다가 `--fit-hi`는 축소 전용이라 1을 넘지도 않는다. 즉 **위로 여는 경로가 없었다.**
-  //  ⚠️ 컨테이너를 스트립 자신(`height:auto`)으로 두므로 높이는 판정에 안 걸리고, `nowrap` +
-  //     `ellipsis`인 폭이 배율을 정한다 — 이 슬롯에서 의도한 계약 그대로다.
+  //
+  //  🔴🔴 **v0.46.0 콜드 리뷰 L3-1(critical) — 아래 「높이는 판정에 안 걸린다」 계약은 반증됐다.**
+  //  종전 주석은 *"컨테이너를 스트립 자신(`height:auto`)으로 두므로 높이는 판정에 안 걸리고,
+  //  `nowrap`+`ellipsis`인 폭이 배율을 정한다 — 이 슬롯에서 의도한 계약 그대로다"* 였다.
+  //  **그것이 이 결함의 원인이었다.** 폭만 묶으면 **1~2글자에서는 아무것도 묶이지 않는다** →
+  //  이진탐색이 상한까지 열려 실측 402×874에서 폰트 304.8px · 스트립 348px(스테이지 전량) ·
+  //  **알람 카드 높이 0 · 터치 도달 실패**. A/B로 v0.46.0 신규 회귀 확정(종전 공식은 76.38px·카드 256px).
+  //  🔑 **자기 자신을 컨테이너로 쓰는 fit은 부모가 「내용만큼」 배분할 때 순환한다** —
+  //  카드가 눌린 만큼 스트립 배정이 늘어나기 때문이다.
+  //  👉 처방은 **부모가 트랙을 clamp하고(`CenterStage`의 `minmax(0, 50%)`) 이 박스가 그 트랙을
+  //  채우는 것**이다(`height:'100%'` + `minHeight:0`). 그러면 높이가 판정에 **들어오고**
+  //  `overflowsHeight`가 유한한 제한을 보므로 fit이 스스로 줄어든다.
+  //  ⚠️ **`height:'auto'`로 되돌리지 마라** — 그 한 줄이 순환을 되살린다.
+  //  게이트: `tests/v0460-cr-alarm-card-floor.spec.ts`
   const valueFitRef = useRef<HTMLSpanElement>(null);
   const fitRef = useFitGroup<HTMLDivElement>(
     [interim],
@@ -361,8 +373,21 @@ export function AlarmInterimStrip() {
       aria-hidden={interim ? undefined : true}
       style={{
         flexShrink: 0,
-        // 높이도 인식값에 맞춰 키운다 — 종전 고정 높이가 알람 카드의 fit 단계까지 끌어내렸다.
-        width: '100%', height: 'auto', minHeight: 'clamp(46px, 6.5vh, 68px)',
+        // 🔴 L3-1 처방 — **인식값이 있을 때만** 부모가 clamp한 트랙(`minmax(0, 50%)`)을 채운다.
+        //    채워야 fit의 높이 판정이 유한한 제한을 보고 순환이 끊긴다(위 §주석이 계약의 SSOT).
+        //    ⚠️ **무조건 `100%`로 두면 회귀다** — 08-06 실측: 인식값이 없을 때도 스트립이 트랙
+        //    절반을 차지해 **알람 카드가 항상 절반으로 줄었다**(375×667에서 248.7 → 124.3px).
+        //    알람 중 대부분의 시간은 인식값이 없는 상태이므로 그때는 `auto`로 돌려 카드가
+        //    스테이지를 거의 다 쓰게 한다. `minHeight` clamp 하한이 빈 슬롯의 자리를 지킨다.
+        //    🔴 그리고 **빈 슬롯은 `maxHeight`로 눌러야 한다.** `visibility:hidden`은 레이아웃
+        //    박스를 남기고, 인식값이 사라져도 **fit 배율은 유지되므로** 빈 span이 여전히 큰
+        //    line box를 갖는다(08-06 실측: 인식값 없이도 트랙 124.3px = 스테이지 절반).
+        //    ⚠️ `display:'none'`으로 없애지 마라 — 빈 슬롯 유지가 계약이다
+        //    (`v0460-fit-headroom:147`: *"빈 슬롯이 red로 둔갑한다"*).
+        width: '100%', height: interim ? '100%' : 'auto',
+        minHeight: 'clamp(46px, 6.5vh, 68px)',
+        maxHeight: interim ? undefined : 'clamp(46px, 6.5vh, 68px)',
+        overflow: 'hidden',
         padding: '2px 8px',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         minWidth: 0,
@@ -385,7 +410,13 @@ export function AlarmInterimStrip() {
           //    종전 인라인 값이 실기기에서 32.16px로 렌더돼 fb-27-7("너무 작음")의 근인이었다.
           fontSize: STATE_TYPE.alarmInterim,
           fontWeight: 900,
-          lineHeight: 1.15,
+          // 🔴 v0.46.0 L3-1 처방 — **빈 슬롯에서는 line box를 0으로 접는다.**
+          //    `visibility:hidden`은 박스를 남기고 **인식값이 사라져도 fit 배율은 유지되므로**,
+          //    빈 span이 그 배율만큼의 line box를 갖는다. 그리드 트랙은 자식의 **max-content**로
+          //    크기가 정해지므로(부모의 `maxHeight`로는 안 줄어든다) 트랙이 상한 50%에 계속 걸려
+          //    **알람 카드가 항상 절반으로 눌렸다**(08-06 실측 375×667: 카드 124.3px).
+          //    ⚠️ 부모의 `maxHeight`만으로 고치려 했다가 실패했다 — 줄여야 하는 것은 **내용**이다.
+          lineHeight: interim ? 1.15 : 0,
           letterSpacing: -0.8,
           textAlign: 'center',
           // 🔴 `maxWidth`가 아니라 `width: 100%`다 — `maxWidth`만 두면 박스가 잉크에 딱 붙는

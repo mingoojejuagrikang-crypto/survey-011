@@ -136,7 +136,21 @@ export function CenterStage({
         data-central-state="alarm"
         style={{
           width: '100%', height: '100%', minHeight: 0,
-          display: 'grid', gridTemplateRows: 'minmax(0, 1fr) auto',
+          display: 'grid',
+          // 🔴 v0.46.0 콜드 리뷰 L3-1(critical) — **인식값 스트립 트랙에 상한을 둔다.**
+          //    종전 `minmax(0,1fr) auto`는 2행이 내용만큼 무한히 커질 수 있었고, 1행이 `1fr`이라
+          //    0까지 눌렸다. 그런데 **스트립의 fit 컨테이너가 스트립 자신**이어서, 카드가 눌린
+          //    만큼 스트립에 배정될 높이가 또 늘어나는 **순환 판정**이 됐다(평형점 = 스트립이
+          //    스테이지 전량). 폭만 묶여 있어 **1~2글자에서는 아무것도 안 묶였다**:
+          //    실측 402×874 폰트 304.8px · 카드 높이 **0** · 터치 도달 실패.
+          //    👉 트랙을 `50%`로 clamp하면 ①카드가 항상 절반을 확보하고 ②스트립 박스가 유한해져
+          //    `overflowsHeight`가 실제 제한을 보므로 **fit이 스스로 줄어든다**(순환이 끊긴다).
+          //    🔑 **폰트 상한이 아니다** — 규칙 2(고정 상한 금지)를 어기지 않는다. 제한하는 것은
+          //    「영역 배분」이고 그 안에서 글자는 여전히 유동적으로 최대가 된다.
+          //    ⚠️ `%` 트랙은 **그리드 컨테이너 높이 기준**이라 내용에 의존하지 않는다 —
+          //    `auto`로 두면서 자식에 `height:100%`를 주면 순환이 되살아난다.
+          //    게이트: `tests/v0460-cr-alarm-card-floor.spec.ts`
+          gridTemplateRows: 'minmax(0, 1fr) minmax(0, 50%)',
           justifyItems: 'center', overflow: 'hidden',
         }}
       >
