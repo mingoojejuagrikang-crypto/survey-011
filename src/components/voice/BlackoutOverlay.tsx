@@ -75,6 +75,19 @@ export function BlackoutOverlay({ onRelease }: { onRelease: () => void }) {
       onPointerUp={stopHold}
       onPointerCancel={stopHold}
       onPointerLeave={stopHold}
+      // 🔴 v0.46.0 콜드 리뷰 L3-5 — `role="button"` + `tabIndex={0}`을 선언했는데 **키 핸들러가
+      //    없었다.** 탈출 경로가 「길게 누르기」 하나뿐인 화면에서 그 약속을 어기면
+      //    포인터를 못 쓰는 경로는 **앱에 갇힌다.** Enter·Space를 누르고 있는 동안 hold가 진행된다
+      //    (`keydown` 자동 반복은 `beginHold`가 멱등이라 무해하다).
+      //    ⚠️ **click(스크린리더 이중탭) 한 번으로는 해제하지 않는다** — 순간 입력으로 풀리면
+      //    주머니 속 오작동으로 화면이 켜지고, 그것이 이 기능의 목적(절전)과 정반대다.
+      //    「길게 눌러야 한다」는 계약을 모든 입력 경로에 동일하게 적용한다.
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); beginHold(); }
+      }}
+      onKeyUp={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') stopHold();
+      }}
       style={{
         position: 'fixed',
         inset: 0,
