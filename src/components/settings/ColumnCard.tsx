@@ -151,6 +151,15 @@ export function ColumnCard({
             const updates: Partial<typeof col> = { input: v };
             if (v === 'voice') updates.ttsAnnounce = true;
             if (v === 'touch') updates.ttsAnnounce = false;
+            // 🔴 v0.46.0 — **`auto` 설정을 지우지 않는다.** 08-06에 민구 계약(*"입력방식이 수동이고,
+            //    순차가 아니고, 어떤값이 올지는 데이터형 외의 정의는 없어야 해"*)을 근거로 여기서
+            //    `auto`를 비우는 변경을 넣었다가 **되돌렸다** — `tests/v0460-fb-a-manual-column.spec.ts`가
+            //    *"'자동'으로 되돌릴 때 설정을 잃지 않게 하는 계약. 합성에서만 빼고 데이터는 보존한다"*
+            //    를 이미 재고 있고, 그 계약이 실용적으로 옳다(되돌리면 목록이 그대로 살아난다).
+            //    🔑 민구 계약의 「값」 축은 **다른 층에서 이미 충족된다**: 값 합성은
+            //    `isUserInputColumn`이 막고(FB-A), 행 자릿수는 `isCycling`이 막는다(L2-2 처방).
+            //    즉 `auto`는 **보관된 데이터**이고 수동인 동안 값 생성에 쓰이지 않는다.
+            //    ⏭ 남은 논점(민구 확인 대기): 수동 칸에 선택지 편집 UI가 보이는 것이 혼란스러운가.
             onChange({ ...col, ...updates });
           }}
         />

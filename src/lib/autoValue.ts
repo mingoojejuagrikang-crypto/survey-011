@@ -2,9 +2,22 @@ import type { Column } from '../types';
 
 /** Auto-cycling columns: seq, or options with selected.length > 1.
  *  Exported (v0.9.0): settingsStore uses it to flip a column's 음성확인(ttsAnnounce) default to
- *  '유' when an auto column *transitions* into a cycling kind (값이 행마다 바뀌므로 들려줘야 함). */
+ *  '유' when an auto column *transitions* into a cycling kind (값이 행마다 바뀌므로 들려줘야 함).
+ *
+ *  🔴 **v0.46.0 콜드 리뷰 L2-2(critical) — 사람이 채우는 칸은 순환하지 않는다.**
+ *  민구 확정(08-06): *"전체행은 **자동 입력 설정된 항목들이 미리 테이블을 만들고**, 수동이나
+ *  음성입력이 만들어진 테이블을 채우는 형태야."* → **테이블 골격의 주체는 `input === 'auto'`뿐이다.**
+ *
+ *  종전엔 `voice`만 빼서 **`touch`(수동)가 순환 자릿수에 계속 참여**했다. 그래서 FB-A 패치가
+ *  값 출력만 막았을 때 실측 결과가 이렇게 됐다(콜드 리뷰 L2):
+ *  조사나무 seq 1~10 · 조사과실 seq 1~5에서 **조사과실만 수동으로** 바꾸면
+ *  총 행 수가 **50 그대로**이고 조사나무가 `1,1,1,1,1,2,…` — **구분자 없는 중복 행 5개가 시트에
+ *  기록됐다.** 이제 총 행 수는 **10**이 되고 조사나무는 `1,2,…,10`이다(민구 확정).
+ *
+ *  🔑 **`isUserInputColumn`과 술어를 통일하는 것이 계약이다** — 갈라지면 「값은 안 쓰는데 자릿수는
+ *  먹는」 상태가 다시 생긴다. 그 불일치가 이 결함의 정체였다. */
 export function isCycling(col: Column): boolean {
-  if (col.input === 'voice') return false;
+  if (isUserInputColumn(col)) return false;
   if (col.auto.kind === 'seq') return true;
   if (col.auto.kind === 'options' && col.auto.selected.length > 1) return true;
   return false;

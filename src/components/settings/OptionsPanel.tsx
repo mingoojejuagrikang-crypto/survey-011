@@ -32,7 +32,19 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
   if (col.auto.kind !== 'options') return null;
   const { available, selected } = col.auto;
 
+  /**
+   * 🔴 v0.46.0 콜드 리뷰 L4-② — **마지막 선택값은 해제할 수 없다.**
+   * 민구 계약(08-06): *"전체행은 **자동 입력 설정된 항목들이 미리 테이블을 만들고**, 수동이나
+   * 음성입력이 만들어진 테이블을 채우는 형태야."* → 자동입력 컬럼은 **골격을 만드는 주체**이므로
+   * 값이 없어선 안 된다. `selected`가 비면 `autoValue`가 `''`를 돌려(`autoValue.ts:33`)
+   * **그 컬럼이 전 행 빈칸으로 시트에 기록되고, `input:'auto'`라 사용자가 손으로 채울 수도 없다.**
+   * 👉 그 칸을 안 쓸 거라면 선택지를 비우는 게 아니라 **입력방식을 「수동」으로** 바꾼다
+   *    (그러면 `ColumnCard`가 목록을 떼고 사람이 채우는 칸이 된다 — 같은 계약의 다른 쪽).
+   */
+  const isLastSelected = (v: string) => selected.length === 1 && selected[0] === v;
+
   const toggle = (v: string) => {
+    if (isLastSelected(v)) return;
     const isSel = selected.includes(v);
     const next = isSel ? selected.filter((x) => x !== v) : [...selected, v];
     onChange({ ...col, auto: { kind: 'options', available, selected: next } });
@@ -51,13 +63,22 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
   const applyDraft = () => {
     if (!canApply) return;
     if (willRemove) {
+      const nextAvailable = available.filter((x) => x !== draft);
+      let nextSelected = selected.filter((x) => x !== draft);
+      // 🔴 v0.46.0 콜드 리뷰 L4-② — **선택값이 비면 남은 값 중 첫 번째를 자동으로 선택한다.**
+      //    자동입력 컬럼은 테이블 골격을 만드는 주체라 값이 없어선 안 된다(민구 계약 08-06).
+      //    비면 `autoValue`가 `''`를 돌려 그 컬럼이 전 행 빈칸으로 기록되고, `input:'auto'`라
+      //    사용자가 손으로 채울 수도 없다.
+      //    🔑 **삭제 자체를 막지는 않는다** — 그건 J-4·J-5(민구 R8·R11 "한 번 지우면 계속 유지")의
+      //    핵심 기능이다. 처음 이 가드를 「삭제 금지」로 넣었더니 `v0460-wp-j-sheet-range`의
+      //    J-5 끝단 오라클이 red로 잡아냈다. **막을 것은 빈 상태이고 삭제가 아니다.**
+      //    ⚠️ `available`까지 비는 것은 사용자가 명시적으로 만든 상태다(UI가 "추가하세요"로 안내).
+      if (nextSelected.length === 0 && nextAvailable.length > 0) {
+        nextSelected = nextAvailable.slice(0, 1);
+      }
       onChange({
         ...col,
-        auto: {
-          kind: 'options',
-          available: available.filter((x) => x !== draft),
-          selected: selected.filter((x) => x !== draft),
-        },
+        auto: { kind: 'options', available: nextAvailable, selected: nextSelected },
       });
       // J-5 — 지운 값을 기억한다. 다음 시트 자동 갱신이 이 값을 다시 넣지 않는다.
       setSettings({ optionExclusions: withExclusion(optionExclusions, col.id, draft) });
@@ -113,16 +134,23 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
           const sel = selected.includes(v);
           // 선택 순번(1부터) = 터치 순서 = 행별 자동입력 순서(auto.selected 순서를 autoValue가 소비).
           const order = sel ? selected.indexOf(v) + 1 : 0;
+          // 🔴 L4-② — 마지막 하나는 해제 불가(위 toggle 주석이 계약의 SSOT).
+          //    누르면 아무 일도 안 일어나므로 **왜 안 되는지 화면과 스크린리더 양쪽에 남긴다.**
+          const locked = isLastSelected(v);
           return (
             <button
               key={v}
               type="button"
               onClick={() => toggle(v)}
               aria-pressed={sel}
+              aria-disabled={locked || undefined}
+              title={locked ? '마지막 선택값입니다. 이 칸을 안 쓰려면 입력방식을 「수동」으로 바꾸세요.' : undefined}
               aria-label={
-                sel
-                  ? `${v}, 선택됨 · 자동 입력 ${order}번째. 누르면 해제`
-                  : `${v}, 누르면 선택`
+                locked
+                  ? `${v}, 선택됨 · 마지막 선택값이라 해제할 수 없습니다. 이 칸을 안 쓰려면 입력방식을 수동으로 바꾸세요`
+                  : sel
+                    ? `${v}, 선택됨 · 자동 입력 ${order}번째. 누르면 해제`
+                    : `${v}, 누르면 선택`
               }
               data-testid={`opt-chip-${col.id}-${v}`}
               style={{
@@ -133,7 +161,7 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
                 // 선택 시 좌측 뱃지 공간 확보(왼쪽 패딩 축소).
                 padding: sel ? '6px 12px 6px 6px' : '8px 12px',
                 borderRadius: 999,
-                cursor: 'pointer',
+                cursor: locked ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', gap: 6,
                 whiteSpace: 'nowrap',
                 // 🔴 WP-C — 선택/비선택의 높이를 같게 만든다. 22px 순번 뱃지 때문에 선택 칩이
@@ -192,7 +220,9 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
             !canApply
               ? '값을 입력하면 추가하거나 삭제할 수 있어요'
               : willRemove
-                ? `${draft}, 선택지에 있음. 누르면 선택지에서 삭제`
+                ? isLastSelected(draft)
+                  ? `${draft}, 선택지에서 삭제. 마지막 선택값이라 다음 값이 자동으로 선택됩니다`
+                  : `${draft}, 선택지에 있음. 누르면 선택지에서 삭제`
                 : `${draft}, 선택지에 없음. 누르면 선택지에 추가`
           }
           style={{

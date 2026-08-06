@@ -208,10 +208,38 @@ function guessType(value: string): DataType {
 }
 
 /**
+ * 🔴 v0.46.0 콜드 리뷰 L2-1(critical) 처방 — **text 컬럼의 리스트 승격 판정 기준.**
+ *
+ * **평균 반복 횟수**(채워진 값 수 ÷ 고유값 수)가 이 값 이상이면 「반복 사용되는 선택지」로 보고
+ * `options`로 승격한다. 미달이면 **자유서술 칸**이므로 승격하지 않고 수동 입력으로 둔다.
+ *
+ * 🔑 **왜 「절대 개수」가 아니라 「반복성」인가** — 종전 `uniqVals.size <= 20`이 이 자리에 있었고,
+ * J-2가 그 상한을 폐지하자(농가 21곳 절벽 제거, 민구 R7-b) **자유서술 컬럼의 보호막까지 함께
+ * 사라졌다.** 08-06 콜드 리뷰 실측: 다른 스키마 시트의 메모 칸이 `options`+`input:'auto'`로 승격돼
+ * **「가장 최근 값」이 전 행에 합성돼 시트에 기록**됐다. 절대 개수는 시트 크기에 따라 의미가
+ * 바뀌므로 두 요구(*"농가 21곳은 리스트로 남는다"* · *"메모 칸은 승격되지 않는다"*)를 동시에
+ * 만족시킬 수 없다. **반복성은 만족시킨다.**
+ *
+ * **실측 근거**(민구 시트 2,902행 · 08-05 WP-A 진단 §시트 실측 + 08-06 콜드 리뷰):
+ * | 컬럼 성격 | 고유값 | 평균 반복 | 판정 |
+ * |---|---|---|---|
+ * | 조사과실(자동입력) | 5 | **580회** | 승격 |
+ * | 농가명 21곳(J-2가 살리려던 것) | 21 | **138회** | 승격 |
+ * | 자유서술 메모 | 2,902 | **1.0회** | 승격 안 함 |
+ * → 임계 `2`는 살릴 쪽 최솟값(138)의 **1/69**이고 막을 쪽(1.0)의 **2배**다. 양쪽 마진이 크다.
+ *
+ * ⚠️ 표본은 **시트 전량**이다(J-1이 `A1:Z1001` 상한을 없앴다) — 비율이 실제 비율이다.
+ * ⚠️ 값이 **하나뿐**인 컬럼은 이 판정 앞에서 `fixed`로 갈린다(기존 동작 유지).
+ * 🔴 **이 값을 만지려면 위 표를 다시 재라.** 근거 없는 리터럴이 이 결함의 출발이었다.
+ */
+const OPTIONS_MIN_REPEAT = 2;
+
+/**
  * Build Column[] from sheet header + sample data.
  * Heuristics:
  *  - If majority of samples are date/int/float → that type, mode 'voice' for numeric.
- *  - If text and unique values ≤ 8 → suggest 'options' with available pre-filled.
+ *  - If text and values repeat (≥ OPTIONS_MIN_REPEAT on average) → 'options' with available pre-filled.
+ *  - If text and values barely repeat → 자유서술 칸: 'text' + input 'touch' (사람이 채운다).
  *  - Otherwise → 'text', input 'auto', ttsAnnounce false.
  */
 export function inferColumns(headers: string[], sample: string[][]): Column[] {
@@ -235,7 +263,8 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
     let ttsAnnounce = false;
     let decimals: number | undefined;
 
-    const uniqVals = new Set(samples.map((v) => v.trim()).filter(Boolean));
+    const filledVals = samples.map((v) => v.trim()).filter(Boolean);
+    const uniqVals = new Set(filledVals);
 
     if (type === 'int' || type === 'float') {
       const nums = samples.map(Number).filter((n) => !isNaN(n));
@@ -276,8 +305,9 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
     } else if (type === 'text') {
       if (uniqVals.size === 1) {
         auto = { kind: 'fixed', value: [...uniqVals][0] };
-      } else if (uniqVals.size > 0) {
-        // v0.46.0 WP-J J-2 (민구 R7-b 확정: "리스트는 무한") — 종전 `uniqVals.size <= 20` 상한을
+        input = 'auto';
+      } else if (uniqVals.size > 0 && filledVals.length / uniqVals.size >= OPTIONS_MIN_REPEAT) {
+        // v0.46.0 WP-J J-2 (민구 R7-b: "리스트는 무한") — 종전 `uniqVals.size <= 20` 상한을
         // 폐지했다. 농가가 21곳이 되는 순간 리스트가 통째로 사라지던 절벽을 없앤다.
         // 🔑 목록이 길어지는 문제는 상한이 아니라 J-4의 **선택지 삭제**가 푼다(제외 목록 = J-5).
         type = 'options';
@@ -285,10 +315,16 @@ export function inferColumns(headers: string[], sample: string[][]): Column[] {
         // 파생: 기본 선택값(slice(0,1))이 "표본에서 처음 본 값"이 아니라 "가장 최근에 쓴 값"이 된다.
         const available = uniqueValuesRecentFirst(samples);
         auto = { kind: 'options', available, selected: available.slice(0, 1) };
+        input = 'auto';
+      } else if (uniqVals.size > 0) {
+        // 🔴 v0.46.0 콜드 리뷰 L2-1(critical) — **반복되지 않는 값은 선택지가 아니다.**
+        //    사람이 그때그때 적는 칸(메모·특이사항)이다 → 민구 계약대로 **수동 입력**으로 둔다.
+        auto = { kind: 'fixed', value: '' };
+        input = 'touch';
       } else {
         auto = { kind: 'fixed', value: '' };
+        input = 'auto';
       }
-      input = 'auto';
       ttsAnnounce = false;
     }
 

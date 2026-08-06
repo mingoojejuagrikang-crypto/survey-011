@@ -14,6 +14,7 @@
     "predeploy": "node scripts/check-release-readme.mjs && node scripts/check-docs.mjs && npm run lint && npm run test:e2e",
     "deploy": "npm run build && gh-pages -d dist",
     "build:preview": "PREVIEW_BUILD=1 tsc -b && PREVIEW_BUILD=1 vite build",
+    "predeploy:preview": "npm run check:release",
     "deploy:preview": "npm run build:preview && gh-pages -d dist -r https://github.com/mingoojejuagrikang-crypto/survey-011-preview.git -b gh-pages"
   },
   "dependencies": {

@@ -44,14 +44,23 @@ function settingsWithSweep(seconds: number) {
   return { ...SETTINGS, state: { ...SETTINGS.state, chipSweepSeconds: seconds } };
 }
 
-/** 요소 중앙점이 실제로 그 요소로 히트되는가 — 가림·클리핑을 함께 잡는 유일한 축. */
+/** 요소 중앙점이 실제로 그 요소로 히트되는가 — 가림·클리핑을 함께 잡는 유일한 축.
+ *
+ *  🔴 **`top.contains(el)`(조상 히트)를 HIT로 세지 마라** — 08-06 콜드 리뷰 L3이 실측으로 잡았다.
+ *  `elementFromPoint`가 **el이 아니라 el의 조상**을 돌려주는 것은 *"그 지점에서 el에 닿지 않는다"* 는
+ *  뜻이다: el이 조상의 `overflow:hidden`에 잘렸거나, 다른 요소에 덮였거나, `pointer-events`가 없다.
+ *  종전 판정식은 그 세 경우를 **전부 통과**시켰고, 그래서 **FB-B가 없애려던 「조상 클리핑 실명」이
+ *  이 오라클에 그대로 재도입돼 있었다**(667×375 실측: strict=false인데 loose=true —
+ *  `elementFromPoint`가 `input-control-panel`을 돌려주는데 HIT로 읽혔다).
+ *  🔑 `[TEAMOPS-86]`이 *"`toBeVisible()`은 가림을 판정하지 않는다"* 로 세운 정본이 바로 이 축이다.
+ *  판정식을 느슨하게 만들면 그 정본이 무력해진다. **el 자신 또는 그 자손만 HIT다.** */
 async function reachable(page: import('@playwright/test').Page, testId: string) {
   return page.evaluate((id) => {
     const el = document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null;
     if (!el) return { found: false, hit: false };
     const b = el.getBoundingClientRect();
     const top = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
-    return { found: true, hit: !!(top && (el.contains(top) || top.contains(el))) };
+    return { found: true, hit: !!(top && (el === top || el.contains(top))) };
   }, testId);
 }
 
