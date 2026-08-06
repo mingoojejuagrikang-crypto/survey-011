@@ -34,6 +34,11 @@ const ALARM_TWO_COLUMN_LAYOUT = `
   [data-central-state="alarm"] [data-testid="anomaly-alert"] {
     padding-block: 0 !important;
     row-gap: 0 !important;
+    /* 🔴 v0.46.0 콜드 리뷰 L3-1 — 스테이지가 flex column이 됐다(CenterStage §근거).
+       카드가 남은 공간을 받고, min-height:0으로 인식값 스트립이 커질 때 줄어들 수 있게 한다.
+       ⚠️ 이 두 줄을 빼면 카드가 자기 내용만큼만 차지해 스트립이 아래를 다 먹는다. */
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
   }
   [data-central-state="alarm"] [data-testid="anomaly-comparison"] {
     display: grid !important;
@@ -136,8 +141,9 @@ export function CenterStage({
         data-central-state="alarm"
         style={{
           width: '100%', height: '100%', minHeight: 0,
-          display: 'grid',
-          // 🔴 v0.46.0 콜드 리뷰 L3-1(critical) — **인식값 스트립 트랙에 상한을 둔다.**
+          // 🔴 v0.46.0 콜드 리뷰 L3-1(critical) — **grid가 아니라 flex다.** 아래 §근거 참조.
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          // ⏹ 종전 주석(grid 트랙 상한) — 왜 grid를 버렸는지가 여기 있다:
           //    종전 `minmax(0,1fr) auto`는 2행이 내용만큼 무한히 커질 수 있었고, 1행이 `1fr`이라
           //    0까지 눌렸다. 그런데 **스트립의 fit 컨테이너가 스트립 자신**이어서, 카드가 눌린
           //    만큼 스트립에 배정될 높이가 또 늘어나는 **순환 판정**이 됐다(평형점 = 스트립이
@@ -147,11 +153,15 @@ export function CenterStage({
           //    `overflowsHeight`가 실제 제한을 보므로 **fit이 스스로 줄어든다**(순환이 끊긴다).
           //    🔑 **폰트 상한이 아니다** — 규칙 2(고정 상한 금지)를 어기지 않는다. 제한하는 것은
           //    「영역 배분」이고 그 안에서 글자는 여전히 유동적으로 최대가 된다.
-          //    ⚠️ `%` 트랙은 **그리드 컨테이너 높이 기준**이라 내용에 의존하지 않는다 —
-          //    `auto`로 두면서 자식에 `height:100%`를 주면 순환이 되살아난다.
+          //    🔴 **그런데 `minmax(0, 50%)` 트랙은 내용과 무관하게 절반을 예약했다** — 인식값이
+          //    없을 때도 카드가 정확히 스테이지 절반이 되는 부수 회귀가 생겼고(375×667:
+          //    248.7 → 124.3px), 부모 `maxHeight`·자식 `lineHeight:0` 둘 다 트랙 크기를 못 줄였다
+          //    (그리드 트랙은 자식의 **max-content**로 정해진다).
+          //    👉 **flex로 바꾼다.** flex item의 `maxHeight:'50%'`는 **부모 높이 기준**이므로
+          //    ①순환이 없고 ②인식값이 없을 때는 스트립이 `auto`로 접혀 카드가 스테이지를 다 쓴다.
+          //    카드는 `flex:1 1 auto` + `min-height:0`으로 남은 공간을 받는다(아래 <style>).
           //    게이트: `tests/v0460-cr-alarm-card-floor.spec.ts`
-          gridTemplateRows: 'minmax(0, 1fr) minmax(0, 50%)',
-          justifyItems: 'center', overflow: 'hidden',
+          overflow: 'hidden',
         }}
       >
         <style>{ALARM_TWO_COLUMN_LAYOUT}</style>

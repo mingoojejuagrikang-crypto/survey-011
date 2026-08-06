@@ -384,9 +384,11 @@ export function AlarmInterimStrip() {
         //    line box를 갖는다(08-06 실측: 인식값 없이도 트랙 124.3px = 스테이지 절반).
         //    ⚠️ `display:'none'`으로 없애지 마라 — 빈 슬롯 유지가 계약이다
         //    (`v0460-fit-headroom:147`: *"빈 슬롯이 red로 둔갑한다"*).
+        //    🔑 **flex item의 `maxHeight:'50%'`는 부모 높이 기준**이라 순환이 없다(그리드 트랙은
+        //    자식 max-content를 봐서 안 통했다 — `CenterStage` §근거).
         width: '100%', height: interim ? '100%' : 'auto',
         minHeight: 'clamp(46px, 6.5vh, 68px)',
-        maxHeight: interim ? undefined : 'clamp(46px, 6.5vh, 68px)',
+        maxHeight: interim ? '50%' : 'clamp(46px, 6.5vh, 68px)',
         overflow: 'hidden',
         padding: '2px 8px',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
