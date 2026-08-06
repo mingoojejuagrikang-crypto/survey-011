@@ -18,6 +18,7 @@ import {
 } from './lib/pastValues';
 import { useSettingsStore } from './stores/settingsStore';
 import { initAutoCapture } from './lib/screenshot';
+import { installAudioInterruptionProbe } from './lib/audioInterruption';
 import { captureForFeedback, initFeedbackQueueFlush, submitFeedback } from './lib/feedback';
 import { FeedbackModal } from './components/FeedbackModal';
 import { logger } from './lib/logger';
@@ -50,6 +51,16 @@ export default function App() {
     resetPastIndexRetries();
     void refreshPastIndexAfterLogin();
   }), []);
+
+  /* 🔴 v0.46.0 P1(민구 지시 08-06) — 전화·타앱 알람이 오디오 세션을 회수하는 **순간**을 관측한다.
+   *  **복구는 하지 않는다**(그게 P1의 안전성이다 — 근거는 `lib/audioInterruption.ts`).
+   *  · 앱 수명에 건다: 인터럽션은 세션 밖에서도 일어나므로 `VoiceScreen` 수명에 매달면 놓친다
+   *    (민구 제보의 절반이 「앱 나갔다 올 때」축이었다).
+   *  · 🔴 **자기 effect로 분리하고 cleanup에서 반드시 해제한다.** 아래 부팅 effect에 얹었더니
+   *    **StrictMode의 이중 실행으로 리스너가 2개**가 됐고, 전이 1회에 로그가 2건 찍혔다
+   *    (08-06 실측: 오라클 ②가 expected 1 / received 2로 red). 해제 함수를 안 쓰는 것은
+   *    dev 전용 잡음이 아니라 **구독 누수** 그 자체다 — 테스트를 느슨하게 하지 말고 여기를 고친다. */
+  useEffect(() => installAudioInterruptionProbe(), []);
 
   // Hydrate data store from IndexedDB once on mount. Errors are logged + recorded as
   // `hydrationError` (D-1) so DataScreen can offer a retry instead of a misleading empty state.
