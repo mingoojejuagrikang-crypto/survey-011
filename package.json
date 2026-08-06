@@ -12,7 +12,7 @@
     "check:release": "node scripts/check-release-readme.mjs && node scripts/check-docs.mjs && npm run lint",
     "test:e2e": "playwright test",
     "test:e2e:gate": "playwright test tests/v0460-cr-data-contract.spec.ts tests/v0460-cr-alarm-card-floor.spec.ts tests/v0460-cr-blackout-escape.spec.ts tests/v0460-fb-a-manual-column.spec.ts tests/v0460-fb-b-drawer-reachable.spec.ts tests/v0460-wp-j-options.spec.ts tests/v0460-wp-j-sheet-range.spec.ts tests/v0460-fit-headroom.spec.ts tests/v0440-alarm-fit.spec.ts --workers=1",
-    "predeploy": "npm run check:release && npm run test:e2e",
+    "predeploy": "npm run check:release && npm run test:e2e:gate",
     "deploy": "npm run build && gh-pages -d dist",
     "build:preview": "PREVIEW_BUILD=1 tsc -b && PREVIEW_BUILD=1 vite build",
     "predeploy:preview": "npm run check:release && npm run test:e2e:gate",
