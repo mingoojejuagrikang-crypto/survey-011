@@ -174,10 +174,17 @@ test('@pending-fb5 §FB-5 — 402×513·idle 웨이브: 필이 켜진 도트를 
  *  ⚠️ 이건 결함 고정이 아니라 **회귀 가드**다. 처방 전에도 green이 정상이다. */
 test('§FB-5 — 402×513에서도 음성 「입력조절」로 조절판이 열린다(기능 생존)', async ({ page }) => {
   await bootShort(page);
+
+  // 🔴 **`input-control-panel`을 쓰면 안 된다** — 그건 접힌 필을 감싸는 **루트 div**라
+  //    닫힌 상태에서도 보인다. 발화가 아무 일도 안 해도 통과하는 **공허한 green**이 된다.
+  //    `{open && …}` 블록 **안에만** 존재하는 노드를 단언한다.
+  const opened = page.locator('[data-testid="stepper-tolerance"]');
+  await expect(opened, '전제: 열기 전에는 조절판이 닫혀 있다').toHaveCount(0);
+
   await fireStt(page, '입력조절', 600);
   await expect(
-    page.locator('[data-testid="input-control-panel"]'),
-    '접힌 필을 숨겨도 음성으로 여는 경로는 남아야 한다',
+    opened,
+    '접힌 필을 숨겨도 음성으로 여는 경로는 남아야 한다 — 이 단언이 「기능 삭제가 아님」의 증거다',
   ).toBeVisible({ timeout: 5000 });
 });
 
