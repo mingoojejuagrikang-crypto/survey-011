@@ -89,6 +89,41 @@ function getCtx(): AudioContext | null {
   return ctx;
 }
 
+/**
+ * 🔴 v0.46.1 WP-1(민구 실기기 08-07) — **사용자 제스처의 동기 구간에서** 오디오 출력을 연다.
+ *
+ * ## 왜 필요한가 — 실측 근거
+ *
+ * 08-07 실기기 로그(`sess_1786066154598`)에서 **세션 초반 2분간 TTS와 비프가 함께 죽어 있었다**:
+ * ```
+ * 10:29:14 session start
+ * 10:29:14 wake_lock:acquire,result=failed,reason=NotAllowedError   ← 사용자 활성화 없음
+ * 10:29:24 [tts] onstart 미도착 → 10초 워치독 (이후 11건 연속)
+ * 10:29:39 beep_play:result=suspended,ctx=suspended
+ * ```
+ * 근인은 `useVoiceSession.start()`가 **`await recorderRef.init()`(gUM) + 1초 정착 뒤에야**
+ * `warmupTts()`를 부른 것이다. **`await` 뒤는 사용자 제스처 콜스택이 아니다** — iOS는 그 시점의
+ * `AudioContext.resume()`·`speechSynthesis.speak()`를 무시하거나 무음으로 만든다.
+ * 같은 이유로 wake lock도 `NotAllowedError`를 냈다(그것이 이 진단의 결정적 증거였다).
+ *
+ * 🔑 **일시정지 → 재시작이라는 새 제스처로 셋 다 즉시 회복됐다**(10:31:16 `delay=345`).
+ * 사용자가 *"편법 사용하면 가능한지 판단중"* 이라고 쓴 것이 이것이다.
+ *
+ * ## 계약
+ * - **동기다.** `await`를 넣지 마라 — 넣는 순간 이 함수의 존재 이유가 사라진다.
+ * - 멱등하다. 이미 `running`이면 아무것도 하지 않는다.
+ * - 실패해도 절대 던지지 않는다(세션 시작을 막으면 안 된다).
+ * - 반환값은 **호출 시점의 상태**다. 계측에 실어 다음 로그에서 판정한다.
+ */
+export function unlockAudioPlayback(): PlaybackContext {
+  try {
+    const c = getCtx();          // 생성 + suspended면 resume — 둘 다 제스처 안에서 일어난다
+    return c?.state ?? 'none';
+  } catch {
+    return 'none';
+  }
+}
+
 /** 절대 스케줄을 WebAudio로 재생(세그먼트별 osc+gain → 마스터 gain → destination). 항상 non-fatal.
  *  v0.35.0 FB-D — 마스터 GainNode에 볼륨 배수를 setValueAtTime으로 건다(0도 안전 — 세그먼트 gain의
  *  exponentialRamp는 그대로 두고 마스터에서만 스케일). `mult`를 넘기면 그 값(미리듣기 라이브 반영),

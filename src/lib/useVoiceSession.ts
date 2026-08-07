@@ -13,7 +13,7 @@ import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, wa
 import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColumn } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
-import { playBeep } from './beep';
+import { playBeep, unlockAudioPlayback } from './beep';
 import { AudioRecorder, type AudioTrackState, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import {
@@ -2809,6 +2809,20 @@ export function useVoiceSession() {
       }
     });
 
+    // ── 🔴 v0.46.1 WP-1(민구 실기기 08-07) — **오디오 출력 unlock은 여기여야 한다** ──────
+    // 08-07 실기기에서 세션 초반 2분간 TTS 11건이 전부 `onstart` 미도착(10초 워치독)이었고
+    // 비프도 `ctx=suspended`였다. 같은 시각 wake lock이 `NotAllowedError`를 냈다 — 즉
+    // **그 시점엔 이미 사용자 활성화가 없었다.**
+    //
+    // 근인: `warmupTts()`가 아래 `await recorderRef.init()`(gUM 프롬프트) + 1초 정착 **뒤**에
+    // 있었다. `await` 뒤는 클릭 콜스택이 아니므로 iOS가 오디오 개시를 거부한다.
+    // 👉 **첫 `await`보다 앞**(이 클릭의 동기 구간)으로 올린다. 위 알림 권한 요청이 같은 이유로
+    //    이미 여기 있다 — 같은 계약이다.
+    // 🔴 **이 두 줄 사이에 `await`를 넣지 마라.** 넣는 순간 원래 버그로 되돌아간다.
+    const audioCtxState = unlockAudioPlayback();  // AudioContext 생성 + resume (비프 경로)
+    warmupTts();                                   // speechSynthesis 개시 (TTS 경로)
+    logCell({ type: 'app', extra: `audio_unlock:ctx=${audioCtxState},src=session_start` });
+
     // ── v0.44.0 §C8 F18(민구 확정 08-02) — 마이크 권한 요청 시점 = **이 클릭** ─────────
     // 종전 v0.25.0 WS-2는 입력탭 마운트에서 prewarm(getUserMedia)을 돌렸다 — 탭에 들어가기만
     // 해도 권한 요청이 떴다. 이제 요청은 여기(시작 버튼의 사용자 제스처 콜스택)서만 일어난다
@@ -2876,7 +2890,9 @@ export function useVoiceSession() {
       return false;
     }
 
-    warmupTts();
+    // 🔴 v0.46.1 WP-1 — `warmupTts()`는 **위 동기 구간으로 올렸다**(첫 await 앞).
+    //    여기(gUM await + 1초 정착 뒤)에 있던 것이 08-07 TTS 무음 11건의 근인이었다.
+    //    되돌리지 마라 — 되돌리면 iOS에서 다시 무음이 된다.
     // v0.5.0 W1: 세션 시작 시 음성 목록 재조회 1회 — iOS가 늦게 채운 한국어 음성을
     // 이 세션의 TTS가 바로 쓸 수 있게 하고, tts_voices_loaded 텔레메트리(개수 변화 시)도 남긴다.
     refreshVoices();

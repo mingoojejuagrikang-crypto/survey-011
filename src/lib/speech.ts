@@ -612,6 +612,7 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     u.volume = opts.volume ?? 1;
 
     let settled = false;
+    let started = false;
     let watchdog: ReturnType<typeof setTimeout> | null = null;
     const done = () => {
       if (settled) return;
@@ -623,13 +624,34 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
 
     u.onstart = () => {
       if (settled) return;
+      started = true;
       opts.onStart?.(Date.now() - enqueuedAt);
     };
     u.onend = done;
     u.onerror = done;
 
-    // iOS Safari 안전장치: onend/onerror 미발생 시 10초 후 강제 resolve
-    watchdog = setTimeout(done, 10_000);
+    /** 🔴 v0.46.1 WP-1(민구 실기기 08-07) — **10초에서 2.5초로 줄였다.**
+     *
+     *  이 워치독은 `onend`/`onerror` 미발생 대비 안전장치인데, 08-07 실기기에서 **발화 자체가
+     *  시작되지 못하는**(= `onstart`도 안 오는) 상태가 세션 초반에 11번 연속 일어났다.
+     *  `say()`가 `await speak(...)`이고 `speak()`는 `muteForTts()`를 건 채 기다리므로,
+     *  **10초 × 11 = 약 110초 동안 앱이 멈추고 STT도 mute 상태였다.**
+     *  민구 제보 *"tts 작동안함"*(FB-3)의 실체가 그 마비다.
+     *
+     *  근본 원인(제스처 밖 오디오 개시)은 `useVoiceSession.start()`의 동기 구간 unlock으로
+     *  처방했다. 이 상수는 **그 처방이 실패했을 때의 피해를 1/4로 줄이는 2차 방어**다.
+     *  🔑 2.5초인 이유: 정상 발화의 `startDelayMs`는 08-07 실측 **중앙값 ~300ms · 최대 377ms**였다.
+     *  2.5초는 그 6배가 넘어 정상 발화를 자를 위험이 없으면서, 마비 구간을 사람이 견딜 만큼 짧게 만든다.
+     *  ⚠️ 값을 다시 올리려면 **그 실측 분포부터 다시 재라.** */
+    const TTS_WATCHDOG_MS = 2_500;
+    watchdog = setTimeout(() => {
+      // 🔑 `onstart`조차 못 받았는가 = 「엔진이 발화를 시작도 못 했다」. 그냥 늦은 것과 다르다.
+      //    다음 로그에서 이 두 갈래를 갈라야 처방의 효과를 판정할 수 있다.
+      try {
+        logger.log({ type: 'app', extra: `tts_watchdog_fired:started=${started ? 'yes' : 'no'},ms=${Date.now() - enqueuedAt}` });
+      } catch { /* 계측은 best-effort — 절대 발화 경로를 막지 않는다 */ }
+      done();
+    }, TTS_WATCHDOG_MS);
 
     // synth.speak → onstart 사이 50~500ms 갭 동안 STT 값이 필터링 안 되는 버그 수정:
     // muteForTts를 onstart가 아닌 synth.speak 직전에 호출
