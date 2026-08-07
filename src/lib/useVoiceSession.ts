@@ -133,6 +133,10 @@ const PAUSE_FLUSH_GRACE_MS = 3000;
  *  데이터를 흘리기 전에 세션이 시작되면 첫 클립이 비는 문제의 방어다(구 v0.25.0 WS-2 prewarm의
  *  첫 클립 유실 완화를 이 지연이 승계한다). 오라클: tests/v0440-c8-flow.spec.ts(1000ms 계약). */
 const MIC_SETTLE_MS = 1000;
+/** 🔴 v0.46.1 WP-1(민구 지시 08-07) — 시작 카운트다운 초. `3`이면 화면에 3→2→1이 뜬다.
+ *  `MIC_SETTLE_MS`(1초)를 대체한다 — 같은 목적(마이크 정착)에 **보이는 피드백**을 붙인 것이다.
+ *  ⚠️ 줄이려면 첫 클립 유실(WS-2 승계 목적)을 함께 재라. 늘리면 시작이 굼떠 보인다. */
+const START_COUNTDOWN_SECONDS = 3;
 
 /** v0.43.0 #4 — 백그라운드 복귀 안내 문구(plan §3-3, 민구 확정).
  *
@@ -2841,10 +2845,21 @@ export function useVoiceSession() {
       const skipSettle =
         (window as unknown as { __micSettleSkipForTest?: boolean }).__micSettleSkipForTest === true;
       if (granted && !skipSettle) {
-        await new Promise((r) => setTimeout(r, MIC_SETTLE_MS));
+        // 🔴 v0.46.1 WP-1(민구 지시 08-07) — 정착 대기를 **3→2→1 카운트다운으로 보이게** 한다.
+        //    민구 원문: *"화면전환은 화면에 「3>2>1」로 카운터 띄워서 약간 지연해서 전환 해줘."*
+        //    종전 MIC_SETTLE_MS(1초)는 **무피드백 침묵**이었고, 08-07 실기기에서 그 침묵 뒤에
+        //    TTS 무음이 이어져 민구가 "마이크가 정상 작동하진 않았어"로 읽었다.
+        //    🔑 대기가 길어진 만큼 **첫 클립 유실 완화**(WS-2 승계 목적)도 함께 두터워진다.
+        for (let n = START_COUNTDOWN_SECONDS; n >= 1; n--) {
+          useSessionStore.getState().setStartCountdown(n);
+          await new Promise((r) => setTimeout(r, 1000));
+        }
       }
     } finally {
       startingRef.current = false;
+      // 🔴 성공·실패·중도이탈 어느 경로로 빠져나가도 카운터를 반드시 지운다 —
+      //    남으면 ready 화면에 유령 숫자가 붙는다.
+      useSessionStore.getState().setStartCountdown(null);
     }
     // 🔴 F18 리뷰 B1 — await 창에서 언마운트됐으면(탭 이탈) 여기서 끝낸다. 이 클로저가
     // 만든 레코더의 스트림을 되돌려 놓는다(획득 세대 카운터가 늦게 열린 스트림도 닫는다 —

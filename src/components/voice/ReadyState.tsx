@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { T } from '../../tokens';
 import { I } from '../icons';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { useSessionStore } from '../../stores/sessionStore';
 import { isSpeechSupported } from '../../lib/speech';
 import { ConnectionStatusCard } from '../ConnectionStatusCard';
 import { isSheetSourceBlocked } from '../../lib/sheetConnection';
@@ -10,6 +11,10 @@ import { emitReadyProbe } from './readyProbe';
 
 export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => void }) {
   const s = useSettingsStore();
+  // 🔴 v0.46.1 WP-1 — 시작 카운트다운(3→2→1). `useVoiceSession.start()`가 마이크 정착 구간에
+  //    채우고, 어느 경로로 빠져나가도 finally에서 null로 지운다.
+  const countdown = useSessionStore((st) => st.startCountdown);
+  const counting = countdown != null;
   // v0.45.0 WP-1① — 시작 전 입·출력 상태 프로브(F15 근원 판정용). 스로틀·계약은 readyProbe.ts.
   useEffect(() => { emitReadyProbe(); }, []);
   const sourceBlocked = isSheetSourceBlocked(s);
@@ -101,21 +106,58 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
 
       <div style={{ padding: '0 16px 12px' }}>
         <button
-          disabled={!ready}
+          disabled={!ready || counting}
           onClick={onStart}
+          data-testid="voice-start-button"
           style={{
             width: '100%', height: 60, borderRadius: 28, border: 'none',
-            background: ready ? T.blue : '#2A2D32',
-            color: ready ? '#fff' : T.textMute,
+            background: counting ? T.blue : ready ? T.blue : '#2A2D32',
+            color: ready || counting ? '#fff' : T.textMute,
             fontSize: VOICE_TYPE.actionLabel, fontWeight: 800, letterSpacing: -0.3,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-            cursor: ready ? 'pointer' : 'not-allowed',
-            boxShadow: ready ? `0 8px 28px ${T.blueGlow}` : 'none',
+            cursor: counting ? 'default' : ready ? 'pointer' : 'not-allowed',
+            boxShadow: ready || counting ? `0 8px 28px ${T.blueGlow}` : 'none',
           }}
         >
+          {/* 🔴 카운트다운 중에도 **버튼 문구를 바꾸지 않는다.** 종전 시도에서 "N 잠시만요…"로
+              바꿨더니 `F18 리뷰 B1`(정착 창 탭 이탈)이 red가 됐다 — 그 오라클이
+              `text=음성 입력 시작`으로 ready 화면을 식별하기 때문이다. 진행 표시는 아래
+              오버레이가 전담하고, 버튼은 `disabled`로만 잠근다. */}
           {I.mic(22, ready ? '#fff' : T.textMute)} 음성 입력 시작
         </button>
       </div>
+
+      {/* 🔴 v0.46.1 WP-1(민구 지시 08-07) — 시작 카운트다운 오버레이(3→2→1).
+          원문: *"화면전환은 화면에 「3>2>1」로 카운터 띄워서 약간 지연해서 전환 해줘."*
+          🔑 이 창은 장식이 아니라 **마이크 획득·오디오 unlock이 정착하는 실제 구간**이다.
+             종전에는 같은 구간이 무피드백 침묵이었다(회차 SSOT §2). */}
+      {counting && (
+        <div
+          data-testid="start-countdown-overlay"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 60,
+            background: 'rgba(11,12,14,0.92)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18,
+            // 🔴 **포인터를 먹지 않는다.** 이 오버레이는 정보 표시일 뿐 입력 차단이 목적이 아니다.
+            //    실측(08-07): `inset:0`이 탭 바까지 덮어 카운트다운 3초 동안 **탭 전환이 막혔고**,
+            //    그 때문에 `F18 리뷰 B1`(정착 창 탭 이탈 → 고아 세션 방지)이 red가 됐다 —
+            //    클릭이 오버레이에 막혀 언마운트가 일어나지 않았고 세션이 그대로 시작됐다.
+            //    🔑 테스트가 잡은 것은 테스트 문제가 아니라 **사용자가 3초간 갇히는 UX 결함**이다.
+            //    시작 버튼 자체는 `disabled`로 잠그므로 중복 시작은 그쪽이 막는다.
+            pointerEvents: 'none',
+          }}
+        >
+          <div style={{
+            fontSize: 'min(44vw, 34vh)', fontWeight: 900, color: '#fff', lineHeight: 1.05,
+            fontVariantNumeric: 'tabular-nums',
+          }}>
+            {countdown}
+          </div>
+          <div style={{ fontSize: VOICE_TYPE.actionLabel, fontWeight: 700, color: T.textMute }}>
+            마이크를 준비하고 있어요
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -349,7 +349,13 @@ test('F18 — 입력탭 진입 시 getUserMedia 0회, "음성 입력 시작" 클
   expect((await gumCalls(page)).length).toBe(1);
 });
 
-test('F18 — 승인 후 1초 정착 지연 뒤 화면 전환(제품 경로: 1000ms ± 여유)', async ({ page }) => {
+/** 🔴 v0.46.1 WP-1(민구 지시 08-07)로 **계약이 1초 → 3초 카운트다운으로 바뀌었다.**
+ *
+ *  민구 원문: *"화면전환은 화면에 「3>2>1」로 카운터 띄워서 약간 지연해서 전환 해줘."*
+ *  종전 `MIC_SETTLE_MS`(1초) **무피드백 침묵**을 `START_COUNTDOWN_SECONDS`(3초) + 화면 카운터로
+ *  교체했다. **계약의 몸통은 그대로다** — "승인 즉시 전환 금지(초기 클립 유실 방어)".
+ *  바뀐 것은 길이와 **사용자에게 보이는가**뿐이다. */
+test('F18 — 승인 후 3초 카운트다운 뒤 화면 전환(제품 경로: 3000ms ± 여유)', async ({ page }) => {
   await installVoiceMocks(page);
   await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await seedAndOpenVoiceTab(page, settingsRows(3, 'c8-f18-delay'));
@@ -364,10 +370,29 @@ test('F18 — 승인 후 1초 정착 지연 뒤 화면 전환(제품 경로: 100
 
   const shownTs = await page.evaluate(() => (window as unknown as { __activeShownTs: number }).__activeShownTs);
   const delta = shownTs - postClick[postClick.length - 1];
-  // 하한 900ms가 계약의 몸통(승인 즉시 전환 금지 — 초기 클립 유실 방어). 상한 1400ms는
-  // 지연이 1초 스케일임을 고정(렌더/rAF 지터 여유 — 2초로 늘리는 회귀는 잡힌다).
-  expect(delta, `승인→화면 전환 지연 ${delta}ms — 1000ms 계약 위반`).toBeGreaterThanOrEqual(900);
-  expect(delta, `승인→화면 전환 지연 ${delta}ms — 1000ms 계약 위반`).toBeLessThanOrEqual(1400);
+  // 하한 2900ms가 계약의 몸통(승인 즉시 전환 금지 — 초기 클립 유실 방어). 상한 3600ms는
+  // 지연이 3초 스케일임을 고정(렌더/rAF 지터 여유 — 5초로 늘리는 회귀는 잡힌다).
+  expect(delta, `승인→화면 전환 지연 ${delta}ms — 3000ms 계약 위반`).toBeGreaterThanOrEqual(2900);
+  expect(delta, `승인→화면 전환 지연 ${delta}ms — 3000ms 계약 위반`).toBeLessThanOrEqual(3600);
+});
+
+/** 🆕 v0.46.1 WP-1 — **카운터가 실제로 보이는가**. 위 테스트는 「지연」만 재고 「보임」은 안 잰다.
+ *  민구 요구의 절반이 그 표시이므로 별도 오라클로 고정한다. */
+test('WP-1 — 시작 클릭 후 3→2→1 카운터가 화면에 뜬다', async ({ page }) => {
+  await installVoiceMocks(page);
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
+  await seedAndOpenVoiceTab(page, settingsRows(3, 'wp1-countdown'));
+
+  // 🔴 `clickStart`는 전환 완료까지 기다리므로 여기선 쓰지 않는다 — 카운터는 그 **도중**에만 뜬다.
+  await page.locator('[data-testid="voice-start-button"]').click();
+
+  const overlay = page.locator('[data-testid="start-countdown-overlay"]');
+  await overlay.waitFor({ state: 'visible', timeout: 2000 });
+  const first = (await overlay.locator('div').first().textContent())?.trim();
+  expect(first, `첫 카운터가 3이 아니다: ${first}`).toBe('3');
+
+  // 카운터는 내려가고, 끝나면 사라진다(유령 오버레이 금지 — finally 정리 계약).
+  await expect(overlay).toBeHidden({ timeout: 6000 });
 });
 
 test('F18 — 테스트 픽스처 우회(__micSettleSkipForTest)는 지연만 생략한다(우회 심 자체를 고정)', async ({ page }) => {
@@ -405,9 +430,12 @@ test('F18 리뷰 B1 — 정착 창에서 탭 이탈 시 고아 세션을 만들�
   await seedAndOpenVoiceTab(page, settingsRows(3, 'c8-b1-orphan'));
 
   await page.locator('text=음성 입력 시작').first().click();
-  await page.waitForTimeout(200); // 정착 창(1000ms) 한복판
+  // 🔴 v0.46.1 WP-1로 정착 창이 **1초 → 3초 카운트다운**이 됐다. 이 테스트의 대기는
+  //    「그 창보다 길게」가 계약이므로 함께 늘린다 — 짧으면 카운트다운 도중에 복귀해
+  //    오버레이가 아직 떠 있는 상태를 「고아 세션」으로 오독한다(실측: 1400ms에서 red).
+  await page.waitForTimeout(200); // 카운트다운 창(3000ms) 한복판
   await page.locator('[data-testid="tab-data"]').click(); // 탭 이탈 → VoiceScreen 언마운트
-  await page.waitForTimeout(1400); // 고아 클로저가 세션을 올렸다면 이 사이에 올라온다
+  await page.waitForTimeout(3400); // 고아 클로저가 세션을 올렸다면 이 사이에 올라온다
 
   // 세션이 몰래 시작되지 않았다 — 입력탭에 돌아오면 ready 화면 그대로다.
   await page.locator('[data-testid="tab-voice"]').click();
