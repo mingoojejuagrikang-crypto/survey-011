@@ -295,6 +295,11 @@ export function ActiveState({
         activeTone={chipAccent}
         anomalyPending={anomalyPending}
         editingColId={editingColId}
+        /* 🔴 v0.46.1 WP-4 C3-①(민구 08-07) — *"사람이 칩을 터치하여 **수동 입력**시에도 스크롤
+           멈춰야하고"*. `editingColId`(인라인 편집)만으로는 **부족하다** — `ManualValueSheet`는
+           `manualCol`이 소유하는 별개 상태라, 시트가 열린 채 스윕이 계속 돌면 사용자가 값을
+           보며 입력하는 동안 뒤에서 칩이 움직인다. **두 축을 함께** 넘긴다. */
+        sweepPaused={editingColId != null || manualCol != null}
         activeChipRef={activeChipRef}
         gridRef={chipGridRef}
         onActivate={(c) => {

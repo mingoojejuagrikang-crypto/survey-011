@@ -164,7 +164,7 @@ function useChipSweep(
 
 export function ChipZone({
   columns, rowValues, row, currentColId, activeTone, anomalyPending, editingColId,
-  activeChipRef, gridRef, onActivate, onCommit, onCancel, commitMarkColId,
+  sweepPaused, activeChipRef, gridRef, onActivate, onCommit, onCancel, commitMarkColId,
 }: {
   columns: Column[];
   rowValues: Record<string, string>;
@@ -173,6 +173,9 @@ export function ChipZone({
   activeTone: string;
   anomalyPending: boolean;
   editingColId: string | null;
+  /** 🔴 WP-4 C3-① — 왕복을 멈춰야 하는 「수동 입력 중」 상태. 인라인 편집(`editingColId`)과
+   *  수동 입력 시트(`manualCol`)를 **부모가 합쳐서** 넘긴다 — 시트 상태는 ChipZone이 모른다. */
+  sweepPaused: boolean;
   activeChipRef: Ref<HTMLDivElement>;
   /** 자동 스크롤(우측 끝 정렬)을 ActiveState가 수행하기 위한 스크롤 컨테이너 핸들. */
   gridRef: Ref<HTMLDivElement>;
@@ -196,8 +199,8 @@ export function ChipZone({
   // ref에 두는 이유: state로 두면 매 칩 이동마다 rAF 루프가 정리·재등록된다.
   const sweepResyncRef = useRef(true);
   useEffect(() => { sweepResyncRef.current = true; }, [currentColId, row, commitMarkColId]);
-  // 🔴 WP-4 C3-① — 인라인 편집(칩 터치 → 수동 입력) 중에는 왕복을 멈춘다.
-  useChipSweep(localGridRef, sweepSeconds, sweepResyncRef, editingColId != null);
+  // 🔴 WP-4 C3-① — 인라인 편집·수동 입력 시트가 열린 동안 왕복을 멈춘다(부모가 합쳐 넘긴다).
+  useChipSweep(localGridRef, sweepSeconds, sweepResyncRef, sweepPaused);
   return (
     <div
       data-testid="voice-chip-grid"

@@ -346,3 +346,51 @@ test.describe('WP-D 설정 UI — 서랍 4번째 항목', () => {
     expect(label, '요약 필에는 종전 두 값만 남는다(칩 왕복은 넣지 않았다)').not.toContain('왕복');
   });
 });
+
+// ── 🆕 v0.46.1 WP-4 C1 — 음성안내 칩만 순회 ────────────────────────────────────
+/** 🔴 **이 오라클이 없으면 C1이 죽어도 아무도 모른다.**
+ *  왕복은 여전히 돌고 칩도 그대로라 화면이 "정상으로 보인다" — 다만 순회 범위가 안 좁혀질 뿐이고,
+ *  그건 민구 요구(*"TTS 알람이 설정된 칩들만 자동 스크롤"*) 그 자체다.
+ *  §②-b가 "기본값 경로를 아무도 안 돌린다"를 막았듯, 이건 **분기가 공허하게 통과하는 것**을 막는다. */
+test.describe('WP-4 C1 — 음성안내 칩만 순회(민구 08-07)', () => {
+  test('표식 칩 범위 안에서만 왕복한다 — 앞쪽 비표식 칩까지 되돌아가지 않는다', async ({ page }) => {
+    await boot(page, PHONE_402, {
+      settings: settingsWithSweep(SWEEP_TEST_SECONDS), preserveAnimations: true,
+    });
+
+    // ① 공허 방지 — 표식이 **섞여** 있어야 이 테스트가 무언가를 증명한다.
+    //    전부 true면 from≈0이라 좁힘이 보이지 않고, 전부 false면 분기 자체가 안 돈다.
+    const geo = await page.evaluate(() => {
+      const grid = document.querySelector('[data-testid="voice-chip-grid"]') as HTMLElement;
+      const chips = Array.from(grid.querySelectorAll('[data-testid="column-chip"]')) as HTMLElement[];
+      const marked = chips.filter((c) => c.getAttribute('data-tts-announce') === 'true');
+      const minLeft = Math.min(...marked.map((c) => c.offsetLeft));
+      return {
+        total: chips.length,
+        marked: marked.length,
+        minLeft,
+        maxScroll: grid.scrollWidth - grid.clientWidth,
+        gridPosition: getComputedStyle(grid).position,
+      };
+    });
+    console.log(`C1: total=${geo.total} marked=${geo.marked} minLeft=${geo.minLeft} max=${Math.round(geo.maxScroll)} pos=${geo.gridPosition}`);
+    expect(geo.marked, '표식 칩이 있어야 한다').toBeGreaterThan(0);
+    expect(geo.marked, '표식이 **섞여** 있어야 좁힘을 관측할 수 있다').toBeLessThan(geo.total);
+    expect(geo.maxScroll, '칩이 실제로 넘쳐야 왕복이 의미를 갖는다').toBeGreaterThan(50);
+    // 🔴 `offsetLeft`는 `offsetParent` 기준이다. 그리드가 static이면 좌표계가 `scrollLeft`와
+    //    어긋나 C1 산술이 조용히 틀린다. 계약으로 못박는다.
+    expect(geo.gridPosition, 'offsetLeft 좌표계 = scrollLeft 좌표계이려면 그리드가 positioned여야 한다')
+      .not.toBe('static');
+    expect(geo.minLeft, '표식 칩이 맨 앞이 아니어야 좁힘이 관측된다').toBeGreaterThan(0);
+
+    // ② 왕복 표본 — 표식 묶음의 왼쪽 끝(minLeft)보다 더 왼쪽으로는 가지 않는다.
+    const samples = await sampleScrollLeft(page, 14, 200); // ≈2.8초 = 편도 1초 × 2주기 이상
+    const lo = Math.min(...samples);
+    const hi = Math.max(...samples);
+    console.log(`C1 왕복: lo=${lo.toFixed(1)} hi=${hi.toFixed(1)} (하한 기대 ≥ ${geo.minLeft})`);
+    expect(hi - lo, '왕복이 실제로 돌고 있다(공허 통과 방지)').toBeGreaterThan(10);
+    // 서브픽셀·rAF 지터 여유 2px. C1이 죽으면 lo가 0 근처로 내려가 이 단언이 깨진다.
+    expect(lo, 'C1이 살아 있으면 표식 묶음 왼쪽 끝보다 더 왼쪽으로 가지 않는다')
+      .toBeGreaterThanOrEqual(geo.minLeft - 2);
+  });
+});
