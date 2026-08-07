@@ -29,6 +29,7 @@
  *  칩 개수·항목명에 기대지 않는다. 재는 것은 **서랍 자신의 기하**뿐이다. */
 import { test, expect } from '@playwright/test';
 import { boot, SETTINGS } from './fixtures/activeZones';
+import { chipSweepSecondsForLevel } from '../src/lib/chipSweep';
 
 /** 🔴 `height`는 **viewport**다(`window.innerHeight`), screen 높이가 아니다.
  *  민구 실기기 실측: `screenH=874`인데 standalone PWA의 `viewportH=**812**`
@@ -67,7 +68,14 @@ async function reachable(page: import('@playwright/test').Page, testId: string) 
 
 for (const vp of VIEWPORTS) {
   test(`서랍 마지막 항목에 닿는다 @ ${vp.width}×${vp.height} (${vp.label})`, async ({ page }) => {
-    await boot(page, vp, { settings: settingsWithSweep(8), preserveAnimations: true });
+    // 🔴 v0.46.1 WP-4 — 눈금이 **단계 0~10**으로 바뀌었다(민구 확정 08-07). 종전 `8`(초)은
+    //    이제 **눈금 밖**이라 가장 빠른 단계 10으로 스냅되고, 그러면 `+`가 정당하게 disabled가 돼
+    //    이 스펙의 ④(값이 바뀐다)가 클릭 타임아웃으로 죽는다.
+    //    👉 이 스펙의 본질은 **「마지막 항목에 닿고 조작된다」**이지 특정 초가 아니다.
+    //       중간 단계에서 부팅해 `+` 여지를 남긴다.
+    await boot(page, vp, {
+      settings: settingsWithSweep(chipSweepSecondsForLevel(5)), preserveAnimations: true,
+    });
     await page.locator('[data-testid="input-control-toggle"]').click();
     await page.waitForTimeout(300);
 
@@ -102,7 +110,9 @@ for (const vp of VIEWPORTS) {
 
     // ④ 배선 확인 — 닿을 뿐 아니라 값이 바뀐다(공허한 통과 방지).
     await page.locator('[data-testid="stepper-chip-sweep-plus"]').click();
-    await expect(page.locator('[data-testid="voice-chip-grid"]')).toHaveAttribute('data-chip-sweep', '9');
+    // + 한 번 = **한 단계 빠르게**(민구 정의: 단계가 클수록 빠르다). 초는 파생값이라 리터럴 금지.
+    await expect(page.locator('[data-testid="voice-chip-grid"]'))
+      .toHaveAttribute('data-chip-sweep', String(chipSweepSecondsForLevel(6)));
   });
 }
 
