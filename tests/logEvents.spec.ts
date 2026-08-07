@@ -395,11 +395,16 @@ test('readyProbe — 시작 전 입출력 상태 바이트 계약 (WP-1①)', ()
 });
 
 /** WP-1② — 확정(에코) 순간 hero 실렌더. px 소수 1자리(fontRenderSnapshot 계보). */
-test('fontRenderEcho — 확정 순간 실렌더 바이트 계약 (WP-1②)', () => {
-  expect(fontRenderEcho({ hero: 90.1349, w: 402, h: 874 }))
-    .toBe('font_render_echo:hero=90.1,w=402,h=874');
-  expect(fontRenderEcho({ hero: 64, w: 375, h: 812 }))
-    .toBe('font_render_echo:hero=64,w=375,h=812');
+test('fontRenderEcho — 확정 순간 실렌더 바이트 계약 (WP-1② · v0.46.1 넘침 3종 추가)', () => {
+  // 🔴 v0.46.1 WP-3(민구 FB-6·7) — `ovX`/`ovY`/`len` 신설. SOP-003 파서가 이 순서를 읽는다.
+  //    `ovX > 0` = ellipsis가 실제로 그려짐(민구가 본 `33…`의 직접 증거).
+  expect(fontRenderEcho({ hero: 90.1349, w: 402, h: 874, ovX: 0, ovY: 0, len: 4 }))
+    .toBe('font_render_echo:hero=90.1,w=402,h=874,ovX=0,ovY=0,len=4');
+  expect(fontRenderEcho({ hero: 64, w: 375, h: 812, ovX: 0, ovY: 0, len: 3 }))
+    .toBe('font_render_echo:hero=64,w=375,h=812,ovX=0,ovY=0,len=3');
+  // 🔑 민구 실기기 시나리오: 402×513에서 정수 2자리(`22.4`)가 가로로 넘친 경우.
+  expect(fontRenderEcho({ hero: 167.9, w: 402, h: 513, ovX: 12, ovY: 2, len: 4 }))
+    .toBe('font_render_echo:hero=167.9,w=402,h=513,ovX=12,ovY=2,len=4');
 });
 
 /** 계측 I — 회전이 실제로 일어났는가 + 안내가 실제로 떴는가(별개 사실). */

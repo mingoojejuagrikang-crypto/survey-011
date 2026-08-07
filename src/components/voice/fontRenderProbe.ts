@@ -184,7 +184,7 @@ export function scheduleEchoFontRender(): void {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (useSessionStore.getState().sessionId !== sessionId) return; // 세션이 이미 끝났다
       if (echoAlreadyEmitted(sessionId)) return; // 연속 확정 경합의 이중 방출 방지
-      const el = document.querySelector('[data-testid="hero-primary"]');
+      const el = document.querySelector('[data-testid="hero-primary"]') as HTMLElement | null;
       if (!el) return;
       markEchoEmitted(sessionId);
       logger.log({
@@ -193,6 +193,11 @@ export function scheduleEchoFontRender(): void {
           hero: computedPx(el),
           w: window.innerWidth,
           h: window.innerHeight,
+          // 🔴 v0.46.1 WP-3 — **넘침 실측**(민구 FB-6·7). `ovX > 0`이면 ellipsis가 실제로
+          //    그려진 것 = 민구가 본 `33…`의 직접 증거. 폰트 크기만으로는 판정할 수 없었다.
+          ovX: el.scrollWidth - el.clientWidth,
+          ovY: el.scrollHeight - el.clientHeight,
+          len: (el.textContent ?? '').trim().length,
         }),
       });
     }));

@@ -103,9 +103,31 @@ export function readyProbe(fields: {
  *  프로브(곡선 해석)였다. 이 이벤트는 확정 플래시(data-hero-state=confirm)가 **실제로 값을 그린
  *  프레임**에서 실렌더만 읽는다 — 요소가 없으면 방출하지 않는다(프로브 폴백 없음: 폴백을 남기면
  *  "확정 순간 실렌더"라는 존재 이유가 사라진다). 세션당 1회(fontRenderProbe.ts가 가드 소유). */
-export function fontRenderEcho(fields: { hero: number; w: number; h: number }): string {
+/** 🔴 v0.46.1 WP-3(민구 FB-6·FB-7 · 08-07) — **넘침 지표 3종을 추가한다.**
+ *
+ *  민구 제보: *"중앙 출력 잘림. 인식 및 출력되어야 할 값 33.3 / 실제 기기에서 보이는 값 33…"* ·
+ *  *"화면 중앙 확정값 표시 **불안정**. … 정수자리가 2자리 일때와, 3자리 일때를 비교해볼것."*
+ *
+ *  🔑 **종전 이 이벤트는 폰트 크기만 남겼다 — 「넘쳤는가」가 없다.** 그래서 로그가 있어도
+ *  제보를 판정할 수 없었다. 08-07 회차가 Chromium에서 재현을 시도했으나 **가로 넘침이
+ *  구조적으로 발생하지 않았고**(fit이 항상 폭에 맞춘다 — 10글자 `1234567.89`조차 `ovX=0`),
+ *  fit의 검사 가능한 축은 전부 이미 처방돼 있었다(폭 판정 tolerance 0.05 · `fonts.ready` 후
+ *  재fit · deps에 값 포함). **남은 것은 실기기 실측뿐이다.**
+ *
+ *  - `ovX` `scrollWidth - clientWidth`. **> 0이면 `text-overflow: ellipsis`가 실제로 그려진다**
+ *    = 민구가 본 `33…`의 직접 증거. 이 값이 0이면 잘림은 다른 층에서 온 것이다.
+ *  - `ovY` `scrollHeight - clientHeight`. 세로 축(402×513 실측에서 1·2자리만 부모를 +1.6px 넘겼다).
+ *  - `len` 표시 문자열 길이. **민구가 지목한 자릿수 축**을 로그에서 바로 가른다.
+ *
+ *  ⚠️ 추측으로 fit 구조를 고치지 마라 — 이 세 값이 다음 로그에 찍힌 뒤에 처방한다. */
+export function fontRenderEcho(fields: {
+  hero: number; w: number; h: number; ovX: number; ovY: number; len: number;
+}): string {
   const px = (v: number) => Math.round(v * 10) / 10;
-  return `font_render_echo:${kv({ hero: px(fields.hero), w: fields.w, h: fields.h })}`;
+  return `font_render_echo:${kv({
+    hero: px(fields.hero), w: fields.w, h: fields.h,
+    ovX: fields.ovX, ovY: fields.ovY, len: fields.len,
+  })}`;
 }
 
 /** v0.45.0 WP-1④ — **세션-활성 게이트(WP-2)가 hidden에 유지한 구간의 생존 요약.** hidden
