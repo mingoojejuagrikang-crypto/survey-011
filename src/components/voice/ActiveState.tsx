@@ -238,7 +238,18 @@ export function ActiveState({
     // 리뷰 C12(v0.45.0) — '✓' 마크(commitMarkColId)가 활성 칩 왼쪽 칩의 폭을 1.5초간 키웠다
     // 되돌린다. 정렬 산술이 마크 삽입·소멸 렌더 뒤에도 다시 돌아야 활성 칩 우측 끝 계약(C4)이
     // 그 창에서도 유지된다 — deps에 포함.
-  }, [currentColId, row, activeChipValue, commitMarkColId]);
+    //
+    // 🔴 v0.46.1 §C1-① (2026-08-07) — **칩 폭·칩존 배분을 바꾸는 축 세 개가 더 있었다.**
+    //   ① `editingColId` 인라인 편집 칩이 `flex:1 0 auto`로 커진다(§C1-② 처방 뒤 더 커졌다)
+    //   ② `manualCol`   `:275`가 `activeZoneRows('modify')`로 **칩존 비율 자체를 바꾼다**(16→20%)
+    //   ③ `confirmExitOpen` 같은 줄이 `'dotless'`로 가른다
+    //   셋 다 렌더를 유발하지만 이 effect는 안 돌았다 → **정렬이 낡은 채 남는다.**
+    //   402×874 실측(`v0461-edit-chip-width`): 편집 진입 전 활성 칩 우측 여유 **7.7px**(계약 준수)
+    //   → 진입 후 **−195.0px**. 사용자가 방금 탭한 칩이 화면 밖으로 나간다.
+    //   🔑 C12가 이미 같은 형태를 한 번 고쳤다 — **「칩 폭을 바꾸는 축은 deps에 넣는다」가 규칙이다.**
+    //   ⚠️ `manualCol`은 객체라 **`.id`로 넣는다** — 참조를 넣으면 내용이 같아도 매 렌더 재실행된다.
+    //   게이트: `tests/v0461-edit-chip-width.spec.ts` §C1-① (editingColId 축을 대표로 잡는다)
+  }, [currentColId, row, activeChipValue, commitMarkColId, editingColId, manualCol?.id, confirmExitOpen]);
 
   // ── 상태 파생(단일 지점) ────────────────────────────────────────────────────
   // 수동 입력 시트가 화면을 덮는 동안엔 알람 표시를 접는다(중복 표시 방지). **보류 상태 자체는

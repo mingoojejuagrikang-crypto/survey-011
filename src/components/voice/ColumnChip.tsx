@@ -115,7 +115,19 @@ export function ColumnChip({
         minHeight: 'var(--chip-min-h, 44px)',
         // 🔴 폭은 **내용이 정한다**(`0 0 auto`). 종전 `0 1 auto`는 한 행에 다 넣으려고 칩을 글자
         //    밑으로 찌그러뜨려 항목명이 한 글자로 잘렸다 — 넘치면 줄이지 말고 가로로 밀어야 한다.
-        flex: isEditing ? '1 1 220px' : compact ? '0 0 clamp(180px, 48vw, 260px)' : '0 0 auto',
+        //
+        // 🔴 v0.46.1 §C1-② (2026-08-07) — **편집 경로만 그 계약 밖에 있었다.**
+        //    종전 `isEditing ? '1 1 220px'`는 `flex-shrink: 1`이라, 단일 라인에서 **유일한 shrink
+        //    대상**이 되어 결손을 혼자 흡수했다. 402×874 실측(`v0461-edit-chip-width`):
+        //      비편집 213.2px → **편집 진입만으로 90.7px** · 항목명이 좌우 46.8px씩 잘려나감
+        //    (긴 항목명 11글자에서는 157.8px씩, 라벨 406.5px 중 약 78%).
+        //    👉 `1 0 auto` — **grow는 남기고 shrink만 끊는다.** 편집 칩이 남는 공간을 먹는
+        //    의도(입력 필드 확보)는 그대로 살고, 모자랄 때 자기를 찌그러뜨리지는 않는다.
+        //    🔑 `220px` basis는 **한 번도 유효한 적 없는 죽은 상수**였다(§C1 6축 감사 08-03).
+        //    shrink가 1이라 basis에 도달하기 전에 `minWidth`까지 밀렸기 때문이다.
+        //    ⚠️ **`1 1 …`로 되돌리지 마라.** 게이트: `tests/v0461-edit-chip-width.spec.ts`가
+        //    잘림 축과 `flex-shrink === 0` 구조 축을 **함께** 잡는다(`[TEAMOPS-97]`).
+        flex: isEditing ? '1 0 auto' : compact ? '0 0 clamp(180px, 48vw, 260px)' : '0 0 auto',
         minWidth: compact ? undefined : '24cqw',   // '—'뿐인 칩이 슬리버로 쪼그라들지 않게
         maxWidth: compact ? '100%' : '96cqw',
         scrollSnapAlign: compact ? 'start' : undefined,
