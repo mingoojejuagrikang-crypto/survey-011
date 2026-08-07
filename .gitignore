@@ -45,6 +45,12 @@ fb-screenshots/
 
 # 에이전트 운영 파일(로컬 전용 — 앱과 무관, myPKA Hard rule #11)
 _BRIEF-*.md
+# 🔴 08-07 레인 P 실측: 여기에 `_ASK` 규칙이 없어서 위임 워커가 `git add -A` 하면
+#    질문 파일이 앱레포에 커밋된다. 브리핑은 "gitignore됨"이라 적었으나 사실이 아니었다.
+_ASK-*.md
+# 위임 프로브 산출물(JSON·스크린샷). test-results/ 에 두면 다른 레인의 playwright 실행이
+# 그 디렉토리를 청소해 증거가 사라진다(08-07 실측) — 그래서 이 경로가 관례가 됐다.
+_probe-out/
 _GL-006.md
 _reference-ui.html
 _codex-tasks/
