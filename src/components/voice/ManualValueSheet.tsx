@@ -5,6 +5,7 @@ import { choicesFor, validateManual } from '../../lib/manualInput';
 import { EdgeButton } from './ActiveControlBar';
 import type { GlowTone } from './EdgeGlow';
 import { VOICE_TYPE } from './heroLayout';
+import { useFitGroup } from './useFitGroup';
 
 /** 음성 칩을 눌렀을 때 활성 화면의 중앙·하단 트랙을 승계하는 인라인 수동 입력.
  *
@@ -59,6 +60,16 @@ export function ManualValueSheet({
     ? T.redGlowFaint
     : tone === 'amber' ? T.amberGlowFaint : T.greenGlowFaint;
   const visibleValue = draft || currentValue;
+  /** 🔴 v0.46.1 WP-9(민구 FB-11) — 표시 영역 안에서 값 글자를 **실제로 줄인다.**
+   *  deps에 `visibleValue`가 있어 한 자 칠 때마다 재fit한다 — 민구가 요구한
+   *  *"입력되는 값에 따라서 유동적으로 사이즈 조절"*이 이 한 줄에서 나온다.
+   *  `searchBasePx`는 종전 고정값(128.64)이라 **짧은 값에서는 종전과 같은 크기**로 착지한다
+   *  (배율 1). 길어질 때만 내려간다 — 회귀 없이 필요한 때만 작동하는 형태다. */
+  const displayValueRef = useRef<HTMLSpanElement>(null);
+  const displayFitRef = useFitGroup<HTMLDivElement>(
+    [visibleValue, isKeypad],
+    [{ variable: '--fit-sheet', members: [displayValueRef], searchBasePx: 128.64 }],
+  );
 
   return (
     <div
@@ -85,7 +96,11 @@ export function ManualValueSheet({
           display: 'grid', gridTemplateRows: 'minmax(0, 3fr) minmax(0, 5fr)',
         }}
       >
+      {/* 🔴 v0.46.1 WP-9(민구 FB-11) — 이 영역이 **fit 컨테이너**다. 값 길이가 바뀌면
+          `useFitGroup`이 `--fit-sheet` 배율을 다시 이진탐색해 폭·높이 안에 맞춘다.
+          종전엔 fit이 아예 없어 고정 128.64px가 `ellipsis`로 잘렸다(heroLayout §sheetDisplay). */}
       <div
+        ref={displayFitRef}
         data-testid="manual-value-display-zone"
         style={{
           position: 'relative', minHeight: 0, overflow: 'hidden',
@@ -107,10 +122,17 @@ export function ManualValueSheet({
               fontSize: VOICE_TYPE.sheetDisplay,
               fontWeight: 900, lineHeight: 0.9, letterSpacing: -1,
               fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-              fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+              fontVariantNumeric: 'tabular-nums',
+              // 🔴 민구 확정(08-07): **축약 금지.** 폭이 모자라면 글자를 줄이거나(위 fit)
+              //    줄을 바꾼다 — 값을 감추지 않는다. 숫자열이라 어디서 끊어도 뜻이 상하지 않는다.
+              //    민구 원문: *"만약 빈 공간이 있다면 줄바꿈 형태로 입력값에 대해서 출력해도 좋아."*
+              whiteSpace: 'normal', wordBreak: 'break-all', textAlign: 'center',
             }}
           >
-            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {/* 🔴 `textOverflow: 'ellipsis'`를 **제거했다** — 이것이 `311…`을 그리던 당사자다.
+                이 레포의 원칙과도 어긋나 있었다: `useFitScale` 주석 *"ellipsis 잘림 금지 —
+                줄바꿈+축소만"*. */}
+            <span ref={displayValueRef} style={{ minWidth: 0 }}>
               {visibleValue}
             </span>
             <span
