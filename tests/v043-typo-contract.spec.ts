@@ -149,7 +149,18 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //      계측이 바깥 요소의 computed fontSize를 읽으므로 바깥 fontSize를 남긴다).
   // v0.46.0 WP-F: BlackoutOverlay 힌트 1건(+1 계약 — VOICE_TYPE.caption,
   //   "길게 눌러 화면 켜기 / 음성 입력은 계속됩니다". 위반 0 유지).
-  expect(contractCount, '계약 참조 (통과)').toBe(59);
+  // v0.46.0 WP-1c(시작 준비 「실제 확인 + 진행바」 · `01da2ea`): **정당 파손 — 위반 0 그대로.**
+  //   ReadyState 2건(+2 계약 — `:177` VOICE_TYPE.actionLabel 취소 버튼 ·
+  //   `:189` VOICE_TYPE.bodySm 안내줄). 59 → 61.
+  //   🔴🔴 **이 red는 08-07 하루 종일 살아 있었고 아무도 못 봤다.** 이 스펙이
+  //   `test:e2e:gate` 목록 **밖**이라 회차 내내 한 번도 안 돌았고, 배포 직전
+  //   `VoiceHero.tsx` max-lines 리팩토링을 검증하다 우연히 드러났다.
+  //   👉 게이트 편입 판단은 `TODO.md`에 등재했다. 계약 검사기는 실행 비용이 9ms다.
+  // v0.46.1 리팩토링: `AlarmInterimStrip`이 `VoiceHero.tsx`에서 **같은 디렉터리의 자기 파일로
+  //   분리**됐다(VoiceHero가 515줄로 max-lines 500을 넘겨 배포가 막혔다). 이 검사기는
+  //   `src/components/voice/`를 **재귀 순회**하므로 계약 2건은 그대로 세어진다 —
+  //   🔴 그 파일을 이 디렉터리 밖으로 옮기면 계약이 −2 되어 여기가 red가 된다.
+  expect(contractCount, '계약 참조 (통과)').toBe(61);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);
