@@ -216,7 +216,9 @@ async function setupAndStart(page: Page) {
   // 🔴 v0.46.1 — 시작 버튼은 **잠시 disabled로 뜬다**(WP-1c 「시작 준비」 실제 확인 구간, 01da2ea).
   //    visible만 보고 바로 클릭하면 `element is not enabled`로 30초를 태우다 무판정으로 끝난다
   //    (실측 2회). 활성화까지 명시적으로 기다린다 — 이건 대기 조건이지 제품 동작 가정이 아니다.
-  await expect(startBtn).toBeEnabled({ timeout: 15_000 });
+  // ⏱ 30초다. 15초로는 부족했다 — 다른 레인과 CPU를 나눠 쓰면(실측 load 9+) 준비 절차가
+  //    그만큼 늘어져 `element is not enabled`로 **무판정**이 난다(§0-6). 테스트 타임아웃 120초 안이다.
+  await expect(startBtn).toBeEnabled({ timeout: 30_000 });
   await startBtn.click();
   await page.waitForTimeout(800);
   await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });

@@ -220,7 +220,9 @@ async function setupAndStart(page: Page) {
   // 🔴 v0.46.1 — 시작 버튼은 **잠시 disabled로 뜬다**(WP-1c 「시작 준비」 실제 확인 구간, 01da2ea).
   //    visible만 보고 바로 클릭하면 `element is not enabled`로 30초를 태우다 무판정으로 끝난다
   //    (실측 2회). 활성화까지 명시적으로 기다린다 — 이건 대기 조건이지 제품 동작 가정이 아니다.
-  await expect(startBtn).toBeEnabled({ timeout: 15_000 });
+  // ⏱ 30초다. 15초로는 부족했다 — 다른 레인과 CPU를 나눠 쓰면(실측 load 9+) 준비 절차가
+  //    그만큼 늘어져 `element is not enabled`로 **무판정**이 난다(§0-6). 테스트 타임아웃 120초 안이다.
+  await expect(startBtn).toBeEnabled({ timeout: 30_000 });
   await startBtn.click();
   await page.waitForTimeout(800);
   await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 3000 });
@@ -283,40 +285,44 @@ function lastVisibleRed(samples: Sample[], threshold = 0.05): number | null {
 }
 
 
-/** 🔴 시계열은 **Playwright 쪽에서 폴링**한다 — 페이지 안의 타이머로 재면 안 된다.
+/** 🔴 시계열은 **MutationObserver**로 모은다 — 타이머로 재려던 시도는 세 번 다 실패했다.
  *
- *  처음엔 `requestAnimationFrame`으로, 다음엔 `setInterval(16ms)`로 페이지 안에서 샘플링했는데
- *  **둘 다 헤드리스에서 스로틀됐다**(실측: 3.5초에 rAF 15샘플 = 253ms 간격 → setInterval 5샘플
- *  = 700ms 간격, 백그라운드 1초 클램프에 근접). 다른 레인과 CPU를 나눠 쓰면 더 심해진다.
- *  그 상태의 「구간 길이」 수치는 전부 못 믿을 값이었다(구간의 **존재**만 유효했다).
- *  👉 드라이버에서 `page.evaluate`를 돌리면 페이지 타이머 정책과 무관하게 샘플이 모인다. */
-const SNAPSHOT = `(() => {
-  const pick = (sel, attr) => { const el = document.querySelector(sel); return el ? el.getAttribute(attr) : null; };
-  const stage = document.querySelector('[data-testid="voice-center-stage"]');
-  return {
-    tone: pick('[data-voice-tone]', 'data-voice-tone'),
-    central: pick('[data-central-state]', 'data-central-state'),
-    status: pick('[data-testid="anomaly-alert"]', 'data-status'),
-    hero: pick('[data-hero-state]', 'data-hero-state'),
-    centerText: stage ? (stage.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 80) : null,
-  };
-})()`;
-
-async function pollWhile(page: Page, durationMs: number): Promise<Sample[]> {
-  const out: Sample[] = [];
-  const t0 = Date.now();
-  while (Date.now() - t0 < durationMs) {
-    try {
-      const snap = await page.evaluate(SNAPSHOT) as Omit<Sample, 't' | 'red' | 'green'>;
-      out.push({ ...snap, t: Date.now() - t0, red: null, green: null } as Sample);
-    } catch {
-      // 리로드·전환 중 실행 컨텍스트가 잠깐 사라지는 것은 정상이다 — **멈추지 않는다.**
-      // 종전엔 여기서 break해서 CPU 경합이 심할 때 샘플이 4개만 모이고 무판정으로 끝났다.
-      await page.waitForTimeout(20);
-    }
+ *  | 방식 | 3.5초 동안 모인 샘플 | 왜 죽었나 |
+ *  |---|---|---|
+ *  | 페이지 `requestAnimationFrame` | 15개 (~253ms 간격) | 헤드리스 rAF 스로틀 |
+ *  | 페이지 `setInterval(16ms)` | 5개 (~700ms) | 백그라운드 1초 클램프에 근접 |
+ *  | 드라이버 `page.evaluate` 폴링 | **3~5개** | load 9+에서 왕복 자체가 700ms 넘게 걸린다 |
+ *
+ *  세 방식 모두 **표본 추출**이라 부하가 곧 해상도 손실이다. 그런데 이 스펙이 묻는 것은
+ *  「몇 ms였나」가 아니라 **「그 상태가 한 번이라도 그려졌나」**다 — 그건 표본이 아니라
+ *  **변화 이벤트**로 재는 것이 맞다. MutationObserver는 마이크로태스크로 돌아 타이머 정책과
+ *  무관하고, DOM이 바뀔 때만 깨므로 부하에도 상태를 놓치지 않는다.
+ *  ⚠️ 그래서 `t`는 참고값이다. 아래 단언은 **상태의 집합·순서·개수만** 쓰고 시간은 쓰지 않는다. */
+const OBSERVER = `
+(function() {
+  window.__fb10 = [];
+  var t0 = performance.now();
+  function snap() {
+    function pick(sel, attr) { var el = document.querySelector(sel); return el ? el.getAttribute(attr) : null; }
+    var stage = document.querySelector('[data-testid="voice-center-stage"]');
+    return {
+      t: Math.round(performance.now() - t0),
+      tone: pick('[data-voice-tone]', 'data-voice-tone'),
+      central: pick('[data-central-state]', 'data-central-state'),
+      status: pick('[data-testid="anomaly-alert"]', 'data-status'),
+      hero: pick('[data-hero-state]', 'data-hero-state'),
+      red: null, green: null,
+      // 🔴 innerText가 아니라 textContent — innerText는 레이아웃을 강제해서 부하가 심할 때
+      //    관측 자체가 느려진다. 우리가 보는 것은 「어떤 값이 그려졌나」뿐이라 충분하다.
+      centerText: stage ? (stage.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80) : null,
+    };
   }
-  return out;
-}
+  window.__fb10.push(snap());
+  var mo = new MutationObserver(function() { window.__fb10.push(snap()); });
+  mo.observe(document.body, { subtree: true, attributes: true, childList: true, characterData: true });
+  window.__fb10stop = function() { mo.disconnect(); };
+})();
+`;
 
 /** 알람이 뜬 상태에서 정상값을 발화하고, 그 전이 전 구간을 시계열로 받는다. */
 async function captureCorrectionTimeline(page: Page, onendDelayMs: number): Promise<Sample[]> {
@@ -324,15 +330,17 @@ async function captureCorrectionTimeline(page: Page, onendDelayMs: number): Prom
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '120.5', 600); // 직전 100.0 · trendRule=increase → 이상치 알람
   await expect(page.locator('[data-testid="anomaly-alert"][data-status="pending"]')).toBeVisible();
-  await page.evaluate((delay) => {
+  await page.evaluate(({ script, delay }) => {
     (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = delay;
-  }, onendDelayMs);
-  // 발화와 수집을 **동시에** 시작한다 — 정정 직후 몇 프레임이 이 스펙의 핵심 구간이다.
-  const [samples] = await Promise.all([
-    pollWhile(page, 3500),
-    fireStt(page, '80.5', 0),
-  ]);
-  return samples;
+    // eslint-disable-next-line no-eval
+    eval(script);
+  }, { script: OBSERVER, delay: onendDelayMs });
+  await fireStt(page, '80.5', 3500); // 전이가 완전히 가라앉을 때까지 관측한다
+  return page.evaluate(() => {
+    const w = window as unknown as { __fb10: Sample[]; __fb10stop?: () => void };
+    w.__fb10stop?.();
+    return w.__fb10;
+  });
 }
 
 // ⚠️ mock TTS의 onend는 기본 **동기**라 echo 지속시간이 0이다(trend-alert.spec.ts:765 주석).
