@@ -46,10 +46,14 @@ test('[UI-e4 dotless 오라클] 저장확인만 20/70/10이고 375×650에서도
     .evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title')));
   expect(actionTitles, '하단은 [✕][✓] 2버튼').toEqual(['계속 입력', '종료 확인']);
 
-  await page.screenshot({ path: 'Deliverables/assets/2026-08-02-ui-e4/exit-inline-375x650.png' });
+  // 🔴 쓰기 경로는 `test-results/`(gitignore) 안이어야 한다 — 종전 `Deliverables/assets/2026-08-02-ui-e4/`는
+  //   **git 추적 중인 08-02 회차 증거 PNG를 매 런마다 덮어썼다.** 실제로 b217278에 교체본이 실려 나가
+  //   e06019a가 되돌리는 커밋을 따로 냈고, 콜드 리뷰 R1은 그 `M`을 "다른 실행 주체가 붙었다"로 오독했다.
+  //   여기 스크린샷은 단언이 아니라 눈으로 볼 증거 덤프다 — 경로만 옮기면 잃는 것이 없다.
+  await page.screenshot({ path: 'test-results/ui-e4/exit-inline-375x650.png' });
   await page.setViewportSize({ width: 402, height: 874 });
   await page.waitForTimeout(250);
-  await page.screenshot({ path: 'Deliverables/assets/2026-08-02-ui-e4/exit-inline-402x874.png' });
+  await page.screenshot({ path: 'test-results/ui-e4/exit-inline-402x874.png' });
 
   await page.locator('button[title="계속 입력"]').click();
   await expect(inline).toHaveCount(0);

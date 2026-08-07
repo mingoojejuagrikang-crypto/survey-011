@@ -431,7 +431,9 @@ test('[ALERT-COMPARE-1] 2열 비교 — 안 넘침·좌우 동일 크기(§C5-c)
       if (banner) banner.style.display = 'none'; // 캡처 하니스의 fake-media 부재만 숨긴다.
     });
   }
-  await page.screenshot({ path: 'Deliverables/assets/2026-08-02-ui-e4/alarm-402x874.png' });
+  // 🔴 `Deliverables/assets/2026-08-02-ui-e4/`(git 추적)에 쓰지 마라 — 그 회차 증거 PNG를 덮어쓴다.
+  //   `test-results/`는 .gitignore에 있어 런이 작업 트리를 더럽히지 않는다. 이건 증거 덤프지 단언이 아니다.
+  await page.screenshot({ path: 'test-results/ui-e4/alarm-402x874.png' });
 
   // 구 62px clamp를 지우는 데서 끝내면 다음 상한이 생길 수 있다. 영역을 넓혔을 때 실제로
   // 더 커지는지 단언해 T6 7회차를 막는다. 값뿐 아니라 라벨도 같은 상한 금지 계약이라 함께 잰다.
