@@ -362,9 +362,16 @@ test('14일 초과 폴백 → 무알람(조용히 skip) + trend_skip:no_index �
   await seedAndBoot(page, { withToken: false, record: buildRecord(builtAt), sheetsFail: true });
 
   // 배지: 만료 폴백은 하이드레이션에서 폐기 → 미준비 + 재시도 버튼.
+  // 🔴 v0.46.1 WP-2(민구 FB-1) — 「미준비」가 **왜 아직 아닌지**를 함께 밝히도록 바뀌었다.
+  //    이 시나리오는 토큰·API key가 둘 다 없으므로 정확한 사유는 「로그인 필요」다.
+  //    상태 자체(off)는 `data-tone`으로 고정한다 — 문구가 또 바뀌어도 이 축은 안 흔들린다.
   await page.locator('[data-testid="tab-voice"]').click();
-  await expect(page.locator('[data-testid="conn-past"]')).toContainText('미준비');
-  await expect(page.locator('[data-testid="past-index-retry"]')).toBeVisible();
+  await expect(page.locator('[data-testid="conn-past"]')).toContainText('로그인 필요');
+  await expect(page.locator('[data-testid="conn-past"]')).toHaveAttribute('data-tone', 'off');
+  // 🔴 v0.46.1 WP-2 — **재시도 버튼은 「지금 시도할 수 있을 때」만 뜬다.** 인증 수단이 전혀
+  //    없으면 눌러봐야 `past_index_skip:not_signed_in`으로 끝나므로, 무의미한 어포던스 대신
+  //    사유 문구가 무엇을 해야 하는지 알려준다(`[TEAMOPS-7]` — 헛도는 알림은 신뢰를 깎는다).
+  await expect(page.locator('[data-testid="past-index-retry"]')).toHaveCount(0);
 
   const startBtn = page.locator('text=음성 입력 시작').first();
   await startBtn.click();
@@ -433,8 +440,9 @@ test('3상태 배지(설정탭) — 토큰 실시간 판정([AUTH-7] stale 표�
   await expect(page.locator('[data-testid="conn-google"]')).toHaveAttribute('data-tone', 'warn');
   await expect(page.locator('[data-testid="conn-sheet"]')).toContainText('Sheet1');
   await expect(page.locator('[data-testid="conn-sheet"]')).toHaveAttribute('data-tone', 'ok');
-  await expect(page.locator('[data-testid="conn-past"]')).toContainText('미준비');
-  await expect(page.locator('[data-testid="past-index-retry"]')).toBeVisible();
+  // 🔴 v0.46.1 WP-2 — 사유를 밝히는 표시로 바뀌었다(위 주석 참조). 토큰·API key 모두 없는 상태.
+  await expect(page.locator('[data-testid="conn-past"]')).toContainText('로그인 필요');
+  await expect(page.locator('[data-testid="conn-past"]')).toHaveAttribute('data-tone', 'off');
 
   // ② 토큰 주입 후 reload: Google 연결이 로그인됨(ok)으로 — 토큰 스토리지 실시간 판정.
   await page.evaluate(() => {

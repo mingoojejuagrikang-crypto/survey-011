@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react';
 import { T } from '../tokens';
 import { useSettingsStore } from '../stores/settingsStore';
 import { getStoredToken, onTokenSettled } from '../lib/googleAuth';
-import { parseSpreadsheetId } from '../lib/sheets';
+import { parseSpreadsheetId, readonlySheetsAuth } from '../lib/sheets';
 import {
   getPastIndexStatus,
   prefetchPastIndex,
@@ -128,13 +128,44 @@ export function ConnectionStatusCard() {
   // 3) 과거값 준비 — 알람 비교선의 실제 가용성.
   const idx = getPastIndexStatus();
   const now = Date.now();
+  /** 🔴 v0.46.1 WP-2(민구 제보 FB-1 · 08-07) — **「미준비」가 이유를 안 알려줬다.**
+   *
+   *  민구 원문: *"과거값 준비가 자동으로 실행 되지 않음. **구글 로그인했고, 스프레드시트 링크가
+   *  이미 있음에도** 과거값 자동 로드가 그린이 아냐."*
+   *
+   *  🔑 **로그 분석 결과 버그가 아니었다.** 08-07 실기기에서 조회는 4회 전부 1초 만에 성공했고
+   *  (`past_index_ready:rows=2902` ×4), 실패·skip은 0건이었다. 다만 프리페치 게이트
+   *  (`shouldPreparePastIndex`)가 **이상치 규칙이 있는 컬럼**을 요구하는데, 민구가 제보한 10:24엔
+   *  아직 테이블 생성 전이라 컬럼이 없었다. 생성하자(10:28) 곧바로 돌았다.
+   *
+   *  👉 민구가 확정한 처방: **"표시를 정직하게"**. 동작은 그대로 두고 **왜 아직 아닌지**만 밝힌다.
+   *  🔴 게이트를 푸는 선택지는 **기각됐다** — 이상치 규칙이 없는 시트에서도 전체 시트를 받게 돼
+   *  통신량·배터리를 낭비한다(그 게이트는 Codex·agy 리뷰가 의도적으로 넣은 것이다). */
+  const anyAnomalyRule = s.columns.some(
+    (c) => c.trendRule === 'increase' || c.trendRule === 'decrease' || c.pctThreshold != null,
+  );
+  // 🔴 **인증 판정은 `readonlySheetsAuth()`가 SSOT다** — 토큰이 없어도 **API key로 공개 시트를
+  //    읽는 경로**가 살아 있다(v0.34.0 C9). 여기서 `token`만 보면 그 경로를 「로그인 필요」로
+  //    잘못 막는다(실측: `past-index-fallback` 오라클 2건이 이걸 잡았다).
+  //    그리고 `s.googleConnected`(persist)도 쓰지 않는다 — 만료 시 같은 카드의 Google 행과
+  //    갈려 `[AUTH-7]`(stale 표시)이 재발한다.
+  const readAuth = readonlySheetsAuth();
+  const notReadyReason = !readAuth ? '로그인 필요'
+    : !sheetId || !s.sheetTab ? '시트 연결 필요'
+    : !s.tableGenerated ? '테이블 생성 후 준비됩니다'
+    : !anyAnomalyRule ? '이상치 알람 규칙이 없어 사용 안 함'
+    : '미준비';
+  /** 지금 조회를 **시도할 수 있는가**. 전제가 안 갖춰졌으면 재시도 버튼은 눌러도 아무 일이
+   *  안 일어나므로 보이지 않는 게 정직하다(`[TEAMOPS-7]` — 무의미한 어포던스는 신뢰를 깎는다). */
+  const canPreparePastIndex =
+    !!readAuth && !!sheetId && !!s.sheetTab && s.tableGenerated && anyAnomalyRule;
   const idxValue =
     idx.state === 'ready' || idx.state === 'stale'
       ? `${idx.rowCount}행 · ${idx.roundCount}회차 준비됨(${formatAge(idx.builtAt ?? now, now)})`
-      : idx.state === 'loading' ? '불러오는 중…' : '미준비';
+      : idx.state === 'loading' ? '불러오는 중…' : notReadyReason;
   const idxTone: 'ok' | 'warn' | 'off' =
     idx.state === 'ready' ? 'ok' : idx.state === 'stale' ? 'warn' : 'off';
-  const showRetry = idx.state === 'stale' || idx.state === 'none';
+  const showRetry = idx.state === 'stale' || (idx.state === 'none' && canPreparePastIndex);
 
   const retry = showRetry ? (
     <button
