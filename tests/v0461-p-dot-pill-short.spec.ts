@@ -2,8 +2,22 @@
  * FB-5 «도트 애니메이션 잘림» 회귀 오라클 — **짧은 화면(402×513)의 필↔도트 겹침** (레인 P).
  *
  * ## 🔴 지금 red가 정상이다 — `@pending-fb5`
- * 수정은 BLOCKING이라 **소스를 안 고쳤다**(`_ASK-P.md` 참조). 이 스펙은 **결함을 고정**해
- * 두는 물건이다. 처방이 들어가면 태그를 떼고 green으로 승격한다.
+ * 이 스펙은 **결함을 고정**해 두는 물건이다. 처방이 들어가면 태그를 떼고 green으로 승격한다.
+ *
+ * ## 처방 방향 (민구 확정 2026-08-07) — **「필이 양보한다」**
+ * 도트 표시는 온전히 두고 **짧은 화면에서 접힌 조절판 필을 숨긴다.**
+ * - 「도트가 양보」(예약 행 픽셀화)는 **기각** — 402×513에서 14행 중 ~10행이 예약돼 표시 소멸.
+ * - 「필을 줄인다」는 **계약이 죽였다** — `PRINCIPLES.md:26`이 **44px 터치 하한**을 요구하는데
+ *   필은 **이미 42px**다. 게다가 `minHeight`라 **작아질 수 없고 커질 수만 있다**(좁은 폭에서
+ *   요약 텍스트가 줄바꿈하면 42를 넘는다). 20px 예약 부족은 **하한**이지 정확값이 아니다.
+ * - 🟢 **숨겨도 기능은 살아 있다**: 래퍼가 `panelOpen ? {…} : canExpand ? {absolute} : none`
+ *   이라 **`panelOpen`이면 접힌 필과 무관하게 패널이 렌더된다.** 음성 명령 「입력조절」
+ *   (`toggleInputControls`)로 열 수 있다 — 그 생존을 아래 4번 케이스가 지킨다.
+ *
+ * ## ⚠️ 「가려지지 않는다」와 「읽힌다」는 다른 것이다
+ * 필을 숨겨도 **도트는 여전히 행 피치 5px · 4×3.59px**다. `heroLayout.ts:124`가 **접힌 토글
+ * 49px를 고정으로 먹기 때문**에 밴드가 커지지 않는다. 이 스펙이 green이 되는 것은
+ * **가림 해소**까지이고, 짧은 화면 **판독성**은 미해결이다(§6 인계 — `heroLayout` zone 계약).
  * ⚠️ **`test.fail()`을 쓰지 않는다** — 레포 관례(`v044-alarm-compare-fit.spec.ts` §19):
  * 그걸 쓰면 **어떤** 실패든 「예상된 실패」로 green이 되어 다른 이유의 red를 삼킨다.
  * 🟢 릴리스 게이트 9스펙(`package.json`)에 이 파일은 없다 — 게이트를 깨지 않는다.
@@ -29,6 +43,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { boot, PHONE_402, injectLevel, fillAllRows } from './fixtures/activeZones';
+import { fireStt } from './fixtures/stt';
 
 test.setTimeout(180_000);
 
@@ -124,6 +139,14 @@ test('@pending-fb5 §FB-5 — 402×513·complete: 필이 체크 글리프를 덮
 
   const m = await sample(page, 'complete', 6); // 정적 글리프라 프레임 적게
   expect(m.litCount, 'check는 22셀을 켠다 — 0이면 상태 미도달(무판정)').toBeGreaterThan(0);
+  // 🔴 `overlap === []`만 단언하면 **기능이 삭제돼도 green이 된다** — 컨트롤바가 안 뜨거나
+  //    `canExpand`가 버그로 false여도 겹칠 게 없어 통과한다. 그래서 「왜 안 겹치는가」를
+  //    함께 단언한다: 짧은 화면에서는 **처방대로 숨겨졌기 때문**이어야 한다.
+  expect(
+    m.pillVisible,
+    `짧은 화면에서는 접힌 필을 숨긴다(민구 확정). 보이면 가림이 남는다 — 행피치 ${m.rowPx}px · `
+    + `예약예산 ${m.reservedPx}px < 필H ${m.pillH}px`,
+  ).toBe(false);
   expect(
     m.overlap,
     `필이 켜진 도트 ${m.overlap.length}셀을 덮는다(행피치 ${m.rowPx}px · 예약예산 `
@@ -140,7 +163,22 @@ test('@pending-fb5 §FB-5 — 402×513·idle 웨이브: 필이 켜진 도트를 
 
   const m = await sample(page, 'idle');
   expect(m.litCount, 'idle 웨이브는 켜진 셀이 있다 — 0이면 무판정').toBeGreaterThan(0);
+  expect(m.pillVisible, '짧은 화면에서는 접힌 필을 숨긴다(민구 확정)').toBe(false);
   expect(m.overlap, `필이 켜진 도트 ${m.overlap.length}셀을 덮는다`).toEqual([]);
+});
+
+/** 🟢 **처방이 「기능 삭제」가 아님을 지키는 유일한 케이스.** 접힌 필을 숨겨도 조절판 자체는
+ *  열려야 한다 — 이 앱은 *"한 손·음성으로"* 쓰는 물건이고 음성 경로가 1급 시민이다.
+ *  래퍼가 `panelOpen ? {…} : canExpand ? {absolute} : none`이라 **`panelOpen`이면 접힌 필과
+ *  무관하게 렌더된다** — 구조상 살아 있어야 하고, 이 케이스가 그 구조를 고정한다.
+ *  ⚠️ 이건 결함 고정이 아니라 **회귀 가드**다. 처방 전에도 green이 정상이다. */
+test('§FB-5 — 402×513에서도 음성 「입력조절」로 조절판이 열린다(기능 생존)', async ({ page }) => {
+  await bootShort(page);
+  await fireStt(page, '입력조절', 600);
+  await expect(
+    page.locator('[data-testid="input-control-panel"]'),
+    '접힌 필을 숨겨도 음성으로 여는 경로는 남아야 한다',
+  ).toBeVisible({ timeout: 5000 });
 });
 
 /** 🟢 이 케이스는 **green이어야 한다** — 같은 계약이 402×874에서는 지켜진다는 대조군이다.
@@ -152,6 +190,8 @@ test('§FB-5 대조군 — 402×874에서는 필이 예약 행에만 앉는다(g
 
   const m = await sample(page, '874-idle');
   expect(m.litCount, 'idle 웨이브 켜진 셀 — 0이면 무판정').toBeGreaterThan(0);
+  // 🔴 숨김이 큰 화면까지 번지면 red — 처방의 적용 범위를 여기서 가둔다.
+  expect(m.pillVisible, '402×874에서는 접힌 필이 **보여야** 한다(예약 48px ≥ 필 42px)').toBe(true);
   expect(m.overlap, '402×874에서는 겹치지 않는다(WP-G 설계대로)').toEqual([]);
   expect(m.reserved, '예약 행(10~13)은 어떤 상태에서도 켜지지 않는다').toEqual([]);
 });
