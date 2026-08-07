@@ -63,12 +63,30 @@ export function ManualValueSheet({
   /** 🔴 v0.46.1 WP-9(민구 FB-11) — 표시 영역 안에서 값 글자를 **실제로 줄인다.**
    *  deps에 `visibleValue`가 있어 한 자 칠 때마다 재fit한다 — 민구가 요구한
    *  *"입력되는 값에 따라서 유동적으로 사이즈 조절"*이 이 한 줄에서 나온다.
-   *  `searchBasePx`는 종전 고정값(128.64)이라 **짧은 값에서는 종전과 같은 크기**로 착지한다
-   *  (배율 1). 길어질 때만 내려간다 — 회귀 없이 필요한 때만 작동하는 형태다. */
+   *  🔴 **배율이 1을 넘어 커지는 것은 「민구 확정(08-07)」으로 의도된 동작이다. 상한을 두지 마라.**
+   *  민구 판단: *"빈 공간을 안 남기는 게 원거리 가독에 낫다. 값마다 크기가 출렁이는 것은 감수한다."*
+   *  `heroLayout.ts` §sheetDisplay의 *"상한은 두지 않는다 — 고정 상한은 T6 6회차 재발 원인"*과도 같다.
+   *
+   *  ⚠️ **커밋 `6d69165` 메시지·종전 주석의 「짧은 값에서는 종전과 같은 크기로 착지한다(배율 1)」은
+   *  실측으로 반증됐다**(08-07 레인 V). `searchBasePx`는 탐색 **유도값**일 뿐 상한이 아니다 —
+   *  402×874·`3`에서 `--fit-sheet=1.7976` → **231.2px**(종전 128.64px보다 크다).
+   *  값이 길어지면 내려간다: 402×513 `311`→111.5px · `3115.75`→85.3px · `311575.25`→67.3px.
+   *  🔑 이 「1 초과」 축은 `v0461-fb11-manual-display.spec.ts`가 **일부러 안 재는 것**이다
+   *  (그 파일 §안 재는 것 참조) — 민구가 허용한 동작이라 단언으로 굳히면 안 된다. */
   const displayValueRef = useRef<HTMLSpanElement>(null);
   const displayFitRef = useFitGroup<HTMLDivElement>(
     [visibleValue, isKeypad],
-    [{ variable: '--fit-sheet', members: [displayValueRef], searchBasePx: 128.64 }],
+    // 🔴 `minScale`을 **CSS 하한과 일치**시킨다. `VOICE_TYPE.sheetDisplay`가
+    //    `max(44px, calc(128.64px * var(--fit-sheet,1)))`이므로 CSS는 배율 44/128.64≈0.342에서
+    //    멈추는데, `fitGroup.ts`의 기본 `minScale`은 **0.25**다. 그 사이 값을 fit이 고르면
+    //    CSS가 그것을 무시해 **fit이 「맞췄다」고 보고하지만 실제로는 넘치는** 상태가 된다
+    //    (종전 `max(128.64px, …)`가 배율을 통째로 흡수하던 것과 같은 구조의 버그다).
+    //    두 하한을 한 값으로 묶으면 fit이 거짓말하지 않는다 — 하한에서도 넘치면 그건
+    //    「44px 아래로는 안 줄인다」는 계약의 결과이고, 프로브가 red로 드러낸다.
+    [{
+      variable: '--fit-sheet', members: [displayValueRef],
+      searchBasePx: 128.64, minScale: 44 / 128.64,
+    }],
   );
 
   return (
@@ -98,13 +116,26 @@ export function ManualValueSheet({
       >
       {/* 🔴 v0.46.1 WP-9(민구 FB-11) — 이 영역이 **fit 컨테이너**다. 값 길이가 바뀌면
           `useFitGroup`이 `--fit-sheet` 배율을 다시 이진탐색해 폭·높이 안에 맞춘다.
-          종전엔 fit이 아예 없어 고정 128.64px가 `ellipsis`로 잘렸다(heroLayout §sheetDisplay). */}
+          종전엔 fit이 아예 없어 고정 128.64px가 `ellipsis`로 잘렸다(heroLayout §sheetDisplay).
+
+          🔴🔴 **`alignItems: 'flex-end'`로 되돌리지 마라 — 그것이 fit의 높이 판정을 죽인다.**
+          (08-07 레인 V 실측, `_probe-fb11-manual-display.spec.ts`)
+          `fitGroups`의 `fits()`는 높이를 **이 컨테이너의 `scrollHeight > clientHeight`**로 본다
+          (`fitGroup.ts` §overflowsHeight). 그런데 `flex-end`에서 자식이 커지면 넘침이
+          **block-start(위) 방향**으로 가고, 그 방향 오버플로는 **스크롤 영역에 잡히지 않는다**
+          (`scrollHeight === clientHeight`). 같은 함정을 `fitGroup.ts:44`가 폭에 대해 이미 적어놨다.
+          실측: `zOvY=0`인 채로 배율이 **3.6028까지 폭주**해 폰트가 128.64px→**463.5px**,
+          높이 111px zone 밖으로 `outTop=1148.3px`. 화면엔 `311575.25` 중 `25`만 보였다 —
+          `311…`보다 나쁘다(잘린 표시조차 없다).
+          👉 그래서 정렬을 **`flex-start` + 자식의 `marginTop:auto`**로 만든다. auto 여백은
+          남는 공간이 **양수일 때만** 분배되므로 ⓐ여유가 있으면 종전과 똑같이 하단 정렬이고
+          ⓑ넘치면 0이 되어 자식이 위에 붙고 넘침이 **아래로** 간다 → `scrollHeight`가 잡는다. */}
       <div
         ref={displayFitRef}
         data-testid="manual-value-display-zone"
         style={{
           position: 'relative', minHeight: 0, overflow: 'hidden',
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
           padding: '4px 16px 8px', boxSizing: 'border-box',
         }}
       >
@@ -117,6 +148,9 @@ export function ManualValueSheet({
             aria-label={draft ? `입력값 ${draft}` : currentValue ? `현재값 ${currentValue}, 새 입력 없음` : '새 입력 없음'}
             style={{
               maxWidth: '100%', minWidth: 0, overflow: 'hidden',
+              // 🔴 하단 정렬은 zone의 `alignItems`가 아니라 **이 auto 여백**이 만든다(위 zone 주석).
+              //    넘칠 때 넘침을 아래로 보내 fit의 높이 판정을 살리는 것이 목적이다.
+              marginTop: 'auto',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.08em',
               color: draft ? T.text : T.textDim,
               fontSize: VOICE_TYPE.sheetDisplay,
