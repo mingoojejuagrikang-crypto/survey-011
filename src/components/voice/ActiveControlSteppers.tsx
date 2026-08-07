@@ -8,7 +8,45 @@ import {
   CHIP_SWEEP_LEVEL_MAX, chipSweepSecondsForLevel, chipSweepLevelForSeconds,
 } from '../../lib/chipSweep';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
-import { VOICE_TYPE } from './heroLayout';
+import { ACTIVE_ZONE_RATIOS, VOICE_TYPE } from './heroLayout';
+
+/** 🔴 v0.46.1 **FB-4**(민구 제보 08-07 *"서랍 펼칠시 스크롤 없이 보이게 변경"* → 확정 답변
+ *  **「서랍을 더 높게 펼쳐라」**) — 펼친 서랍이 **위로** 자랄 수 있는 상한.
+ *
+ *  ## 왜 「더 높게」가 선택이 아니라 강제된 결론인가 (실측 08-07, `_probe-fb4-drawer-height.spec.ts`)
+ *  펼친 서랍의 **필요 높이는 239px 고정**이다(스텝퍼 행 높이가 뷰포트에 안 따라간다).
+ *  배정된 하단 트랙은 **네 뷰포트 전부 모자랐다**:
+ *  ```
+ *  402×513(민구 실기기) 배정 75px  → 부족 164px      375×667 배정 127px → 부족 112px
+ *  402×812(standalone)  배정 176px → 부족  63px      402×874 배정 198px → 부족  41px
+ *  ```
+ *  내용 축소·그리드 재배치는 민구가 **기각**했고 트랙 비율은 `heroLayout.ts` zone 계약
+ *  (WP-G 소유)이라 못 늘린다 → **남는 길은 트랙 밖으로(위로) 자라는 것 하나뿐이다.**
+ *
+ *  ## 상한을 왜 여기서 끊나 — **칩존은 절대 덮지 않는다**
+ *  `1 + center/bottom` = 하단 트랙 + 중앙 트랙 = **칩존 바로 아래까지**.
+ *  🔑 이 파일의 WP-D 주석이 **칩 왕복이 왜 이 서랍에 있는지**를 이미 적어놨다 —
+ *  *"이 값은 «2~3m 떨어져서 읽히는가»가 판정 기준이라 **칩존을 보면서** 맞춰야 한다."*
+ *  칩존을 덮으면 그 이유가 사라진다. 이 상한은 **오라클이 지킨다**
+ *  (`v0460-fb-b-drawer-reachable.spec.ts` ②-b: 서랍이 열려도 칩존이 자기 자신으로 히트된다).
+ *
+ *  ## 🟢 비율을 **읽기만** 한다
+ *  `ACTIVE_ZONE_RATIOS`(WP-G 소유)를 바꾸지 않으므로 WP-G가 배분을 조정하면 이 상한이
+ *  자동으로 따라간다. **숫자를 여기 박으면 그 연동이 끊긴다.**
+ *
+ *  ## 🔴🔴 여유가 얇다 — **서랍에 항목을 추가하려는 사람이 반드시 읽어야 하는 곳**
+ *  실측(08-07): 402×513에서 서랍 최종 높이 **290px** vs 상한 **308px** = **여유 약 18px**.
+ *  서랍 행 하나가 **69px**이다.
+ *  👉 **항목을 하나만 더 넣어도 402×513은 다시 스크롤이 생긴다 = FB-4가 그대로 회귀한다.**
+ *  🔑 **민구는 이 18px을 알고 ⓐ를 확정했다**(08-07 17:55, `_ASK-D.md` D-1 — 대안 ⓑ「칩존까지
+ *     덮기」를 나란히 보고 고른 답이다). 즉 이 얇은 여유는 **사고가 아니라 합의된 상태**다.
+ *  👉 다음에 항목이 필요하면 셋 중 하나를 **민구에게 물어서** 골라라:
+ *     ⓑ 상한을 칩존까지 올린다(칩 왕복을 칩존 보며 맞춘다는 전제를 포기하는 것) ·
+ *     요약 필로 승격 · 항목 통합. **조용히 늘리지 마라.**
+ *  🟢 그래서 `input-control-scroll`의 스크롤 fallback을 **지우지 않았다** — 넘쳐도 조용히
+ *  잘리는 게 아니라 스크롤로 닿는다(FB-B가 세운 계약 보존). 오라클 ②-a가 그 순간 red를 낸다. */
+const DRAWER_MAX_HEIGHT =
+  `calc(100% * ${1 + ACTIVE_ZONE_RATIOS.base.center / ACTIVE_ZONE_RATIOS.base.bottom})`;
 
 /** v0.20.0 입력탭#1·#2 — 입력 컨트롤바: [인식 허용범위] · [안내 속도] 두 다이얼을 수평 배치.
  *  허용범위(recognitionTolerance) 0.40~0.90 → %로 표시. 속도(ttsRate) 0.5~2.0 → x로 표시·샘플 음성.
@@ -123,22 +161,45 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
-        /* 🔴 v0.46.0 FB-B(민구 제보 08-06 *"서랍에서 칩 자동 스크롤 속도 조절할 수 있는 메뉴가
-         *  없다"*) — **펼친 패널이 배정 트랙보다 크면 부모의 `overflow:hidden`이 아래를 잘라낸다.**
+        /* 🔴 v0.46.0 FB-B → **v0.46.1 FB-4로 처방이 바뀌었다.** 두 사건의 원인은 같다:
+         *  WP-D가 **서랍 항목을 3개 → 4개로 늘렸고 트랙은 안 늘었다.**
          *  실측(402×812): 패널 **289px** vs `voice-control-bar` 트랙 **226px** → **63px 손실**,
          *  4번째 항목(칩 왕복, 행 높이 69px)이 거의 통째로 사라졌다. 375×667은 112px 손실.
          *
          *  ⚠️ **탭바가 덮은 게 아니다.** 컨트롤바 bottom과 탭바 top이 정확히 맞닿아 있다
          *  (실측 723=723 · 785=785 · 578=578). 그 `overflow:hidden`은 v0.43.0 UI-b의 **의도된
          *  방어**이고 제대로 동작했다 — 탭바를 침범하는 대신 자기 내용을 잘랐을 뿐이다.
-         *  👉 그래서 처방은 「하단 여백」이 아니라 **트랙 안에서의 내부 스크롤**이다.
          *
-         *  🔑 원인은 WP-D가 **서랍 항목을 3개 → 4개로 늘린 것**이다. 패널은 커졌고 트랙은 안 늘었다.
-         *  트랙을 늘리는 길은 막혀 있다 — 그 비율은 `heroLayout.ts` zone 계약(WP-G 소유)이다.
+         *  · **FB-B(08-06) 처방:** 트랙 안에서의 **내부 스크롤**. 잘림은 사라졌다.
+         *  · **FB-4(08-07) 민구 판정:** *"서랍 펼칠시 **스크롤 없이** 보이게 변경"* →
+         *    그 스크롤 자체가 현장에서 불편했다(2~3m·장갑). 확정 답변은 **「더 높게 펼쳐라」**.
+         *  👉 처방 교체: 패널이 **위로 트랙 밖까지 자란다**(`DRAWER_MAX_HEIGHT` 주석이 근거 SSOT).
+         *
+         *  🔴 `flex`가 **`1 1 auto` → `0 0 auto`** 로 바뀐 것이 이 전환의 핵심이다.
+         *     `1 1 auto`는 컨테이너 높이에 자기를 맞추므로 **트랙보다 커질 수 없었다.**
+         *     `0 0 auto` + `maxHeight`라야 내용만큼 자라고 칩존 앞에서 멈춘다.
+         *     ⚠️ 이 한 줄을 `1 1 auto`로 되돌리면 오라클 ②-a(스크롤 없음)가 red가 된다(반증 확인).
+         *
+         *  🔴 **부모(`ActiveControlBar`)의 협조가 필요하다** — 트랙 밖으로 자라려면
+         *     `overflow:hidden`을 열고(`visible`) 넘침 방향을 위로 돌려야 한다
+         *     (`justifyContent:'flex-end'`). **둘 다 `panelOpen`일 때만** 건다. 근거는 그쪽 주석.
          *
          *  ⚠️ **접힘 상태에는 걸지 않는다**(`open` 가드). 접힌 토글 49px은 `heroLayout.ts:124`가
          *  고정으로 쓰는 계약이라 flex 축을 건드리면 그 계산이 흔들린다. */
-        ...(open ? { minHeight: 0, flex: '1 1 auto' } : null),
+        ...(open ? {
+          flex: '0 0 auto',
+          minHeight: 0,
+          maxHeight: DRAWER_MAX_HEIGHT,
+          /* 중앙 트랙 위에 겹쳐 그려지므로 **불투명해야 한다** — 투명하면 뒤의 중앙 표시(값·항목명)가
+             서랍 항목 사이로 비쳐 원거리에서 둘이 섞여 읽힌다. 좌우 12px은 부모 padding이라
+             음수 마진으로 되찾아 **전폭 시트**로 만든다(가장자리에 뒷화면 띠가 남지 않게). */
+          background: T.bg,
+          borderTop: `1px solid ${T.lineStrong}`,
+          marginLeft: -12,
+          marginRight: -12,
+          paddingLeft: 12,
+          paddingRight: 12,
+        } : null),
       }}
     >
       <button
@@ -175,7 +236,11 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
         <span aria-hidden style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }}>⌄</span>
       </button>
       {open && (
-        /* 🔴 v0.46.0 FB-B — 트랙이 모자라면 **여기서** 스크롤한다(패널 헤더 주석의 처방).
+        /* 🔴 v0.46.0 FB-B — 트랙이 모자라면 **여기서** 스크롤한다.
+         *  🟢 **v0.46.1 FB-4 이후엔 이것이 「평소 경로」가 아니라 「fallback」이다.** 패널이 위로
+         *    자라 네 뷰포트(402×513·812·874 · 375×667)에서 스크롤이 **실제로 사라졌다**(실측).
+         *    ⚠️ **그래도 지우지 마라** — 402×513의 여유는 약 18px뿐이라 서랍 항목이 하나만
+         *    늘어도(행 69px) 다시 넘친다. 그때 이게 없으면 FB-B의 「조용한 잘림」으로 되돌아간다.
          *  · `minHeight:0` 없이 `flex:1 1 auto`만 주면 flex item의 `min-height:auto`가 축소를
          *    막아 종전과 똑같이 잘린다 — 이 레포가 이미 데인 함정이다(UI-a 함정 1의 사촌).
          *  · `overscrollBehavior:'contain'` — 서랍 끝에서 스크롤이 **뒤 화면으로 새지 않게** 한다.

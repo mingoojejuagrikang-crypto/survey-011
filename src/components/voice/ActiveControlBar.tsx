@@ -78,7 +78,27 @@ export function ActiveControlBar({
         //   🟢 UI-a 함정 1(`overflow:hidden`이 `min-height:auto`를 0으로 만들어 fit 무력화)의
         //      사정권이 아니다: 이 컴포넌트는 `useFitScale`·`useFitGroup`을 쓰지 않는다.
         //      **fit이 사는 CenterStage 경계에는 새로 붙이지 않았다.**
-        overflow: 'hidden',
+        //
+        // 🔴 v0.46.1 **FB-4** — 조절판이 **열렸을 때만** 이 방어를 연다(`panelOpen` 가드).
+        //   민구 확정 08-07: *"서랍 펼칠시 스크롤 없이 보이게"* → 「더 높게 펼쳐라」.
+        //   실측상 서랍 필요높이 239px은 **네 뷰포트 전부에서** 배정 트랙보다 크다
+        //   (402×513 배정 75px → 부족 164px). 트랙 비율은 WP-G 계약이라 못 늘린다
+        //   → 서랍이 **위로** 트랙 밖으로 자라는 것이 유일한 길이다(ActiveControlSteppers의
+        //   `DRAWER_MAX_HEIGHT` 주석이 근거 SSOT).
+        //
+        //   ⚠️ **UI-b 방어를 없앤 게 아니다 — 방향을 하나로 좁힌 것이다.**
+        //   ① `panelOpen`이면 인디케이터 행·행동 행은 **렌더 자체가 안 된다**(아래 `!panelOpen`).
+        //      즉 이 상태에서 트랙을 넘칠 수 있는 자식은 조절판 하나뿐이다.
+        //   ② 그 조절판은 아래 래퍼의 `justifyContent:'flex-end'`로 **바닥에 붙어** 있고 넘침은
+        //      **위로만** 간다 → 탭바(컨트롤바 bottom == 탭바 top) 침범 경로가 **구조적으로 없다.**
+        //   ③ 위쪽은 패널의 `maxHeight`가 **칩존 앞에서** 멈춘다.
+        //   🔴 접힘·알람·일시정지 등 나머지 모든 상태에서는 `hidden` 그대로다 — 특히
+        //      §C5-b가 기록한 「91px 도트가 40.75px 밴드를 넘친다」 경로는 이 가드 밖이라
+        //      **영향을 받지 않는다**(도트는 `panelOpen`이면 아예 없다).
+        //   ⚠️ **정렬은 여기 걸면 안 된다**(08-07 실측으로 배웠다): 아래 래퍼가 `flex:1 1 auto`로
+        //      트랙을 꽉 채우므로 이 컨테이너의 `justifyContent`는 **아무 일도 하지 않는다.**
+        //      넘치는 것은 래퍼가 아니라 그 **안**의 패널이라 정렬은 래퍼에 걸어야 한다.
+        overflow: panelOpen ? 'visible' : 'hidden',
         // §C5-b — 접힌 조절판 토글의 오버레이 기준점(아래 주석 참조).
         position: 'relative',
         // §C5-b — gap 2·하단 padding 2를 없앴다. 이 4px 프레임이 도트행 몫에서 빠져나가
@@ -198,8 +218,16 @@ export function ActiveControlBar({
             /* 🔴 v0.46.0 FB-B — `minHeight:0`만으로는 부족하다. 이 래퍼가 **트랙의 남은 높이를
              *  실제로 받아야**(`flex:1 1 auto`) 안쪽 스크롤 컨테이너에 경계가 생긴다. 종전엔
              *  래퍼가 내용 높이(289px)를 그대로 갖고 트랙(226px) 밖으로 나가 부모의
-             *  `overflow:hidden`에 잘렸다. `display:flex`는 패널이 이 높이를 물려받게 한다. */
-            ? { minHeight: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column' }
+             *  `overflow:hidden`에 잘렸다. `display:flex`는 패널이 이 높이를 물려받게 한다.
+             *  🔴 v0.46.1 **FB-4** — 이 래퍼는 여전히 트랙 높이를 받되(`flex:1 1 auto` 유지 —
+             *  패널의 `maxHeight:%`가 이 높이를 기준으로 삼는다), **안의 패널을 바닥에 붙인다.**
+             *  패널이 트랙보다 커지면 넘침이 **위로만** 가고, 아래(탭바)로는 갈 수 없다.
+             *  ⚠️ 이 한 줄을 빼면 넘침이 아래로 흘러 탭바를 덮는다 — 08-07 실측으로 확인했다
+             *  (375×667: panelBottom 690.8 > barBottom 578). 오라클 축 ①-a가 그것을 잡는다. */
+            ? {
+                minHeight: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column',
+                justifyContent: 'flex-end',
+              }
             : controlsExpandable
               ? {
                   position: 'absolute',
