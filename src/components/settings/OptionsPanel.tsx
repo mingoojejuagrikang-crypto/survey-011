@@ -25,6 +25,20 @@ const LIST_MAX_H = CHIP_H * VISIBLE_ROWS + CHIP_GAP * (VISIBLE_ROWS - 1);
 
 export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Column) => void }) {
   const [newOption, setNewOption] = useState('');
+  /** 🔴 v0.46.1 WP-7(민구 방향 전환 08-07) — **삭제 모드.**
+   *
+   *  민구 원문: *"텍스트 입력칸에 입력값이 있고 버튼을 터치시 리스트에 추가되는거고, 텍스트
+   *  입력칸이 **비어 있을때** 버튼을 누르면 기존에 등록된 값들의 칩 앞에 「x」 기호가 표시되서
+   *  사용자가 해당 칩을 터치하면 해당 항목은 사라지는 형태로 가자. **하나가 삭제되면 다시
+   *  버튼은 초기화** 되는거구."*
+   *
+   *  🔑 **왜 종전 방식을 버렸나** — 종전(J-4)은 *"지울 값을 입력창에 정확히 타이핑하면 버튼이
+   *  「삭제」로 바뀐다"* 였다. 이 앱의 현장은 **장갑 낀 손 · 원거리**다. 지우려고 긴 값을 오타 없이
+   *  치는 것이 삭제 자체보다 어렵다. 새 방식은 **탭 두 번**(모드 진입 → 칩)으로 끝난다.
+   *
+   *  ⚠️ **삭제 1건마다 모드가 꺼지는 것은 의도된 안전장치다**(민구 지정). 연속 삭제는 번거롭지만
+   *  오탭 1회가 2건을 지우는 일이 없다. 여러 개를 지울 때만 버튼을 다시 누른다. */
+  const [deleteMode, setDeleteMode] = useState(false);
   // v0.46.0 WP-J J-5 — 제외 목록은 스토어 최상위 맵(colId → 지운 값들). 컬럼 안에 두면 시트
   // 자동 갱신이 컬럼을 통째로 갈아끼울 때 함께 날아가 R11("한 번 지우면 계속 유지")이 깨진다.
   const setSettings = useSettingsStore((st) => st.set);
@@ -57,14 +71,18 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
    * ⚠️ 삭제는 **선택지에서만** 빼는 것이다 — 시트의 과거 데이터는 건드리지 않는다.
    */
   const draft = newOption.trim();
-  const willRemove = draft.length > 0 && available.includes(draft);
-  const canApply = draft.length > 0;
+  /** 이미 있는 값은 **추가하지 않는다** — 중복 항목이 생기면 자동입력 순번(order)이 흐트러진다.
+   *  🔑 민구 원 제보(*"기존에 이미 존재하는 값을 넣어도 버튼의 문구 변경은 없음"*)가 지적한
+   *  침묵을 여기서 갚는다 — 이제 **「이미 있음」이라고 화면에 말한다.** */
+  const isDuplicate = draft.length > 0 && available.includes(draft);
+  const canAdd = draft.length > 0 && !isDuplicate;
+  /** 입력이 비어 있을 때만 삭제 모드를 켤 수 있다(민구 지정). 지울 것이 없으면 무의미하다. */
+  const canEnterDeleteMode = draft.length === 0 && available.length > 0;
 
-  const applyDraft = () => {
-    if (!canApply) return;
-    if (willRemove) {
-      const nextAvailable = available.filter((x) => x !== draft);
-      let nextSelected = selected.filter((x) => x !== draft);
+  /** 선택지에서 값 하나를 뺀다. 삭제 모드의 칩 탭과 (구)입력창 경로가 공유하는 SSOT. */
+  const removeValue = (v: string) => {
+      const nextAvailable = available.filter((x) => x !== v);
+      let nextSelected = selected.filter((x) => x !== v);
       // 🔴 v0.46.0 콜드 리뷰 L4-② — **선택값이 비면 남은 값 중 첫 번째를 자동으로 선택한다.**
       //    자동입력 컬럼은 테이블 골격을 만드는 주체라 값이 없어선 안 된다(민구 계약 08-06).
       //    비면 `autoValue`가 `''`를 돌려 그 컬럼이 전 행 빈칸으로 기록되고, `input:'auto'`라
@@ -81,8 +99,14 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
         auto: { kind: 'options', available: nextAvailable, selected: nextSelected },
       });
       // J-5 — 지운 값을 기억한다. 다음 시트 자동 갱신이 이 값을 다시 넣지 않는다.
-      setSettings({ optionExclusions: withExclusion(optionExclusions, col.id, draft) });
-    } else {
+      setSettings({ optionExclusions: withExclusion(optionExclusions, col.id, v) });
+      // 🔴 민구 지정 — **삭제 1건마다 모드를 끈다.** 오탭 1회가 2건을 지우지 못하게.
+      setDeleteMode(false);
+  };
+
+  const applyDraft = () => {
+    if (!canAdd) return;
+    {
       // 새 값은 **맨 앞**에 넣는다 — "최근에 쓴 값이 위"라는 J-1 정렬 계약과 같은 방향이고,
       // 목록이 길 때 방금 넣은 값을 찾으러 스크롤하지 않아도 된다.
       onChange({
@@ -93,6 +117,15 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
       setSettings({ optionExclusions: withoutExclusion(optionExclusions, col.id, draft) });
     }
     setNewOption('');
+  };
+
+  /** 버튼 한 개가 두 일을 한다(민구 지정): 입력이 있으면 **추가**, 비어 있으면 **삭제 모드 토글**.
+   *  🔑 토글인 것이 중요하다 — 민구 안엔 "하나 삭제되면 초기화"만 있어 **삭제 없이 빠져나올
+   *  경로가 없었다.** 실수로 켠 모드를 끄지 못하면 다음 탭이 삭제가 된다. */
+  const onPrimaryButton = () => {
+    if (draft.length > 0) { applyDraft(); return; }
+    if (deleteMode) { setDeleteMode(false); return; }
+    if (canEnterDeleteMode) setDeleteMode(true);
   };
 
   return (
@@ -141,27 +174,31 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
             <button
               key={v}
               type="button"
-              onClick={() => toggle(v)}
-              aria-pressed={sel}
-              aria-disabled={locked || undefined}
-              title={locked ? '마지막 선택값입니다. 이 칸을 안 쓰려면 입력방식을 「수동」으로 바꾸세요.' : undefined}
+              onClick={() => (deleteMode ? removeValue(v) : toggle(v))}
+              aria-pressed={deleteMode ? undefined : sel}
+              aria-disabled={(!deleteMode && locked) || undefined}
+              title={!deleteMode && locked ? '마지막 선택값입니다. 이 칸을 안 쓰려면 입력방식을 「수동」으로 바꾸세요.' : undefined}
               aria-label={
-                locked
-                  ? `${v}, 선택됨 · 마지막 선택값이라 해제할 수 없습니다. 이 칸을 안 쓰려면 입력방식을 수동으로 바꾸세요`
-                  : sel
-                    ? `${v}, 선택됨 · 자동 입력 ${order}번째. 누르면 해제`
-                    : `${v}, 누르면 선택`
+                deleteMode
+                  ? `${v}, 누르면 선택지에서 삭제`
+                  : locked
+                    ? `${v}, 선택됨 · 마지막 선택값이라 해제할 수 없습니다. 이 칸을 안 쓰려면 입력방식을 수동으로 바꾸세요`
+                    : sel
+                      ? `${v}, 선택됨 · 자동 입력 ${order}번째. 누르면 해제`
+                      : `${v}, 누르면 선택`
               }
               data-testid={`opt-chip-${col.id}-${v}`}
               style={{
-                border: `1px solid ${sel ? T.blue : T.line}`,
-                background: sel ? T.blueGlow : 'rgba(255,255,255,0.04)',
-                color: sel ? T.text : T.textDim,
+                // 🔴 삭제 모드는 **한눈에 달라야 한다** — 같은 탭이 선택 토글이 아니라 삭제가 된다.
+                //    테두리·글자색을 붉게 바꿔 모드를 오인할 여지를 없앤다.
+                border: `1px solid ${deleteMode ? T.red : sel ? T.blue : T.line}`,
+                background: deleteMode ? 'rgba(255,59,48,0.10)' : sel ? T.blueGlow : 'rgba(255,255,255,0.04)',
+                color: deleteMode ? T.text : sel ? T.text : T.textDim,
                 fontSize: 14, fontWeight: 700,
                 // 선택 시 좌측 뱃지 공간 확보(왼쪽 패딩 축소).
-                padding: sel ? '6px 12px 6px 6px' : '8px 12px',
+                padding: deleteMode || sel ? '6px 12px 6px 6px' : '8px 12px',
                 borderRadius: 999,
-                cursor: locked ? 'not-allowed' : 'pointer',
+                cursor: !deleteMode && locked ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', gap: 6,
                 whiteSpace: 'nowrap',
                 // 🔴 WP-C — 선택/비선택의 높이를 같게 만든다. 22px 순번 뱃지 때문에 선택 칩이
@@ -171,7 +208,25 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
                 scrollSnapAlign: 'start',
               }}
             >
-              {sel ? (
+              {/* 🔴 v0.46.1 WP-7(민구 08-07) — 삭제 모드에선 순번 뱃지 자리에 **x**를 놓는다.
+                  민구 원문: *"기존에 등록된 값들의 칩 앞에 「x」 기호가 표시되서 사용자가 해당
+                  칩을 터치하면 해당 항목은 사라지는 형태"*. 같은 자리를 쓰므로 칩 높이(CHIP_H)
+                  계약이 흔들리지 않는다 — 「상시 2줄」이 목록 구성에 따라 달라지면 안 된다. */}
+              {deleteMode ? (
+                <span
+                  aria-hidden="true"
+                  data-testid={`opt-del-mark-${col.id}-${v}`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22, borderRadius: '50%',
+                    background: T.red, color: '#fff',
+                    fontSize: 14, fontWeight: 900, lineHeight: 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  ×
+                </span>
+              ) : sel ? (
                 <span
                   aria-hidden="true"
                   data-testid={`opt-badge-${col.id}-${v}`}
@@ -192,6 +247,14 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
         })}
       </div>
 
+      {/* 🔑 민구 원 제보의 침묵을 갚는 자리 — 이미 있는 값을 넣었을 때 **아무 말도 없던** 것이
+          FB-2의 출발점이었다. 이제 왜 추가가 안 되는지 화면이 말한다. */}
+      {isDuplicate && (
+        <span data-testid={`opt-dup-${col.id}`} style={{ fontSize: 12, fontWeight: 700, color: T.amber }}>
+          「{draft}」는 이미 있습니다 — 지우려면 입력을 비우고 「삭제」를 누르세요
+        </span>
+      )}
+
       <div style={{ display: 'flex', gap: 6 }}>
         <input
           value={newOption}
@@ -203,7 +266,7 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
             }
           }}
           data-testid={`opt-input-${col.id}`}
-          placeholder="값 입력 — 없으면 추가, 있으면 삭제"
+          placeholder={deleteMode ? "지울 값을 눌러주세요" : "값 입력 후 「추가」 · 비우고 「삭제」"}
           style={{
             flex: 1, height: 36, borderRadius: 8,
             background: T.bg, border: `1px solid ${T.line}`,
@@ -213,29 +276,37 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
         />
         <button
           type="button"
-          onClick={applyDraft}
-          disabled={!canApply}
+          onClick={onPrimaryButton}
+          disabled={isDuplicate || (draft.length === 0 && !deleteMode && !canEnterDeleteMode)}
           data-testid={`opt-apply-${col.id}`}
           aria-label={
-            !canApply
-              ? '값을 입력하면 추가하거나 삭제할 수 있어요'
-              : willRemove
-                ? isLastSelected(draft)
-                  ? `${draft}, 선택지에서 삭제. 마지막 선택값이라 다음 값이 자동으로 선택됩니다`
-                  : `${draft}, 선택지에 있음. 누르면 선택지에서 삭제`
-                : `${draft}, 선택지에 없음. 누르면 선택지에 추가`
+            isDuplicate
+              ? `${draft}, 이미 선택지에 있습니다. 지우려면 입력을 비우고 삭제를 누르세요`
+              : draft.length > 0
+                ? `${draft}, 누르면 선택지에 추가`
+                : deleteMode
+                  ? '삭제 모드입니다. 지울 값을 누르세요. 이 버튼을 다시 누르면 취소됩니다'
+                  : available.length === 0
+                    ? '지울 값이 없습니다'
+                    : '누르면 삭제 모드로 바뀝니다. 그 다음 지울 값을 누르세요'
           }
           style={{
             height: 36, padding: '0 14px', borderRadius: 8,
             border: 'none',
-            background: !canApply ? T.line : willRemove ? T.red : T.blue,
-            color: !canApply ? T.textMute : '#fff',
+            background: isDuplicate ? T.line
+              : draft.length > 0 ? T.blue
+              : deleteMode ? T.textDim
+              : canEnterDeleteMode ? T.red
+              : T.line,
+            color: isDuplicate || (draft.length === 0 && !deleteMode && !canEnterDeleteMode)
+              ? T.textMute : '#fff',
             fontSize: 13, fontWeight: 700,
-            cursor: canApply ? 'pointer' : 'default',
+            cursor: isDuplicate || (draft.length === 0 && !deleteMode && !canEnterDeleteMode)
+              ? 'default' : 'pointer',
             whiteSpace: 'nowrap',
           }}
         >
-          {willRemove ? '− 삭제' : '+ 추가'}
+          {draft.length > 0 ? '+ 추가' : deleteMode ? '취소' : '삭제'}
         </button>
       </div>
     </div>

@@ -159,3 +159,4 @@ test('J-5 — 제외가 없으면 목록을 그대로 통과시킨다', () => {
   const vals = ['이원창', '강남호'];
   expect(applyExclusions(vals, [])).toBe(vals);
 });
+

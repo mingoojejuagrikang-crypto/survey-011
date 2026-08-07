@@ -200,10 +200,19 @@ test('J-5 — 지운 선택지는 재연결해도 돌아오지 않는다(끝에�
   // 유추된 컬럼 id는 이름 해시라 스토어에서 읽어 쓴다.
   const farmId = (farmColumn(await readColumns(page)) as { id: string }).id;
 
-  // J-4 — 있는 값을 치면 버튼이 '삭제'로 바뀐다.
-  await page.locator(`[data-testid="opt-input-${farmId}"]`).fill('강남호');
-  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText(/삭제/);
+  // 🔴 v0.46.1 WP-7(민구 방향 전환 08-07) — **삭제 흐름이 바뀌었다.**
+  //    구 J-4: 지울 값을 입력창에 정확히 타이핑 → 버튼이 「삭제」로 변함 → 클릭.
+  //    신 방식: **입력창을 비운 채 「삭제」** → 칩 앞에 `×` → **그 칩을 탭**.
+  //    이유는 현장이다 — 장갑 낀 손으로 긴 값을 오타 없이 치는 것이 삭제보다 어려웠다.
+  //    ⚠️ 이 테스트의 본질(J-5: 지운 값은 재연결해도 안 돌아온다)은 그대로다. 경로만 바뀐다.
+  await expect(page.locator(`[data-testid="opt-input-${farmId}"]`)).toHaveValue('');
+  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText('삭제');
   await page.locator(`[data-testid="opt-apply-${farmId}"]`).click();
+  // 삭제 모드 진입 표식 — 칩 앞 `×`가 실제로 뜬다.
+  await expect(page.locator(`[data-testid="opt-del-mark-${farmId}-강남호"]`)).toBeVisible();
+  await page.locator(`[data-testid="opt-chip-${farmId}-강남호"]`).click();
+  // 민구 지정 — 1건 삭제되면 모드가 꺼진다(오탭 1회가 2건을 지우지 못하게).
+  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText('삭제');
 
   await expect.poll(async () => {
     const s = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), STORE_KEY);
