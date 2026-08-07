@@ -110,9 +110,24 @@ test('② font_render_echo — 첫 커밋 에코에서 1건, 두 번째 커밋�
     (await loadLogEvents(page)).filter((e) => e.extra?.startsWith('font_render_echo:')).length,
   { timeout: 5000 }).toBe(1);
   const echo = (await loadLogEvents(page)).find((e) => e.extra?.startsWith('font_render_echo:'))!;
-  expect(echo.extra).toMatch(/^font_render_echo:hero=\d+(\.\d)?,w=\d+,h=\d+$/);
+  // 🔴 v0.46.0 정당 파손 (2026-08-07) — `c401a30`(08-07 16:00)이 **확정값 넘침 계측**을 넣어
+  //    필드가 3개 → 6개가 됐다(`ovX`·`ovY`·`len`). 종전 정규식은 `h=\d+$`로 **끝을 못박고
+  //    있어** 새 필드가 붙는 순간 red가 됐다.
+  //    🔴🔴 **그 red는 08-07 하루 종일 아무에게도 안 보였다** — 이 파일이 `test:e2e:gate`
+  //    목록 **밖**이라 회차 내내 한 번도 안 돌았고, 08-07 밤 전량 스위트에서야 드러났다.
+  //    같은 날 `v043-typo-contract`가 **똑같은 기전**으로 red였다(게이트 밖 + 새벽 커밋).
+  //    👉 계측 포맷을 늘릴 때 **그 포맷을 단언하는 오라클이 게이트 안에 있는지** 먼저 봐라.
+  //    ⚠️ 필드를 늘리면 여기도 함께 늘려라. `$`를 떼서 느슨하게 만들지 마라 —
+  //    **끝을 못박는 것이 「형식이 조용히 바뀌는 것」을 잡는 이 단언의 존재 이유다.**
+  expect(echo.extra).toMatch(
+    /^font_render_echo:hero=\d+(\.\d)?,w=\d+,h=\d+,ovX=-?\d+,ovY=-?\d+,len=\d+$/,
+  );
   // 실렌더값이 0이면 요소를 못 읽은 것이다 — 프로브 폴백 금지 계약의 실효 확인.
   expect(Number(/hero=([\d.]+)/.exec(echo.extra ?? '')?.[1])).toBeGreaterThan(0);
+  // 🔑 신규 3필드가 **실제로 측정된 값인지** 본다. 형식만 맞고 값이 안 채워지면
+  //    민구 제보(`33…` 잘림)를 판정하려고 넣은 계측이 로그만 늘리는 꼴이 된다.
+  //    `len`은 표시 문자열 길이이므로 확정값 `33.3`에서 **반드시 4**다 — 0이면 요소를 못 읽었다.
+  expect(Number(/len=(\d+)/.exec(echo.extra ?? '')?.[1])).toBe(4);
 
   // 두 번째 커밋 — 가드(세션당 1회)로 늘지 않는다.
   await waitForTtsIdle(page);
