@@ -672,16 +672,41 @@ export function resumeTtsEngine() {
 }
 
 /** Pre-warm the TTS engine to reduce first-utterance delay.
- *  Uses a near-silent '0' utterance — stronger iOS cold-start warm than an empty string. */
-export function warmupTts() {
-  if (!synth) return;
+ *  Uses a near-silent '0' utterance — stronger iOS cold-start warm than an empty string.
+ *
+ *  🔴 v0.46.1 WP-1c(민구 지시 08-07) — **결과를 돌려준다.** 종전엔 `void`라 "엔진이 실제로
+ *  깨어났는가"를 아무도 알 수 없었다. 08-07 실기기에서 세션 초반 TTS 11건이 `onstart` 미도착으로
+ *  죽었는데(회차 SSOT §2), 그 사실을 **시작 화면에서 미리 알 방법이 없었다.**
+ *
+ *  민구 지시: *"권한 수락하고 **실제 마이크/스피커 입출력이 가능한지 확인**하고, 진행 상황을
+ *  바형태로 보여줘서 사용자가 바로 전환되지 않는 화면이 오작동이 아님을 알게 해줘."*
+ *
+ *  🔑 **`synth.speak()` 호출 자체는 여전히 동기다** — 제스처 컨텍스트 계약(`f6de49c`)이 깨지지
+ *  않는다. Promise는 **결과만** 나중에 준다.
+ *
+ *  - `spoken`   `onstart` 도착 = 엔진이 실제로 발화를 시작했다
+ *  - `silent`   `onstart` 없이 끝났거나 타임아웃 = **08-07 무음 시그니처**
+ *  - `unsupported` synthesis 자체가 없다 */
+export function warmupTts(): Promise<'spoken' | 'silent' | 'unsupported'> {
+  if (!synth) return Promise.resolve('unsupported');
   const u = new SpeechSynthesisUtterance('0');
   const v = pickKoreanVoice();
   if (v) try { u.voice = v; } catch { /* ignore — plain-object voice in test/mock env */ }
   u.lang = 'ko-KR';
   u.volume = 0.01;
   u.rate = 1.5;
-  synth.speak(u);
+  return new Promise((resolve) => {
+    let started = false;
+    let settled = false;
+    const done = (r: 'spoken' | 'silent') => { if (settled) return; settled = true; resolve(r); };
+    u.onstart = () => { started = true; };
+    u.onend = () => done(started ? 'spoken' : 'silent');
+    u.onerror = () => done('silent');
+    // 워밍업은 짧다(볼륨 0.01·rate 1.5의 '0'). 1.5초면 정상 엔진은 이미 시작했다 —
+    // 08-07 실측 `startDelayMs` 중앙값 ~300ms·최대 377ms의 4배다.
+    setTimeout(() => done(started ? 'spoken' : 'silent'), 1_500);
+    synth.speak(u);
+  });
 }
 
 /**

@@ -11,10 +11,10 @@ import { emitReadyProbe } from './readyProbe';
 
 export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart: () => void }) {
   const s = useSettingsStore();
-  // 🔴 v0.46.1 WP-1 — 시작 카운트다운(3→2→1). `useVoiceSession.start()`가 마이크 정착 구간에
-  //    채우고, 어느 경로로 빠져나가도 finally에서 null로 지운다.
-  const countdown = useSessionStore((st) => st.startCountdown);
-  const counting = countdown != null;
+  // 🔴 v0.46.1 WP-1c — 시작 준비 **진행 상태**. `useVoiceSession.start()`가 단계마다 채우고,
+  //    어느 경로로 빠져나가도 finally에서 null로 지운다.
+  const progress = useSessionStore((st) => st.startProgress);
+  const counting = progress != null;
   // v0.45.0 WP-1① — 시작 전 입·출력 상태 프로브(F15 근원 판정용). 스로틀·계약은 readyProbe.ts.
   useEffect(() => { emitReadyProbe(); }, []);
   const sourceBlocked = isSheetSourceBlocked(s);
@@ -127,11 +127,13 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
         </button>
       </div>
 
-      {/* 🔴 v0.46.1 WP-1(민구 지시 08-07) — 시작 카운트다운 오버레이(3→2→1).
-          원문: *"화면전환은 화면에 「3>2>1」로 카운터 띄워서 약간 지연해서 전환 해줘."*
-          🔑 이 창은 장식이 아니라 **마이크 획득·오디오 unlock이 정착하는 실제 구간**이다.
-             종전에는 같은 구간이 무피드백 침묵이었다(회차 SSOT §2). */}
-      {counting && (
+      {/* 🔴 v0.46.1 WP-1c(민구 지시 08-07) — 시작 준비 **진행바**.
+          원문: *"마이크 입/출력 권한을 허락하고 3초뒤 화면 전환이 아닌, 권한 수락하고 **실제
+          마이크/스피커 입출력이 가능한지 확인**하고, 진행 상황을 **바형태로** 보여줘서 사용자가
+          바로 전환되지 않는 화면이 **오작동이 아님을 알게** 해줘."*
+          🔑 각 칸이 **실제 확인**이다 — 소리 출력(AudioContext) · 마이크(gUM) · 음성 안내(onstart).
+             08-07엔 이 셋이 죽어도 세션이 한참 진행된 뒤에야 알 수 있었다(회차 SSOT §2). */}
+      {counting && progress && (
         <div
           data-testid="start-countdown-overlay"
           style={{
@@ -147,15 +149,49 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
             pointerEvents: 'none',
           }}
         >
-          <div style={{
-            fontSize: 'min(44vw, 34vh)', fontWeight: 900, color: '#fff', lineHeight: 1.05,
-            fontVariantNumeric: 'tabular-nums',
-          }}>
-            {countdown}
+          {/* 진행바 — 채움 비율이 곧 준비 단계다. 폭은 화면에 비례(고정 px 금지). */}
+          <div
+            data-testid="start-progress-bar"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={progress.total}
+            aria-valuenow={progress.step}
+            aria-label={progress.label}
+            style={{
+              width: 'min(78vw, 420px)', height: 14, borderRadius: 999,
+              background: 'rgba(255,255,255,0.14)', overflow: 'hidden',
+            }}
+          >
+            <div
+              data-testid="start-progress-fill"
+              style={{
+                width: `${Math.round((progress.step / progress.total) * 100)}%`,
+                height: '100%', borderRadius: 999,
+                background: progress.warn ? T.amber : T.blue,
+                transition: 'width 220ms ease-out',
+              }}
+            />
           </div>
-          <div style={{ fontSize: VOICE_TYPE.actionLabel, fontWeight: 700, color: T.textMute }}>
-            마이크를 준비하고 있어요
+          <div
+            data-testid="start-progress-label"
+            style={{ fontSize: VOICE_TYPE.actionLabel, fontWeight: 800, color: '#fff', textAlign: 'center' }}
+          >
+            {progress.label}
           </div>
+          {/* 🔑 실패해도 **시작을 막지 않는다** — 값 입력은 계속 된다. 다만 조용히 넘어가지도 않는다
+              (`[CLIP-INIT-SILENT-1]` v0.44.1 처방과 같은 계보: 실패는 화면에 남긴다). */}
+          {progress.warn && (
+            <div
+              data-testid="start-progress-warn"
+              role="status"
+              style={{
+                maxWidth: 'min(84vw, 460px)', textAlign: 'center',
+                fontSize: VOICE_TYPE.bodySm, fontWeight: 700, color: T.amber, lineHeight: 1.45,
+              }}
+            >
+              {progress.warn}
+            </div>
+          )}
         </div>
       )}
     </div>

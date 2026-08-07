@@ -98,17 +98,23 @@ interface SessionState {
    *  🔑 `resetAll`에도 넣는다 — 세션이 끝났는데 화면이 검으면 당황한다(uiModalOpen과 다른 판단:
    *  그쪽은 세션 수명과 무관한 전역 모달이고, 이쪽은 세션 중 배터리 절약 수단이다). */
   blackout: boolean;
-  /** 🔴 v0.46.1 WP-1(민구 지시 08-07) — 세션 시작 카운트다운의 남은 초(3→2→1). `null`=미표시.
+  /** 🔴 v0.46.1 WP-1c(민구 지시 08-07) — 세션 시작 **준비 진행 상태**. `null`=미표시.
    *
-   *  민구 원문: *"화면전환은 화면에 「3>2>1」로 카운터 띄워서 약간 지연해서 전환 해줘."*
+   *  민구 원문(2차, 종전 3→2→1 카운트다운을 대체): *"마이크 입/출력 권한을 허락하고 **3초뒤 화면
+   *  전환이 아닌**, 권한 수락하고 **실제 마이크/스피커 입출력이 가능한지 확인**하고, 진행 상황을
+   *  **바형태로** 보여줘서 사용자가 바로 전환되지 않는 화면이 **오작동이 아님을 알게** 해줘."*
    *
-   *  🔑 **기능적으로도 옳다.** 시작 클릭의 동기 구간에서 오디오를 unlock한 뒤(`beep.unlockAudioPlayback`
-   *  + `warmupTts`), 마이크 획득·정착이 끝날 때까지 사용자에게 **무엇을 기다리는지** 보여준다.
-   *  종전에는 같은 구간이 **무피드백 1초**였고, 08-07 실기기에서는 그 침묵 뒤에 TTS 무음이 이어져
-   *  민구가 *"마이크가 정상 작동하진 않았어"* 로 읽었다.
+   *  🔑 **고정 3초 대기와 근본적으로 다르다.** 각 단계가 **실제 확인**이다:
+   *  소리 출력(`AudioContext.state`) · 마이크 획득(`gUM`) · 음성 안내(`warmupTts`의 `onstart`).
+   *  08-07 실기기에서 세션 초반 2분간 TTS·비프가 함께 죽었는데(회차 SSOT §2) 사용자는 그것을
+   *  **세션이 한참 진행된 뒤에야** 알았다. 이제 시작 화면에서 그 자리에 뜬다.
    *
-   *  🔴 **메모리 전용이다**(`blackout`과 같은 계약) — 영속되면 재시작 시 유령 카운트다운이 남는다. */
-  startCountdown: number | null;
+   *  - `step`/`total` 진행바 채움 비율
+   *  - `label`  지금 무엇을 하는 중인지(사용자가 읽는 문장)
+   *  - `warn`   확인에 실패한 축(있어도 시작은 막지 않는다 — 값 입력은 계속 가능하다)
+   *
+   *  🔴 **메모리 전용이다**(`blackout`과 같은 계약) — 영속되면 재시작 시 유령 진행바가 남는다. */
+  startProgress: { step: number; total: number; label: string; warn?: string } | null;
   /** v0.35.0 R3-FIX-2(리뷰 라운드3, Codex High·데이터무결성) — **최종 저장(stop) 실패** 상태.
    *  persistSession()이 false(IDB 쓰기 실패: 용량부족·DB 연결 종료·트랜잭션 실패)를 반환하면
    *  stop()이 phase를 'ready'로 내리지 **않고** 이 플래그를 세운다. VoiceScreen이 이 값으로 종료
@@ -169,7 +175,7 @@ interface SessionState {
   setAnomalyAlert: (a: SessionState['anomalyAlert']) => void;
   setUiModalOpen: (m: SessionState['uiModalOpen']) => void;
   setBlackout: (b: boolean) => void;
-  setStartCountdown: (n: number | null) => void;
+  setStartProgress: (p: { step: number; total: number; label: string; warn?: string } | null) => void;
   /** v0.37.0 리뷰#2 — 열린 오버레이 닫기 요청(탭 전환 직전). nonce를 1 증가시킨다. */
   requestOverlayClose: () => void;
   setPersistError: (e: SessionState['persistError']) => void;
@@ -206,7 +212,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   overlayCloseSeq: 0,
   uiModalOpen: null,
   blackout: false,
-  startCountdown: null,
+  startProgress: null,
   persistError: null,
   modifyIndicator: null,
   reaskReason: null,
@@ -241,7 +247,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set(anomalyAlert ? { anomalyAlert, interimValue: null } : { anomalyAlert }),
   setUiModalOpen: (uiModalOpen) => set({ uiModalOpen }),
   setBlackout: (blackout) => set({ blackout }),
-  setStartCountdown: (startCountdown) => set({ startCountdown }),
+  setStartProgress: (startProgress) => set({ startProgress }),
   requestOverlayClose: () => set((s) => ({ overlayCloseSeq: s.overlayCloseSeq + 1 })),
   setPersistError: (persistError) => set({ persistError }),
   setModifyIndicator: (modifyIndicator) => set({ modifyIndicator }),

@@ -133,10 +133,11 @@ const PAUSE_FLUSH_GRACE_MS = 3000;
  *  데이터를 흘리기 전에 세션이 시작되면 첫 클립이 비는 문제의 방어다(구 v0.25.0 WS-2 prewarm의
  *  첫 클립 유실 완화를 이 지연이 승계한다). 오라클: tests/v0440-c8-flow.spec.ts(1000ms 계약). */
 const MIC_SETTLE_MS = 1000;
-/** 🔴 v0.46.1 WP-1(민구 지시 08-07) — 시작 카운트다운 초. `3`이면 화면에 3→2→1이 뜬다.
- *  `MIC_SETTLE_MS`(1초)를 대체한다 — 같은 목적(마이크 정착)에 **보이는 피드백**을 붙인 것이다.
- *  ⚠️ 줄이려면 첫 클립 유실(WS-2 승계 목적)을 함께 재라. 늘리면 시작이 굼떠 보인다. */
-const START_COUNTDOWN_SECONDS = 3;
+/** 🔴 v0.46.1 WP-1c(민구 지시 08-07) — 시작 준비 **단계 수**(진행바 분모).
+ *  ①소리 출력 열기 ②마이크 권한·획득 ③음성 안내 확인 ④마이크 안정화.
+ *  🔑 **고정 대기가 아니다** — 각 단계가 실제 확인이고, 빨리 끝나면 빨리 넘어간다.
+ *  민구: *"3초뒤 화면 전환이 아닌, … 실제 마이크/스피커 입출력이 가능한지 확인하고."* */
+const START_STEPS = 4;
 
 /** v0.43.0 #4 — 백그라운드 복귀 안내 문구(plan §3-3, 민구 확정).
  *
@@ -2824,8 +2825,15 @@ export function useVoiceSession() {
     //    이미 여기 있다 — 같은 계약이다.
     // 🔴 **이 두 줄 사이에 `await`를 넣지 마라.** 넣는 순간 원래 버그로 되돌아간다.
     const audioCtxState = unlockAudioPlayback();  // AudioContext 생성 + resume (비프 경로)
-    warmupTts();                                   // speechSynthesis 개시 (TTS 경로)
+    const ttsWarmup = warmupTts();                 // speechSynthesis 개시 (TTS 경로) — 결과는 아래에서 확인
     logCell({ type: 'app', extra: `audio_unlock:ctx=${audioCtxState},src=session_start` });
+    // 🔴 v0.46.1 WP-1c(민구 지시 08-07) — 준비 **진행 상태**를 화면에 낸다.
+    //    *"3초뒤 화면 전환이 아닌, 권한 수락하고 실제 마이크/스피커 입출력이 가능한지 확인하고,
+    //      진행 상황을 바형태로 보여줘서 … 오작동이 아님을 알게 해줘."*
+    const prog = (step: number, label: string, warn?: string) =>
+      useSessionStore.getState().setStartProgress({ step, total: START_STEPS, label, warn });
+    const audioOk = audioCtxState === 'running';
+    prog(1, '소리 출력을 여는 중…', audioOk ? undefined : '소리 출력이 아직 안 열렸어요');
 
     // ── v0.44.0 §C8 F18(민구 확정 08-02) — 마이크 권한 요청 시점 = **이 클릭** ─────────
     // 종전 v0.25.0 WS-2는 입력탭 마운트에서 prewarm(getUserMedia)을 돌렸다 — 탭에 들어가기만
@@ -2838,28 +2846,38 @@ export function useVoiceSession() {
     startingRef.current = true;
     try {
       if (!recorderRef.current) recorderRef.current = new AudioRecorder();
+      prog(1, '마이크 권한을 확인하는 중…');
       const granted = await recorderRef.current.init().catch(() => false);
+      prog(2, granted ? '마이크가 준비됐어요' : '마이크를 열지 못했어요',
+        granted ? undefined : '마이크 권한을 확인해 주세요');
       // 🔴 테스트 전용 우회(조용한 우회 금지): 픽스처가 `window.__micSettleSkipForTest = true`를
       //    세우면 **정착 지연만** 생략한다(요청 시점·횟수 계약은 그대로). 제품 경로의 1초 지연과
       //    이 우회 심 자체를 tests/v0440-c8-flow.spec.ts가 모두 오라클로 고정한다 — 심을 지우면 red.
       const skipSettle =
         (window as unknown as { __micSettleSkipForTest?: boolean }).__micSettleSkipForTest === true;
       if (granted && !skipSettle) {
-        // 🔴 v0.46.1 WP-1(민구 지시 08-07) — 정착 대기를 **3→2→1 카운트다운으로 보이게** 한다.
-        //    민구 원문: *"화면전환은 화면에 「3>2>1」로 카운터 띄워서 약간 지연해서 전환 해줘."*
-        //    종전 MIC_SETTLE_MS(1초)는 **무피드백 침묵**이었고, 08-07 실기기에서 그 침묵 뒤에
-        //    TTS 무음이 이어져 민구가 "마이크가 정상 작동하진 않았어"로 읽었다.
-        //    🔑 대기가 길어진 만큼 **첫 클립 유실 완화**(WS-2 승계 목적)도 함께 두터워진다.
-        for (let n = START_COUNTDOWN_SECONDS; n >= 1; n--) {
-          useSessionStore.getState().setStartCountdown(n);
-          await new Promise((r) => setTimeout(r, 1000));
-        }
+        const t0 = Date.now();
+        // ③ **음성 안내가 실제로 났는가.** 08-07 무음 사고(회차 SSOT §2)를 여기서 잡는다 —
+        //    종전엔 세션이 한참 진행된 뒤에야 사용자가 알았다.
+        prog(2, '음성 안내를 확인하는 중…');
+        const warm = await ttsWarmup;
+        const ttsOk = warm === 'spoken';
+        prog(3, ttsOk ? '음성 안내가 준비됐어요' : '음성 안내가 나오지 않아요',
+          ttsOk ? undefined : '소리가 안 들리면 일시정지 후 재시작해 주세요');
+        // ④ **마이크 안정화** — 첫 클립 유실 완화(WS-2 승계 목적). 위 확인들이 이미 쓴 시간을
+        //    빼고 남은 만큼만 기다린다. 🔑 **고정 대기가 아니라 「최소 보장」이다**(민구 요구).
+        prog(3, '마이크를 안정시키는 중…');
+        const spent = Date.now() - t0;
+        if (spent < MIC_SETTLE_MS) await new Promise((r) => setTimeout(r, MIC_SETTLE_MS - spent));
+        prog(4, '준비 완료');
+        // 다음 로그에서 「시작 시점에 무엇이 준비됐나」를 판정할 수 있게 남긴다.
+        logCell({ type: 'app', extra: `start_ready:audio=${audioOk ? 'ok' : audioCtxState},mic=${granted ? 'ok' : 'fail'},tts=${warm},ms=${Date.now() - t0}` });
       }
     } finally {
       startingRef.current = false;
-      // 🔴 성공·실패·중도이탈 어느 경로로 빠져나가도 카운터를 반드시 지운다 —
-      //    남으면 ready 화면에 유령 숫자가 붙는다.
-      useSessionStore.getState().setStartCountdown(null);
+      // 🔴 성공·실패·중도이탈 어느 경로로 빠져나가도 진행바를 반드시 지운다 —
+      //    남으면 ready 화면에 유령 진행바가 붙는다.
+      useSessionStore.getState().setStartProgress(null);
     }
     // 🔴 F18 리뷰 B1 — await 창에서 언마운트됐으면(탭 이탈) 여기서 끝낸다. 이 클로저가
     // 만든 레코더의 스트림을 되돌려 놓는다(획득 세대 카운터가 늦게 열린 스트림도 닫는다 —

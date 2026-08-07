@@ -349,13 +349,15 @@ test('F18 — 입력탭 진입 시 getUserMedia 0회, "음성 입력 시작" 클
   expect((await gumCalls(page)).length).toBe(1);
 });
 
-/** 🔴 v0.46.1 WP-1(민구 지시 08-07)로 **계약이 1초 → 3초 카운트다운으로 바뀌었다.**
+/** 🔴 v0.46.1 WP-1c(민구 2차 지시 08-07)로 **계약이 다시 바뀌었다: 고정 대기 → 실제 확인.**
  *
- *  민구 원문: *"화면전환은 화면에 「3>2>1」로 카운터 띄워서 약간 지연해서 전환 해줘."*
- *  종전 `MIC_SETTLE_MS`(1초) **무피드백 침묵**을 `START_COUNTDOWN_SECONDS`(3초) + 화면 카운터로
- *  교체했다. **계약의 몸통은 그대로다** — "승인 즉시 전환 금지(초기 클립 유실 방어)".
- *  바뀐 것은 길이와 **사용자에게 보이는가**뿐이다. */
-test('F18 — 승인 후 3초 카운트다운 뒤 화면 전환(제품 경로: 3000ms ± 여유)', async ({ page }) => {
+ *  민구 원문: *"마이크 입/출력 권한을 허락하고 **3초뒤 화면 전환이 아닌**, 권한 수락하고 **실제
+ *  마이크/스피커 입출력이 가능한지 확인**하고, 진행 상황을 바형태로 보여줘서 …"*
+ *
+ *  👉 이제 지연은 **고정값이 아니다** — 소리 출력·마이크·음성 안내 확인이 끝나는 시간에 따라
+ *  달라지고, `MIC_SETTLE_MS`는 **최소 보장**으로만 남는다(첫 클립 유실 방어).
+ *  **계약의 몸통은 세 회차째 그대로다** — "승인 즉시 전환 금지". 상한만 느슨하게 잡는다. */
+test('F18 — 승인 후 준비 확인이 끝나야 전환된다(즉시 전환 금지 · 최소 보장 유지)', async ({ page }) => {
   await installVoiceMocks(page);
   await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await seedAndOpenVoiceTab(page, settingsRows(3, 'c8-f18-delay'));
@@ -370,15 +372,17 @@ test('F18 — 승인 후 3초 카운트다운 뒤 화면 전환(제품 경로: 3
 
   const shownTs = await page.evaluate(() => (window as unknown as { __activeShownTs: number }).__activeShownTs);
   const delta = shownTs - postClick[postClick.length - 1];
-  // 하한 2900ms가 계약의 몸통(승인 즉시 전환 금지 — 초기 클립 유실 방어). 상한 3600ms는
-  // 지연이 3초 스케일임을 고정(렌더/rAF 지터 여유 — 5초로 늘리는 회귀는 잡힌다).
-  expect(delta, `승인→화면 전환 지연 ${delta}ms — 3000ms 계약 위반`).toBeGreaterThanOrEqual(2900);
-  expect(delta, `승인→화면 전환 지연 ${delta}ms — 3000ms 계약 위반`).toBeLessThanOrEqual(3600);
+  // 하한 900ms = `MIC_SETTLE_MS` 최소 보장(계약의 몸통 — 승인 즉시 전환 금지).
+  // 상한 6000ms = 준비 확인(TTS 워밍업 최대 1.5s 포함)이 끝나지 않는 회귀를 잡는 선.
+  // 🔴 **고정값을 단언하지 않는다** — 확인이 빨리 끝나면 빨리 넘어가는 것이 민구 요구다.
+  expect(delta, `승인→화면 전환 지연 ${delta}ms — 최소 보장(MIC_SETTLE_MS) 위반`).toBeGreaterThanOrEqual(900);
+  expect(delta, `승인→화면 전환 지연 ${delta}ms — 준비 확인이 안 끝난다`).toBeLessThanOrEqual(6000);
 });
 
-/** 🆕 v0.46.1 WP-1 — **카운터가 실제로 보이는가**. 위 테스트는 「지연」만 재고 「보임」은 안 잰다.
- *  민구 요구의 절반이 그 표시이므로 별도 오라클로 고정한다. */
-test('WP-1 — 시작 클릭 후 3→2→1 카운터가 화면에 뜬다', async ({ page }) => {
+/** 🆕 v0.46.1 WP-1c — **진행바가 실제로 보이고 차오르는가**. 위 테스트는 「지연」만 재고
+ *  「보임」은 안 잰다. 민구 요구의 절반이 그 표시다:
+ *  *"진행 상황을 바형태로 보여줘서 사용자가 바로 전환되지 않는 화면이 오작동이 아님을 알게 해줘."* */
+test('WP-1c — 시작 클릭 후 준비 진행바가 뜨고 차오른다', async ({ page }) => {
   await installVoiceMocks(page);
   await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await seedAndOpenVoiceTab(page, settingsRows(3, 'wp1-countdown'));
@@ -387,12 +391,21 @@ test('WP-1 — 시작 클릭 후 3→2→1 카운터가 화면에 뜬다', async
   await page.locator('[data-testid="voice-start-button"]').click();
 
   const overlay = page.locator('[data-testid="start-countdown-overlay"]');
-  await overlay.waitFor({ state: 'visible', timeout: 2000 });
-  const first = (await overlay.locator('div').first().textContent())?.trim();
-  expect(first, `첫 카운터가 3이 아니다: ${first}`).toBe('3');
+  await overlay.waitFor({ state: 'visible', timeout: 3000 });
+  const bar = page.locator('[data-testid="start-progress-bar"]');
+  await expect(bar, '진행바가 보인다').toBeVisible();
+  // 접근성 — 스크린리더도 진행을 읽는다.
+  await expect(bar).toHaveAttribute('role', 'progressbar');
+  const total = Number(await bar.getAttribute('aria-valuemax'));
+  const now = Number(await bar.getAttribute('aria-valuenow'));
+  expect(total, '단계 총수가 있다').toBeGreaterThan(0);
+  expect(now, '진행이 0보다 크다(단계가 실제로 올라간다)').toBeGreaterThan(0);
+  // 라벨이 **무엇을 하는 중인지** 말한다(빈 문자열이면 "오작동이 아님을 알게"가 성립 안 한다).
+  const label = (await page.locator('[data-testid="start-progress-label"]').textContent())?.trim();
+  expect(label && label.length > 0, `진행 라벨이 비었다: ${label}`).toBe(true);
 
-  // 카운터는 내려가고, 끝나면 사라진다(유령 오버레이 금지 — finally 정리 계약).
-  await expect(overlay).toBeHidden({ timeout: 6000 });
+  // 끝나면 사라진다(유령 오버레이 금지 — finally 정리 계약).
+  await expect(overlay).toBeHidden({ timeout: 8000 });
 });
 
 test('F18 — 테스트 픽스처 우회(__micSettleSkipForTest)는 지연만 생략한다(우회 심 자체를 고정)', async ({ page }) => {
