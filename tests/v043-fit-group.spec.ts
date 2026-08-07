@@ -565,10 +565,19 @@ for (const { name, viewport, modifyPx, completePx, reviewPx } of UI_C_BASELINE) 
       await fireStt(page, i === 0 ? '100.0' : `${20 + i}.0`, 320);
       await waitForTtsIdle(page);
     }
+    // 🔴 v0.46.1 정당 파손 (2026-08-07) — `f6de49c`(WP-1, FB-3 근본 처방)가 `speech.ts`의
+    //    TTS 워치독을 **10초 → 2.5초**로 줄였다. 종전 값(`5000` 지연 + `5200` 대기)은
+    //    **워치독보다 뒤**라, TTS가 2.5초에 강제 종료되어 review 창이 닫힌 뒤에 관측했다
+    //    → `[data-hero-state="review"]` element not found.
+    //    🔑 **이 창의 실제 상한은 `min(__ttsOnendDelayMs, TTS_WATCHDOG_MS)`다.**
+    //    같은 파일 `:507`이 `3000` 지연에 **`100`ms 대기**라 살아남은 것도 같은 이유다.
+    //    ⚠️ 워치독을 다시 올리더라도 이 값을 되돌리지 마라 — 창 안에서 관측하는 것이
+    //    워치독 값과 무관하게 옳다. 되돌리면 워치독을 줄일 때마다 이 red가 재발한다.
+    //    🔴🔴 이 red는 **08-07 하루 종일 게이트 밖에서 살아 있었다**(전량 스위트에서 발견).
     await page.evaluate(() => {
-      (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = 5000;
+      (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = 2000;
     });
-    await fireStt(page, '31.0', 5200);
+    await fireStt(page, '31.0', 800);
 
     const hero = page.locator('[data-hero-state="review"]');
     await expect(hero).toBeVisible({ timeout: 4000 });
