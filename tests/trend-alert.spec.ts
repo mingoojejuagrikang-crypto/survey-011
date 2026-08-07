@@ -766,15 +766,22 @@ test('fetch 실패(500) → 알림 없이 조용히 진행 + trend_skip:no_index
 //   🔑 **노출창을 넓혀 통과시키는 게 아니다** — 초록 전환은 코드 경로에서 무조건 일어나고,
 //   실제 브라우저의 TTS는 지속시간이 있다. 창을 0으로 만든 쪽이 mock 인공물이다. 그것만 걷어낸다.
 //   지연은 알람 TTS가 끝난 뒤 켠다 — 셋업·알람 구간은 종전 동기 동작 그대로 둔다.
-test('[시각] 정정 완료 초록 팝업 캡처', async ({ page }) => {
+// 🔴 v0.46.1 FB-10(민구 제보 08-07) — **캡처 대상이 바뀌었다.** 정정 완료는 더 이상 초록 알람
+//   카드로 표시되지 않는다. 카드를 접고 hero 확정 플래시(값 하나만 크게, 녹색 톤)로 착지한다 —
+//   민구가 "붉은 배경톤의 알람카드에서 정상값 출력"을 지적했기 때문이다(CenterStage FB-10 주석).
+//   위 「테스트측 레이스」 분석은 **여전히 유효하다**: mock의 동기 onend가 노출창을 0으로 만들고,
+//   그 창을 넓히는 것이 이 테스트의 인공물 제거였다. 착지점만 카드 → hero로 바뀌었다.
+//   계약 자체(무엇이 떠야 하는가)는 `tests/v0461-fb10-corrected-hero.spec.ts`가 단언한다.
+test('[시각] 정정 완료 확정 플래시 캡처', async ({ page }) => {
   await setupAndStart(page);
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '120.5', 300); // 빨강 알람
   await page.evaluate(() => {
     (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = 400;
   });
-  await fireStt(page, '80.5', 0);    // 정상값 정정 → corrected(초록) 전환 직후 즉시 캡처 시도
-  const green = page.locator('[data-testid="anomaly-alert"][data-status="corrected"]');
-  await expect(green).toBeVisible({ timeout: 2000 });
+  await fireStt(page, '80.5', 0);    // 정상값 정정 → 알람 카드 접힘 + hero 확정 플래시
+  const confirm = page.locator('[data-hero-state="confirm"]');
+  await expect(confirm).toBeVisible({ timeout: 2000 });
+  await expect(page.locator('[data-testid="anomaly-alert"]'), '알람 카드는 남지 않는다').toHaveCount(0);
   await page.screenshot({ path: 'test-results/v013-anomaly-green.png' });
 });

@@ -901,14 +901,23 @@ test('fb-27-8 — 정정 후에는 `정상 : 복귀` 헤드라인을 렌더하�
   await expect(page.locator('[data-testid="anomaly-headline"]'), '알람 중엔 경보행이 있다').toBeVisible();
   // 직전값 100.0 · trendRule=increase(=커지면 알람) → 100 미만은 통과 = 정정 완료.
   await fireStt(page, '80.5', 0);
-  const corrected = page.locator('[data-testid="anomaly-alert"][data-status="corrected"]');
-  await expect(corrected).toBeVisible({ timeout: 4000 });
-  // 🔴 민구 확정(2026-07-27) — 문구 삭제. 오늘 실기기에서 19회 노출됐고, TTS·로그 경로가 없어
-  //    삭제 부작용이 없다. 상태는 하단 글리프(green)와 엣지 글로우가 이미 말한다.
+  // 🔴 v0.46.1 FB-10(민구 제보 08-07)로 **계약이 한 단계 강해졌다 — 단언을 지운 게 아니라 옮겼다.**
+  //    종전엔 여기서 `anomaly-alert[data-status="corrected"]`가 **보이는 것**을 전제로 그 안의
+  //    문구만 없는지 봤다. 민구가 그 카드 자체를 지적했다: *"붉은 배경톤의 알람카드에서 정상값
+  //    출력후 다음 조사 항목으로 넘어간다는건 수정 되었으면 좋겠어."* 이제 정정 완료는 카드를
+  //    통째로 접고 hero 확정 플래시로 착지한다(CenterStage FB-10 주석).
+  //    👉 fb-27-8이 지키려던 것(**정정 후 알람 문구 잔상 없음**)은 사라지지 않았다 — 카드가 아예
+  //    없으므로 **더 강하게** 지켜진다. 아래 단언이 그 강해진 형태다. 값이 사라지지 않는다는
+  //    fb-27-8의 나머지 절반은 `anomaly-next-value` 대신 hero 확정값으로 확인한다.
+  //    전이 시계열·개수 계약(중복 팝업 금지)은 `tests/v0461-fb10-corrected-hero.spec.ts`가 잡는다.
+  await expect(
+    page.locator('[data-hero-state="confirm"]'),
+    '정정 완료는 hero 확정 플래시로 착지한다',
+  ).toBeVisible({ timeout: 4000 });
   await expect(page.locator('[data-testid="anomaly-headline"]'), '정정 후 경보행 미렌더').toHaveCount(0);
-  await expect(corrected, '`정상 : 복귀` 문구 자체가 없다').not.toContainText('정상');
-  // 값은 그대로 보인다(문구만 지웠지 정보를 지운 게 아니다).
-  await expect(page.locator('[data-testid="anomaly-next-value"]')).toHaveText('80.5');
+  await expect(page.locator('[data-testid="anomaly-alert"]'), '정정 후 알람 카드 자체가 없다').toHaveCount(0);
+  // 값은 그대로 보인다(표시 자리를 옮겼지 정보를 지운 게 아니다).
+  await expect(page.locator('[data-hero-state="confirm"]')).toContainText('80.5');
 });
 
 test('UI-c 알람 — `인식 중`은 시각 미렌더, aria 상태와 실제 값만 남는다', async ({ page }) => {

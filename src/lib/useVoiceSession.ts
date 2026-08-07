@@ -2063,6 +2063,16 @@ export function useVoiceSession() {
     // `valueBurst && !anomalyAlert` 조건이 참이 되며 같은 값이 CenterValueBurst로 한 번 더 떠
     // "정상 입력 내용이 한 번 더 팝업"되던 중복(민구 제보)이 발생한다. 정정-출처 커밋에선 burst를
     // 건너뛰어 중앙 팝업이 1회(초록 corrected)만 뜨게 한다. 일반(비-정정) 커밋의 burst는 그대로 유지.
+    //
+    // 🔴 v0.46.1 FB-10 — **이 억제는 그대로 둔다. 여기서 고치려 하지 마라.**
+    //  FB-10(정정 완료도 확정 표시를 받아야 한다)은 이 줄을 푸는 방식으로는 안 고쳐진다 —
+    //  **실측으로 확인했다**: burst를 여기서 밀면 그 시점의 중앙은 아직 알람 카드라 `VoiceHero`가
+    //  언마운트 상태이고, corrected 전환과 burst push는 같은 React 배치에 들어가 hero가 붙는
+    //  렌더에서 `useConfirmFlash`의 *마운트 시점 burst 미재생* 가드(VoiceHero의 `seenSeqRef===null`,
+    //  v0.35.0 FIX-3)에 **조용히 삼켜진다**. 프로브 실측: 알람 카드는 사라졌는데 `hero=listening`,
+    //  확정 플래시 0회(`tests/_probe-fb10-transition.spec.ts`, 402×513).
+    //  👉 그래서 표시 계층에서 푼다 — `CenterStage`가 corrected를 hero 브랜치로 보내며 값을
+    //  `confirmBurst` prop으로 직접 넘긴다. store 흐름(억제 포함)은 **한 줄도 안 바뀐다.**
     if (awaiting.kind !== 'trendConfirm') {
       sess.pushValueBurst(awaiting.name, parsed, awaiting.colId); // I-3: 중앙 버스트 + 칩 V(UI③)
     }

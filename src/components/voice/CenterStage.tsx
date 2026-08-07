@@ -134,7 +134,31 @@ export function CenterStage({
         style={{ width: '100%', height: '100%' }}
       />
     );
-  } else if (anomalyAlert) {
+  } else if (anomalyAlert && anomalyAlert.status !== 'corrected') {
+    // 🔴 v0.46.1 FB-10(민구 제보 08-07) — **정정 완료(corrected)는 알람 카드를 타지 않는다.**
+    //
+    //  민구 원문: *"화면이 녹색으로 변경되며 **인식된 값만 크게** 나오고 다음 조사 항목으로 넘어가면
+    //  좋겠는데 … 알람 해지 조건을 갖췄는데 배경톤이 붉은 상태로 다음 조사로 넘어가는건 사용자가
+    //  느끼기엔 **부정과 긍정이 섞여 있는 느낌**이야."*
+    //
+    //  🔑 실측이 「배경톤」을 반증했다(`tests/_probe-fb10-transition.spec.ts`, 402×513):
+    //  `data-voice-tone`은 corrected 즉시 green으로 뒤집히고 붉은 글로우도 400ms transition으로
+    //  **카드가 닫히기 1711ms 전에** 이미 소등된다. 붉은 채로 남는 것은 톤이 아니라 **중앙이다** —
+    //  `central=alarm`이 corrected 구간(1291~3405ms) 내내 유지돼 「직전 100 / 현재 80.5」 2열
+    //  비교 그리드가 그대로 서 있었다. 민구가 "알람카드"라고 부른 것이 정확히 그 격자다.
+    //
+    //  👉 그래서 **표시를 새로 만들지 않고 hero의 확정 플래시로 합류시킨다**(A-3 계약).
+    //  정상 커밋은 이미 `data-hero-state=confirm`으로 값 하나만 크게 띄운다 — 민구가 원하는
+    //  그림이 앱 안에 이미 있었고, 정정 커밋만 거기서 빠져 있었다. 값 위계를 둘로 가르지 않는다.
+    //
+    //  ⚠️ **store는 건드리지 않는다.** `anomalyAlert`는 corrected인 채로 살아 있고, 해제는 종전대로
+    //  advance 착지점의 `clearAnomalyAlert`가 `hadStatus='corrected'`와 함께 계측하며 내린다.
+    //  여기서 미리 null로 만들면 그 착지점이 early-return이 되어 **해제 계측이 통째로 사라진다**.
+    //  바뀐 것은 「그동안 무엇을 그리는가」 하나뿐이다.
+    //
+    //  ⚠️ 짝이 되는 변경이 `useVoiceSession.ts`의 valueBurst 억제 해제다 — 둘은 **한 커밋으로만
+    //  의미가 있다**. 한쪽만 있으면 corrected 구간이 빈 화면(억제 유지) 또는 값 2회 노출(브랜치
+    //  유지)이 된다. 게이트: `tests/v0461-fb10-corrected-hero.spec.ts`.
     branch = 'anomaly';
     content = (
       <div
@@ -198,6 +222,14 @@ export function CenterStage({
         tone={tone}
         reaskReason={completing ? null : reaskReason}
         reviewCommit={reviewCommit}
+        // 🔴 v0.46.1 FB-10 — 정정 완료가 여기로 흘러들어온 경우, 알람 카드가 접히며 hero가
+        //  **새로 마운트되기 때문에** store burst로는 확정 플래시가 전달되지 않는다(그쪽 주석).
+        //  값은 알람 자신이 이미 들고 있다(`next` = 정정된 값, `colName` = 그 항목).
+        confirmBurst={
+          anomalyAlert?.status === 'corrected'
+            ? { name: anomalyAlert.colName, value: anomalyAlert.next }
+            : null
+        }
       />
     );
   }

@@ -45,7 +45,7 @@ function prefersReducedMotion(): boolean {
 }
 
 export function VoiceHero({
-  col, review, row, tone, reaskReason, reviewCommit,
+  col, review, row, tone, reaskReason, reviewCommit, confirmBurst = null,
 }: {
   col: Column;
   /** true면 phase 'complete'의 검토 표시(✓ + 방금 입력한 값). 확인 플래시보다 우선. */
@@ -60,8 +60,19 @@ export function VoiceHero({
   //   언마운트됐다 재마운트되면 내부 mount-guard가 방금 발행된 영수증을 삼켜(검토가 중립 라벨로 폴백)
   //   버리기 때문이다. 항상 마운트돼 있는 ActiveState에서 파생하면 remount를 관통해 값이 살아남는다.
   reviewCommit: { name: string; value: string } | null;
+  /** 🔴 v0.46.1 FB-10 — **store burst를 관통하는 확정 표시 트리거**(부모가 파생해 내린다).
+   *
+   *  이상치 정정이 정상으로 판명되면 CenterStage가 알람 카드를 접고 이 컴포넌트를 붙이는데,
+   *  그 마운트와 `valueBurst` 갱신이 **같은 React 배치**에 들어가 아래 `useConfirmFlash`의
+   *  *마운트 시점 burst 미재생* 가드(v0.35.0 FIX-3)에 삼켜진다 — 실측으로 확인했다(알람 카드는
+   *  사라졌는데 `hero=listening`, 플래시 0회). **바로 위 `reviewCommit`이 겪은 것과 같은 함정이고
+   *  처방도 같다**: 항상 마운트돼 있는 부모에서 파생해 prop으로 내리면 remount를 관통한다.
+   *
+   *  이 경로는 store를 안 건드리므로 v0.15.0 A4의 「정정 커밋은 burst를 밀지 않는다」 억제가
+   *  그대로 살아 있다 — 값이 크게 뜨는 횟수는 여전히 **1회**다. */
+  confirmBurst?: { name: string; value: string } | null;
 }) {
-  const confirmed = useConfirmFlash(review);
+  const confirmed = useConfirmFlash(review, confirmBurst);
   const interim = useSessionStore((st) => st.interimValue);
 
   // 렌더 우선순위(명시적 — 타이머 레이스 무관): review > confirm > listening.
@@ -178,21 +189,55 @@ export function VoiceHero({
 }
 
 /** 확인 플래시 상태(view 전용) — valueBurst seq 소비. review 중 도착한 burst도 seq는 소비해
- *  과거 burst가 이후 행에서 재생되는 혼선을 막는다(v0.35.0 FIX-3). */
-function useConfirmFlash(review: boolean): { name: string; value: string } | null {
+ *  과거 burst가 이후 행에서 재생되는 혼선을 막는다(v0.35.0 FIX-3).
+ *
+ *  v0.46.1 FB-10 — 트리거가 둘이 됐다: ①store `valueBurst`(정상 커밋) ②`external` prop(이상치
+ *  정정 완료 — 위 `confirmBurst` 주석의 remount 함정 때문에 store를 못 탄다). **표시는 하나다** —
+ *  둘 다 같은 `confirmed`로 들어가 같은 `HeroPrimaryLine`을 그린다(값 위계를 가르지 않는다). */
+function useConfirmFlash(
+  review: boolean,
+  external: { name: string; value: string } | null,
+): { name: string; value: string } | null {
   const burst = useSessionStore((st) => st.valueBurst);
   const [confirmed, setConfirmed] = useState<{ name: string; value: string } | null>(null);
   const seenSeqRef = useRef<number | null>(null);
+  // 🔴 타이머를 effect cleanup이 아니라 ref로 든다(아래 external effect와 공유).
+  //  external은 advance가 알람을 내리면 non-null → null로 바뀌는데, 타이머가 cleanup에 묶여
+  //  있으면 그 전환이 **아직 안 끝난 1.5초 타이머를 죽여** 값이 화면에 영구 고착된다.
+  const timerRef = useRef<number | null>(null);
+  const armFlash = (next: { name: string; value: string }) => {
+    setConfirmed(next);
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setConfirmed(null), CONFIRM_MS);
+  };
+  useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current); // 언마운트 정리
+  }, []);
   useEffect(() => {
     const seq = burst?.seq ?? 0;
     if (seenSeqRef.current === null) { seenSeqRef.current = seq; return; } // 마운트 시 재생 안 함
     if (review) { seenSeqRef.current = seq; setConfirmed(null); return; }
     if (!burst || seq === seenSeqRef.current) return;
     seenSeqRef.current = seq;
-    setConfirmed({ name: burst.name, value: burst.value });
-    const t = window.setTimeout(() => setConfirmed(null), CONFIRM_MS);
-    return () => window.clearTimeout(t); // seq 갱신·언마운트마다 정리(dangling timer 방지)
+    armFlash({ name: burst.name, value: burst.value });
   }, [burst, review]);
+  // ② 외부 트리거 — **up-edge만** 잡는다(null→값). 같은 값이 리렌더마다 재무장하면 타이머가
+  //    계속 밀려 1.5초 계약이 무한정 늘어난다. 해제(null)되면 다음 정정을 위해 마커를 비운다.
+  //    🔴 key는 **비교 전용**이다 — 여기서 name/value를 도로 파싱하지 않는다. 항목명에 무엇이
+  //    들어오는지 우리는 모른다(공백·구분자 포함 가능 — 시트 불특정 계약, 민구 지시 08-05).
+  //    표시할 값은 항상 `externalRef`에서 객체째로 읽는다.
+  const extKey = external ? JSON.stringify([external.name, external.value]) : null;
+  const seenExtRef = useRef<string | null>(null);
+  const externalRef = useRef(external);
+  externalRef.current = external;
+  useEffect(() => {
+    if (extKey === null) { seenExtRef.current = null; return; }
+    if (seenExtRef.current === extKey) return;
+    seenExtRef.current = extKey;
+    if (review) return; // 검토 표시가 확정 플래시보다 우선(위 렌더 우선순위와 같은 계약)
+    const ext = externalRef.current;
+    if (ext) armFlash({ name: ext.name, value: ext.value });
+  }, [extKey, review]);
   return confirmed;
 }
 

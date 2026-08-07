@@ -86,19 +86,22 @@ export const CASES: StateCase[] = [
   {
     name: '05-anomaly-corrected',
     group: '알람 카드',
-    title: '정정 완료 — 문구 없이 복귀',
-    feedback: 'fb-27-8 (F10)',
-    why: '정정값을 수용한 뒤 `정상 : 복귀` 문구를 다시 띄우지 않고 진행으로 돌아가는 과도 상태.',
-    // 이 카드는 에코 TTS 동안에만 떠 있다 — 캡처 뒤에도 살아 있는지 반드시 확인한다.
-    holdSelector: '[data-testid="anomaly-alert"][data-status="corrected"]',
+    title: '정정 완료 — 카드를 접고 확정 플래시로',
+    feedback: 'fb-27-8 (F10) · FB-10 (v0.46.1)',
+    // 🔴 v0.46.1 FB-10(민구 제보 08-07) — 캡처 대상이 「초록 알람 카드」에서 「hero 확정 플래시」로
+    //    바뀌었다. 민구: *"붉은 배경톤의 알람카드에서 정상값 출력후 다음 조사 항목으로 넘어간다는건
+    //    수정 되었으면 좋겠어."* fb-27-8(문구 미렌더)의 의도는 유지된다 — 카드가 통째로 없으므로
+    //    더 강하게 지켜진다. 계약 단언은 `tests/v0461-fb10-corrected-hero.spec.ts`.
+    why: '정정값을 수용한 뒤 알람 카드를 접고 **인식된 값 하나만 크게**(녹색) 띄운 채 다음 항목으로 넘어가는 과도 상태.',
+    // 이 플래시는 CONFIRM_MS(1.5초) 동안만 떠 있다 — 캡처 뒤에도 살아 있는지 반드시 확인한다.
+    holdSelector: '[data-hero-state="confirm"]',
     drive: async (page) => {
       await triggerAnomaly(page);
-      // 알람이 뜬 뒤에 TTS 창을 넓힌다 — 정정 카드는 에코 TTS가 끝나면 advance로 닫힌다.
+      // 알람이 뜬 뒤에 TTS 창을 넓힌다 — 에코 TTS가 끝나면 advance가 알람을 내린다.
       await widenTtsWindow(page, 3000);
       // 직전값 100.0 · trendRule=increase(=커지면 알람) → 100 미만 값은 통과 = 정정 완료.
       await fireStt(page, '80.5', 0);
-      await expect(page.locator('[data-testid="anomaly-alert"][data-status="corrected"]'))
-        .toBeVisible({ timeout: 4000 });
+      await expect(page.locator('[data-hero-state="confirm"]')).toBeVisible({ timeout: 4000 });
     },
   },
   {
