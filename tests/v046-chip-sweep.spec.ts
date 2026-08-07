@@ -3,6 +3,7 @@ import { boot, COLUMNS, PHONE_375, PHONE_402, PREV_ROUND, SETTINGS } from './fix
 import {
   CHIP_SWEEP_DEFAULT_SECONDS,
   chipSweepOffset,
+  chipSweepSecondsForLevel,
   chipSweepStartFor,
   normalizeChipSweepSeconds,
   shouldChipSweep,
@@ -123,15 +124,23 @@ test.describe('WP-D 산술(순수함수) — 시간·DOM 의존 0', () => {
     }
   });
 
-  test('coercion: 0은 유효(끔), 쓰레기는 기본 8로 치유', () => {
+  // 🔴 v0.46.1 WP-4(민구 확정 08-07) — 눈금이 **초 → 단계 0~10**으로 바뀌었다.
+  //    "0=정지 · 10=읽을 수 있는 가장 빠른 속도". 종전 기본 8초는 **눈금 밖**(그보다 빠른 설정 없음)이라
+  //    가장 가까운 단계 10(12초)으로 접힌다. 아래 기대값은 그 계약을 고정한다.
+  test('coercion: 0은 유효(끔), 쓰레기는 기본값으로 치유, 눈금 밖 값은 단계에 스냅', () => {
     expect(normalizeChipSweepSeconds(0), '0 = 끔은 유효값').toBe(0);
-    expect(normalizeChipSweepSeconds(5)).toBe(5);
+    // 🔴 단계의 초는 **리터럴로 적지 마라** — chipSweep.ts의 배분식이 SSOT다(이중 기록 금지).
+    expect(normalizeChipSweepSeconds(chipSweepSecondsForLevel(5)), '단계 5는 눈금 위라 그대로 통과')
+      .toBe(chipSweepSecondsForLevel(5));
+    expect(normalizeChipSweepSeconds(8), '구 기본 8초는 눈금 밖 → 가장 가까운 단계 10(12초)')
+      .toBe(chipSweepSecondsForLevel(10));
     expect(normalizeChipSweepSeconds(undefined), '구버전 영속본(필드 없음)').toBe(CHIP_SWEEP_DEFAULT_SECONDS);
     expect(normalizeChipSweepSeconds('8'), '문자열').toBe(CHIP_SWEEP_DEFAULT_SECONDS);
     expect(normalizeChipSweepSeconds(NaN)).toBe(CHIP_SWEEP_DEFAULT_SECONDS);
     expect(normalizeChipSweepSeconds(-3), '음수').toBe(CHIP_SWEEP_DEFAULT_SECONDS);
     expect(normalizeChipSweepSeconds(9999), '상한 초과').toBe(CHIP_SWEEP_DEFAULT_SECONDS);
-    expect(normalizeChipSweepSeconds(4.4), '스텝 밖 소수는 접는다').toBe(4);
+    expect(normalizeChipSweepSeconds(chipSweepSecondsForLevel(5) - 0.6), '눈금 밖 소수는 가장 가까운 단계로 접는다')
+      .toBe(chipSweepSecondsForLevel(5));
   });
 });
 
@@ -150,11 +159,13 @@ test.describe('WP-D 왕복 배선 — 입력화면', () => {
     expect(spread, '0초면 왕복이 아예 돌지 않는다').toBeLessThanOrEqual(1);
   });
 
-  test('② 저장본에 값이 없으면 기본 8초(민구 R3) — 편도 기준', async ({ page }) => {
+  test('② 저장본에 값이 없으면 기본 단계 5(민구 08-07) — 편도 기준', async ({ page }) => {
     await boot(page, PHONE_402, { settings: settingsWithoutSweep(), preserveAnimations: true });
     const m = await chipZoneMetrics(page);
-    expect(m.sweepAttr, '구버전 영속본은 기본 8초로 치유된다').toBe(String(CHIP_SWEEP_DEFAULT_SECONDS));
-    expect(CHIP_SWEEP_DEFAULT_SECONDS, '민구 확정값').toBe(8);
+    expect(m.sweepAttr, '구버전 영속본은 기본값으로 치유된다').toBe(String(CHIP_SWEEP_DEFAULT_SECONDS));
+    // 🔑 종전 8초가 "글자를 읽기는 힘들었어"(민구 08-07)라 **확실히 느린 쪽**인 눈금 중앙에서 시작한다.
+    expect(CHIP_SWEEP_DEFAULT_SECONDS, '단계 5의 편도 초').toBe(chipSweepSecondsForLevel(5));
+    expect(CHIP_SWEEP_DEFAULT_SECONDS, '종전 8초보다 느려야 한다').toBeGreaterThan(8);
   });
 
   test('②-b 🔴 **배포 기본값 그대로** 왕복이 실제로 돈다(축약값 아님)', async ({ page }) => {
@@ -162,19 +173,22 @@ test.describe('WP-D 왕복 배선 — 입력화면', () => {
     //    `chipSweepSeconds: 0`을 넣는다.** 그리고 축 ③은 편도 1초로 **축약**해서 잰다. 그래서
     //    ②-b가 없으면 **사용자가 실제로 받는 8초 경로를 스위트 전체에서 아무도 돌리지 않는다** —
     //    `useChipSweep`이 기본값에서만 죽어도 1189건이 전부 green이다.
-    //    비용은 2초다(편도 8초의 1/4 = maxScroll의 ~25%가 움직인다. 한 바퀴 16초를 기다리지 않는다).
+    //    비용은 2초다(한 바퀴를 기다리지 않는다).
+    //    🔴 v0.46.1 — 기본값이 **단계 5(느림)** 로 바뀌어 2초에 움직이는 비율이 줄었다.
+    //    그래서 하한을 **기본값에서 파생**시킨다(아래) — 리터럴로 박으면 기본값이 바뀔 때마다 또 깨진다.
     await boot(page, PHONE_402, { settings: settingsWithoutSweep(), preserveAnimations: true });
     const before = await chipZoneMetrics(page);
-    expect(before.sweepAttr, '축약값이 아니라 배포 기본값이다').toBe('8');
+    expect(before.sweepAttr, '축약값이 아니라 배포 기본값이다').toBe(String(CHIP_SWEEP_DEFAULT_SECONDS));
     expect(before.maxScroll, '칩이 넘치는 상태여야 의미가 있다').toBeGreaterThan(50);
 
     const samples = await sampleScrollLeft(page, 10, 200); // ≈2.0초
     const spread = Math.max(...samples) - Math.min(...samples);
-    // 편도 8초 등속이면 2초에 maxScroll의 약 25%가 움직인다. 하한은 그 절반으로 넉넉히 잡는다
+    // 등속이므로 2초에 움직이는 비율 = 2 / 편도초. 하한은 그 **절반**으로 넉넉히 잡는다
     // (rAF가 부하로 밀려도 방향 자체는 사라지지 않는다 — ms를 단언하지 않는 이유와 같다).
-    const floor = before.maxScroll * 0.12;
-    console.log(`sweep-default-8s: max=${Math.round(before.maxScroll)} spread=${spread.toFixed(1)} floor=${floor.toFixed(1)}`);
-    expect(spread, '기본 8초에서도 칩존이 실제로 움직인다').toBeGreaterThan(floor);
+    const expectedFrac = 2 / CHIP_SWEEP_DEFAULT_SECONDS;
+    const floor = before.maxScroll * expectedFrac * 0.5;
+    console.log(`sweep-default-${CHIP_SWEEP_DEFAULT_SECONDS}s: max=${Math.round(before.maxScroll)} spread=${spread.toFixed(1)} floor=${floor.toFixed(1)}`);
+    expect(spread, `기본값(편도 ${CHIP_SWEEP_DEFAULT_SECONDS}초)에서도 칩존이 실제로 움직인다`).toBeGreaterThan(floor);
   });
 
   test('③ 켜지면 왕복한다 — 오른쪽으로 갔다가 **되돌아온다**', async ({ page }) => {
@@ -284,9 +298,11 @@ test.describe('WP-D 설정 UI — 서랍 4번째 항목', () => {
       expect(m.minusSize, '장갑 낀 손을 위한 48px 터치 타깃(레포 관례)').toBeGreaterThanOrEqual(44);
 
       // − 를 눌러 0초(끔)에서 더 내려가지 않고, + 로 켜진다 — 값 배선 확인.
-      await expect(page.locator('[data-testid="stepper-chip-sweep-minus"]'), '0초에서는 더 못 줄인다').toBeDisabled();
+      await expect(page.locator('[data-testid="stepper-chip-sweep-minus"]'), '단계 0에서는 더 못 줄인다').toBeDisabled();
       await page.locator('[data-testid="stepper-chip-sweep-plus"]').click();
-      await expect(page.locator('[data-testid="voice-chip-grid"]'), '+ 한 번에 1초로 켜진다').toHaveAttribute('data-chip-sweep', '1');
+      // 🔴 + 한 번 = **단계 1**(가장 느림). 단계가 클수록 빠르다는 민구 정의를 여기서 고정한다.
+      await expect(page.locator('[data-testid="voice-chip-grid"]'), '+ 한 번에 단계 1로 켜진다')
+        .toHaveAttribute('data-chip-sweep', String(chipSweepSecondsForLevel(1)));
     });
   }
 

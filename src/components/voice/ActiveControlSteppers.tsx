@@ -4,7 +4,9 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { logger } from '../../lib/logger';
 import { inputControlPanelOpened, settingChanged } from '../../lib/logEvents';
 import { speak, setBargeInEnabled } from '../../lib/speech';
-import { CHIP_SWEEP_MAX_SECONDS, CHIP_SWEEP_STEP_SECONDS } from '../../lib/chipSweep';
+import {
+  CHIP_SWEEP_LEVEL_MAX, chipSweepSecondsForLevel, chipSweepLevelForSeconds,
+} from '../../lib/chipSweep';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 import { VOICE_TYPE } from './heroLayout';
 
@@ -81,8 +83,12 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
   //    값의 의미(편도 초·0=끔)와 상한은 src/lib/chipSweep.ts가 SSOT — 여기는 스텝퍼만.
   //    로깅은 ttsRate·recognitionTolerance와 같은 350ms 디바운스(연타가 링버퍼를 잠식하지 않게).
   const sweepLogDebounceRef = useRef<number | null>(null);
-  const setChipSweep = (next: number) => {
-    const value = Math.min(CHIP_SWEEP_MAX_SECONDS, Math.max(0, Math.round(next)));
+  // 🔴 v0.46.1 WP-4(민구 확정 08-07) — 스텝퍼는 이제 **단계 0~10**을 다룬다(초가 아니다).
+  //    민구: *"0~10까지 설정 변경. 0은 정지, 10은 … 읽을 수 있는 가장 빠른 속도."*
+  //    ⚠️ **단계가 클수록 빠르다**(직관과 반대) — 민구가 그렇게 정의했다. 변환은 chipSweep.ts가 SSOT.
+  const setChipSweepLevel = (nextLevel: number) => {
+    const level = Math.min(CHIP_SWEEP_LEVEL_MAX, Math.max(0, Math.round(nextLevel)));
+    const value = chipSweepSecondsForLevel(level);
     s.set({ chipSweepSeconds: value });
     if (sweepLogDebounceRef.current !== null) window.clearTimeout(sweepLogDebounceRef.current);
     sweepLogDebounceRef.current = window.setTimeout(() => {
@@ -104,6 +110,7 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
     // 이벤트 seq가 유일한 실행 트리거다. 설정/로컬 상태 변경으로 같은 명령을 재실행하지 않는다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uiCommand?.seq]);
+  const sweepLevel = chipSweepLevelForSeconds(s.chipSweepSeconds);
   const tolPct = Math.round(s.recognitionTolerance * 100);
   // v0.37.0 FB-K(민구) — 모호한 "입력 조절"·"인식"·"안내" 라벨을 뜻이 분명한 "허용 인식률"·
   //   "안내속도"로 교체(원거리·장갑 현장에서 무엇을 조절하는지 즉시 이해). 요약 접힘 버튼도
@@ -223,15 +230,18 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
             testId="stepper-chip-sweep"
             fullWidth
             label="칩 왕복"
-            value={s.chipSweepSeconds > 0 ? `${s.chipSweepSeconds}초` : '끔'}
-            detail="편도 · 0초=끔"
+            // 단계와 실제 편도 초를 **함께** 보여준다 — 민구가 실기기에서 튜닝할 때
+            // "몇 단계가 몇 초인가"를 화면에서 바로 읽어야 한다.
+            value={sweepLevel > 0 ? `${sweepLevel} (${s.chipSweepSeconds}초)` : '정지'}
+            // 🔴 단계가 클수록 **빠르다**(민구 정의). 라벨이 이 방향을 명시해야 오조작이 없다.
+            detail="0=정지 · 10=가장 빠름"
             accent={s.chipSweepSeconds > 0 ? T.text : T.textMute}
-            minusLabel="칩 왕복 빠르게(0초면 끔)"
-            plusLabel="칩 왕복 느리게"
-            canMinus={s.chipSweepSeconds > 0}
-            canPlus={s.chipSweepSeconds < CHIP_SWEEP_MAX_SECONDS}
-            onMinus={() => setChipSweep(s.chipSweepSeconds - CHIP_SWEEP_STEP_SECONDS)}
-            onPlus={() => setChipSweep(s.chipSweepSeconds + CHIP_SWEEP_STEP_SECONDS)}
+            minusLabel="칩 왕복 느리게(0이면 정지)"
+            plusLabel="칩 왕복 빠르게"
+            canMinus={sweepLevel > 0}
+            canPlus={sweepLevel < CHIP_SWEEP_LEVEL_MAX}
+            onMinus={() => setChipSweepLevel(sweepLevel - 1)}
+            onPlus={() => setChipSweepLevel(sweepLevel + 1)}
           />
         </div>
         </div>

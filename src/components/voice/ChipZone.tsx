@@ -70,6 +70,10 @@ function useChipSweep(
   elRef: MutableRefObject<HTMLDivElement | null>,
   seconds: number,
   resyncRef: MutableRefObject<boolean>,
+  /** 🔴 v0.46.1 WP-4 C3-①(민구 08-07) — *"사람이 칩을 터치하여 수동 입력시에도 스크롤
+   *  멈춰야하고"*. 손가락 접촉(`held`)과 **다른 축**이다: 시트/인라인 편집이 열려 있는 동안은
+   *  손을 떼고 있어도 멈춰야 한다(값을 보며 입력하는 중이다). */
+  paused: boolean,
 ) {
   useEffect(() => {
     const el = elRef.current;
@@ -97,15 +101,46 @@ function useChipSweep(
         resyncRef.current = true; // 다시 넘칠 때 현재 위치에서 이어받는다
         return;
       }
-      if (held) {
-        resyncRef.current = true; // 손을 떼면 민 자리에서 이어받는다
+      if (held || paused) {
+        // 🔑 **재개는 「지금 보이는 자리」에서다**(민구 C4): *"사람의 터치나 스크롤이 끝나면
+        //    그 화면에서 스크롤이 되어야지, 자동 스크롤 되었을 경우의 위치로 한번에
+        //    자동 스크롤 되지 않으면 좋겠어."* → `chipSweepStartFor`가 현재 scrollLeft로
+        //    위상을 역산하므로 점프가 없다. 이 플래그 한 줄이 그 계약을 만든다.
+        resyncRef.current = true;
+        return;
+      }
+      // 🔴 v0.46.1 WP-4 C1(민구 08-07) — *"항목중에 TTS 알람이 설정된 칩들만 자동 스크롤 되면
+      //    좋겠어."* 왕복 구간을 **음성안내(ttsAnnounce) 칩들이 차지하는 범위**로 좁힌다.
+      //    🔑 매 프레임 실측이다 — 칩 개수·폭·항목명 길이에 대한 가정이 없다(§시트 불특정).
+      //    표식이 하나도 없으면(전부 꺼져 있으면) 종전대로 트랙 전체를 왕복한다 — 갑자기
+      //    안 움직이면 "고장"으로 보인다.
+      let from = 0;
+      let to = max;
+      const marked = el.querySelectorAll<HTMLElement>('[data-tts-announce="true"]');
+      if (marked.length > 0) {
+        let minL = Infinity;
+        let maxR = -Infinity;
+        marked.forEach((k) => {
+          minL = Math.min(minL, k.offsetLeft);
+          maxR = Math.max(maxR, k.offsetLeft + k.offsetWidth);
+        });
+        if (Number.isFinite(minL) && maxR > -Infinity) {
+          // 대상 묶음의 왼쪽 끝이 화면 왼쪽에 오는 지점 ~ 오른쪽 끝이 화면 오른쪽에 오는 지점.
+          from = Math.max(0, Math.min(minL, max));
+          to = Math.max(from, Math.min(maxR - el.clientWidth, max));
+        }
+      }
+      const range = to - from;
+      // 대상이 이미 한 화면에 다 들어오면 왕복할 거리가 없다 — 억지로 흔들지 않는다.
+      if (!shouldChipSweep(seconds, range)) {
+        resyncRef.current = true;
         return;
       }
       if (resyncRef.current || start < 0) {
-        start = chipSweepStartFor(ts, el.scrollLeft, seconds, max);
+        start = chipSweepStartFor(ts, el.scrollLeft - from, seconds, range);
         resyncRef.current = false;
       }
-      el.scrollLeft = chipSweepOffset(ts - start, seconds, max);
+      el.scrollLeft = from + chipSweepOffset(ts - start, seconds, range);
     };
     const hold = () => { held = true; };
     const release = () => { held = false; };
@@ -124,7 +159,7 @@ function useChipSweep(
       window.removeEventListener('pointerup', release);
       window.removeEventListener('pointercancel', release);
     };
-  }, [elRef, seconds, resyncRef]);
+  }, [elRef, seconds, resyncRef, paused]);
 }
 
 export function ChipZone({
@@ -161,7 +196,8 @@ export function ChipZone({
   // ref에 두는 이유: state로 두면 매 칩 이동마다 rAF 루프가 정리·재등록된다.
   const sweepResyncRef = useRef(true);
   useEffect(() => { sweepResyncRef.current = true; }, [currentColId, row, commitMarkColId]);
-  useChipSweep(localGridRef, sweepSeconds, sweepResyncRef);
+  // 🔴 WP-4 C3-① — 인라인 편집(칩 터치 → 수동 입력) 중에는 왕복을 멈춘다.
+  useChipSweep(localGridRef, sweepSeconds, sweepResyncRef, editingColId != null);
   return (
     <div
       data-testid="voice-chip-grid"

@@ -20,16 +20,61 @@
  *  왕복 1주기로 읽으면 편도 4초가 되어 민구가 경계한 *"너무 빠르면 못 읽고"* 쪽으로 기운다.
  *  👉 **왕복 1주기 = 16초**(왼쪽 끝 → 오른쪽 끝 → 왼쪽 끝). */
 
-/** 기본 편도 초(민구 R3 확정). 0 = 끔. */
-export const CHIP_SWEEP_DEFAULT_SECONDS = 8;
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 🔴 v0.46.1 WP-4 — **눈금이 「초」에서 「단계 0~10」으로 바뀌었다** (민구 확정 08-07)
+ *
+ * 민구 원문:
+ * > *"칩존 자동 스크롤 주기를 0~10까지 설정 변경. **0은 정지**, **10은 사람이 움직이는 칩에서
+ * >  정보를 읽을 수 있는 가장 빠른 속도.**"*
+ * > *"**8초기 디폴트 값인데 글자를 읽기는 힘들었어.** 대신 어디쯤 진행되었는가 정도만 알 수 있었어."*
+ *
+ * 🔑 **방향에 주의하라 — 직관과 반대다.** 민구가 「10 = 가장 빠름」이라고 **명시**했으므로
+ * **단계가 클수록 편도 시간이 짧다.** 그리고 종전 기본 8초가 *"읽기 힘들다"* 였으므로
+ * **읽을 수 있는 한계(단계 10)는 8초보다 느려야 한다** → 12초로 잡았다.
+ * 👉 **종전 8초는 이제 눈금 밖이다**(그보다 빠른 설정은 없다). 그게 이 변경의 요점이다.
+ *
+ * ⚠️ 12초·40초는 **민구가 고른 표의 값**이지 실측이 아니다. 실기기에서 조정될 수 있다.
+ * ───────────────────────────────────────────────────────────────────────────── */
 
-/** 스텝퍼·coercion 공통 상한. 편도 30초를 넘으면 "왕복한다"는 인상 자체가 사라지고,
- *  민구가 경계한 *"느리면 원하는 칩을 기다려야 한다"* 가 그대로 발생한다. */
-export const CHIP_SWEEP_MAX_SECONDS = 30;
+/** 설정 단계 상한. `0`(정지)~`10`(가장 빠름). */
+export const CHIP_SWEEP_LEVEL_MAX = 10;
 
-/** 스텝퍼 증감 단위(초). 8초 기준에서 1초는 눈에 보이는 차이이면서 장갑 낀 손으로 몇 번 눌러
- *  원하는 값에 닿는 크기다. */
-export const CHIP_SWEEP_STEP_SECONDS = 1;
+/** 단계 10 = **읽을 수 있는 가장 빠른** 편도 초(민구 정의). */
+export const CHIP_SWEEP_FASTEST_SECONDS = 12;
+
+/** 단계 1 = 가장 느린 편도 초. 이보다 느리면 "원하는 칩을 기다려야 한다"(민구가 경계한 축). */
+export const CHIP_SWEEP_SLOWEST_SECONDS = 40;
+
+/** 기본 단계. **눈금 중앙(5 ≈ 편도 26초)** 에서 시작한다 —
+ *  종전 8초가 "읽기 힘들다"였으므로 확실히 느린 쪽에 두고, 민구가 실기기에서 올리게 한다. */
+export const CHIP_SWEEP_DEFAULT_LEVEL = 5;
+
+/** 단계 → 편도 초. `0`은 정지(0을 돌려준다). 1~10을 [느림 40초 … 빠름 12초]로 **선형** 배분한다. */
+export function chipSweepSecondsForLevel(level: number): number {
+  if (!Number.isFinite(level) || level <= 0) return 0;
+  const lv = Math.min(CHIP_SWEEP_LEVEL_MAX, Math.max(1, Math.round(level)));
+  const span = CHIP_SWEEP_SLOWEST_SECONDS - CHIP_SWEEP_FASTEST_SECONDS;
+  return Math.round(CHIP_SWEEP_SLOWEST_SECONDS - ((lv - 1) * span) / (CHIP_SWEEP_LEVEL_MAX - 1));
+}
+
+/** 기본 편도 초(파생 — 리터럴로 적지 마라). */
+export const CHIP_SWEEP_DEFAULT_SECONDS = chipSweepSecondsForLevel(CHIP_SWEEP_DEFAULT_LEVEL);
+
+/** coercion 상한. 단계 1의 초와 같아야 한다(둘이 갈라지면 영속본이 눈금 밖으로 샌다). */
+export const CHIP_SWEEP_MAX_SECONDS = CHIP_SWEEP_SLOWEST_SECONDS;
+
+/** 편도 초 → 가장 가까운 단계. 구버전 영속본(예: 8초)·수동 편집값을 눈금으로 되돌린다.
+ *  🔑 **8초처럼 눈금보다 빠른 값은 10으로 접힌다** — 눈금 밖이지 오류가 아니다. */
+export function chipSweepLevelForSeconds(seconds: number): number {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  let best = 1;
+  let bestDiff = Infinity;
+  for (let lv = 1; lv <= CHIP_SWEEP_LEVEL_MAX; lv++) {
+    const diff = Math.abs(chipSweepSecondsForLevel(lv) - seconds);
+    if (diff < bestDiff) { bestDiff = diff; best = lv; }
+  }
+  return best;
+}
 
 /** 왕복 거리가 이 px 이하면 왕복하지 않는다 — 칩이 화면 안에 다 들어온 경우(`maxScroll` 0)와
  *  서브픽셀 반올림 잔여(1px 미만 흔들림)를 같은 문에서 막는다. */
@@ -40,9 +85,11 @@ export const CHIP_SWEEP_MIN_TRAVEL_PX = 1;
 export function normalizeChipSweepSeconds(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return CHIP_SWEEP_DEFAULT_SECONDS;
   if (value < 0 || value > CHIP_SWEEP_MAX_SECONDS) return CHIP_SWEEP_DEFAULT_SECONDS;
-  // 스텝 단위 밖의 소수(구버전·수동 편집)는 스텝에 맞춰 접는다 — UI가 표시할 수 없는 값을
-  // 스토어에 남기지 않는다.
-  return Math.round(value / CHIP_SWEEP_STEP_SECONDS) * CHIP_SWEEP_STEP_SECONDS;
+  if (value === 0) return 0; // 정지는 유효값
+  // 🔴 v0.46.1 WP-4 — **눈금(단계 1~10)에 스냅한다.** 종전엔 1초 격자였으나 이제 설정 UI가
+  //    단계를 다루므로, UI가 표시할 수 없는 중간 초가 스토어에 남으면 스텝퍼가 값을 잃는다.
+  //    구버전 영속본(기본 8초)은 가장 가까운 단계 = **10(12초)** 으로 접힌다.
+  return chipSweepSecondsForLevel(chipSweepLevelForSeconds(value));
 }
 
 /** 왕복이 실제로 돌아야 하는가. `seconds === 0`(끔)과 "칩이 다 보인다"를 한 곳에서 판정한다. */

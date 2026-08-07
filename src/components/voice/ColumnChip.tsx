@@ -83,6 +83,11 @@ export function ColumnChip({
       data-testid="column-chip"
       data-active={isActive ? 'true' : 'false'}
       data-col-name={col.name}
+      /* 🔴 v0.46.1 WP-4 C1(민구 08-07) — *"항목중에 TTS 알람이 설정된 칩들만 자동 스크롤 되면
+         좋겠어."* 왕복 루프(`ChipZone.useChipSweep`)가 이 표식으로 순회 범위를 좁힌다.
+         🔑 여기 두는 이유: 칩 폭·위치는 런타임 실측이라야 하고(시트 불특정), 스윕이 DOM에서
+         직접 읽어야 칩 개수·항목명 길이에 대한 가정이 생기지 않는다. */
+      data-tts-announce={col.ttsAnnounce ? 'true' : 'false'}
       onClick={() => { if (clickable && !isEditing) onActivate(); }}
       style={{
         // 칩 내부 2행 — 1행 항목명 / 2행 값(민구 fb-27-2).
