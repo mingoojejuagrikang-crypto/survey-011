@@ -283,25 +283,56 @@ function lastVisibleRed(samples: Sample[], threshold = 0.05): number | null {
 }
 
 
-/** 알람이 뜬 뒤부터 전이가 가라앉을 때까지의 시계열을 수집한다(단언의 근거이자 실패 시 진단표). */
+/** 🔴 시계열은 **Playwright 쪽에서 폴링**한다 — 페이지 안의 타이머로 재면 안 된다.
+ *
+ *  처음엔 `requestAnimationFrame`으로, 다음엔 `setInterval(16ms)`로 페이지 안에서 샘플링했는데
+ *  **둘 다 헤드리스에서 스로틀됐다**(실측: 3.5초에 rAF 15샘플 = 253ms 간격 → setInterval 5샘플
+ *  = 700ms 간격, 백그라운드 1초 클램프에 근접). 다른 레인과 CPU를 나눠 쓰면 더 심해진다.
+ *  그 상태의 「구간 길이」 수치는 전부 못 믿을 값이었다(구간의 **존재**만 유효했다).
+ *  👉 드라이버에서 `page.evaluate`를 돌리면 페이지 타이머 정책과 무관하게 샘플이 모인다. */
+const SNAPSHOT = `(() => {
+  const pick = (sel, attr) => { const el = document.querySelector(sel); return el ? el.getAttribute(attr) : null; };
+  const stage = document.querySelector('[data-testid="voice-center-stage"]');
+  return {
+    tone: pick('[data-voice-tone]', 'data-voice-tone'),
+    central: pick('[data-central-state]', 'data-central-state'),
+    status: pick('[data-testid="anomaly-alert"]', 'data-status'),
+    hero: pick('[data-hero-state]', 'data-hero-state'),
+    centerText: stage ? (stage.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 80) : null,
+  };
+})()`;
+
+async function pollWhile(page: Page, durationMs: number): Promise<Sample[]> {
+  const out: Sample[] = [];
+  const t0 = Date.now();
+  while (Date.now() - t0 < durationMs) {
+    try {
+      const snap = await page.evaluate(SNAPSHOT) as Omit<Sample, 't' | 'red' | 'green'>;
+      out.push({ ...snap, t: Date.now() - t0, red: null, green: null } as Sample);
+    } catch {
+      // 리로드·전환 중 실행 컨텍스트가 잠깐 사라지는 것은 정상이다 — **멈추지 않는다.**
+      // 종전엔 여기서 break해서 CPU 경합이 심할 때 샘플이 4개만 모이고 무판정으로 끝났다.
+      await page.waitForTimeout(20);
+    }
+  }
+  return out;
+}
+
+/** 알람이 뜬 상태에서 정상값을 발화하고, 그 전이 전 구간을 시계열로 받는다. */
 async function captureCorrectionTimeline(page: Page, onendDelayMs: number): Promise<Sample[]> {
   await setupAndStart(page);
   await waitForActiveChip(page, '횡경');
   await fireStt(page, '120.5', 600); // 직전 100.0 · trendRule=increase → 이상치 알람
   await expect(page.locator('[data-testid="anomaly-alert"][data-status="pending"]')).toBeVisible();
-  await page.evaluate(({ script, delay }) => {
+  await page.evaluate((delay) => {
     (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = delay;
-    // eslint-disable-next-line no-eval
-    eval(script);
-  }, { script: SAMPLER, delay: onendDelayMs });
-  await page.waitForTimeout(120);
-  await fireStt(page, '80.5', 0); // 100 미만 = 통과 → 정정 완료
-  await page.waitForTimeout(3500);
-  return page.evaluate(() => {
-    const w = window as unknown as { __fb10: Sample[]; __fb10raf?: number };
-    if (w.__fb10raf) clearInterval(w.__fb10raf);
-    return w.__fb10;
-  });
+  }, onendDelayMs);
+  // 발화와 수집을 **동시에** 시작한다 — 정정 직후 몇 프레임이 이 스펙의 핵심 구간이다.
+  const [samples] = await Promise.all([
+    pollWhile(page, 3500),
+    fireStt(page, '80.5', 0),
+  ]);
+  return samples;
 }
 
 // ⚠️ mock TTS의 onend는 기본 **동기**라 echo 지속시간이 0이다(trend-alert.spec.ts:765 주석).
@@ -309,16 +340,16 @@ async function captureCorrectionTimeline(page: Page, onendDelayMs: number): Prom
 for (const [label, onendDelay] of [['동기 onend(최악 경계)', 0], ['onend 1000ms(실기기 근사)', 1000]] as const) {
   test(`[FB-10] 정정 완료 → 알람 카드 소멸 + hero 확정 플래시(값만, green) — ${label} @402×513`, async ({ page }) => {
     const samples = await captureCorrectionTimeline(page, onendDelay);
-    expect(samples.length, '샘플러가 실제로 돌았다(무판정 방지)').toBeGreaterThanOrEqual(10);
+    expect(samples.length, '샘플러가 실제로 돌았다(무판정 방지)').toBeGreaterThanOrEqual(20);
     report(`FB-10 게이트 · ${label} · 402×513`, samples);
 
-    // ── ① 알람 카드가 corrected 상태로 화면에 서 있는 프레임이 **없다** ────────────────
-    const correctedCardFrames = samples.filter((s) => s.status === 'corrected');
-    expect(
-      correctedCardFrames.length,
-      'corrected 알람 카드가 렌더된 프레임 수(0이어야 한다 — 정정은 카드가 아니라 hero로 착지)',
-    ).toBe(0);
-    // 비교 격자(직전/현재)가 정정 이후 남아 있으면 민구가 지적한 "알람카드에서 정상값 출력"이다.
+    // ── ① corrected 알람 카드가 **한 프레임도** 서 있지 않다 ─────────────────────────
+    //  `toHaveCount(0)`으로는 이걸 못 잡는다 — 그건 재시도라서 "잠깐 떴다 사라진" 경우도
+    //  통과시킨다. 민구가 지적한 것이 정확히 그 「잠깐」이므로 시계열로 센다.
+    const correctedFrames = samples.filter((s) => s.status === 'corrected');
+    expect(correctedFrames.length, 'corrected 알람 카드가 렌더된 프레임 수').toBe(0);
+    const alarmCentralFrames = samples.filter((s) => s.central === 'alarm' && s.hero !== null);
+    expect(alarmCentralFrames.length, '알람 중앙과 hero가 동시에 선 프레임(상호배타 계약)').toBe(0);
     await expect(
       page.locator('[data-testid="anomaly-comparison"]'),
       '정정 후 직전/현재 비교 격자는 남지 않는다',
@@ -331,13 +362,13 @@ for (const [label, onendDelay] of [['동기 onend(최악 경계)', 0], ['onend 1
     const confirmTexts = [...new Set(confirmFrames.map((s) => (s.centerText ?? '').trim()))];
     expect(confirmTexts, '확정 플래시 중 중앙 텍스트는 정정값 하나뿐').toEqual(['80.5']);
 
-    // ── ③ 그 순간 톤은 green이다 ────────────────────────────────────────────────
+    // ── ③ 그 순간 톤은 green이다(부정/긍정 혼재 금지) ──────────────────────────────
     const tonesWhileConfirm = [...new Set(confirmFrames.map((s) => s.tone))];
     expect(tonesWhileConfirm, '확정 플래시 구간의 톤은 green 단독').toEqual(['green']);
 
     // ── ④ 값이 크게 뜬 횟수 = 1 (v0.15.0 A4 계약) ──────────────────────────────
-    //  listening/null → confirm 으로 **진입한 횟수**를 센다. 처방이 store burst 억제를 풀었다면
-    //  정정 커밋이 confirm을 두 번(정정 표시 + advance 후 burst) 받아 2가 된다.
+    //  confirm으로 **진입한 횟수**를 센다. 처방이 store burst 억제를 우회했다면 정정 커밋이
+    //  확정 표시를 두 번(정정 표시 + advance 후 burst) 받아 2가 된다.
     let entries = 0;
     for (let i = 1; i < samples.length; i++) {
       if (samples[i].hero === 'confirm' && samples[i - 1].hero !== 'confirm') entries++;

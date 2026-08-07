@@ -156,9 +156,12 @@ export function CenterStage({
     //  여기서 미리 null로 만들면 그 착지점이 early-return이 되어 **해제 계측이 통째로 사라진다**.
     //  바뀐 것은 「그동안 무엇을 그리는가」 하나뿐이다.
     //
-    //  ⚠️ 짝이 되는 변경이 `useVoiceSession.ts`의 valueBurst 억제 해제다 — 둘은 **한 커밋으로만
-    //  의미가 있다**. 한쪽만 있으면 corrected 구간이 빈 화면(억제 유지) 또는 값 2회 노출(브랜치
-    //  유지)이 된다. 게이트: `tests/v0461-fb10-corrected-hero.spec.ts`.
+    //  ⚠️ 짝이 되는 변경은 `VoiceHero`의 `confirmBurst` prop이다 — 이 브랜치 전환만으로는 중앙이
+    //  **빈 listening 화면**이 된다(실측). store `valueBurst`는 이 값을 실어 나르지 **못한다**:
+    //  정정 커밋은 애초에 burst를 밀지 않고(v0.15.0 A4), 억제를 풀어 밀어봐도 corrected 전환과
+    //  같은 React 배치라 hero 마운트 가드에 삼켜진다. 그래서 값은 알람 자신에게서 직접 내린다.
+    //  게이트: `tests/v0461-fb10-corrected-hero.spec.ts`(반증 확인: 이 조건절을 빼면 corrected
+    //  카드 프레임이 0 → 1로 올라가 red).
     branch = 'anomaly';
     content = (
       <div
