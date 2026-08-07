@@ -4,6 +4,19 @@
 > 🔴 `CHANGELOG.md`는 이 레인이 건드리지 않는다 — `check:release`가 `package.json` 버전과의 일치를
 > 강제하는데 이 레인은 버전 bump가 금지라 항목을 추가하는 순간 배포가 막힌다.
 
+- **2026-08-08** · `tests/v043-typo-contract.spec.ts`의 `ALLOWLIST_ITEMS`에서 죽은 항목 1건
+  (`CompleteSummary:87`의 `'max(15px, calc(clamp(17px, min(5vw, 2.6vh), 26px) * var(--fit-lo, 1)))'`)을
+  제거하고 그 자리에 소멸 경위 주석을 남겼다. **기대값 4개는 손대지 않았다.**
+  **왜:** v0.46.0 WP-B가 그 인라인 26px 상한을 `STATE_TYPE.completeReceipt` 참조로 승격시켜 부채가
+  소멸했는데, 구현자는 `expect(allowlistCount).toBe(5→4)`만 내리고 배열의 문자열은 안 지웠다.
+  `allowlistCount`는 «매치된 소스 줄»로 세므로 죽은 항목은 개수에 안 잡힌다 — 지우든 말든 4라서
+  **검사기가 스스로는 이걸 못 알린다**(자기 목록을 검사할 오라클이 없다).
+  **실측:** 항목별 리터럴 grep으로 히트 수가 `0 / 1 / 1 / 1 / 1`임을 먼저 확인했고, 편집 전후 런의
+  요약줄이 `contract=61 allowlist=4 comment=3 violation=0`으로 **바이트 동일**했다(제거해도 값이 안
+  바뀌는 것이 「죽었다」의 반증 조건이었다). 두 런 모두 `✘` **0건** · 1 passed · 예외 0건.
+  `check:docs` OK · `lint` OK. **미처리로 남김:** 파생 항목인 `TODO.md` 「상한 5건」 표의 실측 정정
+  (잔존은 3건인데 표는 4건으로 적혀 있다)은 그 파일이 이 워크트리 **밖**(`workspace_teamops/TODO.md`)이라
+  규칙 1에 따라 건드리지 않았다. 근거는 `_ASK-auto-maint-001.md` 후보 2에 이미 실려 있다.
 - **2026-08-07** · 테스트 스크린샷 3장의 쓰기 경로를 `Deliverables/assets/2026-08-02-ui-e4/` →
   `test-results/ui-e4/`로 옮겼다 (`tests/v043-exit-inline.spec.ts` 2곳 · `tests/trend-alert.spec.ts` 1곳).
   **왜:** 그 경로가 git 추적 중인 08-02 회차 증거 PNG였고 매 런이 덮어썼다 — `b217278`에 교체본이 실려

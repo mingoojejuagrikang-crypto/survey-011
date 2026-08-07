@@ -19,8 +19,12 @@ import * as path from 'node:path';
  */
 
 const ALLOWLIST_ITEMS = [
-  // 1. CompleteSummary:87 — 부채: 상한 26px 잔존 (규칙 2 위반, UI-g 이후 제거 대상)
-  "'max(15px, calc(clamp(17px, min(5vw, 2.6vh), 26px) * var(--fit-lo, 1)))'",
+  // (구 1. CompleteSummary:87 — v0.46.0 WP-B에서 인라인 26px 상한이
+  //  `STATE_TYPE.completeReceipt` 참조로 **승격**돼 부채 소멸(allowlist −1, 계약 +1).
+  //  🔴 그때 기대값은 5 → 4로 내렸는데 **문자열은 목록에 남아 0줄을 세고 있었다.**
+  //  `allowlistCount`는 «매치된 소스 줄» 단위라 죽은 항목은 개수에 안 잡힌다 —
+  //  지우든 말든 4다. 그래서 검사기가 스스로는 이걸 못 알린다(lint의 lint가 없다).
+  //  제거해도 `toBe(4)`가 green인 것이 곧 「죽었다」의 반증 조건이었다 — 실측 green.)
   // (구 2. CompleteSummary:132 — v0.44.0 §C3에서 중앙 종료 버튼 자체가 삭제돼 부채도 소멸.
   //  상한 5건 부채 중 1건이 이렇게 닫혔다 — TODO.md 「상한 5건」 표 참조.)
   // 3. ReaskCue:39 — 부채: 상한 17px 잔존 (규칙 2 위반, UI-g 이후 제거 대상)
