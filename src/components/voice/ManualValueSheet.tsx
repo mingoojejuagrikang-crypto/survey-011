@@ -182,7 +182,13 @@ export function ManualValueSheet({
           <div
             role="status"
             aria-label={`현재값 ${currentValue}`}
-            style={{ color: T.textDim, fontSize: VOICE_TYPE.sheetTitle, fontWeight: 850, whiteSpace: 'nowrap' }}
+            style={{
+              // 🔴 zone이 `flex-start`이므로 **이쪽에도 auto 여백이 필요하다**(위 zone 주석).
+              //    빠뜨리면 text·date 컬럼의 현재값이 아래가 아니라 **위에 붙는다** —
+              //    키패드 경로만 보고 고치면 놓치는 자리다.
+              marginTop: 'auto',
+              color: T.textDim, fontSize: VOICE_TYPE.sheetTitle, fontWeight: 850, whiteSpace: 'nowrap',
+            }}
           >
             {currentValue}
           </div>
