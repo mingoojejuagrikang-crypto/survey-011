@@ -105,6 +105,28 @@ test('W3-② 재개는 드래그 종점에서 — 위상 점프 없음(민구 C4
   expect(Math.abs((firstMoved as number) - pEnd), '재개는 종점 근방(위상 점프 없음)').toBeLessThan(maxScroll * 0.25);
 });
 
+// ── C-FIX3(리뷰 U6) — DPR<1 자기쓰기 오판 가드 ─────────────────────────────────────────
+// scrollLeft 반올림 격자는 기기 픽셀 단위라 DPR 0.5에서는 2 CSS px — 허용 오차가 1px 고정이면
+// 루프 자신의 scroll 이벤트가 '사용자'로 오판돼 매 이벤트 300ms 창이 열리고, 왕복이 사실상
+// 멈춘다(스터터~정지). 오차를 max(1, 1/DPR)로 보정했다 — 이 축은 그 정지가 없음을 잰다.
+test.describe('C-FIX3 — DPR 0.5', () => {
+  test.use({ deviceScaleFactor: 0.5 });
+  test('DPR<1에서도 왕복이 자기쓰기 오판 없이 지속된다', async ({ page }) => {
+    await boot(page, PHONE_402, { settings: settingsWithSweep(), preserveAnimations: true });
+    await waitForSweepMoving(page);
+    const before = await metrics(page);
+    const samples: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      samples.push((await metrics(page)).scrollLeft);
+      await page.waitForTimeout(200);
+    }
+    const spread = Math.max(...samples) - Math.min(...samples);
+    console.log(`[cfix3] dpr=0.5 max=${Math.round(before.maxScroll)} spread=${spread.toFixed(1)}`);
+    // 편도 1초 왕복이 2초 표본에서 유의하게 움직인다(v046 ②-b와 같은 하한 산술).
+    expect(spread, 'DPR 0.5에서 왕복 지속(오판 정지 없음)').toBeGreaterThan(before.maxScroll * 0.12);
+  });
+});
+
 test('W3-③ pointercancel 후에도 왕복은 죽지 않는다(held 영구 true 역회귀 가드)', async ({ page }) => {
   await boot(page, PHONE_402, { settings: settingsWithSweep(), preserveAnimations: true });
   await waitForSweepMoving(page);

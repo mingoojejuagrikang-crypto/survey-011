@@ -171,7 +171,12 @@ function useChipSweep(
     //    프로그램 스크롤도 '사용자'로 분류되는데, 의도된 동작이다 — 정렬이 옮긴 자리에서 300ms 뒤
     //    위상을 이어받는 것은 기존 resync 계약(§두 계약이 만나는 지점)과 같고 점프만 없앤다.
     const onScroll = () => {
-      if (Math.abs(el.scrollLeft - lastSelfLeft) < 1) return; // 자기쓰기 반향
+      // C-FIX3(리뷰 U6) — 허용 오차에 DPR 반영. scrollLeft 반올림 격자는 **기기 픽셀** 단위라
+      // DPR<1(데스크톱 축소 배율 등)에서는 1 CSS px보다 굵다(DPR 0.5 → 2px). 고정 1px이면
+      // 자기쓰기 반향이 사용자로 오판돼 경계에서 스터터할 개연(오판은 일과성이지만 공짜 보정).
+      // DPR≥1은 종전 1px 그대로. 매 이벤트 재계산 — 사용자 줌 변경을 따라간다(비용: 프로퍼티 1회).
+      const eps = Math.max(1, 1 / (window.devicePixelRatio || 1));
+      if (Math.abs(el.scrollLeft - lastSelfLeft) < eps) return; // 자기쓰기 반향
       userScrollUntil = performance.now() + USER_SCROLL_SETTLE_MS;
       resyncRef.current = true;
     };
