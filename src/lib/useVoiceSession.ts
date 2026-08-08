@@ -3613,31 +3613,65 @@ export function useVoiceSession() {
    *  (commitManualValue)가 공유한다: sessionStore + dataStore(patchRowValues — F2: "값 변경 ⇒
    *  synced→dirty" 불변식으로 업로드된 행도 다음 sync가 시트 행을 UPDATE) + IDB 반영.
    *  행이 아직 완료된 적이 없으면 sessionStore만 갱신되고, 다음 persistSession에서 자연 반영된다. */
-  const persistCellValue = useCallback(async (row: number, colId: string, value: string) => {
+  const persistCellValue = useCallback(async (row: number, colId: string, value: string): Promise<boolean> => {
     useSessionStore.getState().setRowValue(row, colId, value);
-    // v0.47.0 W4(FB-E) — 수동/터치 확정 커밋의 ✓ 집합 등록. 이 코어는 manualHold 후보 경로를
-    //   지나지 않으므로(그쪽은 patchRowValues 직행) 미확정 후보가 ✓를 받는 일이 없다.
-    if (value !== '') useSessionCommitMarks.getState().add(row, colId);
     const updatedSession = useDataStore
       .getState()
       .patchRowValues(sessionIdRef.current, row, { [colId]: value });
     if (updatedSession) {
-      try { await saveSession(updatedSession); } catch { /* ignore */ }
+      // 🔴 v0.47.0 C-FIX2(리뷰 U3, major) — **saveSession 실패를 삼키지 않는다.** 종전 catch{}는
+      //   실패해도 호출부가 화음·에코·✓·advance로 성공을 고지하게 했다 — 유실될 값을 성공
+      //   고지(PRINCIPLES §1 위반, manualHold [확인]의 durable 실패 처리와 비대칭). false를
+      //   반환해 호출부가 성공 신호를 억제하고 사용자에게 고지하게 한다.
+      try {
+        await saveSession(updatedSession);
+      } catch (e) {
+        logCell({
+          type: 'error',
+          extra: `cell_persist_failed:${String((e as Error)?.message ?? e)}`,
+          row, colId,
+        });
+        return false;
+      }
     }
+    // v0.47.0 W4(FB-E) — 수동/터치 확정 커밋의 ✓ 집합 등록. 이 코어는 manualHold 후보 경로를
+    //   지나지 않으므로(그쪽은 patchRowValues 직행) 미확정 후보가 ✓를 받는 일이 없다.
+    //   C-FIX2 — 등록은 durable 확정 **뒤**다: 실패 시 회수(remove)가 필요 없는 순서라
+    //   add 전용 집합 계약이 그대로 선다. (updatedSession null = 행이 아직 IDB에 없어 다음
+    //   persistSession이 자연 반영하는 기존 계약 — 실패가 아니라 지연이므로 true.)
+    if (value !== '') useSessionCommitMarks.getState().add(row, colId);
+    return true;
   }, []);
 
   /** v0.11.0: touch 컬럼 값 commit 시 sessionStore + dataStore + IDB 모두에 즉시 반영.
    *  Codex MEDIUM: setRowValue만으로는 휘발성 상태만 변경 → sync/CSV가 누락하는 위험 해결.
    *  v0.33.0 항목6 — 영속 코어는 persistCellValue로 추출(수동 입력 시트와 공유). */
+  /** v0.47.0 C-FIX2 — 셀 영속 실패 고지(수동·터치 공통 · manualHold 실패 처리와 대칭 목적).
+   *  경고 트릴 + 발화 — 현장은 폰을 2~3m 떨어뜨려 둬 화면을 못 본다(PRINCIPLES §2).
+   *  🟡 값은 화면에 남긴다(manualHold의 롤백과 다른 선택): 그쪽 롤백은 pending 태그 없는
+   *  후보가 reload에 확정처럼 보이는 반쪽 상태를 막는 장치고, 여기는 검증을 통과한 값의
+   *  내구화만 실패한 경우다 — 지우면 입력이 유실되고, 남기면 재커밋(=재시도)이나 이후
+   *  persistSession(행 완료)이 자연 회복할 수 있다. 근거는 산출물 리뷰 대응 절에. */
+  const notifyCellPersistFailed = useCallback(() => {
+    playBeep('alert');
+    const msg = '저장하지 못했습니다. 다시 입력해 주세요.';
+    useSessionStore.getState().setLastTts(msg);
+    void say(msg);
+  }, [say]);
+
   const commitTouchValue = useCallback(async (row: number, colId: string, value: string) => {
     logCell({ type: 'command', parsed: 'touch_commit', extra: 'touch', text: value, row, colId });
-    await persistCellValue(row, colId, value);
+    // C-FIX2 — durable 실패면 영수증(성공 표식)을 만들지 않고 고지한다.
+    if (!(await persistCellValue(row, colId, value))) {
+      notifyCellPersistFailed();
+      return;
+    }
     // v0.37.0 리뷰#1 후속(Codex Medium) — 터치 인라인 커밋도 검토 영수증을 발행한다(음성·수동·이상치
     //   정정과 동일 패턴). 검토(complete) 중 터치 컬럼을 편집하면 검토 화면이 그 값을 보여야 오표시가
     //   없다. 커밋/전진 조건 무수정 — 기존 persist 뒤 표시 전용 영수증만 추가.
     const col = getColById(colId);
     if (col) useSessionStore.getState().pushCommitReceipt(row, colId, col.name, value);
-  }, [persistCellValue]);
+  }, [notifyCellPersistFailed, persistCellValue]);
 
   /** v0.33.0 항목6 — 칩 터치 수동 입력(ManualValueSheet) 커밋. 음성 없이 값이 서므로:
    *   ① `manual_commit` 텔레메트리(항목3에서 예약한 기존 command 타입 + extra:'touch')
@@ -3782,7 +3816,13 @@ export function useVoiceSession() {
     }
 
     // 일반값/정보성 이상치는 기존 즉시 영속 계약을 유지한다.
-    await persistCellValue(row, colId, value);
+    // 🔴 C-FIX2 — durable 실패면 여기서 끝낸다: 영수증·화음·에코·진행·정보성 알람 전부 억제
+    //   (유실될 값을 성공 고지하지 않는다). 값은 화면에 남아 재커밋이 재시도가 된다
+    //   (notifyCellPersistFailed 주석의 🟡 선택 근거 참조).
+    if (!(await persistCellValue(row, colId, value))) {
+      notifyCellPersistFailed();
+      return;
+    }
     // v0.37.0 리뷰#1 — 수동 시트 커밋 영수증(검토 화면 파생 SSOT). 보류(manualHold) 분기는 위에서
     //   return하므로 여기 도달 = 확정 커밋(일반값·정보성 이상치). 보류 정정값은 confirmManualAnomaly가 발행.
     useSessionStore.getState().pushCommitReceipt(row, colId, col.name, value);
@@ -3832,7 +3872,7 @@ export function useVoiceSession() {
     }
 
     if (violation) fireManualAlert(violation, false);
-  }, [archiveCellClip, clearAnomalyAlert, evaluateTrend, getAnomalyAlertData, persistCellValue, persistSession, proceedAfterCommit, say]);
+  }, [archiveCellClip, clearAnomalyAlert, evaluateTrend, getAnomalyAlertData, notifyCellPersistFailed, persistCellValue, persistSession, proceedAfterCommit, say]);
 
   // ── v0.33.0 항목7 — 이상치 응답 대기(trendConfirm) 중 터치 버튼: 음성 명령과 동일 동작·동일 로그 ──
   /** [확인] 버튼 — 음성 '확인'과 동일: 커밋된 값 확정 + 팝업 해제 + advance 1회. attribution은
