@@ -92,6 +92,26 @@ function useChipSweep(
     let raf = 0;
     let start = -1;
     let held = false; // 손이 칩존에 닿아 있는 동안 정지(장갑 낀 손의 오탭·드래그와 싸우지 않는다)
+    // 🔴 v0.47.0 W3(FB-D, 민구 08-08) — **사용자 스크롤 공존.** 실기기 재현: iOS는 터치가
+    //    네이티브 스크롤로 전환되는 순간 `pointercancel`을 쏘는데, 종전 코드가 이를 '뗌'으로
+    //    해석해 held를 내렸다 → 드래그가 한창인데 rAF 루프가 매 프레임 scrollLeft를 덮어써
+    //    「밀리지 않거나 스냅백」(FB-D). 그렇다고 pointercancel을 무시하면 0c9f4ea가 막은
+    //    반대 회귀가 돌아온다 — cancel 후엔 pointerup이 **영영 안 오므로** held가 true로 남아
+    //    왕복이 조용히 죽는다. 👉 **'손이 떨어졌다' 판정을 scroll 활동으로 보강한다**:
+    //    pointercancel = 「네이티브 스크롤 인계」로 처리(held 해제 + 사용자 창 개방)하고,
+    //    이후는 scroll 이벤트가 창을 연장한다(드래그·관성 모두 이벤트를 낸다). 마지막 활동
+    //    후 SETTLE ms 조용하면 **지금 보이는 자리에서** 재개한다(C4 — resync가 위상 역산).
+    let userScrollUntil = 0; // 이 시각(performance.now 축 = rAF ts 축)까지 사용자 스크롤 창
+    // 자기쓰기 판별 — 루프가 마지막으로 대입한 값. scroll 이벤트 위치가 이 값 ±1px이면 루프의
+    // 반향이고, 그 밖이면 사용자(또는 ActiveState 우측끝 정렬)다. 🔑 불리언 플래그(1이벤트
+    // 1소비)로 하지 않은 이유: 대입이 이벤트를 안 내거나(변화 없음) 이벤트가 병합되면 소비
+    // 짝이 어긋나는데, 그 오판이 "루프 이벤트 = 사용자"쪽으로 굳으면 **왕복이 영구 정지**한다.
+    // 위치 비교는 오판이 나도 이벤트 1건짜리 일과성이다(다음 이벤트가 바로잡는다).
+    let lastSelfLeft = -1;
+    /** 마지막 사용자 scroll 후 재개 대기(ms). 관성 스크롤은 멈출 때까지 이벤트를 계속 내므로
+     *  이 값은 이벤트 사이 간격만 덮으면 된다(60Hz≈16ms, 스로틀돼도 수십 ms). 300ms는 그
+     *  여유 10배이면서, 편도 8초 왕복 대비 사람이 못 느끼는 재개 지연이다. */
+    const USER_SCROLL_SETTLE_MS = 300;
     const tick = (ts: number) => {
       raf = requestAnimationFrame(tick);
       // 🔴 왕복 거리는 **매 프레임 실측**한다 — 칩 개수·항목명 길이·기기 폭에 대한 가정이 없다
@@ -101,11 +121,12 @@ function useChipSweep(
         resyncRef.current = true; // 다시 넘칠 때 현재 위치에서 이어받는다
         return;
       }
-      if (held || paused) {
+      if (held || paused || ts < userScrollUntil) {
         // 🔑 **재개는 「지금 보이는 자리」에서다**(민구 C4): *"사람의 터치나 스크롤이 끝나면
         //    그 화면에서 스크롤이 되어야지, 자동 스크롤 되었을 경우의 위치로 한번에
         //    자동 스크롤 되지 않으면 좋겠어."* → `chipSweepStartFor`가 현재 scrollLeft로
         //    위상을 역산하므로 점프가 없다. 이 플래그 한 줄이 그 계약을 만든다.
+        //    (W3 — `ts < userScrollUntil` 축 추가: 네이티브 스크롤·관성이 held 없이 도는 동안.)
         resyncRef.current = true;
         return;
       }
@@ -140,24 +161,47 @@ function useChipSweep(
         start = chipSweepStartFor(ts, el.scrollLeft - from, seconds, range);
         resyncRef.current = false;
       }
-      el.scrollLeft = from + chipSweepOffset(ts - start, seconds, range);
+      const next = from + chipSweepOffset(ts - start, seconds, range);
+      lastSelfLeft = next; // 대입 **전에** 기록 — 이 대입의 scroll 이벤트가 자기쓰기로 판별되게.
+      el.scrollLeft = next;
+    };
+    // W3 — scroll 활동 감시. 루프 반향(±1px)이 아니면 사용자 창을 연장한다. 브라우저가 대입값을
+    //    정수/서브픽셀로 반올림해도 0.5px 이내라 1px 허용치가 덮는다. ActiveState 우측끝 정렬의
+    //    프로그램 스크롤도 '사용자'로 분류되는데, 의도된 동작이다 — 정렬이 옮긴 자리에서 300ms 뒤
+    //    위상을 이어받는 것은 기존 resync 계약(§두 계약이 만나는 지점)과 같고 점프만 없앤다.
+    const onScroll = () => {
+      if (Math.abs(el.scrollLeft - lastSelfLeft) < 1) return; // 자기쓰기 반향
+      userScrollUntil = performance.now() + USER_SCROLL_SETTLE_MS;
+      resyncRef.current = true;
     };
     const hold = () => { held = true; };
     const release = () => { held = false; };
+    // W3 — pointercancel은 '뗌'이 아니라 **네이티브 스크롤 인계**다(iOS: 터치가 스크롤로 전환되는
+    //    순간 발화). held는 내리되(cancel 후 pointerup은 영영 없다 — 0c9f4ea의 실패 모드) 사용자
+    //    창을 즉시 연다 — 이후 드래그·관성의 scroll 이벤트가 창을 연장하고, 이벤트가 하나도 없는
+    //    cancel(시스템 제스처 등)이면 300ms 뒤 그냥 재개된다.
+    const cancelToNativeScroll = () => {
+      held = false;
+      userScrollUntil = performance.now() + USER_SCROLL_SETTLE_MS;
+      resyncRef.current = true;
+    };
     // 🔴 뗌은 **window에서** 듣는다. 두 실패 모드를 동시에 막는 유일한 조합이다:
     //    · 요소에만 걸면 — 손가락이 칩존 밖으로 나가서 떼는 순간(드래그는 늘 그렇다) `pointerup`이
     //      이 요소로 오지 않아 `held`가 **영영 true**가 되고 왕복이 조용히 죽는다.
     //    · `pointerleave`를 뗌으로 치면 — 손가락이 **아직 닿아 있는데** 경계를 넘는 순간 재개돼
     //      사용자의 손과 싸운다.
+    //    (scroll은 대상 요소에서만 발화하므로 el에 건다 — window 버블 없음.)
     el.addEventListener('pointerdown', hold);
+    el.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('pointerup', release);
-    window.addEventListener('pointercancel', release);
+    window.addEventListener('pointercancel', cancelToNativeScroll);
     raf = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(raf);
       el.removeEventListener('pointerdown', hold);
+      el.removeEventListener('scroll', onScroll);
       window.removeEventListener('pointerup', release);
-      window.removeEventListener('pointercancel', release);
+      window.removeEventListener('pointercancel', cancelToNativeScroll);
     };
   }, [elRef, seconds, resyncRef, paused]);
 }
