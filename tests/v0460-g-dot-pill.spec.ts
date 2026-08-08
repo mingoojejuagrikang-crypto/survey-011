@@ -121,15 +121,23 @@ test('§3-G — nav 발화(파형): 필이 켜진 도트를 덮지 않고 예약
   expect(r.overlap, '② 파형의 켜진 셀이 필 사각형과 겹치지 않는다').toEqual([]);
 });
 
-test('§3-G — 완료(check 글리프): 필이 켜진 도트를 덮지 않는다', async ({ page }) => {
+/** 🔴 v0.47.0 W6 **정당 파손** — 종전 이 케이스는 *"완료는 edgeMode가 nav라 필이 뜬다"* 를
+ *  전제로 `pillVisible === true`를 단언했다. 민구 확정(08-08, T-6=FB-G②)으로 **완료 상태에서는
+ *  접힌 필을 숨긴다** — 402×513에서 행피치가 5px로 무너져 예약 20px < 필 42px이 되고, 격자가
+ *  세로 중앙정렬이라 **글리프 축소로는 겹침을 없앨 수 없다**(그쪽 스펙 헤더에 산술).
+ *  전제가 바뀌었으므로 기대값을 뒤집는다. ①(예약 행) 축은 그대로 유효하다.
+ *  👉 완료 케이스의 **본 오라클은 `tests/v0470-w6-complete-dot-pill.spec.ts`로 옮겼다**
+ *     (두 뷰포트 + 복귀 + 기능 생존). 여기는 «이 파일의 ② 커버리지가 왜 nav 2종만인가»의
+ *     근거로 남는다 — ③(일시정지·이상치)과 같은 역할이다. */
+test('§3-G — 완료(check 글리프): 필이 애초에 뜨지 않는다(W6 — ②가 nav 2종만 보는 근거)', async ({ page }) => {
   await boot(page, PHONE_402);
   await fillAllRows(page);
   await page.waitForTimeout(500);
   const r = await sample(page, 'endReached', 4);
-  expect(r.pillVisible, '완료는 edgeMode가 nav라 필이 뜬다').toBe(true);
   expect(r.glyph, '완료 글리프는 check').toBe('check');
+  expect(r.pillVisible, 'W6 — 완료 동안 접힌 필은 숨는다(민구 확정 08-08)').toBe(false);
   expect(r.reserved, '① check 글리프가 예약 행을 켜지 않는다').toEqual([]);
-  expect(r.overlap, '② check 글리프의 켜진 셀이 필 사각형과 겹치지 않는다').toEqual([]);
+  expect(r.overlap, '② 필이 없으므로 겹칠 것도 없다(위 단언이 「왜 0인가」를 못박는다)').toEqual([]);
 });
 
 /** ③은 처방 전에도 green이었다 — ②의 커버리지가 nav뿐인 **이유**를 기계로 고정한다.

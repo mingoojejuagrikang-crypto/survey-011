@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { T } from '../../tokens';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { useSessionStore } from '../../stores/sessionStore';
 import { logger } from '../../lib/logger';
 import { inputControlPanelOpened, settingChanged } from '../../lib/logEvents';
 import { speak, setBargeInEnabled } from '../../lib/speech';
@@ -68,6 +69,32 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
   onOpenChange: (next: boolean) => void;
 }) {
   const s = useSettingsStore();
+  /** 🔴 v0.47.0 W6(민구 제보 T-6=FB-G② · 확정 08-08) — **완료(체크 글리프) 동안 접힌 필을 숨긴다.**
+   *
+   *  실측(08-08): 402×874는 행피치 12px·예약 48px ≥ 필 42px라 설계대로지만, 402×513은 행피치가
+   *  **5px**로 무너져 예약이 **20px**이 된다 — 필은 `minHeight:42`(44px 터치 하한)라 작아질 수
+   *  없어 체크 글리프를 **13셀** 덮는다. 「N행 예약」이 짧은 화면에서 성립하지 않는 것이다.
+   *  🔴 민구 원안(«글리프 축소»)은 **기하학적으로 불가능**하다 — 격자는 세로 중앙정렬이고 필은
+   *  하단 고정이라 `잉크하단 = 밴드중심 + 0.1429·G`인데, 402×513은 밴드중심(339.6)이 이미
+   *  필top(335.3)보다 아래여서 `G→0`에서도 겹친다. **산술과 대안 4종은
+   *  `tests/v0470-w6-complete-dot-pill.spec.ts` 헤더가 SSOT.**
+   *  👉 08-07의 「짧은 화면 전 구간 숨김」안은 같은 날 20:10 민구가 취소했다(세션 중 서랍을
+   *  터치로 못 연다) — **완료 한정으로 좁힌 것이 그 절충이다.**
+   *
+   *  조건은 `ActiveState`의 `glyph === 'check'`와 같아야 한다
+   *  (`paused ? 'pause' : anomalyPending ? 'alert' : endReached ? 'check' : 'mic'`). `phase==='complete'`가
+   *  paused를 이미 배제하므로 남는 것은 이상치 배제 하나다. prop이 아니라 스토어를 직접 읽는 것은
+   *  경로상 `ActiveState`·`ActiveControlBar`를 거쳐야 하는데 **표시 전용 판정**이라 구독으로 족해서다.
+   *  🔴 `endReached`는 complete를 벗어나는 순간 `setPhase`가 내린다(`sessionStore.ts:230`) —
+   *  **복귀 배선이 따로 없다.** 🟡 FB-5(진행 중 도트 가림)는 이걸로 안 풀린다(별건·`@pending-fb5`). */
+  const checkGlyphShown = useSessionStore((st) => (
+    st.phase === 'complete'
+    && st.endReached
+    && !(st.anomalyAlert && st.anomalyAlert.status !== 'corrected')
+  ));
+  // 펼친 상태의 헤더는 남긴다 — 그게 사라지면 **닫을 수단이 없어진다.** 펼치면 도트가 통째로
+  //   숨으므로(부모 `open` 계약) 겹칠 것도 애초에 없다.
+  const hideCollapsedPill = checkGlyphShown && !open;
   const ttsDebounceRef = useRef<number | null>(null);
   const sampleTts = (rate: number) => {
     if (ttsDebounceRef.current !== null) window.clearTimeout(ttsDebounceRef.current);
@@ -202,6 +229,10 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
         } : null),
       }}
     >
+      {/* v0.47.0 W6 — 완료(체크 글리프) 동안에는 접힌 필 자체를 렌더하지 않는다(위 상수 주석).
+          🔴 `visibility:hidden`이나 `opacity:0`으로 하지 마라 — 그것들은 **박스를 남기므로**
+          겹침 판정(사각형 교차)에도, 오탭 hit-test에도 그대로 걸린다. */}
+      {!hideCollapsedPill && (
       <button
         type="button"
         data-testid="input-control-toggle"
@@ -235,6 +266,7 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
         <span>{summary}</span>
         <span aria-hidden style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 150ms' }}>⌄</span>
       </button>
+      )}
       {open && (
         /* 🔴 v0.46.0 FB-B — 트랙이 모자라면 **여기서** 스크롤한다.
          *  🟢 **v0.46.1 FB-4 이후엔 이것이 「평소 경로」가 아니라 「fallback」이다.** 패널이 위로

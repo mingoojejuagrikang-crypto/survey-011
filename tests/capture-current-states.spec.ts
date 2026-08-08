@@ -163,7 +163,12 @@ async function captureAndVerify(
     }
     // v0.44.0 §C5-b — 접힌 토글은 nav 모드 전용 오버레이가 됐다. anomaly·paused에서는 종전의
     // "비활성 스트립"조차 렌더하지 않으므로(오탭 겹침 원천 제거) hit-test 대상 자체가 없다.
-    const toggleHidden = meta.name === '04-anomaly' || meta.name === '07-paused';
+    // 🔴 v0.47.0 W6 **정당 파손** — `08-complete` 추가. 민구 확정(08-08, T-6=FB-G②)으로 완료
+    //    화면에서는 접힌 필을 숨긴다(402×513에서 예약 20px < 필 42px · 글리프 축소는 격자
+    //    중앙정렬 때문에 기하학적으로 불가 — `v0470-w6-complete-dot-pill.spec.ts` 헤더의 산술).
+    //    §C5-b의 anomaly·paused와 **같은 계열의 부재**이지 새로운 예외가 아니다.
+    const toggleHidden = meta.name === '04-anomaly' || meta.name === '07-paused'
+      || meta.name === '08-complete';
     if (toggleHidden) {
       expect(hits, `${meta.name}: 숨긴 토글이 hit-test에 나타나면 §C5-b 회귀다`).toBeNull();
     } else {
