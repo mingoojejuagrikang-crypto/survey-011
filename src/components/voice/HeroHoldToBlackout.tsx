@@ -96,6 +96,15 @@ function prefersReducedMotion(): boolean {
 
 export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
   const [progress, setProgress] = useState(0);
+  /** 🔴 V-FIX3b(2차 재검증 신규 위험) — **표시 여부는 「눌렸는가」이지 「진행값이 0보다 큰가」가 아니다.**
+   *
+   *  종전엔 `holding = progress > 0` 파생이었다. V-FIX3이 reduce의 첫 갱신을 750ms 뒤로 미루면서
+   *  그 파생이 **즉시 피드백 계약을 깼다**: reduce 사용자는 홀드 시작 후 최대 750ms 동안 문구도
+   *  진행바도 못 보고, 400ms 안내 TTS가 **시각보다 먼저** 온다(소리는 나는데 화면은 그대로).
+   *  🔑 두 계약이 서로를 갉은 것이라 **표시 트리거를 진행값에서 분리**하는 게 처방이다 —
+   *  계단 간격도 3초 판정도 그대로 두고, «언제 나타나는가»만 포인터 다운 시점으로 되돌린다.
+   *  ⚠️ 통상 모드에도 이득이 있다: 첫 rAF 프레임(≈16ms) 공백이 사라진다. */
+  const [holding, setHolding] = useState(false);
   /** 진행 틱 핸들. V-FIX3 이후 **두 종류**다 — 통상은 rAF id, reduce에서는 타이머 id.
    *  어느 쪽으로 취소할지는 `tickIsRafRef`가 기억한다(숫자만으론 구분되지 않는다). */
   const tickHandleRef = useRef<number | null>(null);
@@ -115,6 +124,7 @@ export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
 
   const stopHold = useCallback(() => {
     cancelTick();
+    setHolding(false);
     if (ttsTimerRef.current !== null) {
       window.clearTimeout(ttsTimerRef.current);
       ttsTimerRef.current = null;
@@ -140,6 +150,9 @@ export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* 캡처 미지원 — rAF는 그대로 */ }
     firedRef.current = false;
     startRef.current = performance.now();
+    // V-FIX3b — **누른 그 순간** 문구·진행바를 세운다. 진행값(계단)은 아래 틱이 채운다.
+    setProgress(0);
+    setHolding(true);
     // V-FIX1ⓐ+ⓒ — 400ms 뒤에, 그때 아무도 말하고 있지 않을 때만 발화한다.
     ttsTimerRef.current = window.setTimeout(() => {
       ttsTimerRef.current = null;
@@ -180,6 +193,7 @@ export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
         //   sessionId는 logger가 현재 세션 컨텍스트에서 자동 첨부한다(`logger.ts:189`).
         logger.log({ type: 'command', parsed: 'screen_off', extra: 'src:hold' });
         setProgress(0);
+        setHolding(false);
         return;
       }
       schedule();
@@ -187,7 +201,6 @@ export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
     schedule();
   }, []);
 
-  const holding = progress > 0;
   return (
     <div
       data-testid="hero-hold-surface"

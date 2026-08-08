@@ -117,10 +117,16 @@ test('① 히어로 3초 홀드로 진입한다 + 홀드 중 문구·진행바�
   const shownHint = (await page.locator('[data-testid="hero-hold-hint"]').innerText())
     .replace(/\s+/g, ' ').trim();
   expect(shownHint, 'V-FIX2 — 화면 문구가 TTS와 글자까지 같아야 한다').toBe(HOLD_TTS);
+  // 🔴 «진행바가 보인다»는 **트랙**으로 잰다 — 채움(fill)은 0%일 때 폭 0이라 Playwright가
+  //    hidden으로 읽는다. V-FIX3b 이후 0%는 정상 상태이므로 fill 가시성은 계약이 아니다.
+  await expect(page.locator('[data-testid="hero-hold-track"]'), '진행바 트랙').toBeVisible();
   const fill = page.locator('[data-testid="hero-hold-fill"]');
-  await expect(fill).toBeVisible();
+  // ⚠️ V-FIX3b 이후 표시는 «눌렸는가»로 뜨므로 **첫 프레임의 진행값은 0이 정상**이다.
+  //    「차오른다」는 값 하나가 아니라 **증가**로 재야 한다(단발 읽기는 flaky를 만든다).
+  await expect
+    .poll(async () => Number(await fill.getAttribute('data-progress')), { timeout: 2000 })
+    .toBeGreaterThan(0);
   const mid = Number(await fill.getAttribute('data-progress'));
-  expect(mid, '진행바가 실제로 차오른다(0 고정이면 rAF가 안 돈다)').toBeGreaterThan(0);
   expect(mid, '아직 3초가 안 됐으므로 1 미만').toBeLessThan(1);
 
   await page.waitForTimeout(HOLD_MS);
@@ -221,8 +227,18 @@ test('⑦ reduced-motion — 진행 표현은 0.25 계단, 3초 판정은 불변
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
 
+  // 🔴 V-FIX3b(2차 재검증) — **즉시** 떠야 한다. reduce의 첫 계단은 750ms 뒤이고 안내 TTS는
+  //    400ms 뒤라, 표시가 진행값에 묶여 있으면 «소리는 나는데 화면은 그대로»인 구간이 생긴다.
+  //    300ms 안에 못 뜨면 그 회귀다(400·750 둘 다보다 앞이라 두 축을 한 번에 가른다).
   const fill = page.locator('[data-testid="hero-hold-fill"]');
-  await expect(fill, 'reduce에서도 진행 피드백 자체는 남는다').toBeVisible({ timeout: 2000 });
+  await expect(
+    page.locator('[data-testid="hero-hold-cue"]'),
+    'reduce에서 시각 피드백이 늦다 — 안내 TTS가 화면보다 먼저 온다',
+  ).toBeVisible({ timeout: 300 });
+  await expect(
+    page.locator('[data-testid="hero-hold-track"]'),
+    'reduce에서도 진행 피드백 자체는 남는다(트랙으로 잰다 — 0% 채움은 폭 0이라 hidden이다)',
+  ).toBeVisible({ timeout: 300 });
   // 여러 번 읽어도 0.25 배수만 나온다 = 연속 애니메이션이 아니다.
   const seen = new Set<string>();
   for (let i = 0; i < 6; i++) {
