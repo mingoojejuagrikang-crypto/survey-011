@@ -75,10 +75,15 @@ export function VoiceHero({
 
   // 렌더 우선순위(명시적 — 타이머 레이스 무관): review > confirm > listening.
   const showConfirm = !review && confirmed !== null;
-  // v0.45.0 WP-1② — 확정 플래시가 뜬 프레임의 hero 실렌더 계측(세션당 1회 — 가드는 fontRenderProbe).
+  // 🔴 v0.47.0 W5ⓐ(민구 FB-F 확정 08-08) — 확정 플래시가 뜬 프레임의 hero 실렌더 계측을
+  //    **에코 표시마다** 낸다(종전: 세션당 1회 — 가드는 fontRenderProbe가 소유했다).
+  //    ⚠️ deps에 `confirmed.seq`가 **반드시** 있어야 한다. 연속 커밋은 `armFlash`가 값만
+  //    갈아끼우므로 `showConfirm`은 true → true로 **변하지 않고**, seq가 없으면 두 번째
+  //    커밋부터 계측이 조용히 사라진다(전수화의 목적이 통째로 무산된다).
+  const confirmSeq = confirmed?.seq ?? 0;
   useEffect(() => {
     if (showConfirm) scheduleEchoFontRender();
-  }, [showConfirm]);
+  }, [showConfirm, confirmSeq]);
   const labelFitRef = useRef<HTMLSpanElement>(null);
   const valueFitRef = useRef<HTMLSpanElement>(null);
   const fitRef = useFitGroup<HTMLDivElement>(
@@ -195,16 +200,19 @@ export function VoiceHero({
 function useConfirmFlash(
   review: boolean,
   external: { name: string; value: string } | null,
-): { name: string; value: string } | null {
+): { name: string; value: string; seq: number } | null {
   const burst = useSessionStore((st) => st.valueBurst);
-  const [confirmed, setConfirmed] = useState<{ name: string; value: string } | null>(null);
+  // v0.47.0 W5ⓐ — `seq`는 **표시에 쓰이지 않는다.** 연속 확정(값만 갈리고 상태는 confirm 유지)을
+  //   계측 effect가 구분할 수 있게 하는 유일한 축이다(위 `confirmSeq` deps 주석이 근거).
+  const [confirmed, setConfirmed] = useState<{ name: string; value: string; seq: number } | null>(null);
+  const flashSeqRef = useRef(0);
   const seenSeqRef = useRef<number | null>(null);
   // 🔴 타이머를 effect cleanup이 아니라 ref로 든다(아래 external effect와 공유).
   //  external은 advance가 알람을 내리면 non-null → null로 바뀌는데, 타이머가 cleanup에 묶여
   //  있으면 그 전환이 **아직 안 끝난 1.5초 타이머를 죽여** 값이 화면에 영구 고착된다.
   const timerRef = useRef<number | null>(null);
   const armFlash = (next: { name: string; value: string }) => {
-    setConfirmed(next);
+    setConfirmed({ ...next, seq: ++flashSeqRef.current });
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => setConfirmed(null), CONFIRM_MS);
   };
@@ -359,7 +367,18 @@ function HeroPrimaryLine({
         color: T.text,
         letterSpacing: -2,
         fontVariantNumeric: 'tabular-nums',
-        display: 'block', width: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        // 🔴 v0.47.0 W5ⓑ(민구 FB-F 확정 08-08) — **`textOverflow:'ellipsis'`를 제거했다.**
+        //    민구 확정 원문(08-07, `heroLayout.ts` VOICE_TYPE.sheetDisplay 주석에 보존):
+        //    *"축약(\"...\")을 금지하고 폭에 맞춰서 글자 크기를 조절하는걸로."*
+        //    그 처방(FB-11/WP-9 `6d69165`)은 **ManualValueSheet 전용**이었고 hero는 빠져 있었다 —
+        //    "여전히 축약된다"는 이번 제보의 1차 답이 그 누락이다(triage §중복·이력).
+        //    🔑 넘침을 막는 것은 `useFitGroup`이고, ellipsis는 그 fit이 늦은 프레임에서
+        //    **틀린 값을 그럴듯하게 그려 보이는 폴백**이었다(`29.9` → `29…`). 폴백을 지우면
+        //    같은 프레임이 «잘린 글리프»로 남아 **오독이 아니라 결함으로 보인다** — 로그
+        //    `font_render_echo`의 `ovX`/`txt`가 그 프레임을 잡는다(W5ⓐ).
+        //    ⚠️ `overflow:'hidden'`은 남긴다. 지우면 넘친 글자가 hero 밖으로 흘러 칩존·밴드
+        //    위에 겹쳐 그려진다(레이아웃 계약 파손 — 잘림보다 나쁘다).
+        display: 'block', width: '100%', whiteSpace: 'nowrap', overflow: 'hidden',
         wordBreak: 'normal',
         overflowWrap: 'normal',
         textAlign: 'center',
@@ -387,6 +406,18 @@ function InterimLine({ value, fitRef }: { value: string; fitRef: RefObject<HTMLS
         color: T.text,
         opacity: 0.92,
         letterSpacing: -1.2,
+        // 🟡 v0.47.0 W5ⓑ — **여기는 ellipsis를 남긴다**(확정 라인에서만 제거했다). 브리핑은 두
+        //    라인 모두 제거를 지시했으나 **기존 계약과 충돌해 확정 라인으로 범위를 좁혔다.**
+        //    ① 민구 제보(FB-F)는 *"중앙 숫자 … **확정 시에만**"* 이고 triage 실측도
+        //       *"실시간(interim) 중은 정상"* 이다 — interim은 결함 대상이 아니다.
+        //    ② `tests/v043-fit-group.spec.ts:333`이 *"무표식 잘림 금지"* 를 **긴 interim에 대해**
+        //       명시적으로 단언한다: 하한(24px)에 닿고도 넘치는 STT 원문은 «…»로 손실을
+        //       드러내야 한다는 계약이다. 그 계약은 **지금도 옳다** — 확정값은 짧은 숫자라
+        //       fit이 항상 맞출 수 있지만, 인식 원문은 임의 길이라 맞출 수 없다.
+        //    🔑 두 라인의 차이는 «내용 종류»다: 숫자는 잘리면 **다른 숫자로 오독**되고(29.9→29…),
+        //       문장은 잘려도 «뒤가 더 있다»로 읽힌다. 같은 `--fit-value`를 공유하는 것은
+        //       **배율**이지 넘침 표기 규칙이 아니다.
+        //    → 범위 확대(interim도 제거) 판단은 `_ASK-implvisual.md` 🟡 #2에 올렸다.
         display: 'block', width: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         wordBreak: 'normal',
         overflowWrap: 'normal',

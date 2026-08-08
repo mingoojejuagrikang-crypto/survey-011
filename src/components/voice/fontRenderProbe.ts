@@ -151,55 +151,91 @@ export function scheduleFontRenderSnapshot(): () => void {
   };
 }
 
-/** v0.45.0 WP-1② — 확정(에코) 플래시가 실제로 그린 프레임의 hero 실렌더 계측. 세션당 1회.
- *  리뷰 C9 — 모듈 변수는 reload에서 초기화되는데 세션은 reload를 넘어 복원된다(sessionId 보존).
- *  sessionStorage를 병행 가드로 써서 같은 sessionId의 2중 방출을 막는다(같은 탭 수명 유지). */
-let echoEmittedForSession = '';
-const ECHO_EMIT_SS_KEY = 'survey-011.fontRenderEcho.sessionId';
+/** 🔴 v0.47.0 W5ⓐ(민구 FB-F 확정 08-08) — **세션당 1회 가드를 걷어낸다. 에코 표시마다 1건.**
+ *
+ *  종전 계약(v0.45.0 WP-1②)은 `echoEmittedForSession` + `sessionStorage` 2중 가드로 세션당
+ *  정확히 1건을 보장했다. 그 계약이 FB-F를 **판정 불가로 만든 당사자다**: 민구가 관찰한 것은
+ *  *"nn.n만, 확정 시에만"* 인데, 표본이 세션 첫 확정 1건뿐이면 그 조건에 해당하는 에코가
+ *  로그에 들어올 보장이 없다. 실제로 08-08 새벽 제보의 로그에도 `len=4,ovX=0` 한 건뿐이었고,
+ *  그 1건이 "정상"이라 후보 3안 중 무엇도 죽지 않았다.
+ *
+ *  🔑 **세션 순번(`n`)이 종전 가드의 역할을 대신한다** — 이중 방출·누락은 순번의 중복/구멍으로
+ *  로그에서 드러난다. 가드를 없앤 것이 아니라 **가드를 관측 가능한 형태로 바꾼 것이다.**
+ *  ⚠️ 순번은 모듈 변수라 reload에서 1로 되돌아간다(세션은 reload를 넘어 복원된다). 같은
+ *  sessionId에 `n=1`이 두 번 보이면 그건 이중 방출이 아니라 **재적재**다. */
+let echoSessionId = '';
+let echoSeq = 0;
 
-function echoAlreadyEmitted(sessionId: string): boolean {
-  if (echoEmittedForSession === sessionId) return true;
-  try { return sessionStorage.getItem(ECHO_EMIT_SS_KEY) === sessionId; } catch { return false; }
-}
-
-function markEchoEmitted(sessionId: string): void {
-  echoEmittedForSession = sessionId;
-  try { sessionStorage.setItem(ECHO_EMIT_SS_KEY, sessionId); } catch { /* 프라이빗 모드 등 — 모듈 가드만 */ }
+function nextEchoSeq(sessionId: string): number {
+  if (echoSessionId !== sessionId) { echoSessionId = sessionId; echoSeq = 0; }
+  return ++echoSeq;
 }
 
 /** 확정 플래시가 뜬 뒤 fit 이진탐색이 정착할 시간 — 플래시 창(1500ms)의 앞 1/5 지점에서 읽는다.
- *  즉시(rAF 2회만) 읽으면 useFitGroup의 rAF 스케줄 탐색 중간값을 실측으로 오인할 수 있다. */
+ *  즉시(rAF 2회만) 읽으면 useFitGroup의 rAF 스케줄 탐색 중간값을 실측으로 오인할 수 있다.
+ *  🔴 W5ⓐ 이후로는 **그 중간값 자체가 관측 대상이다**(후보 ①). 두 시점을 다 읽되 정착값을
+ *  대표값(`hero`/`ovX`)으로 두고 전환 직후 값은 `px0`/`ovX0`/`fit0`로 **한 이벤트에** 싣는다. */
 const ECHO_SETTLE_MS = 300;
 
+interface EchoReading {
+  px: number; ovX: number; ovY: number; len: number; text: string; ell: boolean; fit: number;
+}
+
+/** hero 확정 라인의 실렌더 1회 판독. 요소가 없으면 null — **프로브 폴백을 두지 않는다**
+ *  (폴백을 남기면 "확정 순간 실렌더"라는 이 계측의 존재 이유가 사라진다 · fontRenderEcho 주석). */
+function readEcho(): EchoReading | null {
+  const el = document.querySelector('[data-testid="hero-primary"]') as HTMLElement | null;
+  if (!el) return null;
+  const cs = getComputedStyle(el);
+  const text = (el.textContent ?? '').trim();
+  return {
+    px: computedPx(el),
+    // 🔴 v0.46.1 WP-3 — **넘침 실측**(민구 FB-6·7). `ovX > 0`이면 브라우저가 실제로 잘라 그린
+    //    것 = 민구가 본 `33…`의 직접 증거. 폰트 크기만으로는 판정할 수 없었다.
+    ovX: el.scrollWidth - el.clientWidth,
+    ovY: el.scrollHeight - el.clientHeight,
+    len: text.length,
+    text,
+    // W5ⓑ 이후로는 상시 false여야 한다 — 배포된 번들이 처방을 담았는지의 지표로 남긴다.
+    ell: cs.textOverflow === 'ellipsis',
+    fit: Number.parseFloat(cs.getPropertyValue('--fit-value')) || 0,
+  };
+}
+
 /**
- * VoiceHero가 confirm 플래시 진입에서 호출한다(fire-and-forget). C3(확정값 잘림) 판정 축:
+ * VoiceHero가 confirm 플래시 **진입마다** 호출한다(fire-and-forget). C3(확정값 잘림) 판정 축:
  * 세션 시작 스냅샷(`font_render`)은 확정값 슬롯이 대개 프로브라, **확정 순간의 실렌더**가
- * 로그에 없었다. hero-primary가 이미 사라졌으면(플래시 종료·상태 전환) 방출하지 않고 가드도
- * 세우지 않는다 — 다음 확정에서 다시 시도한다(프로브 폴백 금지: fontRenderEcho 주석 참조).
+ * 로그에 없었다. hero-primary가 두 시점 모두에서 사라졌으면 방출하지 않는다(거짓 데이터 금지).
  */
 export function scheduleEchoFontRender(): void {
   const sessionId = useSessionStore.getState().sessionId;
-  if (!sessionId || echoAlreadyEmitted(sessionId)) return;
-  window.setTimeout(() => {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
+  if (!sessionId) return;
+  const n = nextEchoSeq(sessionId);
+  // ① 전환 직후(rAF 2회) — fit이 아직 이전 상태의 배율일 수 있는 그 프레임이 후보 ①의 현장이다.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const early = readEcho();
+    // ② 정착 후 — 대표값. 둘의 차이가 곧 "첫 프레임에만 넘쳤는가"의 답이다.
+    window.setTimeout(() => {
       if (useSessionStore.getState().sessionId !== sessionId) return; // 세션이 이미 끝났다
-      if (echoAlreadyEmitted(sessionId)) return; // 연속 확정 경합의 이중 방출 방지
-      const el = document.querySelector('[data-testid="hero-primary"]') as HTMLElement | null;
-      if (!el) return;
-      markEchoEmitted(sessionId);
+      const settled = readEcho();
+      const base = settled ?? early;
+      if (!base) return; // 두 시점 모두 요소가 없었다 — 방출하지 않는다
       logger.log({
         type: 'session',
         extra: fontRenderEcho({
-          hero: computedPx(el),
+          hero: base.px,
           w: window.innerWidth,
           h: window.innerHeight,
-          // 🔴 v0.46.1 WP-3 — **넘침 실측**(민구 FB-6·7). `ovX > 0`이면 ellipsis가 실제로
-          //    그려진 것 = 민구가 본 `33…`의 직접 증거. 폰트 크기만으로는 판정할 수 없었다.
-          ovX: el.scrollWidth - el.clientWidth,
-          ovY: el.scrollHeight - el.clientHeight,
-          len: (el.textContent ?? '').trim().length,
+          ovX: base.ovX,
+          ovY: base.ovY,
+          len: base.len,
+          n,
+          ell: base.ell,
+          fit: base.fit,
+          ...(early ? { px0: early.px, ovX0: early.ovX, fit0: early.fit } : {}),
+          txt: base.text,
         }),
       });
-    }));
-  }, ECHO_SETTLE_MS);
+    }, ECHO_SETTLE_MS);
+  }));
 }

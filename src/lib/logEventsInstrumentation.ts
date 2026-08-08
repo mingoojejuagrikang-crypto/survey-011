@@ -120,14 +120,55 @@ export function readyProbe(fields: {
  *  - `len` 표시 문자열 길이. **민구가 지목한 자릿수 축**을 로그에서 바로 가른다.
  *
  *  ⚠️ 추측으로 fit 구조를 고치지 마라 — 이 세 값이 다음 로그에 찍힌 뒤에 처방한다. */
+/** 🔴 v0.47.0 W5ⓐ(민구 FB-F 제보 08-08 · 확정 «계측+축약제거 동시») — **세션 1회 → 에코마다.**
+ *
+ *  왜: triage가 FB-F("29.9가 29로")를 **표시 계층 단독 결함**까지 좁혔으나 후보 3안에서 멈췄다.
+ *  세션당 1건인 표본으로는 *"nn.n만 갈린다"* 는 민구의 관찰을 로그에서 가를 수 없다 — 갈린
+ *  그 에코가 표본에 들어올 확률 자체가 낮다. 전수화 비용은 세션당 ~40건이고 링버퍼는 2000건
+ *  (`logger.ts:196`)이라 2% 대의 잠식이다. **민구가 이 대가를 확정했다.**
+ *
+ *  **추가 필드는 전부 optional이다** — 기존 6필드 호출은 바이트 동일하게 남는다
+ *  (`tests/logEvents.spec.ts`의 리터럴 3건이 그대로 green인 것이 그 반증 조건이다).
+ *   - `n`     세션 내 에코 순번. 로그에 빠진 구간(=방출 실패)이 있는지를 가른다.
+ *   - `ell`   `text-overflow: ellipsis`가 계산 스타일에 살아 있는가(1/0). W5ⓑ가 그걸 제거했으므로
+ *             **배포된 번들이 처방을 담았는지**의 직접 증거다(zip 번들 식별자와 짝으로 읽는다).
+ *   - `fit`   확정 프레임의 `--fit-value` 실측 배율 — 후보 ①(전환 프레임 fit 미적용)의 판정 축.
+ *   - `px0` `ovX0` `fit0`  **rAF 2회 시점**(전환 직후) 읽기. 종전 계측은 300ms 정착 후만 읽어서
+ *             *"첫 프레임에 넘쳤다가 곧 수렴한다"* 는 후보 ①을 **구조적으로 못 봤다.** 정착값과
+ *             한 이벤트에 나란히 두면 두 시점을 대조할 수 있다(이벤트 수는 그대로 1건).
+ *   - `txt`   화면에 **실제로 그려진 문자열**. `len`만으로는 "29.9를 29로 그렸다"와 "29.9인데
+ *             넘쳐 잘려 보인다"가 갈리지 않는다.
+ *             🔴 시트 불특정 계약상 값에 무엇이 들어올지 모른다 — `extra`의 `k=v,k=v` 문법을
+ *             깨는 `%`·`,`·`=`를 **%-이스케이프**한다(가역). 길이는 아래 상수에서 자르고 잘림은
+ *             `~` 접미로 표시한다(링버퍼 보호). */
+const ECHO_TEXT_MAX = 24;
+
+/** `extra` 파서를 깨지 않게 값 문자열을 감싼다. 되돌리는 순서는 `%2C`→',' `%3D`→'=' `%25`→'%'. */
+export function escapeExtraValue(s: string): string {
+  const cut = s.length > ECHO_TEXT_MAX ? `${s.slice(0, ECHO_TEXT_MAX)}~` : s;
+  return cut.replace(/%/g, '%25').replace(/,/g, '%2C').replace(/=/g, '%3D');
+}
+
 export function fontRenderEcho(fields: {
   hero: number; w: number; h: number; ovX: number; ovY: number; len: number;
+  n?: number; ell?: boolean; fit?: number;
+  px0?: number; ovX0?: number; fit0?: number; txt?: string;
 }): string {
   const px = (v: number) => Math.round(v * 10) / 10;
-  return `font_render_echo:${kv({
+  const ratio = (v: number) => Math.round(v * 1000) / 1000;
+  const pairs: Record<string, string | number> = {
     hero: px(fields.hero), w: fields.w, h: fields.h,
     ovX: fields.ovX, ovY: fields.ovY, len: fields.len,
-  })}`;
+  };
+  // 🔴 순서가 계약이다(SOP-003 파서). 신규 필드는 **기존 6필드 뒤에만** 붙인다.
+  if (fields.n !== undefined) pairs.n = fields.n;
+  if (fields.ell !== undefined) pairs.ell = fields.ell ? 1 : 0;
+  if (fields.fit !== undefined) pairs.fit = ratio(fields.fit);
+  if (fields.px0 !== undefined) pairs.px0 = px(fields.px0);
+  if (fields.ovX0 !== undefined) pairs.ovX0 = fields.ovX0;
+  if (fields.fit0 !== undefined) pairs.fit0 = ratio(fields.fit0);
+  if (fields.txt !== undefined) pairs.txt = escapeExtraValue(fields.txt);
+  return `font_render_echo:${kv(pairs)}`;
 }
 
 /** v0.45.0 WP-1④ — **세션-활성 게이트(WP-2)가 hidden에 유지한 구간의 생존 요약.** hidden

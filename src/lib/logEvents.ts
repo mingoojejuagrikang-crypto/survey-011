@@ -476,4 +476,6 @@ export function bgMicAction(fields: {
 export {
   audioInputClass, fontRenderSnapshot, bargeInTextSource,
   readyProbe, fontRenderEcho, bgKeep, notifyPerm,
+  // v0.47.0 W5ⓐ — 에코 전수화가 표시 문자열을 싣게 되면서 필요해진 `extra` 값 이스케이프.
+  escapeExtraValue,
 } from './logEventsInstrumentation';
