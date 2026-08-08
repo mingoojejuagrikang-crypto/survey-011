@@ -22,7 +22,9 @@ export function ModifyIndicatorPill({ name, prevValue, newValue }: { name: strin
   // ② 새 값 도착(echo): 새 값을 가장 크게 두고 직전값은 작은 보조 정보로 남긴다.
   const committed = !!newValue && newValue !== prevValue;
   const interim = useSessionStore((s) => s.interimValue);
-  const accent = committed ? T.amber : T.blue;
+  // v0.47.0 W2(FB-C, 민구 08-08) — 성공 국면은 green이다(종전 amber). 재청취(비-committed)는
+  //   §C4 amber 톤이 화면 전체(글로우·칩)를 이미 말하므로 여기선 blue(재입력 안내) 유지.
+  const accent = committed ? T.green : T.blue;
   const visibleValue = committed ? newValue : interim;
   const valueFitRef = useRef<HTMLSpanElement>(null);
   const fitRef = useFitGroup<HTMLDivElement>(
@@ -72,7 +74,8 @@ export function ModifyIndicatorPill({ name, prevValue, newValue }: { name: strin
             width: '100%', maxWidth: '100%',
             fontFamily: 'JetBrains Mono, ui-monospace, monospace',
             fontSize: committed ? HERO_TYPE.value : HERO_TYPE.interim,
-            fontWeight: 900, color: committed ? T.amber : T.text,
+            // v0.47.0 W2 — 성공 국면 값은 green(민구: "성공 순간부터 green").
+            fontWeight: 900, color: committed ? T.green : T.text,
             letterSpacing: -1, lineHeight: 1.04,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             textAlign: 'center',

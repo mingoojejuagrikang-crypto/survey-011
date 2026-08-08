@@ -10,6 +10,7 @@ import {
   type VoiceTrackState,
 } from '../lib/useVoiceSession';
 import { buildSessionLabel } from '../lib/sessionLabel';
+import { useModifyPhase } from '../lib/modifyPhase';
 import { EdgeGlow, type GlowTone } from '../components/voice/EdgeGlow';
 import { type ReaskReason } from '../components/voice/ReaskCue';
 import { PersistErrorBanner } from '../components/voice/PersistErrorBanner';
@@ -53,6 +54,9 @@ export function VoiceScreen(props: {
     blackout: st.blackout,
   })));
   const voiceSession = useVoiceSession();
+  // v0.47.0 W2 — 수정 성공 국면(green) 구독. 🔴 early-return(ReadyState/stopping)보다 **위**여야
+  //   한다(Rules of Hooks — phase 전환에서 훅 수가 달라지면 크래시). 파생은 아래 glowTone에서.
+  const modifyCommitted = useModifyPhase((st) => st.committed);
   useEffect(() => {
     props.onTelemetryReadersChange?.({
       getTrackState: voiceSession.getTrackState,
@@ -125,11 +129,13 @@ export function VoiceScreen(props: {
   //   progressAccent)은 이 tone을 prop으로 받아 TONE_BASE로 색만 바꾼다(파생 중복 방지).
   //   v0.44.0 §C4(F12, 민구 확정 08-02): 일시정지 amber → **mono**(무채 점멸), amber는
   //   **수정모드**로 이동. 우선순위: 이상치/마이크 소실(red) > 일시정지(mono) > 수정(amber) > 입력 중(green).
+  //   v0.47.0 W2(FB-C, 민구 08-08): amber는 수정 **재청취 국면**으로 좁아진다 — 성공 커밋 순간부터
+  //   green(modifyPhase.committed가 그 경계). 수정 국면(modifyIndicator)이되 미성공일 때만 amber.
   const anomalyPending = !!sess.anomalyAlert && sess.anomalyAlert.status !== 'corrected';
   const glowTone: GlowTone =
     anomalyPending || voiceSession.micLost ? 'red'
       : sess.phase === 'paused' ? 'mono'
-        : sess.modifyIndicator ? 'amber'
+        : sess.modifyIndicator && !modifyCommitted ? 'amber'
           : 'green';
   const sessionLive =
     sess.phase === 'active' || sess.phase === 'paused' || sess.phase === 'complete';

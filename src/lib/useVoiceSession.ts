@@ -14,6 +14,7 @@ import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColum
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep, unlockAudioPlayback } from './beep';
+import { useModifyPhase } from './modifyPhase';
 import { AudioRecorder, type AudioTrackState, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import {
@@ -725,6 +726,12 @@ export function useVoiceSession() {
       useSessionStore.getState().setModifyIndicator(
         opts?.isModify ? { name: col.name, colId: col.id } : null,
       );
+      // v0.47.0 W2(FB-C, 민구 08-08) — 수정 **진입** = 중립 단음 + amber(§C4 의미 보존).
+      //   종전엔 이 단음이 성공 커밋 시점(:handleFinal)에 났다 — W2가 성공을 화음+green으로
+      //   재정의하며 중립 단음은 "모드 전환" 본래 의미대로 진입으로 옮겼다. committed=false는
+      //   재청취 국면 시작(amber) 선언 — 일반 안내(국면 종료)도 같은 값이라 무조건 내린다.
+      useModifyPhase.getState().setCommitted(false);
+      if (opts?.isModify) playBeep('modify');
       awaitingFieldRef.current = opts?.isModify
         ? { kind: 'modify', row, colId: col.id, name: col.name, previousValue: opts?.previousValue }
         : { kind: 'value', row, colId: col.id, name: col.name };
@@ -767,6 +774,11 @@ export function useVoiceSession() {
   const announceEndReached = useCallback(async () => {
     const sess = useSessionStore.getState();
     clearAnomalyAlert('end_reached');
+    // 🔴 v0.47.0 W2(FB-G①, 실기기 08-08) — 종단 착지에서 수정 표시 **명시 해제**. 해제 유일
+    //   지점이 announceField(다음 필드 안내)뿐이라, 마지막 행을 수정으로 마감하면 그게 다시
+    //   안 불려 완료 화면까지 amber가 고착됐다. 색 전환(committed)과 별개로 상태 자체를 내린다.
+    sess.setModifyIndicator(null);
+    useModifyPhase.getState().setCommitted(false);
     const vc = voiceColsList();
     const total = computeTotalRows(getSessionColumns());
     const empties = listEmptyRows(total, vc);
@@ -809,6 +821,10 @@ export function useVoiceSession() {
   const enterReviewWait = useCallback(async (row: number) => {
     const sess = useSessionStore.getState();
     clearAnomalyAlert('review_wait');
+    // v0.47.0 W2(FB-G①) — 검토 대기 진입도 종단 착지다(announceField를 안 거친다). 검토 출신
+    //   수정("수정 88.9" 직접값 등)이 여기로 복귀할 때 수정 표시가 잔존하지 않게 명시 해제.
+    sess.setModifyIndicator(null);
+    useModifyPhase.getState().setCommitted(false);
     const vc = voiceColsList();
     const values = sess.getRowValues(row);
     const parts = vc
@@ -1047,6 +1063,10 @@ export function useVoiceSession() {
         });
         sess.setRecognized(parsed);
         sess.pushValueBurst(target.name, parsed, target.id); // I-3: 중앙 버스트 + 칩 V(UI③)
+        // v0.47.0 W2 — 직접 수정("수정 88.9")도 성공 커밋이다: 화음 → 에코 순서 계약(WP-E).
+        //   종전엔 이 경로만 무음이었다(재청취 경로의 성공음과 비대칭 — 값이 저장되는 모든
+        //   커밋에 확인음이 난다는 WP-E 원칙에 합류).
+        playBeep('commit');
         await say(`수정 ${target.name} ${formatForTts(parsed)}`);
         // v0.33.0 — 검토 대기 출신 직접 수정: 값 수신 재안내 대신 검토 대기로 복귀
         // (수정 반영값 재낭독 + 대기 — bare 값 덮어쓰기 금지 계약 유지).
@@ -2359,15 +2379,21 @@ export function useVoiceSession() {
         beeped = true;
       }
     } else if (awaiting.kind === 'modify') {
-      playBeep('modify');
-      beeped = true;
+      // 🔴 v0.47.0 W2(FB-C+G①, 민구 08-08) — **수정 성공 커밋 = 화음 + green.** 종전엔 여기서
+      //   중립 단음(playBeep('modify'))을 내고 beeped 가드로 아래 화음을 건너뛰었다 — 그 단음은
+      //   "모드 전환" 신호라 진입(announceField isModify)으로 옮겼고, 성공은 다른 모든 커밋과
+      //   동일한 화음을 받는다(beeped를 세우지 않아 아래 공용 화음이 난다).
+      //   committed=true가 VoiceScreen 톤 파생을 amber→green으로 뒤집는다(재청취 중은 amber —
+      //   §C4 의미 보존). 해제는 announceField(다음 안내)·종단 착지가 modifyIndicator와 함께.
+      useModifyPhase.getState().setCommitted(true);
     }
 
     // 🔴 v0.46.0 WP-E(제보 F7② — 민구 지시 08-05) — **커밋 확인음**. 종전엔 정상 커밋 경로에
     // 소리가 아예 없었다(alert·corrected·modify 3종뿐). 값이 저장되는 모든 커밋에 확인음이 난다.
     // 🔑 **순서가 계약이다: 확인음 → 인식값 TTS**(민구 지정). 그래서 아래 echo speak() 바로 앞이다.
-    // `beeped` 가드는 **중복 방지 전용**이다 — 정정 완료(corrected)·수정 진입(modify)은 이미
-    // 자기 소리를 냈고 그 위에 확인음을 겹치면 두 신호가 한 순간에 섞여 구분이 안 된다.
+    // `beeped` 가드는 **중복 방지 전용**이다 — 정정 완료(corrected)는 이미 자기 소리(긍정 화음)를
+    // 냈고 그 위에 확인음을 겹치면 두 신호가 한 순간에 섞여 구분이 안 된다.
+    // (수정 성공은 v0.47.0 W2부터 이 공용 화음을 그대로 받는다 — 위 분기 주석 참조.)
     // ⚠️ trendConfirm인데 팝업(anomalyAlert)이 이미 내려간 경우는 corrected 비프가 안 나므로
     // 여기서 확인음이 난다 — 커밋은 성공했으니 소리가 없는 편이 더 나쁘다.
     if (!beeped) playBeep('commit');
@@ -3096,6 +3122,9 @@ export function useVoiceSession() {
     awaitingFieldRef.current = null;
     // 리뷰 라운드1(Codex+Flash, 수용) — 종료 전환 시 미확정 interim 표시 정리(표시 전용).
     useSessionStore.getState().setInterimValue(null);
+    // v0.47.0 W2(FB-G①) — 세션 종료도 종단 착지: 수정 표시·성공 국면 명시 해제(잔존 방지).
+    useSessionStore.getState().setModifyIndicator(null);
+    useModifyPhase.getState().setCommitted(false);
     // v0.35.0 R3-FIX-1 — 종료 확인 '확인' 경로는 resume 없이 여기로 온다. 래치를 여기서 풀지 않으면
     //   다음 세션의 모달 suspend가 전부 조기 반환돼 STT가 안 멈춘다. 복원은 불필요(세션 종료 중).
     clearUiSuspendLatch('stop');
@@ -3745,6 +3774,8 @@ export function useVoiceSession() {
     } else if (awaiting && awaiting.kind !== 'atEnd' && awaiting.row === row && awaiting.colId === colId) {
       epochRef.current++;
       cancelTts();
+      // v0.47.0 W2 — 수정 재청취 중 수동 재커밋도 「수정 성공」이다(amber→green 전환 신호).
+      if (awaiting.kind === 'modify') useModifyPhase.getState().setCommitted(true);
       await proceedAfterCommit(awaiting, { echoValue: value }); // echo 후 진행
     } else {
       // v0.47.0 W1(FB-A+B) — 비-awaiting(다른 셀 덮어쓰기)·atEnd 수동 커밋도 **값을 에코**한다.
