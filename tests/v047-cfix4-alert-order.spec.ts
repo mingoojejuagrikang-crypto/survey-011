@@ -3,8 +3,10 @@
  *
  * 종전(W1): 비-awaiting 수동 커밋의 값 에코를 `await`한 뒤에야 fireManualAlert가 불려,
  * 정보성 이상치의 팝업·트릴·알람 TTS가 에코 종료까지 지연됐다. 처방: violation이면 에코를
- * 생략한다 — 알람 문구(alertText)가 buildAnomalyAlert의 next로 커밋값을 이미 담아 발화하므로
- * 별도 에코는 같은 값의 이중 발화이기도 하다. 커밋 화음은 유지(저장됨≠이상함 — 별개 신호).
+ * 생략한다 — ⚠️ alertText는 **변화량/편차만** 발화한다(커밋값은 next로 팝업에 **표시**될 뿐,
+ * 발화되지 않는다 — anomalyAlarmLabel 실측). 에코 생략이 안전한 근거는 「수동 커밋 = 화면 앞
+ * 조작 + 팝업이 값을 표시」라 시각 확인이 이미 있다는 것이다(이중 발화 논리 아님 — 2차 재검증
+ * 정정). 커밋 화음은 유지(저장됨≠이상함 — 별개 신호).
  *
  * 데이터: activeZones 픽스처(측정항목01 trendRule=increase · 직전 100.0 — stubSheets).
  * ⚠️ 왕복 OFF는 AZ_SETTINGS가 이미 보장([TEAMOPS-81]).
