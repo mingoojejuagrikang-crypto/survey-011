@@ -3868,7 +3868,17 @@ export function useVoiceSession() {
       //   큐잉해 진행 중인 안내 TTS(awaiting 셀 재촉 등)를 자르지 않는다 — 화음이 즉시 나므로
       //   "커밋됐다"는 신호는 지연 없이 전달되고, 에코는 안내가 끝난 직후 이어진다(순서 계약
       //   확인음→에코 유지 — 사이가 벌어질 수는 있어도 뒤집히지는 않는다).
-      await say(formatForTts(value), false);
+      // v0.47.0 C-FIX4(리뷰 U9) — 정보성 이상치(violation)면 **에코를 생략**한다. 두 이유:
+      //   ①이 await가 알람 팝업·트릴·알람 TTS를 에코 종료까지 지연시켰다(값이 이상하다는
+      //   사실이 즉시 필요한 정보인데 늦는다 — U9의 본축) ②수동 커밋은 정의상 **화면 앞
+      //   키패드 조작**이고(2~3m 음성 시나리오가 아니다) 알람 팝업이 직전→현재 값을 크게
+      //   보여준다 — 값 확인 채널이 살아 있으니, 에코→알람 이중 TTS로 경고를 뒤로 미는 것보다
+      //   경고 단독이 낫다. ⚠️ alertText는 값이 아니라 **변화량**을 말한다(anomalyAlarmLabel) —
+      //   "알람이 값을 발화한다"는 가정은 틀렸다(이 스펙 첫 구현에서 실측). 순서를 뒤집어
+      //   알람 뒤에 에코를 큐잉하는 안은 기각: fireManualAlert의 say가 비대기(void)라
+      //   interrupt 50ms 갭과 레이스해 에코가 알람을 앞지를 수 있다.
+      //   화음(위)은 그대로 — "저장됐다"와 "이상하다"는 별개 신호다(화음→트릴→알람 TTS 순).
+      if (!violation) await say(formatForTts(value), false);
     }
 
     if (violation) fireManualAlert(violation, false);
