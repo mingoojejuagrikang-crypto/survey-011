@@ -16,6 +16,11 @@
  *     이 단언이 그 이전의 실체다. 여기가 죽으면 절전 기능이 주머니에서 스스로 켜진다.
  *  ④ 계측이 진입 경로를 가른다(`src:hold` vs 기존 `src:voice`). 두 경로의 사용 비율은
  *     다음 회차의 UI 판단 근거다 — 안 남기면 또 추론이 된다.
+ *  ⑧ 🔴 **해제 탭이 하부 UI로 전파되지 않는다**(V-FIX5 · 리뷰 U8이 지목한 오라클 공백).
+ *     터치 한 번은 `pointerdown → pointerup → mousedown → mouseup → click`을 낸다. `pointerup`에서
+ *     오버레이를 걷으면 뒤따르는 `click`은 **그 자리에 있던 다른 요소로** 간다. 검은 화면 중앙
+ *     아래에는 히어로가, 그 아래 트랙에는 종료·일시정지가 산다 — 화면을 켜려던 탭이 세션을
+ *     건드리면 사고다. 해제 계측(`screen_on`/`src:tap`)도 여기서 함께 잰다.
  *
  * ## 🔴 안 재는 축
  *  - **갇힘 방지 전반**(키보드 탈출·해제 후 음성 생존) → `v0460-cr-blackout-escape.spec.ts`.
@@ -75,7 +80,7 @@ const HOLD_TTS_DELAY_MS = 400;
 
 interface LoggedEvent { type: string; parsed?: string; extra?: string }
 
-async function screenOffLogs(page: Page): Promise<LoggedEvent[]> {
+async function screenLogs(page: Page, parsed: 'screen_off' | 'screen_on'): Promise<LoggedEvent[]> {
   const all = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
       const r = indexedDB.open('survey-011');
@@ -90,7 +95,7 @@ async function screenOffLogs(page: Page): Promise<LoggedEvent[]> {
       req.onerror = () => res([]);
     }) as Promise<LoggedEvent[]>;
   });
-  return all.filter((e) => e.parsed === 'screen_off');
+  return all.filter((e) => e.parsed === parsed);
 }
 
 test('① 히어로 3초 홀드로 진입한다 + 홀드 중 문구·진행바가 뜬다', async ({ page }) => {
@@ -131,7 +136,7 @@ test('② 🔴 3초 미만에서 떼면 진입하지 않는다 (오터치 방어
     '중도 이탈로 화면이 꺼진다 — 현장에서 값이 날아간 것처럼 보인다',
   ).toHaveCount(0);
   // 취소는 무동작이지 「나중에 발화」가 아니다 — 계측에도 안 남아야 한다.
-  expect(await screenOffLogs(page), '취소된 홀드가 screen_off를 남기면 안 된다').toHaveLength(0);
+  expect(await screenLogs(page, 'screen_off'), '취소된 홀드가 screen_off를 남기면 안 된다').toHaveLength(0);
 });
 
 test('③ 🔴 검은 화면 — 중앙 탭은 켜고, 가장자리 탭은 무시한다', async ({ page }) => {
@@ -242,9 +247,69 @@ test('④ 계측 — 홀드 진입은 src:hold, 음성 진입은 src:voice로 �
   await fireStt(page, '화면', 600);
   await expect(overlay(page)).toBeVisible({ timeout: 4000 });
 
-  const logs = await screenOffLogs(page);
+  const logs = await screenLogs(page, 'screen_off');
   expect(logs.map((e) => e.extra), '두 진입이 같은 이벤트에 출처만 다르게 남는다')
     .toEqual(['src:hold', 'src:voice']);
   // 새 이벤트 타입을 만들지 않았다는 확인 — SOP-003 파서 계약(기존 command/screen_off 그대로).
   expect(logs.every((e) => e.type === 'command')).toBe(true);
+});
+
+/** 🔴 V-FIX5 (리뷰 U8 — 오라클 공백) — 해제 탭이 **하부 UI로 새지 않는다** + 해제 계측.
+ *
+ *  ## ⚠️ 「고스트 클릭이 실제로 나는가」는 여기서 못 잰다 — 그래서 **기제를 잰다**
+ *  초안은 «`.click()` 후 window 버블 청취자에 click이 안 잡힌다»로 썼는데, **반증 확인에서
+ *  죽었다**: `swallowGhostClick()`를 지워도 green이었다. 이유는 Chromium에서 `pointerup`이
+ *  discrete 이벤트라 React가 **동기 flush**로 오버레이를 걷고, 브라우저가 그 뒤 `click`을
+ *  만들 때 down/up 타깃이 이미 분리돼 **click 자체가 발생하지 않기** 때문이다.
+ *  즉 이 환경에는 막을 고스트가 없고, 그 위에 세운 단언은 **공허한 green**이었다.
+ *  (진짜 고스트 클릭은 iOS 터치 경로의 산물이라 여기서 재현 불가 — 실기기 MONITORING 축.)
+ *
+ *  👉 그래서 **차단막 자체의 계약**을 결정론적으로 잰다: 해제 직후 창 안에서
+ *   ① 첫 click은 **먹힌다**(캡처 단계에서 stopPropagation → 버블 청취자에 안 온다)
+ *   ② 두 번째 click은 **통과한다** — 차단막이 «정확히 한 번»만 먹고 물러난다는 계약.
+ *     🔑 ②가 없으면 400ms 사각지대가 무한이 되는 회귀를 못 잡는다. 장갑 낀 현장에서
+ *     «화면 켜고 바로 누른 버튼이 안 먹는다»가 되는 축이 정확히 여기다.
+ *  🔴 이벤트는 `document.body`에 쏜다 — `window`에 직접 쏘면 at-target 단계라 캡처/버블이
+ *     **등록 순서**로 섞여 판정이 무의미해진다. */
+test('⑧ 🔴 해제 탭 차단막 — 첫 click은 먹고 두 번째는 통과 + screen_on(src:tap) (V-FIX5)', async ({ page }) => {
+  await boot(page, PHONE_402);
+  await waitForTtsIdle(page);
+  await fireStt(page, '화면', 600);
+  await expect(overlay(page)).toBeVisible({ timeout: 4000 });
+
+  await page.evaluate(() => {
+    const w = window as unknown as { __leakedClicks: number };
+    w.__leakedClicks = 0;
+    window.addEventListener('click', () => { w.__leakedClicks += 1; }, false); // 버블 단계
+  });
+
+  await page.locator('[data-testid="blackout-center-hit"]').click();
+  await expect(overlay(page)).toBeHidden({ timeout: 3000 });
+
+  const [firstLeaked, secondLeaked] = await page.evaluate(() => {
+    const w = window as unknown as { __leakedClicks: number };
+    const fire = () => document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const before = w.__leakedClicks;
+    fire();
+    const afterFirst = w.__leakedClicks;
+    fire();
+    return [afterFirst - before, w.__leakedClicks - afterFirst];
+  });
+  expect(
+    firstLeaked,
+    '해제 직후 첫 click이 하부로 샌다 — 검은 화면 아래 종료·일시정지 버튼을 때릴 수 있다',
+  ).toBe(0);
+  expect(
+    secondLeaked,
+    '차단막이 두 번째 click까지 먹는다 — 400ms 사각지대가 넓어져 «버튼이 안 먹는다»가 된다',
+  ).toBe(1);
+
+  // 하부가 실제로 멀쩡한지 상태로도 확인한다(이벤트 수만 보면 «다른 경로로 눌렸다»를 놓친다).
+  await expect(page.locator('[data-testid="voice-active-state"]'), '세션 화면 유지').toBeVisible();
+  await expect(page.locator('[data-testid="exit-confirm-inline"]'), '종료 확인이 뜨지 않았다').toHaveCount(0);
+  await expect(page.locator('[data-testid="paused-card"]'), '일시정지되지 않았다').toHaveCount(0);
+
+  const on = await screenLogs(page, 'screen_on');
+  expect(on.map((e) => e.extra), '해제도 진입과 대칭으로 계측된다 — 체류 시간 계산의 전제').toEqual(['src:tap']);
+  expect(on.every((e) => e.type === 'command'), '새 이벤트 타입을 만들지 않았다').toBe(true);
 });

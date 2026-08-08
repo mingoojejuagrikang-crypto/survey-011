@@ -1,5 +1,6 @@
 import { useCallback, type PointerEvent } from 'react';
 import { VOICE_TYPE } from './heroLayout';
+import { logger } from '../../lib/logger';
 
 /**
  * v0.46.0 WP-F — **검은 화면 모드**(제보 F13② · 민구 R2 확정)
@@ -57,11 +58,20 @@ function swallowGhostClick(): void {
 export function BlackoutOverlay({ onRelease }: { onRelease: () => void }) {
   /** 🔴 `pointerup`에서 푼다(`pointerdown`이 아니라). down에서 풀면 같은 제스처의 up·click이
    *  **이미 사라진 오버레이 자리**로 떨어져 아래 UI를 때린다. up + 고스트 클릭 차단이 짝이다. */
+  /** V-FIX5 — 해제도 계측한다. 진입(`screen_off` + `src:hold`/`src:voice`)과 **대칭**이어야
+   *  «몇 번 껐다 켰나 · 어느 경로로»가 로그에서 짝지어진다. 종전에는 진입만 남아 검은 화면
+   *  체류 시간조차 계산할 수 없었다. 새 이벤트 타입은 만들지 않는다(SOP-003 파서 계약 —
+   *  `command`/`parsed`/`extra:src=` 문법 그대로). sessionId는 logger가 자동 첨부한다. */
+  const logRelease = (src: 'tap' | 'key') => {
+    logger.log({ type: 'command', parsed: 'screen_on', extra: `src:${src}` });
+  };
+
   const release = useCallback((e: PointerEvent<HTMLDivElement>) => {
     if (!e.isPrimary) return;
     e.preventDefault();
     e.stopPropagation();
     swallowGhostClick();
+    logRelease('tap');
     onRelease();
   }, [onRelease]);
 
@@ -78,7 +88,7 @@ export function BlackoutOverlay({ onRelease }: { onRelease: () => void }) {
       //    🟢 갇힘 방지 계약(`v0460-cr-blackout-escape` ④)은 그대로다: Enter를 눌러 보고 있으면
       //    나온다. 키보드에는 「가장자리」가 없으므로 위치 조건도 없다.
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRelease(); }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); logRelease('key'); onRelease(); }
       }}
       style={{
         position: 'fixed',
