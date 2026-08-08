@@ -2383,13 +2383,18 @@ export function useVoiceSession() {
         playBeep('corrected');
         beeped = true;
       }
-    } else if (awaiting.kind === 'modify') {
-      // 🔴 v0.47.0 W2(FB-C+G①, 민구 08-08) — **수정 성공 커밋 = 화음 + green.** 종전엔 여기서
-      //   중립 단음(playBeep('modify'))을 내고 beeped 가드로 아래 화음을 건너뛰었다 — 그 단음은
-      //   "모드 전환" 신호라 진입(announceField isModify)으로 옮겼고, 성공은 다른 모든 커밋과
-      //   동일한 화음을 받는다(beeped를 세우지 않아 아래 공용 화음이 난다).
-      //   committed=true가 VoiceScreen 톤 파생을 amber→green으로 뒤집는다(재청취 중은 amber —
-      //   §C4 의미 보존). 해제는 announceField(다음 안내)·종단 착지가 modifyIndicator와 함께.
+    }
+    // 🔴 v0.47.0 W2(FB-C+G①, 민구 08-08) — **수정 성공 커밋 = 화음 + green.** 종전엔 여기서
+    //   중립 단음(playBeep('modify'))을 내고 beeped 가드로 아래 화음을 건너뛰었다 — 그 단음은
+    //   "모드 전환" 신호라 진입(announceField isModify)으로 옮겼고, 성공은 다른 모든 커밋과
+    //   동일한 화음을 받는다(kind='modify'는 beeped를 세우지 않아 아래 공용 화음이 난다).
+    //   committed=true가 VoiceScreen 톤 파생을 amber→green으로 뒤집는다(재청취 중은 amber —
+    //   §C4 의미 보존). 해제는 announceField(다음 안내)·종단 착지가 modifyIndicator와 함께.
+    // v0.47.0 C-FIX1ⓑ(리뷰 U2·U5) — kind='modify'만 보던 종전 판정의 구멍: **수정→이상치 알람→
+    //   정정 확정**은 awaiting이 trendConfirm으로 승격돼 있어 committed가 안 서고, 성공했는데
+    //   착지까지 amber가 남았다. isModifyLike(modify+trendConfirm)로 판정한다 — 수정 문맥이
+    //   없던 일반 정정은 modifyIndicator가 null이라 이 플래그가 시각 효과를 갖지 않는다(무해).
+    if (isModifyLike(awaiting)) {
       useModifyPhase.getState().setCommitted(true);
     }
 
@@ -3307,6 +3312,21 @@ export function useVoiceSession() {
     // 브리핑을 생략하고 이 '재시작' 시점이 담당한다(Q4-답 — 이중 낭독 방지).
     const briefing = buildReturnBriefing(false);
     if (briefing) await say(briefing, false);
+    // 🔴 v0.47.0 C-FIX1ⓐ(리뷰 U2, Codex 프로브 재현) — **수정 재청취 중 일시정지→재개가 수정
+    //   문맥을 지우면 안 된다.** 종전엔 무옵션 announceField(cur)가 awaiting을 kind:'value'로
+    //   덮고 modifyIndicator를 해제해, 성공 커밋 전인데 amber가 꺼지고(green 오표시) 다음
+    //   발화가 '수정'이 아닌 일반 커밋 의미론으로 흘렀다. pause()는 awaitingFieldRef를 보존
+    //   하므로 여기서 그 문맥을 그대로 재안내한다(isModify — 진입 중립음·amber·previousValue 복원).
+    {
+      const awaiting = awaitingFieldRef.current;
+      if (awaiting?.kind === 'modify') {
+        const target = getColById(awaiting.colId);
+        if (target) {
+          await announceField(target, { isModify: true, previousValue: awaiting.previousValue });
+          return;
+        }
+      }
+    }
     if (cur) await announceField(cur);
   }, [announceField, handleFinal, handleInterim, say, buildReturnBriefing]);
 
@@ -3914,6 +3934,12 @@ export function useVoiceSession() {
         // v0.47.0 W4(FB-E) — 보류 후보가 [확인]으로 **확정되는 순간** ✓ 등록(후보 단계는 제외).
         useSessionCommitMarks.getState().add(pv.row, pv.colId);
       }
+    }
+    // v0.47.0 C-FIX1ⓑ 동축 — 보류 [확인] 확정도 수정 문맥(수정 중 수동 재커밋의 hold)이면
+    // 성공 신호를 세운다(voice 정정 경로와 대칭 — amber 잔존 방지).
+    {
+      const aw = awaitingFieldRef.current;
+      if (aw && isModifyLike(aw)) useModifyPhase.getState().setCommitted(true);
     }
     // 보류 시 재무장을 미뤘던 진행 재개 — reviewWait 출신은 검토 대기 재진입, 그 외 advance
     // (commitManualValue와 동일 착지, proceedAfterCommit SSOT).
