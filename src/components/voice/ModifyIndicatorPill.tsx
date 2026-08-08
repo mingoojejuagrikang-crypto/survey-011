@@ -77,7 +77,17 @@ export function ModifyIndicatorPill({ name, prevValue, newValue }: { name: strin
             // v0.47.0 W2 — 성공 국면 값은 green(민구: "성공 순간부터 green").
             fontWeight: 900, color: committed ? T.green : T.text,
             letterSpacing: -1, lineHeight: 1.04,
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            // 🔴 v0.47.0 C-FIX5(리뷰 U7) — **확정값 국면(committed)의 ellipsis를 제거했다.**
+            //   W5ⓑ(VoiceHero `6d69165`→`cd6d6d6`)와 동형: 숫자는 잘리면 다른 숫자로
+            //   오독된다('29.9'→'29…'). 넘침 방지는 useFitGroup(valueFitRef, searchBasePx=
+            //   HERO_BASE_FONT_PX.value)이 맡고, ellipsis는 fit이 늦은 프레임에서 틀린 값을
+            //   그럴듯하게 그리는 폴백이었다 — 지우면 그 프레임이 «잘린 글리프»로 남아
+            //   오독이 아니라 결함으로 보인다.
+            //   ⚠️ interim 국면은 ellipsis **유지**(Larry 확정 08-08 — 확정값 라인만):
+            //   임의 길이 STT 문장의 «…»는 "뒤가 더 있다" 표기 계약이다(v043-fit-group:333).
+            //   ⚠️ overflow:'hidden'도 유지 — 지우면 넘친 글자가 중앙 흡수영역 밖으로 흐른다.
+            whiteSpace: 'nowrap', overflow: 'hidden',
+            textOverflow: committed ? 'clip' : 'ellipsis',
             textAlign: 'center',
             animation: committed ? 'chip-pop 320ms ease-out' : undefined,
           }}
