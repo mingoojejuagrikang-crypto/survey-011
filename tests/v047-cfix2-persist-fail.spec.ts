@@ -197,9 +197,23 @@ test('C-FIX2 — 영속 실패 시 성공 신호 0(화음·에코·✓·advance)
   expect(tts1.some((t) => t.includes('저장하지 못했습니다')), '실패 발화 고지').toBe(true);
   expect(events.some((e) => e.type === 'error' && (e.extra ?? '').startsWith('cell_persist_failed:')), '실패 계측').toBe(true);
 
-  // ── seam 해제 → 같은 셀 재커밋 = 재시도 성공: 화음·에코·advance·✓ 전부 발화 ──
+  // ── C-FIX2b — **지속 배너**: TTS를 놓쳐도 화면에 남는다(PRINCIPLES §1) + 실패 셀·값 명시. ──
+  const banner = page.locator('[data-testid="cell-persist-error-banner"]');
+  await expect(banner, '실패가 화면에 지속된다').toBeVisible();
+  await expect(banner).toContainText('횡경 35.1');
+
+  // 재시도 ① — seam이 아직 켜져 있다: 실패가 반복돼도 배너가 남고 고지가 다시 난다.
+  await page.locator('[data-testid="cell-persist-retry-btn"]').click();
+  await page.waitForTimeout(600);
+  await expect(banner, '재시도 실패 시 배너 유지').toBeVisible();
+  events = await loadLogEventsFromIDB(page);
+  expect(countBeeps(events, 'alert'), '재시도 실패 고지(트릴 2회째)').toBe(2);
+  expect(countBeeps(events, 'commit'), '여전히 성공 화음 없음').toBe(2);
+
+  // 재시도 ② — seam 해제 → [다시 저장] = 원래 커밋 플로우 전체 재개(화음·에코·advance·✓) + 배너 해소.
   await page.evaluate(() => { (window as unknown as { __survey011FailSessionPut?: boolean }).__survey011FailSessionPut = false; });
-  await manualCommit(page, '횡경', ['3', '5', '.', '1']);
+  await page.locator('[data-testid="cell-persist-retry-btn"]').click();
+  await expect(banner, 'durable 성공이 배너를 내린다').toHaveCount(0, { timeout: 4000 });
 
   events = await loadLogEventsFromIDB(page);
   expect(countBeeps(events, 'commit'), '재시도 성공 화음').toBe(3);

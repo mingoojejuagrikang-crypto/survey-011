@@ -16,6 +16,7 @@ import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep, unlockAudioPlayback } from './beep';
 import { useModifyPhase } from './modifyPhase';
 import { useSessionCommitMarks } from '../components/voice/useVoiceCommitMark';
+import { useCellPersistError } from './cellPersistError';
 import { AudioRecorder, type AudioTrackState, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import {
@@ -2969,6 +2970,8 @@ export function useVoiceSession() {
     sess.resetAll();
     // v0.47.0 W4(FB-E) — 세션 경계: 영속 ✓ 집합 리셋(이전 세션의 확정 표시가 새지 않게).
     useSessionCommitMarks.getState().reset();
+    // v0.47.0 C-FIX2b — 세션 경계: 셀 저장 실패 배너도 리셋(유령 배너 방지).
+    useCellPersistError.getState().clear();
     // D-2 (RACE-7): persist session id/startedAt in the store so an in-app unmount during pause
     // can't lose them. MUST run AFTER resetAll() — resetAll clears sessionId/startedAt too.
     sess.setSessionMeta({ sessionId: sessionIdRef.current, startedAt: startTs, label: sessionLabelRef.current });
@@ -3147,6 +3150,9 @@ export function useVoiceSession() {
     // v0.47.0 W2(FB-G①) — 세션 종료도 종단 착지: 수정 표시·성공 국면 명시 해제(잔존 방지).
     useSessionStore.getState().setModifyIndicator(null);
     useModifyPhase.getState().setCommitted(false);
+    // v0.47.0 C-FIX2b — 셀 저장 실패 배너 해소: stop의 persistSession이 세션 전체(미저장 셀 값
+    // 포함)를 다시 쓰고, 그 실패는 stop 전용 persistError 모달이 이어받는다(이중 모달 방지).
+    useCellPersistError.getState().clear();
     // v0.35.0 R3-FIX-1 — 종료 확인 '확인' 경로는 resume 없이 여기로 온다. 래치를 여기서 풀지 않으면
     //   다음 세션의 모달 suspend가 전부 조기 반환돼 STT가 안 멈춘다. 복원은 불필요(세션 종료 중).
     clearUiSuspendLatch('stop');
@@ -3666,6 +3672,8 @@ export function useVoiceSession() {
     //   add 전용 집합 계약이 그대로 선다. (updatedSession null = 행이 아직 IDB에 없어 다음
     //   persistSession이 자연 반영하는 기존 계약 — 실패가 아니라 지연이므로 true.)
     if (value !== '') useSessionCommitMarks.getState().add(row, colId);
+    // C-FIX2b — 같은 셀의 durable 성공이 실패 배너를 해소한다(재시도 성공·수동 재입력 성공 공통).
+    useCellPersistError.getState().clearIfMatches(row, colId);
     return true;
   }, []);
 
@@ -3676,11 +3684,16 @@ export function useVoiceSession() {
    *  경고 트릴 + 발화 — 현장은 폰을 2~3m 떨어뜨려 둬 화면을 못 본다(PRINCIPLES §2).
    *  🟡 값은 화면에 남긴다(manualHold의 롤백과 다른 선택): 그쪽 롤백은 pending 태그 없는
    *  후보가 reload에 확정처럼 보이는 반쪽 상태를 막는 장치고, 여기는 검증을 통과한 값의
-   *  내구화만 실패한 경우다 — 지우면 입력이 유실되고, 남기면 재커밋(=재시도)이나 이후
-   *  persistSession(행 완료)이 자연 회복할 수 있다. 근거는 산출물 리뷰 대응 절에. */
-  const notifyCellPersistFailed = useCallback(() => {
+   *  내구화만 실패한 경우다 — 지우면 입력이 유실되고, 남기면 재시도가 그 값을 그대로 쓴다.
+   *  근거는 산출물 리뷰 대응 절에.
+   *  C-FIX2b(2차 재검증) — 소리·발화는 순간이라 놓칠 수 있다: **지속 배너 + 명시 재시도**를
+   *  함께 세운다(cellPersistError.arm → VoiceScreen이 CellPersistErrorBanner 렌더 · [다시 저장]
+   *  = commitManualValue 재실행 → 성공 시 원래 커밋 플로우 전체 재개). 기존 persistError는
+   *  stop 전용 의미론(성공 재시도 = 세션 종료)이라 셀 스코프 변형 — 근거는 cellPersistError.ts. */
+  const notifyCellPersistFailed = useCallback((row: number, colId: string, value: string) => {
+    useCellPersistError.getState().arm({ row, colId, value });
     playBeep('alert');
-    const msg = '저장하지 못했습니다. 다시 입력해 주세요.';
+    const msg = '저장하지 못했습니다. 다시 저장 버튼을 눌러 주세요.';
     useSessionStore.getState().setLastTts(msg);
     void say(msg);
   }, [say]);
@@ -3689,7 +3702,7 @@ export function useVoiceSession() {
     logCell({ type: 'command', parsed: 'touch_commit', extra: 'touch', text: value, row, colId });
     // C-FIX2 — durable 실패면 영수증(성공 표식)을 만들지 않고 고지한다.
     if (!(await persistCellValue(row, colId, value))) {
-      notifyCellPersistFailed();
+      notifyCellPersistFailed(row, colId, value);
       return;
     }
     // v0.37.0 리뷰#1 후속(Codex Medium) — 터치 인라인 커밋도 검토 영수증을 발행한다(음성·수동·이상치
@@ -3846,7 +3859,7 @@ export function useVoiceSession() {
     //   (유실될 값을 성공 고지하지 않는다). 값은 화면에 남아 재커밋이 재시도가 된다
     //   (notifyCellPersistFailed 주석의 🟡 선택 근거 참조).
     if (!(await persistCellValue(row, colId, value))) {
-      notifyCellPersistFailed();
+      notifyCellPersistFailed(row, colId, value);
       return;
     }
     // v0.37.0 리뷰#1 — 수동 시트 커밋 영수증(검토 화면 파생 SSOT). 보류(manualHold) 분기는 위에서

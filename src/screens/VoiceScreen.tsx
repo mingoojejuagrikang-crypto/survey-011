@@ -11,6 +11,8 @@ import {
 } from '../lib/useVoiceSession';
 import { buildSessionLabel } from '../lib/sessionLabel';
 import { useModifyPhase } from '../lib/modifyPhase';
+import { useCellPersistError } from '../lib/cellPersistError';
+import { CellPersistErrorBanner } from '../components/voice/CellPersistErrorBanner';
 import { EdgeGlow, type GlowTone } from '../components/voice/EdgeGlow';
 import { type ReaskReason } from '../components/voice/ReaskCue';
 import { PersistErrorBanner } from '../components/voice/PersistErrorBanner';
@@ -57,6 +59,9 @@ export function VoiceScreen(props: {
   // v0.47.0 W2 — 수정 성공 국면(green) 구독. 🔴 early-return(ReadyState/stopping)보다 **위**여야
   //   한다(Rules of Hooks — phase 전환에서 훅 수가 달라지면 크래시). 파생은 아래 glowTone에서.
   const modifyCommitted = useModifyPhase((st) => st.committed);
+  // v0.47.0 C-FIX2b — 셀 저장 실패 배너 상태(같은 Rules of Hooks 제약으로 여기).
+  const cellPersistPending = useCellPersistError((st) => st.pending);
+  const cellPersistRetrying = useCellPersistError((st) => st.retrying);
   useEffect(() => {
     props.onTelemetryReadersChange?.({
       getTrackState: voiceSession.getTrackState,
@@ -235,6 +240,28 @@ export function VoiceScreen(props: {
         <PersistErrorBanner
           retrying={sess.persistError.retrying}
           onRetry={() => { void voiceSession.retryFinalPersist(); }}
+        />
+      )}
+      {/* v0.47.0 C-FIX2b — 셀 저장 실패 배너(지속 표시 + 명시 재시도, PRINCIPLES §1).
+          stop 실패 모달(persistError)이 서 있으면 그쪽이 우선 — 더 큰 사고(세션 전체 미저장)가 위다.
+          [다시 저장] = commitManualValue 재실행: 성공 시 화음·에코·✓·진행까지 원래 커밋 플로우
+          전체가 재개되고, persistCellValue의 durable 성공이 clearIfMatches로 배너를 내린다. */}
+      {cellPersistPending && !sess.persistError && (
+        <CellPersistErrorBanner
+          colName={s.columns.find((c) => c.id === cellPersistPending.colId)?.name ?? ''}
+          value={cellPersistPending.value}
+          retrying={cellPersistRetrying}
+          onRetry={() => {
+            if (useCellPersistError.getState().retrying) return;
+            useCellPersistError.getState().setRetrying(true);
+            void (async () => {
+              const p = cellPersistPending;
+              await voiceSession.commitManualValue(p.row, p.colId, p.value);
+              // 성공이면 clearIfMatches가 이미 내렸다. 실패면 notify가 재무장(arm — retrying=false).
+              // 어느 쪽이든 잠금은 남기지 않는다(방어적 해제 — arm이 이미 풀었으면 no-op).
+              useCellPersistError.getState().setRetrying(false);
+            })();
+          }}
         />
       )}
       {/* v0.46.0 WP-F — 검은 화면 모드. **마지막에 둔다**(DOM 순서 = 모든 것을 덮는다).
