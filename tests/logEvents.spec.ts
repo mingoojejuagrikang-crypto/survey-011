@@ -37,6 +37,7 @@ import {
   bgKeep,
   notifyPerm,
   readyProbe,
+  holdTtsSkipped,
   fontRenderEcho,
 } from '../src/lib/logEvents';
 
@@ -405,6 +406,13 @@ test('fontRenderEcho — 확정 순간 실렌더 바이트 계약 (WP-1② · v0
   // 🔑 민구 실기기 시나리오: 402×513에서 정수 2자리(`22.4`)가 가로로 넘친 경우.
   expect(fontRenderEcho({ hero: 167.9, w: 402, h: 513, ovX: 12, ovY: 2, len: 4 }))
     .toBe('font_render_echo:hero=167.9,w=402,h=513,ovX=12,ovY=2,len=4');
+});
+
+/** v0.47.0 W7 V-FIX1ⓒ — 홀드 안내 TTS를 큐잉하지 않고 버린 사건.
+ *  🔴 이 빌더가 존재하는 것 자체가 계약이다: 종전엔 컴포넌트가 문자열을 인라인으로 썼고,
+ *  그건 이 파일 헤더의 *"새 extra는 이 모듈을 경유한다"* 규약 위반이었다(V-FIX6b에서 정리). */
+test('holdTtsSkipped — 홀드 안내 스킵 바이트 계약 (W7 V-FIX1ⓒ)', () => {
+  expect(holdTtsSkipped('tts_busy')).toBe('hold_tts_skipped:tts_busy');
 });
 
 /** 계측 I — 회전이 실제로 일어났는가 + 안내가 실제로 떴는가(별개 사실). */

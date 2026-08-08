@@ -4,6 +4,7 @@ import { VOICE_TYPE } from './heroLayout';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { logger } from '../../lib/logger';
+import { holdTtsSkipped } from '../../lib/logEvents';
 import { speak } from '../../lib/speech';
 
 /**
@@ -161,7 +162,7 @@ export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
         // 🔑 큐잉하지 않고 **버린다.** 뒤에 세우면 앞 발화 종료가 뮤트를 먼저 풀어(위 계약 ③)
         //    이 문장이 STT로 들어간다. 안내 손실은 화면 문구·진행바가 메운다.
         //    실패를 숨기지 않는다 — 얼마나 자주 버려지는지가 다음 회차의 판단 근거다.
-        logger.log({ type: 'app', extra: 'hold_tts_skipped:tts_busy' });
+        logger.log({ type: 'app', extra: holdTtsSkipped('tts_busy') });
         return;
       }
       void speak(HOLD_TTS, {

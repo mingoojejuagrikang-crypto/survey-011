@@ -15,6 +15,9 @@
  *    이벤트 문자열은 영원히 그 형태가 정답이다.
  *
  * 신규 이벤트 규약(v0.35.2+ — 새 extra는 이 모듈을 경유한다):
+ *  - 🔴 대상은 **이벤트 이름을 새로 만드는 extra**다. 기존 `parsed` 이벤트에 실리는 **필드
+ *    문자열**(`screen_off`/`screen_on`의 `src:hold`·`src:tap` 등)은 어휘가 이미 고정돼 있어
+ *    콜사이트 인라인을 허용한다 — 새 이름을 만드는 쪽만 빌더를 거친다(V-FIX6b에서 명문화).
  *  - 세그먼트 구분은 ':' — `event:detail` / `event:detail:sub`
  *  - key=value 쌍은 ','로 연결 — `event:key=val,key2=val2` (kv() 사용)
  *  - 전이 표기는 ASCII '->' (유니코드 '→' 금지 — 신규 한정, 기존 이벤트는 불변)
@@ -484,4 +487,6 @@ export {
   readyProbe, fontRenderEcho, bgKeep, notifyPerm,
   // v0.47.0 W5ⓐ — 에코 전수화가 표시 문자열을 싣게 되면서 필요해진 `extra` 값 이스케이프.
   escapeExtraValue,
+  // v0.47.0 W7 V-FIX1ⓒ — 홀드 안내 TTS를 큐잉하지 않고 버린 사건(빈도가 판정 근거다).
+  holdTtsSkipped,
 } from './logEventsInstrumentation';
