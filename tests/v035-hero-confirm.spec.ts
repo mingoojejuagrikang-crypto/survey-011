@@ -375,11 +375,15 @@ test('리뷰#2 — skip-완료 검토는 방금 커밋된 앞 셀(당도)을 보
   console.log('✓ skip-완료 검토: 당도 30.7(방금 커밋) — 산도 4.2 오표시 없음');
 });
 
-// ─── v0.45.0 UI③ — 칩 '✓' 마크(음성 커밋 승계 표시) ─────────────────────────────────────────
-//   중앙 '✓+항목명' 라벨 삭제(위 정당 파손)의 승계: 방금 **음성으로** 확정된 칩의 항목명 앞에
-//   '✓'(data-testid=chip-commit-mark)가 값 플래시와 같은 리듬(VOICE_COMMIT_MARK_MS = CONFIRM_MS
-//   = 1.5초)으로 표시된다. `valueBurst`는 음성 커밋 경로만 발행하므로(수동·터치·이상치 정정은
-//   commitReceipt) 그 자체가 "음성 입력 칩만 ✓"의 판별식이다 — 아래 수동 커밋 대조군이 그 반쪽.
+// ─── v0.45.0 UI③ → v0.47.0 W4(FB-E) — 칩 '✓' 마크 ──────────────────────────────────────────
+//   중앙 '✓+항목명' 라벨 삭제(위 정당 파손)의 승계: 확정된 칩의 항목명 앞에
+//   '✓'(data-testid=chip-commit-mark)가 표시된다.
+//   🔴 v0.47.0 W4(민구 확정 08-08) — **UI③의 두 원칙이 대체됐다(정당 파손):**
+//    · "음성만 ✓" → **성공 입력 전부**(수동·터치·이상치 정정 포함). ✓ 의미 = "이 칸은 채워졌다".
+//    · "1.5초 뒤 소멸" → **세션 동안 유지**(성공 입력으로 덮으면 유지, 값이 비면 회수).
+//   1.5초 플래시(useVoiceCommitMarkColId)는 "방금 확정" 리듬으로 여전히 존재하지만, 영속 ✓
+//   (useSessionCommitMarks)가 같은 글리프를 이어받으므로 소멸은 더 이상 관측되지 않는다.
+//   이 기대를 "음성만/1.5초 소멸"로 되돌리려면 민구의 08-08 확정을 먼저 뒤집어야 한다.
 //   🔴 v0.46.0 WP-0 — 기대 문자가 알파벳 'V'에서 체크표시 '✓'로 **정정**됐다. 민구의 "V"는
 //   처음부터 체크표시의 표기였다(민구 정정 08-05). 이 기대값을 'V'로 되돌리지 마라.
 //   신규 절은 픽스처 SSOT(tests/fixtures/stt.ts·gum.ts)로 부트한다(인라인 목 복붙 금지 계약).
@@ -410,7 +414,7 @@ async function bootWithFixtures(page: Page) {
   await page.waitForTimeout(200);
 }
 
-test('UI③ — 음성 커밋: 확정 칩에 ✓ 마크가 뜨고 값 플래시와 같은 1.5초 뒤 소멸한다', async ({ page }) => {
+test('UI③→W4 — 음성 커밋: 확정 칩에 ✓ 마크가 뜨고 **세션 동안 유지**된다(1.5초 소멸 대체)', async ({ page }) => {
   await bootWithFixtures(page);
   await startSession(page);
   await expect(page.locator('[data-testid="chip-commit-mark"]'), '커밋 전엔 마크 없음').toHaveCount(0);
@@ -424,19 +428,19 @@ test('UI③ — 음성 커밋: 확정 칩에 ✓ 마크가 뜨고 값 플래시�
   await expect(page.locator('[data-testid="column-chip"][data-active="true"]'), '활성 칩은 이미 다음 항목(산도)')
     .toContainText('산도');
 
-  // 값 플래시(CONFIRM_MS)와 같은 리듬 — 창의 중간에도 살아 있고, 1.5초가 지나면 꺼진다.
-  await page.waitForTimeout(600);
-  await expect(mark, '1.5초 창 중간에도 유지된다(한 프레임 깜빡임이 아니다)').toBeVisible();
-  await expect(page.locator('[data-testid="chip-commit-mark"]'), 'VOICE_COMMIT_MARK_MS 경과 후 소멸')
-    .toHaveCount(0, { timeout: 3000 });
-  console.log('✓ UI③ — 음성 커밋 칩 V 마크: 표시 → 1.5초 유지 → 소멸');
+  // 🔴 v0.47.0 W4(민구 08-08) — 종전 「VOICE_COMMIT_MARK_MS 경과 후 소멸」 단언의 **정당 파손**:
+  //   ✓는 이제 "이 칸은 채워졌다"의 세션 영속 표시다. 1.5초 창을 훌쩍 넘겨도 남는다.
+  await page.waitForTimeout(2200); // > VOICE_COMMIT_MARK_MS(1500) — 플래시 창 밖
+  await expect(mark, '1.5초 플래시 창이 지나도 ✓는 세션 영속(W4)').toBeVisible();
+  console.log('✓ UI③→W4 — 음성 커밋 칩 ✓ 마크: 표시 → 1.5초 창 밖에서도 유지(세션 영속)');
 });
 
-test('UI③ — 수동(터치) 커밋에는 V 마크가 붙지 않는다(음성 전용 판별식)', async ({ page }) => {
+test('UI③→W4 — 수동(터치) 커밋에도 ✓ 마크가 붙는다(「음성만」 판별식 대체 — 민구 08-08)', async ({ page }) => {
   await bootWithFixtures(page);
   await startSession(page);
 
-  // 활성 칩(당도)을 탭 → 수동 키패드로 31.5 커밋. valueBurst(음성)가 아니라 commitReceipt 경로다.
+  // 활성 칩(당도)을 탭 → 수동 키패드로 31.5 커밋. 종전엔 valueBurst(음성 전용)만 마크를 받았다 —
+  // W4부터 성공 입력 전부(수동 포함)가 영속 ✓ 집합(useSessionCommitMarks)에 등록된다.
   await page.locator('[data-testid="column-chip"][data-col-name="당도"]').click();
   await expect(page.locator('[data-testid="manual-value-sheet"]')).toBeVisible({ timeout: 3000 });
   for (const k of ['3', '1', '.', '5']) await page.locator(`[data-testid="manual-key-${k}"]`).click();
@@ -444,10 +448,10 @@ test('UI③ — 수동(터치) 커밋에는 V 마크가 붙지 않는다(음성 
   await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
   await expect(page.locator('[data-testid="column-chip"][data-col-name="당도"]')).toContainText('31.5');
 
-  // 마크 창(1.5초)을 통째로 덮는 구간을 표집 — 어느 순간에도 마크가 떠서는 안 된다.
-  for (let i = 0; i < 4; i++) {
-    await expect(page.locator('[data-testid="chip-commit-mark"]'), '수동 커밋엔 V 마크 없음').toHaveCount(0);
-    await page.waitForTimeout(400);
-  }
-  console.log('✓ UI③ — 수동 커밋 무마크(음성 전용)');
+  const mark = page.locator('[data-testid="column-chip"][data-col-name="당도"] [data-testid="chip-commit-mark"]');
+  await expect(mark, '수동 커밋에도 ✓(성공 입력 전부 — W4)').toBeVisible({ timeout: 2000 });
+  // 플래시 창(1.5초) 밖에서도 유지 — 수동 경로는 valueBurst가 없어 플래시 자체가 없고, 영속 ✓만 있다.
+  await page.waitForTimeout(2000);
+  await expect(mark, '수동 커밋 ✓도 세션 영속').toBeVisible();
+  console.log('✓ UI③→W4 — 수동 커밋에도 ✓(세션 영속)');
 });

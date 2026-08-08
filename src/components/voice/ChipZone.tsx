@@ -4,6 +4,7 @@ import { ColumnChip } from './ColumnChip';
 import { nestedAutoValue } from '../../lib/autoValue';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { chipSweepOffset, chipSweepStartFor, shouldChipSweep } from '../../lib/chipSweep';
+import { commitMarkKey, useSessionCommitMarks } from './useVoiceCommitMark';
 import type { Column } from '../../types';
 
 /** 칩존 **20%** 트랙(v0.43.0 UI-b, 종전 25%) — **한 행 · 가로 스크롤 · 진행중 칩 우측 끝 정렬**
@@ -230,6 +231,11 @@ export function ChipZone({
   commitMarkColId?: string | null;
 }) {
   const sweepSeconds = useSettingsStore((s) => s.chipSweepSeconds);
+  // v0.47.0 W4(FB-E, 민구 확정 08-08) — 세션 영속 ✓ 집합 조회. ✓ = "이 칸은 채워졌다"
+  //   (성공 입력 전부 — 수동·터치·정정 포함. v0.45.0 UI③ "음성만"은 이 결정이 대체).
+  //   렌더 게이트 `hasValue &&`가 값 삭제 시 회수를 맡는다(집합은 add 전용 — 정본 주석은
+  //   useVoiceCommitMark.ts). 현재 행(row) 키만 조회하므로 C13(행 이식 방지)과 구조적으로 공존.
+  const sessionMarks = useSessionCommitMarks((s) => s.keys);
   // 왕복 루프가 DOM을 직접 만지려면 자기 핸들이 필요한데, `gridRef`는 부모(ActiveState)가 소유한
   // `Ref`라 여기서 `.current`를 읽을 수 없다. 콜백 ref로 **둘 다** 채운다 — 부모 계약 불변.
   const localGridRef = useRef<HTMLDivElement | null>(null);
@@ -294,7 +300,12 @@ export function ChipZone({
             activeTone={activeTone}
             isDone={(isVoice || isTouch) && hasValue}
             isEditing={editingColId === c.id}
-            justCommitted={commitMarkColId != null && c.id === commitMarkColId}
+            // W4 — ✓는 「방금 확정 플래시」(1.5초) 또는 「이 세션에서 성공 커밋됨」(영속)일 때.
+            //   같은 prop을 쓰는 이유: 글리프·자리(chip-commit-mark)가 동일한 하나의 표시라서다.
+            justCommitted={
+              (commitMarkColId != null && c.id === commitMarkColId) ||
+              ((isVoice || isTouch) && hasValue && sessionMarks.has(commitMarkKey(row, c.id)))
+            }
             onActivate={() => onActivate(c)}
             onCommit={(newValue) => onCommit(c, newValue, value)}
             onCancel={onCancel}

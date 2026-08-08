@@ -15,6 +15,7 @@ import type { Column, Session, SessionRow, SessionTarget } from '../types';
 import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
 import { playBeep, unlockAudioPlayback } from './beep';
 import { useModifyPhase } from './modifyPhase';
+import { useSessionCommitMarks } from '../components/voice/useVoiceCommitMark';
 import { AudioRecorder, type AudioTrackState, type ClipResult } from './audioRecorder';
 import { logger } from './logger';
 import {
@@ -1063,6 +1064,7 @@ export function useVoiceSession() {
         });
         sess.setRecognized(parsed);
         sess.pushValueBurst(target.name, parsed, target.id); // I-3: 중앙 버스트 + 칩 V(UI③)
+        useSessionCommitMarks.getState().add(targetRow, target.id); // W4 — 직접 수정도 성공 커밋
         // v0.47.0 W2 — 직접 수정("수정 88.9")도 성공 커밋이다: 화음 → 에코 순서 계약(WP-E).
         //   종전엔 이 경로만 무음이었다(재청취 경로의 성공음과 비대칭 — 값이 저장되는 모든
         //   커밋에 확인음이 난다는 WP-E 원칙에 합류).
@@ -2067,6 +2069,9 @@ export function useVoiceSession() {
     const myEpoch = ++epochRef.current;
     const sess = useSessionStore.getState();
     sess.setRowValue(awaiting.row, awaiting.colId, parsed);
+    // v0.47.0 W4(FB-E) — 음성 확정 커밋의 ✓ 집합 등록(value·modify·trendConfirm 정정 공통.
+    //   아래 추세위반 분기도 "커밋된 값은 그대로 선다"이므로 이 지점이 맞다).
+    useSessionCommitMarks.getState().add(awaiting.row, awaiting.colId);
     // v0.37.0 리뷰#1 — 검토 영수증(모든 커밋 경로 공통). trendConfirm(정정)도 **무조건** 발행한다:
     //   valueBurst는 아래에서 중복 팝업 억제로 정정 커밋을 건너뛰지만(불변), 검토 화면은 정정된
     //   실제 커밋값을 보여야 하므로 영수증은 정정 여부와 무관하게 발행한다.
@@ -2947,6 +2952,8 @@ export function useVoiceSession() {
       ? ensureUniqueSessionLabel(baseLabel, useDataStore.getState().sessions.map((x) => x.label))
       : undefined;
     sess.resetAll();
+    // v0.47.0 W4(FB-E) — 세션 경계: 영속 ✓ 집합 리셋(이전 세션의 확정 표시가 새지 않게).
+    useSessionCommitMarks.getState().reset();
     // D-2 (RACE-7): persist session id/startedAt in the store so an in-app unmount during pause
     // can't lose them. MUST run AFTER resetAll() — resetAll clears sessionId/startedAt too.
     sess.setSessionMeta({ sessionId: sessionIdRef.current, startedAt: startTs, label: sessionLabelRef.current });
@@ -3320,6 +3327,20 @@ export function useVoiceSession() {
     sessionColumnsRef.current = restoredSession.columns;
     setSessionColumns(restoredSession.columns);
     logger.setSessionId(live.sessionId);
+    // v0.47.0 W4(FB-E) 🟡 hydrate 가정 — 복원 세션의 **값이 있는 셀 = 과거 성공 커밋**으로
+    //   ✓ 집합을 재구성한다("이 칸은 채워졌다"는 reload를 넘어 이어진다고 읽음). 단, 지금
+    //   복구 중인 미확정 후보 셀(pending)은 제외 — [확인] 시점에 add된다.
+    {
+      const seed: Array<{ row: number; colId: string }> = [];
+      for (const r of restoredSession.rows) {
+        for (const [colId, v] of Object.entries(r.values)) {
+          if (v !== '' && !(r.index === pending.row && colId === pending.colId)) {
+            seed.push({ row: r.index, colId });
+          }
+        }
+      }
+      useSessionCommitMarks.getState().reset(seed);
+    }
     const col = getColById(pending.colId);
     if (!col) return;
     awaitingFieldRef.current = pending.reviewWait
@@ -3574,6 +3595,9 @@ export function useVoiceSession() {
    *  행이 아직 완료된 적이 없으면 sessionStore만 갱신되고, 다음 persistSession에서 자연 반영된다. */
   const persistCellValue = useCallback(async (row: number, colId: string, value: string) => {
     useSessionStore.getState().setRowValue(row, colId, value);
+    // v0.47.0 W4(FB-E) — 수동/터치 확정 커밋의 ✓ 집합 등록. 이 코어는 manualHold 후보 경로를
+    //   지나지 않으므로(그쪽은 patchRowValues 직행) 미확정 후보가 ✓를 받는 일이 없다.
+    if (value !== '') useSessionCommitMarks.getState().add(row, colId);
     const updatedSession = useDataStore
       .getState()
       .patchRowValues(sessionIdRef.current, row, { [colId]: value });
@@ -3885,7 +3909,11 @@ export function useVoiceSession() {
     //   후보값(candidateValue)을 보여야 한다(거부된 직전값 아님). proceedAfterCommit(advance→검토) 전에 발행.
     {
       const pv = staged.pendingValidation;
-      if (pv) useSessionStore.getState().pushCommitReceipt(pv.row, pv.colId, alert.colName, pv.candidateValue);
+      if (pv) {
+        useSessionStore.getState().pushCommitReceipt(pv.row, pv.colId, alert.colName, pv.candidateValue);
+        // v0.47.0 W4(FB-E) — 보류 후보가 [확인]으로 **확정되는 순간** ✓ 등록(후보 단계는 제외).
+        useSessionCommitMarks.getState().add(pv.row, pv.colId);
+      }
     }
     // 보류 시 재무장을 미뤘던 진행 재개 — reviewWait 출신은 검토 대기 재진입, 그 외 advance
     // (commitManualValue와 동일 착지, proceedAfterCommit SSOT).
