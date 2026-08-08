@@ -49,6 +49,30 @@ async function holdHero(page: Page, ms: number) {
   await page.mouse.up();
 }
 
+/** 🔴 V-FIX1 오라클용 — **엔진에 실제로 들어간 발화 문자열을 기록한다.**
+ *
+ *  왜 로그가 아니라 엔진인가: 우리가 재려는 것은 *"이 문장이 스피커로 나갔는가"* 이고, 그게
+ *  곧 *"STT가 자기 안내를 받아 적을 수 있는가"* 다. 앱 로그는 그 사실을 안 남긴다.
+ *  공용 mock의 `speak`를 감싸 `__utterances`에 쌓는다(mock 자체는 건드리지 않는다 —
+ *  `tests/fixtures/stt.ts`는 다른 레인도 쓰는 공용물이다). */
+const RECORD_UTTERANCES = `(() => {
+  const w = window;
+  if (w.__utterances) return;
+  w.__utterances = [];
+  const synth = w.speechSynthesis;
+  const orig = synth.speak.bind(synth);
+  synth.speak = function (u) { w.__utterances.push(String(u && u.text || '')); return orig(u); };
+})()`;
+
+async function utterances(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as unknown as { __utterances?: string[] }).__utterances ?? []);
+}
+
+/** 홀드 안내 문구(제품 `HOLD_LINES`의 결합형과 같아야 한다 — 상수를 import하지 않는 건 의도다). */
+const HOLD_TTS = '계속 누르면 화면을 끕니다. 음성 입력은 계속됩니다.';
+/** 제품 `HOLD_TTS_DELAY_MS`와 같아야 한다. */
+const HOLD_TTS_DELAY_MS = 400;
+
 interface LoggedEvent { type: string; parsed?: string; extra?: string }
 
 async function screenOffLogs(page: Page): Promise<LoggedEvent[]> {
@@ -134,6 +158,43 @@ test('③ 🔴 검은 화면 — 중앙 탭은 켜고, 가장자리 탭은 무�
     overlay(page),
     '중앙을 탭했는데 안 켜진다 — 탈출 경로가 이것뿐이라 사용자가 앱에 갇힌다',
   ).toBeHidden({ timeout: 3000 });
+});
+
+/** 🔴 V-FIX1ⓐ+ⓑ (이중 콜드 리뷰 blocker) — 스침 오터치는 **발화 자체를 만들지 않는다.**
+ *  종전에는 `pointerdown` 즉시 전문을 발화했고 조기 해제로도 취소되지 않아, barge-in OFF에서
+ *  ~4초 인식 공백이 났다. */
+test('⑤ 🔴 400ms 전에 떼면 홀드 안내가 **발화되지 않는다** (V-FIX1ⓐⓑ)', async ({ page }) => {
+  await boot(page, PHONE_402);
+  await waitForTtsIdle(page);
+  await page.evaluate(RECORD_UTTERANCES);
+
+  await holdHero(page, Math.floor(HOLD_TTS_DELAY_MS * 0.5)); // 200ms — 지연 임계 전
+  await page.waitForTimeout(1200); // 예약이 살아 있었다면 이 창에서 터진다
+  expect(
+    (await utterances(page)).filter((t) => t === HOLD_TTS),
+    '스침 오터치가 안내를 발화한다 — barge-in OFF에서 그만큼 인식이 죽는다',
+  ).toHaveLength(0);
+  await expect(overlay(page), '전제: 진입도 하지 않았다').toHaveCount(0);
+});
+
+/** 🔴 V-FIX1ⓒ — **다른 TTS가 재생·큐잉 중이면 홀드 안내를 큐에 세우지 않는다.**
+ *  `speech.ts`의 뮤트가 depth가 아니라 boolean이라(`:196`·`:620`·`:658`) 앞 발화가 끝나는 순간
+ *  뮤트가 풀리고, 뒤이어 재생되는 이 문장을 STT가 받아 적을 수 있다. `text` 컬럼이면 파서가
+ *  원문을 유효값으로 받아 **앱 안내가 시트 값으로 커밋된다** — 데이터 무결성 사고다. */
+test('⑥ 🔴 TTS 재생·큐잉 중에는 홀드 안내를 큐잉하지 않는다 (V-FIX1ⓒ)', async ({ page }) => {
+  await boot(page, PHONE_402);
+  await waitForTtsIdle(page);
+  await page.evaluate(RECORD_UTTERANCES);
+  // 공용 mock은 `speaking`/`pending`을 항상 false로 두므로(고정 필드) 재생 중 상태를 여기서 세운다.
+  //   🔴 mock 파일을 고치지 않는다 — 그 플래그는 `handleFinal`의 STT 무시 경로도 읽으므로
+  //   전역으로 바꾸면 다른 레인의 스펙 판정이 조용히 달라진다.
+  await page.evaluate(() => { (window.speechSynthesis as unknown as { speaking: boolean }).speaking = true; });
+
+  await holdHero(page, HOLD_TTS_DELAY_MS + 900); // 지연 임계를 넘겨 발화 시점을 확실히 지난다
+  expect(
+    (await utterances(page)).filter((t) => t === HOLD_TTS),
+    'TTS 재생 중인데 홀드 안내가 큐에 섰다 — 앞 발화 종료가 뮤트를 먼저 풀어 STT 자기입력이 열린다',
+  ).toHaveLength(0);
 });
 
 test('④ 계측 — 홀드 진입은 src:hold, 음성 진입은 src:voice로 갈린다', async ({ page }) => {
