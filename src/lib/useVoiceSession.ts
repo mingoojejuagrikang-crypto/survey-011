@@ -3716,6 +3716,15 @@ export function useVoiceSession() {
     sess.setRecognized(value);
     sess.setReaskReason(null);
 
+    // 🔴 v0.47.0 W1(FB-A+B, 민구 08-08) — **수동 커밋 확인음은 awaiting 여부와 무관하다.**
+    //   종전엔 커밋 화음이 음성 경로(:2373)에만 있었고 수동 경로는 awaiting 셀일 때 echo TTS만
+    //   났다 — 비-awaiting 덮어쓰기 커밋(08-08 새벽 실측 manual_commit 8건 중 4건)은 **완전 무음**.
+    //   현장에서는 폰을 2~3m 떨어뜨려 두므로(PRINCIPLES §2) 소리 없는 커밋은 "저장됐는지 모르는"
+    //   커밋이다. 여기 = manualHold 보류가 아닌 **확정 커밋의 유일 도달점**(보류는 위에서 return).
+    //   순서 계약은 음성 경로와 동일: **확인음 → 인식값 TTS**(v0.46.0 WP-E, 민구 지정).
+    //   화음이 WebAudio, 에코가 SpeechSynthesis라 아래 어느 분기의 TTS와도 채널 충돌이 없다.
+    playBeep('commit');
+
     // ⑤ 진행: awaiting 셀이면 음성 커밋과 동일하게 echo 후 advance. 검토 대기면 재무장.
     //    v0.34.0 A1 — 단, violation이면 진행을 보류하고 팝업 응답을 기다린다(칩 전진 버그 수정).
     if (oldPending && oldPending.row === row && oldPending.colId === colId) {
@@ -3737,11 +3746,18 @@ export function useVoiceSession() {
       epochRef.current++;
       cancelTts();
       await proceedAfterCommit(awaiting, { echoValue: value }); // echo 후 진행
+    } else {
+      // v0.47.0 W1(FB-A+B) — 비-awaiting(다른 셀 덮어쓰기)·atEnd 수동 커밋도 **값을 에코**한다.
+      //   종전 "흐름 불변 = 무음"이 FB-A/B의 실체다. 진행 상태는 여전히 건드리지 않는다
+      //   (epoch bump·cancelTts 없음 — advance 소유권이 없는 커밋이다). interrupt=false로
+      //   큐잉해 진행 중인 안내 TTS(awaiting 셀 재촉 등)를 자르지 않는다 — 화음이 즉시 나므로
+      //   "커밋됐다"는 신호는 지연 없이 전달되고, 에코는 안내가 끝난 직후 이어진다(순서 계약
+      //   확인음→에코 유지 — 사이가 벌어질 수는 있어도 뒤집히지는 않는다).
+      await say(formatForTts(value), false);
     }
-    // (awaiting이 다른 셀이면 흐름 불변 — 값만 반영되고 현재 안내 상태 유지.)
 
     if (violation) fireManualAlert(violation, false);
-  }, [archiveCellClip, clearAnomalyAlert, evaluateTrend, getAnomalyAlertData, persistCellValue, persistSession, proceedAfterCommit]);
+  }, [archiveCellClip, clearAnomalyAlert, evaluateTrend, getAnomalyAlertData, persistCellValue, persistSession, proceedAfterCommit, say]);
 
   // ── v0.33.0 항목7 — 이상치 응답 대기(trendConfirm) 중 터치 버튼: 음성 명령과 동일 동작·동일 로그 ──
   /** [확인] 버튼 — 음성 '확인'과 동일: 커밋된 값 확정 + 팝업 해제 + advance 1회. attribution은
