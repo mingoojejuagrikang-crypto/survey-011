@@ -74,39 +74,66 @@ const HOLD_TTS = HOLD_LINES.join(' ');
  *  **발화가 아예 없는 것**이 가장 확실한 에코 차단이다. */
 const HOLD_TTS_DELAY_MS = 400;
 
+/** 🔴 V-FIX3(리뷰 U11) — `prefers-reduced-motion: reduce`에서 진행 표현을 **저빈도 계단**으로.
+ *
+ *  종전에는 reduce에서도 3초 내내 rAF로 매 프레임 진행바를 밀었다. 이 화면의 다른 모션은 전부
+ *  reduce를 존중하는데(`StateDots`는 rAF를 아예 안 돌리고 `ChipZone`은 왕복을 끈다) **신규
+ *  진행바만 60fps로 움직여** 그 계약을 혼자 깼다.
+ *
+ *  🔑 **홀드 시간 판정은 건드리지 않는다** — 3초는 그대로다. 바뀌는 것은 «몇 번 그리는가»뿐이다:
+ *  rAF(≈180회) → `REDUCED_STEP_MS` 간격 타이머(≈4회)로 4칸 계단. 진행 피드백은 남고(민구가
+ *  요구한 «진행바»의 목적) 연속 애니메이션만 사라진다.
+ *  ⚠️ 「그냥 안 그리기」는 고르지 않았다 — 위치 기반 진입에서 피드백이 사라지면 *"왜 안 꺼지지"*
+ *  가 된다(BlackoutOverlay의 차오르는 원이 사양의 절반이었던 것과 같은 이유). */
+const REDUCED_STEP_MS = 750;
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+}
+
 export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
   const [progress, setProgress] = useState(0);
-  const rafRef = useRef<number | null>(null);
+  /** 진행 틱 핸들. V-FIX3 이후 **두 종류**다 — 통상은 rAF id, reduce에서는 타이머 id.
+   *  어느 쪽으로 취소할지는 `tickIsRafRef`가 기억한다(숫자만으론 구분되지 않는다). */
+  const tickHandleRef = useRef<number | null>(null);
+  const tickIsRafRef = useRef(true);
   const startRef = useRef(0);
   const firedRef = useRef(false);
 
   /** V-FIX1ⓑ — 아직 발화하지 않은 안내 예약. 조기 해제가 이걸 끈다. */
   const ttsTimerRef = useRef<number | null>(null);
 
+  const cancelTick = useCallback(() => {
+    if (tickHandleRef.current === null) return;
+    if (tickIsRafRef.current) cancelAnimationFrame(tickHandleRef.current);
+    else window.clearTimeout(tickHandleRef.current);
+    tickHandleRef.current = null;
+  }, []);
+
   const stopHold = useCallback(() => {
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
+    cancelTick();
     if (ttsTimerRef.current !== null) {
       window.clearTimeout(ttsTimerRef.current);
       ttsTimerRef.current = null;
     }
     setProgress(0);
-  }, []);
+  }, [cancelTick]);
 
-  // 언마운트 정리 — 남으면 히어로가 사라진 뒤에도 프레임이 돌고, 최악의 경우 **화면이 안 보이는
+  // 언마운트 정리 — 남으면 히어로가 사라진 뒤에도 틱이 돌고, 최악의 경우 **화면이 안 보이는
   //   상태에서 blackout으로 진입**한다(분기 전환 = 홀드 취소 계약의 실효 지점이다).
   useEffect(() => () => {
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    cancelTick();
     // V-FIX1ⓑ — 언마운트(분기 전환)도 조기 해제다. 예약된 안내가 사라진 화면에서 발화하면
     //   그 문장이 그대로 STT 자기입력 후보가 된다.
     if (ttsTimerRef.current !== null) window.clearTimeout(ttsTimerRef.current);
-  }, []);
+  }, [cancelTick]);
 
   const beginHold = useCallback((e: PointerEvent<HTMLDivElement>) => {
     // 멀티터치·보조 버튼 무시. 이미 검은 화면이면 진입 자체가 무의미하다(오버레이가 위를 덮는다).
-    if (!e.isPrimary || rafRef.current !== null) return;
+    if (!e.isPrimary || tickHandleRef.current !== null) return;
     if (useSessionStore.getState().blackout) return;
     // 🔴 포인터 캡처 — 손가락이 히어로 밖으로 밀려도 `pointerup`이 **이 요소로** 온다.
     //    없으면 경계에서 뗀 손가락이 취소를 못 보내 홀드가 떠 있는 채로 남는다.
@@ -129,11 +156,22 @@ export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
         rate: useSettingsStore.getState().ttsRate || 1.05,
       });
     }, HOLD_TTS_DELAY_MS);
+    // V-FIX3 — reduce에서는 rAF 대신 저빈도 타이머로 4칸 계단을 그린다. **시간 판정은 불변이다.**
+    const reduced = prefersReducedMotion();
+    tickIsRafRef.current = !reduced;
+    const schedule = () => {
+      if (!reduced) { tickHandleRef.current = requestAnimationFrame(tick); return; }
+      // 🔴 남은 시간으로 clamp한다 — 750ms 고정으로 밀면 마지막 틱이 3000ms를 지나쳐
+      //    reduce 사용자만 **최대 750ms 늦게** 진입한다(시간 판정 불변 계약 위반).
+      const remaining = HOLD_TO_BLACKOUT_MS - (performance.now() - startRef.current);
+      tickHandleRef.current = window.setTimeout(tick, Math.max(0, Math.min(REDUCED_STEP_MS, remaining)));
+    };
     const tick = () => {
       const p = Math.min(1, (performance.now() - startRef.current) / HOLD_TO_BLACKOUT_MS);
-      setProgress(p);
+      // reduce는 0.25 단위 계단 — 타이머 지터로 0.26/0.49 같은 값이 새는 것을 막는다.
+      setProgress(reduced ? Math.round(p * 4) / 4 : p);
       if (p >= 1) {
-        rafRef.current = null;
+        tickHandleRef.current = null;
         if (firedRef.current) return;
         firedRef.current = true;
         useSessionStore.getState().setBlackout(true);
@@ -144,9 +182,9 @@ export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
         setProgress(0);
         return;
       }
-      rafRef.current = requestAnimationFrame(tick);
+      schedule();
     };
-    rafRef.current = requestAnimationFrame(tick);
+    schedule();
   }, []);
 
   const holding = progress > 0;

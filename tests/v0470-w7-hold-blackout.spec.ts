@@ -197,6 +197,38 @@ test('⑥ 🔴 TTS 재생·큐잉 중에는 홀드 안내를 큐잉하지 않는
   ).toHaveLength(0);
 });
 
+/** V-FIX3(리뷰 U11) — `prefers-reduced-motion: reduce`에서 진행 표현이 **저빈도 계단**이 되고,
+ *  **홀드 시간 판정은 그대로**다. 「reduce면 아무것도 안 그린다」로 가지 않은 이유는 위치 기반
+ *  진입에서 피드백이 사라지면 *"왜 안 꺼지지"* 가 되기 때문이다. */
+test('⑦ reduced-motion — 진행 표현은 0.25 계단, 3초 판정은 불변 (V-FIX3)', async ({ page }) => {
+  await boot(page, PHONE_402);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await waitForTtsIdle(page);
+
+  const box = await heroSurface(page).boundingBox();
+  if (!box) throw new Error('hero-hold-surface 미존재 — 무판정');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+
+  const fill = page.locator('[data-testid="hero-hold-fill"]');
+  await expect(fill, 'reduce에서도 진행 피드백 자체는 남는다').toBeVisible({ timeout: 2000 });
+  // 여러 번 읽어도 0.25 배수만 나온다 = 연속 애니메이션이 아니다.
+  const seen = new Set<string>();
+  for (let i = 0; i < 6; i++) {
+    seen.add(String(await fill.getAttribute('data-progress')));
+    await page.waitForTimeout(120);
+  }
+  const offGrid = [...seen].filter((v) => Math.abs(Number(v) * 4 - Math.round(Number(v) * 4)) > 1e-6);
+  expect(offGrid, `reduce인데 0.25 격자 밖 값이 나왔다(연속 애니메이션) — ${[...seen].join(',')}`).toEqual([]);
+
+  await page.waitForTimeout(HOLD_MS);
+  await page.mouse.up();
+  await expect(
+    overlay(page),
+    'reduce에서 3초 판정이 늦어졌다 — 시각 표현만 바꾸는 계약이 깨졌다',
+  ).toBeVisible({ timeout: 2000 });
+});
+
 test('④ 계측 — 홀드 진입은 src:hold, 음성 진입은 src:voice로 갈린다', async ({ page }) => {
   await boot(page, PHONE_402);
   await waitForTtsIdle(page);
