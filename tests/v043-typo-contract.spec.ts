@@ -169,7 +169,14 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //   "계속 누르면 화면을 끕니다"). 위반 0 그대로. 61 → 62.
   //   🔴 이 검사기는 `src/components/voice/`를 **재귀 순회**한다 — 그 파일을 이 디렉터리 밖으로
   //   옮기면 계약이 −1 되어 여기가 red가 된다(AlarmInterimStrip 분리 때와 같은 함정).
-  expect(contractCount, '계약 참조 (통과)').toBe(62);
+  // v0.47.0 C-FIX2b(`ef86d59` — 셀 저장 실패 지속 배너): **정당 파손 — 방향이 계약 쪽이다.**
+  //   신규 `CellPersistErrorBanner.tsx`의 계약 참조 3건(+3 계약, 위반 0 그대로):
+  //   `:61` VOICE_TYPE.bannerTitle(제목 '저장 실패 — 값이 저장되지 않음') ·
+  //   `:71` VOICE_TYPE.bodyText(본문) · `:90` VOICE_TYPE.bannerAction([다시 저장] 버튼) —
+  //   PersistErrorBanner(stop 전용)와 동일한 시각 계약을 따르는 셀 스코프 변형이라
+  //   같은 세 타입 토큰을 참조한다. 62 → 65.
+  //   🔴 위 W7과 같은 함정: 이 파일을 `src/components/voice/` 밖으로 옮기면 계약 −3.
+  expect(contractCount, '계약 참조 (통과)').toBe(65);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);
