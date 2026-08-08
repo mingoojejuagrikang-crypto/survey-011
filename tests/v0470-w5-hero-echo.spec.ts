@@ -1,14 +1,30 @@
 /**
  * v0.47.0 W5ⓐ — `font_render_echo` **전수화 확장의 바이트 계약** (Node, 서버 불필요).
  *
- * 왜 새 파일인가: `tests/logEvents.spec.ts`는 v0.35.2 특성화 테스트로서 *"빌더 구현을 바꿔서
- * 이 테스트를 고치고 싶어지면 그것은 외부 파서 계약 위반 신호"* 라는 계약을 머리에 달고 있다.
- * W5ⓐ는 그 계약을 **깨지 않는 방식**(전 필드 optional)으로 확장했으므로 그 파일의 기대값 3건은
- * 손대지 않았다 — **그 3건이 그대로 green인 것이 「기존 호출은 바이트 동일」의 반증 조건이다.**
- * 신규 필드의 계약은 여기가 따로 진다.
+ * ## 🔴 v0.47.0 V-FIX6 — **계약 개정.** 이 파일의 ①이 틀린 것을 재고 있었다 (리뷰 U4)
+ *
+ * 종전 ①은 *"기존 6필드 호출은 바이트 동일"* 을 단언했고, 초기 커밋 메시지도 그걸 «바이트
+ * 호환의 반증 조건»이라고 불렀다. **거짓 안심이었다.** 프로덕션 방출 경로
+ * (`fontRenderProbe.scheduleEchoFontRender`)는 **언제나** `n`·`ell`·`fit`·`txt`를 실어 보낸다 —
+ * 6필드짜리 호출은 **테스트 안에만 존재한다.** 그러니 그 단언이 green인 것은 프로덕션 이벤트가
+ * 옛 파서와 호환된다는 뜻이 전혀 아니었다. Codex가 정확히 이 지점을 짚었다.
+ *
+ * 사실관계: `$` 앵커를 쓰는 옛 정규식은 v0.47 이벤트를 **전건 미매치**한다.
+ *
+ * 👉 되돌리지 않고 **계약을 개정한다** (Larry 확정 — teamops·앱 전수 grep 결과 이 이벤트를
+ * 실제로 소비하는 파서가 **0건**이라, 지킬 대상이 없는 호환성 때문에 계측을 약하게 둘 이유가 없다):
+ *
+ *   **`font_render_echo`의 계약 = 「접두 불변 + 꼬리 확장 허용」**
+ *   - 앞 6필드(`hero,w,h,ovX,ovY,len`)의 **순서·이름·값 형식은 바이트 불변**이다.
+ *   - 신규 필드는 **그 뒤에만** 붙는다. 사이에 끼워 넣는 것은 계약 위반이다.
+ *   - 소비자는 `$` 앵커가 아니라 **접두 매칭**으로 읽는다.
+ *   (SSOT: `PRINCIPLES.md` §4 · 빌더 주석은 `logEventsInstrumentation.ts`)
+ *
+ * 그래서 ①은 **프로덕션 형상**(확장 필드 포함)을 재도록 교체했다 — 실제로 나가는 바이트를
+ * 재지 않는 오라클은 없느니만 못하다.
  *
  * ## 재는 축
- *  ① 기존 6필드 호출의 산출이 **문자 그대로 종전과 같다**(회귀 가드 — 위 반증 조건의 사본).
+ *  ① **프로덕션 형상**에서 앞 6필드가 접두로 바이트 불변이고 확장은 꼬리에만 붙는다.
  *  ② 신규 필드가 **정해진 순서로** 붙는다(SOP-003 파서는 순서를 읽는다).
  *  ③ `txt` 이스케이프 — `extra`의 `k=v,k=v` 문법을 깨는 문자가 값에 들어와도 파서가 안 무너진다.
  *     🔴 이게 왜 계약인가: 시트 스키마 불특정이 이 앱의 상시 계약이라(민구 지시 08-05) 값에
@@ -24,9 +40,35 @@
 import { test, expect } from '@playwright/test';
 import { fontRenderEcho, escapeExtraValue } from '../src/lib/logEvents';
 
-test('[node] ① 기존 6필드 호출은 바이트 동일 — 신규 필드는 전부 optional이다', () => {
-  expect(fontRenderEcho({ hero: 90.1349, w: 402, h: 874, ovX: 0, ovY: 0, len: 4 }))
-    .toBe('font_render_echo:hero=90.1,w=402,h=874,ovX=0,ovY=0,len=4');
+/** `scheduleEchoFontRender`가 실제로 만드는 인자 형상. 여기가 프로덕션과 어긋나면 이 파일
+ *  전체가 «테스트에만 있는 형상»을 재게 된다 — V-FIX6이 고친 결함이 정확히 그것이다. */
+const PRODUCTION_SHAPE = {
+  hero: 90.1349, w: 402, h: 874, ovX: 0, ovY: 0, len: 4,
+  n: 3, ell: false, fit: 0.75, px0: 120.5, ovX0: 8, fit0: 1, txt: '33.3',
+} as const;
+
+test('[node] ① 프로덕션 형상 — 앞 6필드는 **접두로** 바이트 불변, 확장은 꼬리에만', () => {
+  const line = fontRenderEcho({ ...PRODUCTION_SHAPE });
+
+  // ⓐ 접두 바이트 — 옛 6필드 산출이 **문자 그대로** 앞에 그대로 있다(다음 `,`까지 포함).
+  expect(line.startsWith('font_render_echo:hero=90.1,w=402,h=874,ovX=0,ovY=0,len=4,')).toBe(true);
+
+  // ⓑ 순서 — 앞 6필드 사이에 새 필드가 끼어들면 red. `$` 앵커를 못 쓰는 대신 이게 엄격함을 진다.
+  const keys = line.slice('font_render_echo:'.length).split(',').map((kv) => kv.split('=')[0]);
+  expect(keys.slice(0, 6)).toEqual(['hero', 'w', 'h', 'ovX', 'ovY', 'len']);
+
+  // ⓒ 확장이 **실제로** 붙는다 — 이 단언이 없으면 «꼬리가 통째로 사라져도 green»이 된다.
+  //    (종전 ①의 실패가 바로 그 모양이었다: 프로덕션이 안 쓰는 조합만 재서 아무것도 못 지켰다.)
+  expect(keys.slice(6)).toEqual(['n', 'ell', 'fit', 'px0', 'ovX0', 'fit0', 'txt']);
+
+  // ⓓ 값 형식도 접두 구간에서 불변 — px 소수 1자리 반올림(fontRenderSnapshot 계보).
+  expect(/^font_render_echo:hero=\d+(\.\d)?,/.test(line)).toBe(true);
+});
+
+/** 🟡 **레거시 형상** — 6필드만 넘기면 옛 바이트가 그대로 나온다(빌더가 optional로 설계돼 있다).
+ *  ⚠️ 이건 **프로덕션 호환의 증거가 아니다** — 프로덕션은 이 형상으로 방출하지 않는다.
+ *  빌더가 필드를 무조건 채우도록 퇴행하는 것을 잡는 **구현 가드**로만 남긴다(V-FIX6 이후의 위상). */
+test('[node] ①′ 레거시 형상(테스트 전용) — optional 설계가 살아 있다', () => {
   expect(fontRenderEcho({ hero: 167.9, w: 402, h: 513, ovX: 12, ovY: 2, len: 4 }))
     .toBe('font_render_echo:hero=167.9,w=402,h=513,ovX=12,ovY=2,len=4');
 });
