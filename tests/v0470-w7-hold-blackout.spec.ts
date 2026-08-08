@@ -111,6 +111,12 @@ test('① 히어로 3초 홀드로 진입한다 + 홀드 중 문구·진행바�
   // 민구가 명시한 피드백 — *"안내음성/문구+진행바와 함께"*. 진행바가 없으면 사용자는
   //   3초가 얼마나 남았는지 모른 채 손가락을 떼고 "안 된다"고 판단한다.
   await expect(page.locator('[data-testid="hero-hold-cue"]'), '홀드 중 안내 문구').toBeVisible({ timeout: 1500 });
+  // 🔴 V-FIX2(리뷰 U10) — **화면 문구와 TTS가 글자까지 같다.** 상수는 배열 SSOT 하나로 묶여
+  //    있지만 «렌더»는 별개다 — 두 줄 중 하나를 떨어뜨리는 리팩토링은 상수만 봐서는 안 잡힌다.
+  //    (*"계약이 지켜지는지 확인하는 테스트가 없다면 그 계약은 주석일 뿐이다"* — v043-typo-contract)
+  const shownHint = (await page.locator('[data-testid="hero-hold-hint"]').innerText())
+    .replace(/\s+/g, ' ').trim();
+  expect(shownHint, 'V-FIX2 — 화면 문구가 TTS와 글자까지 같아야 한다').toBe(HOLD_TTS);
   const fill = page.locator('[data-testid="hero-hold-fill"]');
   await expect(fill).toBeVisible();
   const mid = Number(await fill.getAttribute('data-progress'));
