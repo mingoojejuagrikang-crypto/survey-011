@@ -17,17 +17,22 @@ import { fireStt, waitForTtsIdle } from './fixtures/stt';
  *
  * | # | 축 | 왜 |
  * |---|---|---|
- * | 1 | 음성 `'화면'`으로 진입한다 | 유일한 진입 경로(민구 R2 — 버튼 자리는 판단 대기) |
- * | 2 | 길게 누르면 해제된다 | 유일한 탈출 경로 |
- * | 3 | **짧게 누르면 해제되지 않는다** | 오작동 방지가 이 기능의 전제다 — 이게 깨지면 절전이 무의미 |
- * | 4 | 🆕 **키보드(Enter)로도 탈출한다** | `role="button"`+`tabIndex=0`을 선언했으므로 계약이다(L3-5) |
- * | 5 | 해제 후 입력이 계속된다 | 「음성 입력은 계속됩니다」 고지가 참인지 |
+ * | 1 | 음성 `'화면'`으로 진입한다 | v0.47.0 W7 이후로도 **살아 있어야 하는** 경로(홀드가 추가됐을 뿐) |
+ * | 2 | 중앙을 탭하면 해제된다 | 포인터 탈출 경로 |
+ * | 3 | 🆕 **키보드(Enter)로도 탈출한다** | `role="button"`+`tabIndex=0`을 선언했으므로 계약이다(L3-5) |
+ * | 4 | 해제 후 입력이 계속된다 | 「음성 입력은 계속됩니다」 고지가 참인지 |
  *
- * ⚠️ `HOLD_MS`는 900ms다. 여유를 두고 1200ms 누른다 — 경계에 붙이면 판정이 타이밍에 흔들린다.
+ * ## 🔴 v0.47.0 W7 정당 파손 — 「길게 누르기」 계약이 「중앙 탭」으로 교체됐다 (민구 08-08)
+ * 종전 이 파일의 축 3은 *"짧게 누르면 해제되지 않는다"* 였고 근거는 *"순간 입력으로 풀리면
+ * 주머니 속 오작동으로 화면이 켜진다"* 였다. 민구 확정으로 **그 방어가 「시간」에서 「위치」로
+ * 이전됐다**: 중앙 영역만 받고 가장자리는 무시한다. 그래서 그 케이스는 여기서 삭제하고,
+ * 대체 계약(**가장자리 탭 무시**)은 `tests/v0470-w7-hold-blackout.spec.ts` ③이 진다.
+ * ⚠️ 삭제가 아니라 **이전**이다 — 저쪽이 없어지면 절전 기능이 주머니에서 스스로 켜진다.
+ *
+ * 이 파일의 존재 이유(**갇힘 방지**)는 그대로다. 탈출 제스처가 무엇이든 «나갈 수 있는가»는
+ * 계속 여기서 잰다.
  */
 
-const HOLD_MS = 900;
-const HOLD_SAFE = 1200;
 
 function makeSettings() {
   const columns = [
@@ -59,20 +64,14 @@ async function enterBlackout(page: Page) {
   await overlay(page).waitFor({ state: 'visible', timeout: 4000 });
 }
 
-/** 오버레이 중앙을 `ms` 동안 누른다(포인터 경로). */
-async function holdPointer(page: Page, ms: number) {
-  const box = await overlay(page).boundingBox();
-  if (!box) throw new Error('오버레이 박스를 얻지 못했다');
-  const cx = box.x + box.width / 2;
-  const cy = box.y + box.height / 2;
-  await page.mouse.move(cx, cy);
-  await page.mouse.down();
-  await page.waitForTimeout(ms);
-  await page.mouse.up();
+/** 🔴 v0.47.0 W7 — 해제는 **중앙 히트존 탭**이다. 오버레이 루트가 아니라 그 안의
+ *  `blackout-center-hit`을 눌러야 한다(가장자리는 핸들러 자체가 없다 — 그쪽 컴포넌트 주석). */
+async function tapCenter(page: Page) {
+  await page.locator('[data-testid="blackout-center-hit"]').click();
 }
 
 test.describe('WP-F 검은 화면 — 갇히지 않는다', () => {
-  test('음성 「화면」으로 진입하고, 길게 눌러 나온다', async ({ page }) => {
+  test('음성 「화면」으로 진입하고, 중앙을 탭해 나온다', async ({ page }) => {
     const { settings, headers, sheetRows } = makeSettings();
     await boot(page, { width: 402, height: 874 }, { settings, headers, sheetRows });
     await waitForTtsIdle(page);
@@ -80,28 +79,14 @@ test.describe('WP-F 검은 화면 — 갇히지 않는다', () => {
     await enterBlackout(page);
     await expect(overlay(page)).toBeVisible();
 
-    await holdPointer(page, HOLD_SAFE);
+    await tapCenter(page);
     await expect(
       overlay(page),
-      `길게 눌러도 안 나온다 — 탈출 경로가 이것뿐이라 사용자가 앱에 갇힌다`,
+      `중앙을 탭해도 안 나온다 — 포인터 탈출 경로가 죽으면 사용자가 앱에 갇힌다`,
     ).toBeHidden({ timeout: 3000 });
   });
 
-  test('🔴 짧게 누르면 해제되지 않는다 (오작동 방지가 전제다)', async ({ page }) => {
-    const { settings, headers, sheetRows } = makeSettings();
-    await boot(page, { width: 402, height: 874 }, { settings, headers, sheetRows });
-    await waitForTtsIdle(page);
-
-    await enterBlackout(page);
-    await holdPointer(page, Math.floor(HOLD_MS * 0.3));
-    await page.waitForTimeout(400);
-    await expect(
-      overlay(page),
-      '짧은 터치로 풀리면 주머니 속 오작동으로 화면이 켜진다 — 절전이 무의미해진다',
-    ).toBeVisible();
-  });
-
-  test('🆕 키보드(Enter)를 누르고 있어도 나온다 — role=button·tabIndex 계약', async ({ page }) => {
+  test('🆕 키보드(Enter)로도 나온다 — role=button·tabIndex 계약', async ({ page }) => {
     // L3-5: `role="button"`+`tabIndex={0}`을 선언했는데 키 핸들러가 없었다.
     // 포인터를 못 쓰는 경로에서 탈출구가 0개가 된다.
     const { settings, headers, sheetRows } = makeSettings();
@@ -110,12 +95,12 @@ test.describe('WP-F 검은 화면 — 갇히지 않는다', () => {
 
     await enterBlackout(page);
     await overlay(page).focus();
-    await page.keyboard.down('Enter');
-    await page.waitForTimeout(HOLD_SAFE);
-    await page.keyboard.up('Enter');
+    // W7 — 포인터가 「탭」이 됐으므로 키보드도 **누르는 즉시** 해제한다(둘의 의미를 맞춘다).
+    //   키보드에는 「가장자리」가 없으므로 위치 조건도 없다.
+    await page.keyboard.press('Enter');
     await expect(
       overlay(page),
-      'Enter를 누르고 있어도 안 나온다 — role=button을 선언했으면 키 경로도 계약이다',
+      'Enter로 안 나온다 — role=button을 선언했으면 키 경로도 계약이다',
     ).toBeHidden({ timeout: 3000 });
   });
 
@@ -125,7 +110,7 @@ test.describe('WP-F 검은 화면 — 갇히지 않는다', () => {
     await waitForTtsIdle(page);
 
     await enterBlackout(page);
-    await holdPointer(page, HOLD_SAFE);
+    await tapCenter(page);
     await expect(overlay(page)).toBeHidden({ timeout: 3000 });
 
     // 🔑 **음성 경로 생존은 「명령이 다시 먹는가」로 잰다.** 처음에는 값(`'123.4'`)을 말해

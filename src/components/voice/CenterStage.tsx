@@ -4,6 +4,7 @@ import { CompleteSummary } from './CompleteSummary';
 import { ExitConfirmInline } from './ExitConfirmInline';
 import { ModifyIndicatorPill } from './ModifyIndicatorPill';
 import { VoiceHero } from './VoiceHero';
+import { HeroHoldToBlackout } from './HeroHoldToBlackout';
 import { AlarmInterimStrip } from './AlarmInterimStrip';
 import { type ReaskReason } from './ReaskCue';
 import type { GlowTone } from './EdgeGlow';
@@ -218,7 +219,12 @@ export function CenterStage({
     );
   } else if (currentCol) {
     branch = 'hero';
+    // 🔴 v0.47.0 W7(민구 지시 08-08) — **히어로(중앙) 3초 홀드 = 검은 화면 진입.**
+    //   ⚠️ **hero 분기에만 붙인다.** 이 스테이지는 6분기 상호배타인데, 이상치 카드나 종료
+    //   확인 위에서의 3초 홀드가 화면을 끄면 사고다(그 화면들은 **봐야 하는** 화면이다).
+    //   분기가 바뀌면 이 래퍼가 언마운트되며 진행 중인 홀드도 함께 취소된다(그쪽 계약 ①).
     content = (
+      <HeroHoldToBlackout>
       <VoiceHero
         col={currentCol}
         review={completing}
@@ -235,6 +241,7 @@ export function CenterStage({
             : null
         }
       />
+      </HeroHoldToBlackout>
     );
   }
 

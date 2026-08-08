@@ -164,7 +164,12 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //   분리**됐다(VoiceHero가 515줄로 max-lines 500을 넘겨 배포가 막혔다). 이 검사기는
   //   `src/components/voice/`를 **재귀 순회**하므로 계약 2건은 그대로 세어진다 —
   //   🔴 그 파일을 이 디렉터리 밖으로 옮기면 계약이 −2 되어 여기가 red가 된다.
-  expect(contractCount, '계약 참조 (통과)').toBe(61);
+  // v0.47.0 W7(민구 지시 08-08 — 히어로 3초 홀드 진입): **정당 파손 — 방향이 계약 쪽이다.**
+  //   신규 `HeroHoldToBlackout.tsx`의 홀드 안내 문구 1건(+1 계약 — `VOICE_TYPE.caption`,
+  //   "계속 누르면 화면을 끕니다"). 위반 0 그대로. 61 → 62.
+  //   🔴 이 검사기는 `src/components/voice/`를 **재귀 순회**한다 — 그 파일을 이 디렉터리 밖으로
+  //   옮기면 계약이 −1 되어 여기가 red가 된다(AlarmInterimStrip 분리 때와 같은 함정).
+  expect(contractCount, '계약 참조 (통과)').toBe(62);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);
