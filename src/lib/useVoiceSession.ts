@@ -719,7 +719,10 @@ export function useVoiceSession() {
   }, []);
 
   const announceField = useCallback(
-    async (col: Column, opts?: { isModify?: boolean; previousValue?: string }) => {
+    // v0.47.0 C-FIX1b — opts.fractionWhole: 재개(resume) 재안내가 소수부 재질문 문맥(정수부)을
+    // 잃지 않고 재구성하기 위한 전달로. 값 추측 금지 계약(:113-120)의 합성 문맥이 여기서 끊기면
+    // 재개 후 조각 발화("5")가 전체값으로 오커밋된다(데이터 오염).
+    async (col: Column, opts?: { isModify?: boolean; previousValue?: string; fractionWhole?: string }) => {
       const row = useSessionStore.getState().activeRow;
       // v0.9.0 — 다음 필드로 진입하면 이전 이상치 알람 팝업은 해제(해소된 것으로 간주).
       clearAnomalyAlert('announce_field');
@@ -734,8 +737,15 @@ export function useVoiceSession() {
       useModifyPhase.getState().setCommitted(false);
       if (opts?.isModify) playBeep('modify');
       awaitingFieldRef.current = opts?.isModify
-        ? { kind: 'modify', row, colId: col.id, name: col.name, previousValue: opts?.previousValue }
-        : { kind: 'value', row, colId: col.id, name: col.name };
+        ? {
+          kind: 'modify', row, colId: col.id, name: col.name,
+          previousValue: opts?.previousValue,
+          ...(opts?.fractionWhole != null ? { fractionWhole: opts.fractionWhole } : {}),
+        }
+        : {
+          kind: 'value', row, colId: col.id, name: col.name,
+          ...(opts?.fractionWhole != null ? { fractionWhole: opts.fractionWhole } : {}),
+        };
       // v0.4.4 barge-in 클립 복구: 클립을 announce TTS '이전에' 시작한다. 레코더(audioRecorder)는
       // TTS mute와 무관하게 영구 mic 스트림에서 연속 캡처하므로, 안내 음성이 나가는 동안 사용자가
       // 값을 말하면(barge-in) 그 발화가 클립에 담긴다. 이전엔 announce 후 시작이라 barge-in 구간이
@@ -3317,18 +3327,34 @@ export function useVoiceSession() {
     //   덮고 modifyIndicator를 해제해, 성공 커밋 전인데 amber가 꺼지고(green 오표시) 다음
     //   발화가 '수정'이 아닌 일반 커밋 의미론으로 흘렀다. pause()는 awaitingFieldRef를 보존
     //   하므로 여기서 그 문맥을 그대로 재안내한다(isModify — 진입 중립음·amber·previousValue 복원).
+    // 🔴 C-FIX1b(2차 재검증) — **문맥은 전체를 보존한다.** 1차는 kind·previousValue만 넘겨
+    //   fractionWhole(소수부 재질문의 정수부, :88-93)이 유실됐다 — "111 점 에" 재질문 중
+    //   일시정지→재시작 뒤 "5"가 111.5 합성 대신 전체값이 될 수 있다(값 추측 금지 계약 :113-120이
+    //   데이터 오염으로 규정). announceField에 fractionWhole 전달로를 뚫어 재구성이 무손실이
+    //   되게 했다(value-kind 재질문도 같은 축 — 아래 announceField(cur) 호출에 동일 전달).
     {
       const awaiting = awaitingFieldRef.current;
+      const fw = awaiting ? fractionWholeOf(awaiting) : undefined;
       if (awaiting?.kind === 'modify') {
         const target = getColById(awaiting.colId);
         if (target) {
-          await announceField(target, { isModify: true, previousValue: awaiting.previousValue });
+          await announceField(target, { isModify: true, previousValue: awaiting.previousValue, fractionWhole: fw });
           return;
         }
       }
+      // C-FIX1b — trendConfirm(이상치 응답 대기)도 같은 축이다(실측 확인: 터치 [일시정지]는
+      // manualHold만 막고 trendConfirm은 통과한다). announceField(cur)를 부르면
+      // clearAnomalyAlert('announce_field')가 알람을 지우고 awaiting이 value로 덮여 **확인
+      // 루프가 무응답으로 소멸**한다. 재구성하지 않고 그대로 둔다 — 팝업은 paused 해제로
+      // 다시 보이고, awaiting·previousValue·fractionWhole 전부 산 채로 응답을 기다린다.
+      // 응답 발화 클립만 재무장한다(pause가 recorder를 dispose했다 — 알람 시점의 arm은 죽었다).
+      if (awaiting?.kind === 'trendConfirm') {
+        armClipForCell(awaiting.row, awaiting.colId);
+        return;
+      }
+      if (cur) await announceField(cur, fw != null ? { fractionWhole: fw } : undefined);
     }
-    if (cur) await announceField(cur);
-  }, [announceField, handleFinal, handleInterim, say, buildReturnBriefing]);
+  }, [announceField, armClipForCell, handleFinal, handleInterim, say, buildReturnBriefing]);
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
   useEffect(() => { resumeRef.current = resume; }, [resume]);

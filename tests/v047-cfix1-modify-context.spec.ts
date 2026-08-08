@@ -181,6 +181,54 @@ test('C-FIX1ⓐ — 수정 재청취 중 일시정지→재개: 수정 문맥(am
   await expect(page.locator('[data-voice-tone="green"]')).toHaveCount(1);
 });
 
+test('C-FIX1b-ⓒ 🔴 소수부 재질문 중 일시정지→재개: fractionWhole 보존 — "5"가 111.5로 합성된다', async ({ page }) => {
+  // 2차 재검증(major): 1차 C-FIX1ⓐ가 kind·previousValue만 보존해 fractionWhole(정수부 문맥)이
+  // 재개 재안내에서 유실됐다 — 조각 "5"가 전체값 5로 오커밋될 수 있다(값 추측 금지 계약이
+  // 데이터 오염으로 규정하는 축). announceField fractionWhole 전달로가 처방.
+  await setupAndStart(page, TWO_COL_SETTINGS);
+
+  // 소수부 유실 발화 → 정수부(111) 유지 + 소수부 타깃 재질문.
+  await fireStt(page, '111 점 에', 600);
+  // 일시정지 → 재시작(재안내가 awaiting을 재구성하는 지점 — 종전엔 여기서 문맥이 사라졌다).
+  await fireStt(page, '일시정지', 600);
+  await expect(page.locator('[data-voice-tone="mono"]')).toHaveCount(1);
+  await fireStt(page, '재시작', 900);
+
+  // 조각 응답 "5" → 111.5 합성 커밋(종전: 전체값 5).
+  await fireStt(page, '5', 700);
+  await expect(page.locator('[data-testid="column-chip"][data-col-name="당도"]'), 'fractionWhole 보존 합성')
+    .toContainText('111.5');
+});
+
+test('C-FIX1b-ⓓ 🔴 이상치 응답 대기(trendConfirm) 중 일시정지→재개: 확인 루프가 소멸하지 않는다', async ({ page }) => {
+  // 같은 축 실측 확인: 터치 [일시정지]는 manualHold만 거부하고 trendConfirm은 통과한다.
+  // 종전 resume은 무옵션 announceField(cur)로 alert를 지우고(clearAnomalyAlert) awaiting을
+  // value로 덮어 — 미확인 이상치가 응답 없이 증발했다. 재개 후 팝업·응답 대기가 살아 있고
+  // '확인'이 정상 해소(advance)돼야 한다.
+  await setupAndStart(page, AZ_SETTINGS, { stubAzSheets: true });
+
+  // 위반값 → 추세 알람(응답 대기).
+  await fireStt(page, '120.5', 900);
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible({ timeout: 6000 });
+
+  // 터치 [일시정지] → 재시작. ⚠️ 톤은 red가 mono보다 우선(§C4 — anomalyPending 생존 중)이라
+  // paused 판정은 톤이 아니라 paused-card(CenterStage에서 paused 분기가 알람보다 우선)로 한다.
+  await page.locator('button[title="일시정지"]').first().click();
+  await page.waitForTimeout(600);
+  await expect(page.locator('[data-testid="paused-card"]')).toBeVisible({ timeout: 3000 });
+  await fireStt(page, '재시작', 900);
+
+  // 팝업 생존 + '확인' 응답이 확인 루프를 정상 해소(다음 필드로 전진).
+  await expect(page.locator('[data-testid="anomaly-alert"]'), '재개 후 알람 팝업 생존').toBeVisible({ timeout: 4000 });
+  await fireStt(page, '확인', 900);
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toHaveCount(0);
+  await page.waitForFunction(
+    () => (document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null)
+      ?.dataset.colName === '측정항목02',
+    { timeout: 5000 },
+  );
+});
+
 test('C-FIX1ⓑ — 수정→이상치 알람→정정 확정: 확정 순간부터 green(amber 잔존 0)', async ({ page }) => {
   // activeZones 데이터(측정항목01 trendRule=increase · 직전 100.0) + 정정 echo만 1.2s 동결 —
   // 정정 echo가 발화되는 동안 톤을 판독할 관측 창을 만든다.
