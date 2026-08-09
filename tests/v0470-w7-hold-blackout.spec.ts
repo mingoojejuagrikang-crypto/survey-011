@@ -238,9 +238,25 @@ test('⑨ 🔴 짧은 탭으로는 해제되지 않는다 — 「떼는 순간 �
   ).toBeVisible();
 
   // ② 홀드 시간에 못 미치는 누름도 안 풀린다(경계 확인 — 위 ①만으로는 «0ms만 막았다»가 남는다)
-  await holdCenter(page, WAKE_HOLD_MS - 700);
+  //    🔑 그 홀드 **도중에** 진행 표시가 뜨는지도 여기서 잰다. 히어로 쪽 등가 계약(①)과 대칭이다 —
+  //    코드 주석이 *"피드백이 사라지면 「왜 안 켜지지」가 된다"* 라고 적었는데 오라클이 없으면
+  //    그건 주석일 뿐이다(`v043-typo-contract` 표어).
+  await holdCenter(page, 900, false); // 손을 뗀 상태로 두지 않는다 — 홀드 중을 관측한다
+  await expect(
+    page.locator('[data-testid="blackout-hold-track"]'),
+    '홀드 중 진행 트랙이 보이지 않는다 — 사용자가 2초를 눌러야 하는지 알 방법이 없다',
+  ).toBeVisible();
+  // 계단은 500ms 간격이므로 900ms 시점엔 최소 한 칸 차 있어야 한다.
+  await expect
+    .poll(async () => Number(await page.locator('[data-testid="blackout-hold-fill"]').getAttribute('data-progress')), { timeout: 1500 })
+    .toBeGreaterThan(0);
+  await page.mouse.up(); // 2초 전에 뗀다 → 해제되면 안 된다
   await page.waitForTimeout(300);
   await expect(overlay(page), '2초 미만 홀드로 풀렸다 — 홀드 시간 판정이 헐겁다').toBeVisible();
+  await expect(
+    page.locator('[data-testid="blackout-hold-track"]'),
+    '떼었는데 진행 표시가 남아 있다 — 다음 홀드가 이어서 차오르는 것처럼 보인다',
+  ).toHaveCount(0);
 
   // ③ 충분히 누르면 풀린다(①②가 «영영 안 풀린다»로 통과하는 공허한 green이 아님을 증명)
   await holdCenter(page, WAKE_HOLD_MS + 300);
