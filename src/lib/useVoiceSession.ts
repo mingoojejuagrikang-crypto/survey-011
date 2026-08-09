@@ -963,6 +963,64 @@ export function useVoiceSession() {
     await advance();
   }, [advance, enterReviewWait, say]);
 
+  // ── v0.7.0 B4: 추세 검증 ───────────────────────────────────
+  /** trend_skip 텔레메트리 — 같은 원인은 세션당 1회만 기록(셀마다 반복돼 로그를 도배하지 않게).
+   *  Set은 start()에서 리셋된다. */
+  const logTrendSkip = useCallback((cause: string, row: number, colId: string) => {
+    if (trendSkipLoggedRef.current.has(cause)) return;
+    trendSkipLoggedRef.current.add(cause);
+    logCell({ type: 'trend', extra: `trend_skip:${cause}`, row, colId });
+  }, []);
+
+  /** 방금 커밋된 값의 이상치 알람 검사(v0.8.0). 전역 마스터 토글 제거 — 컬럼에 방향 규칙
+   *  (trendRule) 또는 변동률 % 임계값(pctThreshold)이 하나라도 있으면 활성. 규칙 없는 컬럼은
+   *  검사 자체가 없고(로그 없음), 판정 불가(인덱스 없음·키 불완전·직전 회차/과거값 없음)는
+   *  조용히 skip + trend_skip 1회(telemetry 키 'trend'/trend_skip 유지 — 로그 연속성).
+   *  여기서는 절대 fetch하지 않는다 — start()의 프리페치가 채운 캐시(getCachedIndex)만 본다
+   *  (행 단위 재fetch 금지, B2 설계). */
+  const evaluateTrend = useCallback(
+    (col: Column | null, row: number, colId: string, nextRaw: string): TrendViolation | null => {
+      const columns = getSessionColumns();
+      return evaluateTrendForRow({
+        col,
+        columns,
+        // 현재 행의 전체 값(자동·고정·음성) — persistSession과 같은 composeRowValues 합성.
+        // thunk로 넘겨 인덱스/키 검사 통과 시에만 계산(종전 순서 보존).
+        composeRow: () => composeRowValues(columns, row),
+        // 로컬 날짜(UTC 아님) — start()에서 세션당 1회 계산(핫패스 호이스팅), ref 빈 경우만 지연 계산.
+        today: sessionTodayRef.current || localTodayISO(),
+        nextRaw,
+        onSkip: (cause) => logTrendSkip(cause, row, colId),
+        // 폴백 사용 계측(세션당 1회 — trend_skip과 동일 dedupe 컨벤션). age_h = 비교선 나이.
+        onStaleIndex: (ageH) => {
+          if (trendSkipLoggedRef.current.has('used_stale_index')) return;
+          trendSkipLoggedRef.current.add('used_stale_index');
+          logCell({
+            type: 'trend', extra: `trend_used_stale_index:age_h=${ageH}`,
+            row, colId,
+          });
+        },
+      });
+    },
+    [logTrendSkip],
+  );
+
+  /** v0.12.0 AREA2 V2 — 이상치 팝업에 곁들일 식별정보(샘플키 + 직전 회차 ISO 날짜)를 재계산한다.
+   *  evaluateTrend와 같은 캐시(getCachedIndex)·키 합성을 쓰되 TrendViolation 타입은 순수하게 유지
+   *  한다(trendCheck.ts 오염 금지 — 표시용 부가정보는 여기서 별도 산출). 캐시 없음·키 불완전이면
+   *  해당 필드를 undefined로 둔다(팝업이 '행 N' 폴백 + 날짜 라벨 생략으로 안전 처리). */
+  const getAnomalyAlertData = useCallback(
+    (row: number): { sampleKey?: string; prevDate?: string } => {
+      const columns = getSessionColumns();
+      return anomalyAlertContext({
+        columns,
+        composeRow: () => composeRowValues(columns, row),
+        today: sessionTodayRef.current || localTodayISO(),
+      });
+    },
+    [],
+  );
+
   // ── modify (cross-row) ─────────────────────────────────────
   const enterModifyMode = useCallback(async (
     preExtractedValue?: string,
@@ -1301,64 +1359,6 @@ export function useVoiceSession() {
     // 완료 행 착지는 jumpToRow가 검토 대기로, 미완료 행 착지는 첫 미완료 필드 안내로 처리한다.
     await jumpToRow(row + 1, { setReturn: false, source });
   }, [announceField, enterReviewWait, jumpToRow, persistSession, say]);
-
-  // ── v0.7.0 B4: 추세 검증 ───────────────────────────────────
-  /** trend_skip 텔레메트리 — 같은 원인은 세션당 1회만 기록(셀마다 반복돼 로그를 도배하지 않게).
-   *  Set은 start()에서 리셋된다. */
-  const logTrendSkip = useCallback((cause: string, row: number, colId: string) => {
-    if (trendSkipLoggedRef.current.has(cause)) return;
-    trendSkipLoggedRef.current.add(cause);
-    logCell({ type: 'trend', extra: `trend_skip:${cause}`, row, colId });
-  }, []);
-
-  /** 방금 커밋된 값의 이상치 알람 검사(v0.8.0). 전역 마스터 토글 제거 — 컬럼에 방향 규칙
-   *  (trendRule) 또는 변동률 % 임계값(pctThreshold)이 하나라도 있으면 활성. 규칙 없는 컬럼은
-   *  검사 자체가 없고(로그 없음), 판정 불가(인덱스 없음·키 불완전·직전 회차/과거값 없음)는
-   *  조용히 skip + trend_skip 1회(telemetry 키 'trend'/trend_skip 유지 — 로그 연속성).
-   *  여기서는 절대 fetch하지 않는다 — start()의 프리페치가 채운 캐시(getCachedIndex)만 본다
-   *  (행 단위 재fetch 금지, B2 설계). */
-  const evaluateTrend = useCallback(
-    (col: Column | null, row: number, colId: string, nextRaw: string): TrendViolation | null => {
-      const columns = getSessionColumns();
-      return evaluateTrendForRow({
-        col,
-        columns,
-        // 현재 행의 전체 값(자동·고정·음성) — persistSession과 같은 composeRowValues 합성.
-        // thunk로 넘겨 인덱스/키 검사 통과 시에만 계산(종전 순서 보존).
-        composeRow: () => composeRowValues(columns, row),
-        // 로컬 날짜(UTC 아님) — start()에서 세션당 1회 계산(핫패스 호이스팅), ref 빈 경우만 지연 계산.
-        today: sessionTodayRef.current || localTodayISO(),
-        nextRaw,
-        onSkip: (cause) => logTrendSkip(cause, row, colId),
-        // 폴백 사용 계측(세션당 1회 — trend_skip과 동일 dedupe 컨벤션). age_h = 비교선 나이.
-        onStaleIndex: (ageH) => {
-          if (trendSkipLoggedRef.current.has('used_stale_index')) return;
-          trendSkipLoggedRef.current.add('used_stale_index');
-          logCell({
-            type: 'trend', extra: `trend_used_stale_index:age_h=${ageH}`,
-            row, colId,
-          });
-        },
-      });
-    },
-    [logTrendSkip],
-  );
-
-  /** v0.12.0 AREA2 V2 — 이상치 팝업에 곁들일 식별정보(샘플키 + 직전 회차 ISO 날짜)를 재계산한다.
-   *  evaluateTrend와 같은 캐시(getCachedIndex)·키 합성을 쓰되 TrendViolation 타입은 순수하게 유지
-   *  한다(trendCheck.ts 오염 금지 — 표시용 부가정보는 여기서 별도 산출). 캐시 없음·키 불완전이면
-   *  해당 필드를 undefined로 둔다(팝업이 '행 N' 폴백 + 날짜 라벨 생략으로 안전 처리). */
-  const getAnomalyAlertData = useCallback(
-    (row: number): { sampleKey?: string; prevDate?: string } => {
-      const columns = getSessionColumns();
-      return anomalyAlertContext({
-        columns,
-        composeRow: () => composeRowValues(columns, row),
-        today: sessionTodayRef.current || localTodayISO(),
-      });
-    },
-    [],
-  );
 
   // ── v0.22.0 P0: 클립 레코더 스트림 소실 → micLost 게이트 ──────────────
   /** 빈/극소 클립이 났을 때의 처리. 이 콜백 자체에서는 **재-getUserMedia를 하지 않는다** —
