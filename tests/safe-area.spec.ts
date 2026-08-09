@@ -23,8 +23,14 @@ test.setTimeout(120_000);
 const STORE_KEY = 'survey-011-settings-v3';
 
 // ── 공용 단언 ────────────────────────────────────────────────
-/** 요소가 safe bounds(노치 아래·홈바 위·좌우 inset 안)에 **완전히** 들어와 있는지 단언. */
-async function expectWithinSafeBounds(page: Page, locator: Locator, label: string) {
+/** 요소가 safe bounds(노치 아래·홈바 위·좌우 inset 안)에 **완전히** 들어와 있는지 단언.
+ *
+ *  🔴 v0.47.0 r2 P7 — `skipBottom` 옵션이 생겼다. **탭바 하나만 쓴다.** 기본값은 종전 그대로
+ *  (하단도 단언)이라 다른 8개 호출부의 계약은 1비트도 바뀌지 않는다. 옵션을 「기본 off」로 둔 이유가
+ *  그것이다 — 계약 완화가 파일 전체로 새면 이 스펙의 존재 이유가 사라진다. */
+async function expectWithinSafeBounds(
+  page: Page, locator: Locator, label: string, opts: { skipBottom?: boolean } = {},
+) {
   const vp = page.viewportSize();
   expect(vp, 'viewport must be set by the iphone17 project').not.toBeNull();
   const safe = safeBounds(vp!);
@@ -33,25 +39,53 @@ async function expectWithinSafeBounds(page: Page, locator: Locator, label: strin
   const b = box!;
   const EPS = 0.5; // sub-pixel rounding
   expect(b.y, `${label} top(${b.y}) must clear the notch(${safe.top})`).toBeGreaterThanOrEqual(safe.top - EPS);
-  expect(b.y + b.height, `${label} bottom(${b.y + b.height}) must clear the home indicator(${safe.bottom})`).toBeLessThanOrEqual(safe.bottom + EPS);
+  if (!opts.skipBottom) {
+    expect(b.y + b.height, `${label} bottom(${b.y + b.height}) must clear the home indicator(${safe.bottom})`).toBeLessThanOrEqual(safe.bottom + EPS);
+  } else {
+    // 하단 계약을 면제해도 **뷰포트 밖으로 나가는 것은 여전히 실패**다(잘림 = 탭 불가).
+    expect(b.y + b.height, `${label} bottom(${b.y + b.height}) must stay inside the viewport(${vp!.height})`).toBeLessThanOrEqual(vp!.height + EPS);
+  }
   expect(b.x, `${label} left(${b.x})`).toBeGreaterThanOrEqual(safe.left - EPS);
   expect(b.x + b.width, `${label} right(${b.x + b.width})`).toBeLessThanOrEqual(safe.right + EPS);
 }
 
 /** 인터랙티브 요소가 잘리지 않았는지: safe bounds 안 + 가시 + 실제 히트테스트(탭) 가능. */
-async function expectTappable(page: Page, locator: Locator, label: string) {
-  await expectWithinSafeBounds(page, locator, label);
+async function expectTappable(page: Page, locator: Locator, label: string, opts: { skipBottom?: boolean } = {}) {
+  await expectWithinSafeBounds(page, locator, label, opts);
   await expect(locator, `${label} must be visible`).toBeVisible();
   // trial:true — 실제 클릭 없이 액션 가능성(히트테스트·가림 여부)만 검증.
   await locator.click({ trial: true });
 }
 
 // ── ① 탭바 ───────────────────────────────────────────────────
-test('탭바 — 탭 버튼이 홈인디케이터(--sab) 위에 완전히 위치', async ({ page }) => {
+/**
+ * 🔴 **v0.47.0 r2 P7 — 이 테스트의 계약이 뒤집혔다** (정당 파손 · 민구 08-09 실기기 점검 FB-H).
+ *
+ * 종전 제목은 *"탭 버튼이 홈인디케이터(--sab) 위에 완전히 위치"* 였고 그게 v0.33.0 이래의 계약이었다.
+ * 민구 원문: *"지금 하단에 빈 공간이 많이 보임. 아이폰의 키보드 펼쳤을때 언어와 마이크 버튼이 있는
+ * 공간까지는 사용을 못하고 있음."* → 하단 패딩 축소를 **확정**했고, 그 대가인 **iOS 하단 스와이프
+ * 오터치 위험을 명시적으로 감수**했다.
+ *
+ * 🔑 종전 계약을 「완화」한 게 아니라 **반대 방향으로 다시 단언**한다 — 침범이 사라지면 red다.
+ *    그냥 하단 단언만 지우면 P7이 조용히 되돌려져도 green이라 회귀를 못 잡는다.
+ *    좌우 inset·노치·히트테스트·뷰포트 잘림은 **그대로 전부 유지**된다.
+ * 실측 근거(`TabBar.tsx` §반전): 버튼 하단이 840(= 874−34) → 862로 22px 내려왔다.
+ */
+test('탭바 — 탭 버튼이 홈인디케이터 영역을 의도적으로 침범한다 (P7 · 좌우/노치/히트테스트는 유지)', async ({ page }) => {
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(500);
+  const vp = page.viewportSize()!;
+  const safe = safeBounds(vp);
   for (const id of ['settings', 'voice', 'data']) {
-    await expectTappable(page, page.locator(`[data-testid="tab-${id}"]`), `tab-${id}`);
+    const loc = page.locator(`[data-testid="tab-${id}"]`);
+    await expectTappable(page, loc, `tab-${id}`, { skipBottom: true });
+    const b = (await loc.boundingBox())!;
+    // 🔴 회귀 방향 단언 — 「되찾았는가」를 직접 잰다.
+    expect(
+      b.y + b.height,
+      `tab-${id} bottom(${b.y + b.height})은 홈인디케이터 경계(${safe.bottom})보다 아래여야 한다 — `
+      + 'P7이 되돌려지면 여기서 잡힌다',
+    ).toBeGreaterThan(safe.bottom);
   }
 });
 
