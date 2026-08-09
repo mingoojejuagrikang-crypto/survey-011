@@ -28,6 +28,7 @@ import {
   bgMicAction,
   clipArmBlocked,
   lowConfidenceParsed,
+  manualHoldGuide,
   micAutoReconnect,
   micInitFailed,
   notifyPerm,
@@ -135,6 +136,19 @@ function demoteTrendConfirm(a: AwaitingBase & { kind: 'trendConfirm'; previousVa
     ...(a.resumeReview != null ? { resumeReview: a.resumeReview } : {}),
   };
 }
+
+/** 🔴 v0.47.0-r2 P2(FB-C) — 수동입력 이상치 보류 중 **음성이 차단됐을 때** 나가는 안내 문구.
+ *
+ *  ⚠️ **명령 어휘를 문구에 넣지 마라.** detectCommand는 공백을 지우고 `startsWith`로 맞추므로,
+ *  이 발화가 재인식되면 문장이 **명령으로 실행된다.** 특히 `screenOff`의 word는 `'화면'`이라
+ *  초안의 *"화면의 버튼을 눌러 주세요"* 는 검은 화면을 켤 수 있었다(실제로 위험한 조합 —
+ *  민구는 화면이 꺼지면 「갇혔다」고 읽는다). 같은 이유로 「확인」·「수정」·「다음」·「이전」·
+ *  「유지」·「종료」·「취소」도 금지다.
+ *  현재 문구의 어절은 전량 대조했다 — 명령 16개 중 어느 것으로도 시작하지 않는다
+ *  (검증 명령: `grep -n "word: '" src/lib/voiceCommands.ts`).
+ *  「표시된 버튼」이라 부르는 이유: 민구는 폰을 2~3m 떨어뜨려 두므로(PRINCIPLES §2) *"가서
+ *  화면을 봐야 한다"* 가 이 안내의 실질 내용이다. 버튼 이름을 말해 줘도 음성으로는 못 누른다. */
+const MANUAL_HOLD_GUIDE_TTS = '알림은 터치로만 응답할 수 있습니다. 표시된 버튼을 눌러 주세요.';
 
 /** v0.9.0 빠른 인식(조기확정): interim 숫자가 이 시간(ms) 동안 같은 값으로 안정되면 final을
  *  기다리지 않고 커밋한다. 짧을수록 빠르지만 미완성 숫자(소수점 추가 전) 절단 위험이 커진다. */
@@ -268,6 +282,9 @@ export function useVoiceSession() {
   // v0.7.0 B4: trend_skip 원인별 1회 로깅(세션당) — 같은 원인(no_index 등)이 셀마다 반복
   // 로깅돼 텔레메트리를 도배하지 않게 한다. start()에서 리셋.
   const trendSkipLoggedRef = useRef<Set<string>>(new Set());
+  // v0.47.0-r2 P2(FB-C) — 홀드 안내 TTS를 이미 낸 알람의 식별키. **알람 1건당 1회**의 저장소다
+  //   (재안내 없음 · 알람이 바뀌면 리셋). clearAnomalyAlert가 null로 되돌린다.
+  const holdGuideKeyRef = useRef<string | null>(null);
   // 세션 시작 시점의 로컬 오늘 ISO — evaluateTrend가 값 커밋마다 Date를 새로 만들지 않게
   // start()에서 1회 계산(현장 세션은 자정을 의미 있게 넘기지 않는다).
   const sessionTodayRef = useRef<string>('');
@@ -360,6 +377,8 @@ export function useVoiceSession() {
       ...(colId ? { colId } : {}),
     });
     sess.setAnomalyAlert(null);
+    // v0.47.0-r2 P2 — 알람이 내려갔으니 홀드 안내 1회 제한도 푼다(다음 알람은 다시 안내받는다).
+    holdGuideKeyRef.current = null;
   }, []);
   const say = useCallback(async (text: string, interrupt = true) => {
     if (!text) return;
@@ -390,14 +409,50 @@ export function useVoiceSession() {
    *  게이트(SSOT). 라운드1에선 STT만 막았는데 터치 [이전]/[다음]/[일시정지]가 그대로 열려 있어
    *  미확인 이상치를 우회할 수 있었다(Codex 라운드2 High: announceField/PausedCard가 알람을 지워
    *  검증 절차 자체가 소멸). 해소 경로는 confirmManualAnomaly/modifyManualAnomaly 둘뿐이다.
-   *  `reason`은 무엇이 막혔는지 다음 로그 분석에서 보이게 한다(막힌 시도가 잦으면 UX 재고 신호). */
+   *  `reason`은 무엇이 막혔는지 다음 로그 분석에서 보이게 한다(막힌 시도가 잦으면 UX 재고 신호).
+   *
+   *  🔴 v0.47.0-r2 P2(FB-C · 민구 실기기 08-09) — **차단은 유지하되 「들리게」 한다.**
+   *  위 주석이 예고한 *"막힌 시도가 잦으면 UX 재고 신호"* 가 실제로 왔다: 08-09 홀드 중 민구가
+   *  「확인」×6·「100」×3·「일시 정지」×3을 말했고 **12건 전부 무음 차단**됐다. 07-14 결정
+   *  (터치 전용)은 옳았지만 그 대가가 «앱이 죽은 것처럼 보이는» 상태였다 — 민구는 TTS 고장으로
+   *  읽었다. 결정은 **뒤집지 않고**(민구 확정 08-09) 차단 사실만 발화한다.
+   *
+   *  ⚠️ `reason === 'stt'`로 좁힌다. 홀드 중 **음성** 명령은 handleFinal 선두의 STT 게이트에서
+   *  먼저 잘리므로 `prev`/`next`/`pause` 차단은 사실상 **터치 전용**이다(실측 12건 전부 stt).
+   *  터치까지 포함시키면 「알람 1건당 1회」라는 희소한 슬롯을 오탭이 먼저 소모해, 정작 말을 건
+   *  사용자가 무음을 받는다. 👉 터치 차단은 여전히 무음이다 — 필요하면 별건으로 잡는다.
+   *
+   *  🔑 **1회 제한은 스팸 방지가 아니라 루프 차단이다.** speech.ts는 TTS 재생 중에도 final을
+   *  handleFinal까지 올린다 — 이 안내 발화 자체가 재인식돼 다시 여기로 들어올 수 있다. 키가
+   *  같으면 재발화하지 않으므로 그 지점에서 루프가 끊긴다. *"3번에 1번씩 안내"* 같은 완화는
+   *  이 루프를 되연다 — 바꾸려면 재인식 축을 먼저 막아라. */
   const isManualHoldBlocked = (reason: string): boolean => {
-    if (!useSessionStore.getState().anomalyAlert?.manualHold) return false;
+    const alert = useSessionStore.getState().anomalyAlert;
+    if (!alert?.manualHold) return false;
     logCell({
       type: 'command',
       extra: `blocked:manual_hold:${reason}`,
       row: useSessionStore.getState().activeRow,
     });
+    if (reason === 'stt') {
+      // 알람 식별키 — 같은 셀이라도 후보값이 바뀌면(=[수정] 후 재위반) 새 알람이라 재안내한다.
+      const key = `${alert.row}:${alert.colId ?? alert.colName}:${alert.prev}->${alert.next}`;
+      if (holdGuideKeyRef.current !== key) {
+        holdGuideKeyRef.current = key;
+        logCell({
+          type: 'command',
+          extra: manualHoldGuide('stt'),
+          row: alert.row,
+          ...(alert.colId ? { colId: alert.colId } : {}),
+        });
+        useSessionStore.getState().setLastTts(MANUAL_HOLD_GUIDE_TTS);
+        // 게이트는 동기 함수다(터치 이동·일시정지도 같은 함수로 거부한다) — 발화는 비대기로
+        //   띄운다. interrupt는 say의 기본값 그대로 true다: 사용자가 이미 말을 겹쳐 온 시점이라
+        //   재생 중인 앞 발화를 자르는 편이 맞고, 큐잉(interrupt=false)은 앞 발화 종료가 뮤트를
+        //   먼저 풀어 이 문장이 STT로 들어가는 경로를 연다(V-FIX1ⓒ가 홀드 안내에서 실측한 함정).
+        void say(MANUAL_HOLD_GUIDE_TTS);
+      }
+    }
     return true;
   };
 

@@ -200,6 +200,21 @@ export function holdTtsSkipped(reason: 'tts_busy'): string {
   return `hold_tts_skipped:${reason}`;
 }
 
+/** 🔴 v0.47.0-r2 P2(FB-C · 민구 실기기 08-09) — **수동입력 이상치 보류 중 음성 차단을 안내했다.**
+ *
+ *  왜 계측하나: 07-14 결정(수동입력 이상치는 터치 [확인]/[수정] 전용)은 유지하되, 종전엔 차단이
+ *  **완전 무음**이었다 — 08-09 실측에서 민구가 홀드 중 「확인」×6·「100」×3을 말했고 12건이
+ *  `blocked:manual_hold:stt`로 조용히 버려졌다. 민구는 그걸 **TTS 고장**으로 읽었다(FB-C).
+ *  이제 알람 1건당 1회 안내를 낸다. 이 이벤트의 빈도 대비 `blocked:manual_hold:stt` 빈도가
+ *  *"안내를 듣고도 계속 말했는가"* 를 가른다 — 그게 다음 회차에 07-14 결정을 재검토할 근거다.
+ *
+ *  `reason` 유니온을 'stt'로 좁게 둔다: 홀드 중 음성 명령은 STT 게이트에서 **먼저** 잘려
+ *  `prev`/`next`/`pause` 차단은 사실상 터치 전용이다(실측 12건 전부 stt). 터치 차단까지
+ *  안내하려면 사유를 **의도적으로** 늘려라 — 어휘가 저절로 흩어지지 않게. */
+export function manualHoldGuide(reason: 'stt'): string {
+  return `manual_hold_guide:${reason}`;
+}
+
 /** v0.45.0 WP-1④ — **세션-활성 게이트(WP-2)가 hidden에 유지한 구간의 생존 요약.** hidden
  *  사이클당 1건(복귀 또는 임계 도달 시점) — 시계열이 아니라 요약이다([F5] 링버퍼 보호).
  *  WP-2가 "유지"를 선택한 사이클에서 OS가 실제로 무엇을 살려뒀는지가 다음 실기기 판정 축이다:

@@ -489,4 +489,6 @@ export {
   escapeExtraValue,
   // v0.47.0 W7 V-FIX1ⓒ — 홀드 안내 TTS를 큐잉하지 않고 버린 사건(빈도가 판정 근거다).
   holdTtsSkipped,
+  // v0.47.0-r2 P2(FB-C) — 수동입력 보류 중 음성 차단을 **안내**한 사건(종전 무음 차단의 해소).
+  manualHoldGuide,
 } from './logEventsInstrumentation';
