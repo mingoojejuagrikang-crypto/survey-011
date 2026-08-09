@@ -10,6 +10,7 @@ import { type ReaskReason } from './ReaskCue';
 import { TONE_BASE, type GlowTone } from './EdgeGlow';
 import { useReviewCommit } from './VoiceHero';
 import { useVoiceCommitMarkColId, useCommitMarkAlertColId } from './useVoiceCommitMark';
+import { useHoldCandidateMask } from './useHoldCandidateMask';
 import { ActiveHeaderStrip } from './ActiveHeaderStrip';
 import { ChipZone } from './ChipZone';
 import { CenterStage } from './CenterStage';
@@ -103,9 +104,20 @@ export function ActiveState({
   const commitMarkColId = useVoiceCommitMarkColId();
   // v0.47.0-r2 P5(FB-F) — ✓의 **색**. 표시 여부(위)와 직교한 축이라 별도 파생이다.
   //   이 행에 알람이 걸린 셀만 빨강 — 저장 상태가 아니라 anomalyAlert에서 매 렌더 파생된다.
-  const commitMarkAlertColId = useCommitMarkAlertColId(row);
+  const alertMarkColId = useCommitMarkAlertColId(row);
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
+  // 🔴 v0.47.0-r2 P5 보강(민구 08-09) — **미확정 후보값은 칩에 넣지 않는다.** 칩존에 내리는
+  //   값만 직전 확정값으로 되돌린다(저장·동기화·복원은 무접촉 · 근거는 useHoldCandidateMask).
+  //   ⚠️ `rowValues` 자체는 바꾸지 않는다 — [수정] 시트 프리필(:currentValue)은 후보값
+  //   그대로여야 사용자가 방금 넣은 값의 한 자리를 고칠 수 있다.
+  const { chipValues, maskedColId } = useHoldCandidateMask(row, rowValues);
+  // 가려진 칩이 보여 주는 것은 **직전 확정값**이다 — 알람 대상이 아니므로 체크는 원래 색(초록).
+  //   (민구: *"기존 값이 있던 셀이면 그 옛 값(+원래 색 체크)"*.) 「이 칩이 알람 대상」 신호는
+  //   활성 칩의 빨강 강조·칩존 하단 경계가 계속 진다 — 값과 체크만 직전 상태로 되돌린다.
+  const commitMarkAlertColId = maskedColId !== null && alertMarkColId === maskedColId
+    ? null
+    : alertMarkColId;
   const activeChipValue = currentColId ? rowValues[currentColId] : undefined;
   const [editingColId, setEditingColId] = useState<string | null>(null);
   const [cmdHelpOpen, setCmdHelpOpen] = useState(false);
@@ -300,7 +312,7 @@ export function ActiveState({
 
       <ChipZone
         columns={columns}
-        rowValues={rowValues}
+        rowValues={chipValues}
         row={row}
         // 와이어프레임 §[4] — "마지막 행 확정, **활성 강조 없음**". 조사가 끝나면 가리킬 다음 칸이
         //   없으므로 하이라이트·점멸을 거둔다(끝났는데 무언가를 기다리는 것처럼 보이지 않게).

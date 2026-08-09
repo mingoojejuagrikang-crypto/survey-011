@@ -117,7 +117,11 @@ test('P5ⓒ 수동 보류(manualHold): 미확정 후보는 마크 없음(W4 계�
   await page.locator('[data-testid="manual-commit"]').click();
   await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible({ timeout: 6000 });
 
-  await expect(chip(page, '측정항목01')).toContainText('120.5');
+  // 🔴 P5 보강(민구 확정 08-09) — 후보값은 **칩에 넣지 않는다.** 팝업에만 보인다.
+  //   (이 스펙 최초 구현은 칩에 120.5가 뜨는 것을 전제했다 — 민구 결정으로 뒤집힌 정당 파손.
+  //    전용 오라클은 v0470-r2-p5b-hold-candidate-hidden.spec.ts.)
+  await expect(chip(page, '측정항목01')).not.toContainText('120.5');
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toContainText('120.5');
   await page.waitForTimeout(1800);
   // 🟡 경계 — 미확정 후보는 ✓ 집합에 없다(W4 "후보 제외"). 빨강으로 물들 마크 자체가 없다.
   await expect(markIn(page, '측정항목01'), '후보 단계엔 마크 없음').toHaveCount(0);

@@ -165,6 +165,24 @@ async function waitForRow(page: Page, targetRow: number, timeout = 6000) {
   );
 }
 
+/** 🔴 v0.47.0-r2 P5 보강(민구 확정 08-09) — **미확정 후보값은 칩에 넣지 않는다.**
+ *  그래서 「후보가 보존됐다」를 칩 DOM으로 잴 수 없게 됐다. 관측 채널을 **내구 상태**(IDB의
+ *  pendingValidation)로 옮긴다 — 원래 재고 싶었던 것(«소음이 후보를 덮어쓰지 않았다»,
+ *  «우회로 확정되지 않았다»)은 애초에 값의 내구성이지 화면 문자열이 아니었다. 더 강한 단언이다. */
+async function heldCandidate(page: Page): Promise<string | null> {
+  return page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((res, rej) => {
+      const r = indexedDB.open('survey-011');
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+    const all: Array<{ pendingValidation?: { candidateValue: string } }> = await new Promise((res, rej) => {
+      const r = db.transaction('sessions', 'readonly').objectStore('sessions').getAll();
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+    return all.find((x) => x.pendingValidation)?.pendingValidation?.candidateValue ?? null;
+  });
+}
+
 async function loadLogEventsFromIDB(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase | null>((res) => {
@@ -566,7 +584,9 @@ test('[리뷰] A1 회귀 — manualHold 팝업 중 STT 발화는 무시: 수동�
   // 팝업·활성 칩·값 전부 불변(수동값 120.5 보존 — 소음 "30"이 덮어쓰지 않았다).
   await expect(popup).toBeVisible();
   await waitForActiveChip(page, '횡경');
-  await expect(page.locator('[data-testid="column-chip"][data-col-name="횡경"]')).toContainText('120.5');
+  // P5 보강 — 칩엔 후보값이 **없다**(민구 08-09). 보존은 내구 상태로 잰다.
+  await expect(page.locator('[data-testid="column-chip"][data-col-name="횡경"]')).not.toContainText('120.5');
+  expect(await heldCandidate(page), '후보값 보존(칩이 아니라 IDB로 확인)').toBe('120.5');
 
   const ignored = (await loadLogEventsFromIDB(page))
     .filter((e) => (e.extra ?? '') === 'blocked:manual_hold:stt');
@@ -613,7 +633,9 @@ test('[리뷰 High] manualHold → reload: 후보·팝업·중앙 게이트를 I
   await page.locator('[data-testid="tab-voice"]').click();
   const popup = page.locator('[data-testid="anomaly-alert"]');
   await expect(popup).toBeVisible();
-  await expect(page.locator('[data-testid="column-chip"][data-col-name="횡경"]')).toContainText('120.5');
+  // P5 보강 — 칩엔 후보값이 **없다**(민구 08-09). 보존은 내구 상태로 잰다.
+  await expect(page.locator('[data-testid="column-chip"][data-col-name="횡경"]')).not.toContainText('120.5');
+  expect(await heldCandidate(page), '후보값 보존(칩이 아니라 IDB로 확인)').toBe('120.5');
   expect(await page.evaluate(() => !!(window as any).__mockSTT)).toBe(true);
   const lifecycle = await page.evaluate(() => (window as any).__sttLifecycle);
   // React.StrictMode: 첫 setup 컨트롤러는 simulated teardown에서 abort, 두 번째 setup은 새 생성/start.
@@ -728,7 +750,9 @@ test('[리뷰] A1 회귀 — manualHold 중 터치 [다음]/[이전]/[일시정�
   await expect(popup).toBeVisible();
   await waitForActiveChip(page, '횡경');
   await waitForRow(page, 1); // 행 이동 없음
-  await expect(page.locator('[data-testid="column-chip"][data-col-name="횡경"]')).toContainText('120.5');
+  // P5 보강 — 칩엔 후보값이 **없다**(민구 08-09). 보존은 내구 상태로 잰다.
+  await expect(page.locator('[data-testid="column-chip"][data-col-name="횡경"]')).not.toContainText('120.5');
+  expect(await heldCandidate(page), '후보값 보존(칩이 아니라 IDB로 확인)').toBe('120.5');
 
   // 상태기계의 거부 계측은 그대로 — 터치로 도달 가능한 경로(pause)가 실제로 거부됐다.
   const blocked = (await loadLogEventsFromIDB(page))
@@ -778,7 +802,9 @@ test('[리뷰] A1 회귀 — [수정] 후 시트 취소: 팝업·보류 유지(�
   const blocked = (await loadLogEventsFromIDB(page))
     .filter((e) => (e.extra ?? '') === 'blocked:manual_hold:stt');
   expect(blocked.length).toBeGreaterThanOrEqual(1);
-  await expect(page.locator('[data-testid="column-chip"][data-col-name="횡경"]')).toContainText('120.5');
+  // P5 보강 — 칩엔 후보값이 **없다**(민구 08-09). 보존은 내구 상태로 잰다.
+  await expect(page.locator('[data-testid="column-chip"][data-col-name="횡경"]')).not.toContainText('120.5');
+  expect(await heldCandidate(page), '후보값 보존(칩이 아니라 IDB로 확인)').toBe('120.5');
 
   // [수정] → 정상값 재커밋 → 그제서야 보류 해소·전진.
   // (규칙 주의: trendRule='increase'는 "커지면 알람"이라 직전 100.0보다 **작은** 값이 무알람 —
