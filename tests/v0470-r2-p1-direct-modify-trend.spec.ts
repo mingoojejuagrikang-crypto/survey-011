@@ -193,7 +193,7 @@ async function idbRowValue(page: Page, rowIndex: number, colId: string): Promise
   }, { rowIndex, colId });
 }
 
-test('P1-persist 🔴 현재 행·무클립 셀 직접수정도 알람 대기 전에 IDB로 내구화된다', async ({ page }) => {
+test('P1-persist 🔴 현재 행·무클립 셀 직접수정은 알람 응답 대기 중 IDB로 내구화된다(eventual)', async ({ page }) => {
   // codex f1: targetRow===curRow && 무클립 && !reviewTarget 조합은 두 저장 갈래
   // (saveSession/persistSession)를 모두 건너뛴다 → 알람/다음 필드 대기 중 reload가 오면
   // IDB의 이전 값으로 복귀(값 유실). 수동으로 입력한 셀이 정확히 이 무클립 조건에 도달한다.
@@ -225,8 +225,13 @@ test('P1-persist 🔴 현재 행·무클립 셀 직접수정도 알람 대기 �
   await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible({ timeout: 6000 });
   await expect(chip(page, '측정항목01')).toContainText('120.5'); // 메모리 값은 섰다(알림 ≠ 롤백)
 
-  // 🔴 본축 — 알람 노출 시점(응답 대기 무기한)에 IDB가 이미 120.5여야 한다.
+  // 🔴 본축 — 알람 **응답 대기 동안**(이후 상호작용 0회) 120.5의 내구화가 완료된다.
   //    persist 0회면 행이 통째로 미영속(실측 null — codex f1), 이 poll이 타임아웃으로 red가 된다.
+  //    ⚠️ 주장 범위(codex r4 low :230 반영): 이 오라클은 「알람 **전에** durable」이라는 순서를
+  //    증명하지 않는다 — 제품 계약이 애초에 fire-and-forget(void persistSession, 모든 커밋 경로
+  //    동일)이라 그런 순서 약속이 없다. 여기서 증명하는 것은 persist의 **시작이 직접수정 경로
+  //    자신에게 있다**는 사실이다: 알람 후 아무 상호작용이 없으므로, 대기 중 write가 관측되면
+  //    그 시작점은 직접수정 커밋뿐이다(0회 결함 복원 시 red — 반증력의 축).
   await expect.poll(() => idbRowValue(page, 1, 'v0'), { timeout: 5000 }).toBe('120.5');
 });
 
@@ -295,4 +300,65 @@ test('P1-중첩복귀 🔴 기존 복귀 예약 위의 교차행 직접수정: �
   await fireStt(page, '5.0', 700);
   await fireStt(page, '100.0', 1500);
   await expect.poll(() => activeRowOf(page), { timeout: 8000 }).toBe(3);
+});
+
+/** IDB sessions에서 행 레코드(complete 플래그 + values)를 읽는다 — 거짓 완료 오염 오라클용. */
+async function idbRow(
+  page: Page,
+  rowIndex: number,
+): Promise<{ complete?: boolean; values?: Record<string, string> } | null> {
+  return page.evaluate(async ({ rowIndex }) => {
+    const db = await new Promise<IDBDatabase | null>((res) => {
+      const r = indexedDB.open('survey-011');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => res(null);
+    });
+    if (!db) return null;
+    const sessions = await new Promise<Array<{ rows?: Array<{ index: number; complete?: boolean; values?: Record<string, string> }> }>>((res) => {
+      const tx = db.transaction('sessions', 'readonly');
+      const req = tx.objectStore('sessions').getAll();
+      req.onsuccess = () => res(req.result as never);
+      req.onerror = () => res([]);
+    });
+    db.close();
+    const last = sessions[sessions.length - 1];
+    return last?.rows?.find((r) => r.index === rowIndex) ?? null;
+  }, { rowIndex });
+}
+
+test('P1-미완료대상 🔴 skip 행을 겨냥한 교차행 직접수정 알람: 확인이 그 행을 거짓 완료로 내구화하지 않는다', async ({ page }) => {
+  // codex r4 :968(Larry 코드 재검증 완료): advance()는 포인터 **앞** 빈 칸을 검사하지 않는다.
+  // 교차행 직접수정 알람은 포인터를 대상 행 **마지막** 칸에 세우므로, 대상 행이 미완료(skip)면
+  // '확인' 한 번에 markRowComplete가 돌아 빈 측정값(m1='')이 complete:true로 내구화되고
+  // skippedRows 표식(데이터탭 placeholder의 근거)까지 지워진다 — 값 유실이 완료로 위장된다.
+  // 설계(Larry 확정): 미완료 대상 행은 완료 처리 금지·skip 보존, 복귀는 returnStack 소비 그대로.
+  await boot(page, PHONE_402, {
+    settings: NESTED_SETTINGS as unknown as typeof AZ_SETTINGS,
+    headers: NESTED_HEADERS,
+    sheetRows: NESTED_ROWS,
+  });
+
+  // 1행을 **비운 채** '다음' → skip placeholder로 영속 + 2행 m1 대기.
+  await fireStt(page, '다음', 1500);
+  await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(2);
+
+  // 2행 m1에서 「수정 120.5」 → 대상은 skip된 1행의 **마지막** 칸 m2(직전 100.0, increase 위반).
+  await fireStt(page, '수정 120.5', 1200);
+  await expect(page.locator('[data-testid="anomaly-alert"]'), 'skip 행 대상 직접수정도 알람')
+    .toBeVisible({ timeout: 6000 });
+  expect(await activeRowOf(page), '알람 중 포인터 = 대상 행').toBe(1);
+
+  // '확인' → 원 출발점(2행 m1) 복귀는 그대로 성립해야 하고(returnStack 소비),
+  await fireStt(page, '확인', 1500);
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toHaveCount(0);
+  await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(2);
+  expect(await activeChipName(page), '원 출발 좌표(2행 m1) 복귀').toBe('측정항목01');
+
+  // 🔴 본축 — 1행은 **미완료로 남는다.** 수정값(m2=120.5)은 내구화되되 m1은 비어 있고,
+  //    complete는 false를 유지해야 한다. 현재 결함은 확인 직후 complete:true로 내구화한다(red).
+  await expect.poll(async () => (await idbRow(page, 1))?.values?.m2, { timeout: 5000 }).toBe('120.5');
+  await expect.poll(async () => (await idbRow(page, 1))?.complete, {
+    timeout: 4000,
+  }).toBe(false);
+  expect((await idbRow(page, 1))?.values?.m1 ?? '', '빈 측정값은 빈 채로 남는다').toBe('');
 });

@@ -965,14 +965,25 @@ export function useVoiceSession() {
       }
     }
 
-    // All voice cols in this row filled — complete
-    if (correctionBackupRef.current?.index === row) correctionBackupRef.current = null;
-    sess.markRowComplete(row);
-    sess.setPhase('complete');
-    void persistSession();
-    awaitingFieldRef.current = null;
-    await announceRowComplete(row);
-    if (epochRef.current !== startEpoch) return;
+    // All voice cols AFTER the pointer are filled — but that alone doesn't prove the row is
+    // complete: the forward scan never looks at cols BEFORE the pointer.
+    // 🔴 v0.47.0-r3 후속(codex r4 :968, Larry 확정 08-09) — 교차행 직접수정 알람은 포인터를 대상
+    //   행 **마지막** 칸에 세우므로(:1273 부근), 대상이 skip 행이면 여기서 앞선 빈 칸을 안 보고
+    //   markRowComplete가 돌아 **빈 측정값이 complete:true로 내구화**되고 skippedRows 표식까지
+    //   지워졌다(markRowComplete가 skip을 제거한다 — 값 유실이 완료로 위장). cascade 변형(skip
+    //   행 bare '수정' — 예약 없음, :1365)도 같은 구멍이었다. 미완료 행은 완료 처리 전체(마킹·
+    //   persist·완료 낭독)를 건너뛰고, 아래 복귀 예약 소비/다음 행 탐색만 그대로 수행한다 —
+    //   P1 알람 경로는 returnStack이 원 출발점을 들고 있으니 그 소비가 곧 복귀다.
+    //   오라클: tests/v0470-r2-p1-direct-modify-trend.spec.ts 「P1-미완료대상」.
+    if (isRowVoiceComplete(row, vc)) {
+      if (correctionBackupRef.current?.index === row) correctionBackupRef.current = null;
+      sess.markRowComplete(row);
+      sess.setPhase('complete');
+      void persistSession();
+      awaitingFieldRef.current = null;
+      await announceRowComplete(row);
+      if (epochRef.current !== startEpoch) return;
+    }
 
     // If a return reservation is set (came from modify/jump), go back.
     // v0.5.0 NAV-1 이중 가드: 복귀 대상이 이미 완료된 행이면 복귀하지 않는다 — 완료 행을
