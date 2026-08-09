@@ -1876,3 +1876,27 @@ TTS 구간(`:2522-2523`)에 오버레이가 열리면 **모달 뒤에서 STT 인
 - **대응(미수행):** 픽스처에 `text`·`date`·options 컬럼을 섞는다. 다만 이 픽스처를 쓰는
   스펙이 많아(v039 우측끝 6단언 · 72조합 스윕 · 프리뷰 캡처 등) **컬럼 개수·순서를 바꾸면
   그쪽이 흔들린다** — 별도 픽스처를 추가하는 쪽이 안전할 수 있다. **다음 회차 과제.**
+
+## 2026-08-09 v0.47.0-r3 수정 라운드 관측 (이중 콜드 리뷰 후속 · 회차 SSOT: `workspace_teamops/deliverables/2026-08-09-survey-011-v0470-r2-review-union.md`)
+
+### [UI-BLACKOUT-CAPTURE-1] wake 홀드의 iOS 암묵 포인터 캡처 방어 — 실기기 판정 전 MONITORING
+
+- **카테고리:** UI / iOS 실기기 축
+- **상태:** `MONITORING` (방어 코드는 들어감 — 실기기 확인 전 RESOLVED 금지)
+- **관측(콜드 리뷰 claude §2):** Pointer Events 스펙상 터치 포인터는 `pointerdown` 타깃에
+  **암묵 캡처**가 자동으로 걸려, `beginHold`의 "나가면 `pointerleave`가 취소한다" 설계가
+  iOS 실기기에서 무효일 개연. 데스크톱 Playwright는 마우스라 이 축을 **재지 못한다.**
+- **대응(r3 · `ccab4c8`):** `beginHold`에 `releasePointerCapture` 방어 1줄 — 경계 이벤트 복원.
+  오라클은 강제하지 않았다(데스크톱으로 못 재는 축).
+- **실기기 확인 절차(다음 실기기 회차):** 중앙 홀드 시작 → 1초 내 손가락을 가장자리로 끌고
+  유지 → 게이지가 **멈추면** 해소 확정, 계속 차서 켜지면 재발(절차 상세는 `BlackoutOverlay.tsx`
+  beginHold 주석).
+
+### [TEST-W7-TIMING-1] w7 ⑦·⑧-b 1회 실패 후 재현 불가 — 타이밍 창 스펙의 부하 민감 개연
+
+- **카테고리:** 빌드·테스트 / flake 의심
+- **상태:** `OPEN` (기록만 — 판정 미확정)
+- **관측(r3 레인 B′):** `v0470-w7-hold-blackout` ⑦(reduced-motion)·⑧-b(장기 홀드 차단막)가
+  1회차 실행에서 각 1회 실패 후 같은 조건 재실행 2회 연속 green(5182 · workers=1).
+- **판정 절차(다음 사람):** red를 보면 [TEST-MANUAL-CHIP-1]과 같은 절차 — `--grep`으로
+  그 2건만 좁혀 A/B부터. 전량에서만 보고 자기 변경의 회귀로 오인하지 마라.
