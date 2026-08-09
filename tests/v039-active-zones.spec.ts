@@ -248,22 +248,20 @@ async function activeChipAlignment(page: Page) {
     const active = grid.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement;
     const gridRect = grid.getBoundingClientRect();
     const activeRect = active.getBoundingClientRect();
+    // 🔴 v0.47.0-r2 P5 — ✓ 마크 span이 항목명 span **안에** 렌더되므로, 마크가 있는 칩에서는
+    //   위치 색인이 한 칸 밀린다(마크 유무에 따라 같은 헬퍼가 다른 것을 읽는 취약점).
+    //   마크를 걸러 내 「마크가 있든 없든 값은 두 번째 span」을 복원한다.
+    const spans = Array.from(grid.querySelectorAll('span'))
+      .filter((s) => s.closest('[data-testid="column-chip"][data-active="true"]'))
+      .filter((s) => s.getAttribute('data-testid') !== 'chip-commit-mark');
     return {
-      value: active.querySelectorAll('span')[1]?.textContent?.trim() ?? '',
+      value: spans[1]?.textContent?.trim() ?? '',
       width: activeRect.width,
       rightGap: Math.round(gridRect.right - activeRect.right),
       scrollLeft: Math.round(grid.scrollLeft),
       maxScroll: Math.round(grid.scrollWidth - grid.clientWidth),
     };
   });
-}
-
-async function commitManualValue(page: Page, keys: string[]) {
-  await page.locator('[data-testid="column-chip"][data-active="true"]').click();
-  await expect(page.locator('[data-testid="manual-value-sheet"]')).toBeVisible();
-  for (const key of keys) await page.locator(`[data-testid="manual-key-${key}"]`).click();
-  await page.locator('[data-testid="manual-commit"]').click();
-  await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
 }
 
 for (const vp of [
@@ -277,9 +275,14 @@ for (const vp of [
     expect(before.scrollLeft, '첫 활성 음성 칩도 이미 우측 끝 정렬 대상이다').toBeGreaterThan(0);
     expect(Math.abs(before.rightGap - 8), '변경 전 우측 여백 = CHIP_SCROLL_PAD').toBeLessThanOrEqual(2);
 
-    // 첫 음성 칩은 추세 규칙이 있어 수동 120.5 커밋 뒤 manualHold에 머문다.
+    // 첫 음성 칩은 추세 규칙이 있어 120.5 커밋 뒤 **이상치 응답 대기**에 머문다(advance 중단).
     // currentColId/row는 그대로이고 값만 `—`→`120.5`로 바뀌므로 C4 의존성 누락을 직접 찌른다.
-    await commitManualValue(page, ['1', '2', '0', '.', '5']);
+    // 🔴 v0.47.0-r2 P5 보강(민구 08-09) — 수단을 **수동 커밋에서 음성 커밋으로** 바꿨다.
+    //   미확정 후보값은 이제 칩에 표시되지 않으므로(후보는 알람 팝업에만) 수동 보류로는
+    //   「값이 바뀐 활성 칩」을 만들 수 없다 — 폭이 안 변해 이 테스트의 전제가 죽는다.
+    //   음성 위반 커밋은 값이 **확정 저장**되고(알림 ≠ 롤백) trendConfirm이 포인터를 붙잡아
+    //   두므로, 이 테스트가 원래 재려던 조건(같은 칩·값만 변화)을 그대로 만든다.
+    await fireStt(page, '120.5', 900);
     await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible();
     const after = await activeChipAlignment(page);
 
