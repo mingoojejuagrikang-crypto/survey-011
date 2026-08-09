@@ -126,6 +126,10 @@ export function chipSweepOffset(elapsedMs: number, oneWaySeconds: number, maxScr
  *   ② 사용자가 손으로 칩존을 밀었다가 뗀 직후
  * 둘 다 "지금 보이는 자리에서 오른쪽으로 다시 흘러간다"가 자연스럽다.
  *
+ * ⚠️ **`scrollLeft`가 `[0, maxScroll]` 밖이면 clamp된다** — 그게 아래 §글라이드가 다루는
+ * 바로 그 지점이다. 이 함수는 «대역 안에서 위상을 잇는» 일만 하고, 대역 밖은 호출부가
+ * 글라이드로 데려온 뒤에 부른다.
+ *
  * @returns `start` — `chipSweepOffset(now - start, …)`가 현재 위치를 돌려주는 시각
  */
 export function chipSweepStartFor(nowMs: number, scrollLeft: number, oneWaySeconds: number, maxScroll: number): number {
@@ -134,4 +138,84 @@ export function chipSweepStartFor(nowMs: number, scrollLeft: number, oneWaySecon
   // 상승 구간(0→1)으로 재개한다. 하강 구간으로 붙이면 왼쪽 끝에서 시작한 사용자가 곧바로
   // 벽에 닿아 정지한 것처럼 보인다.
   return nowMs - p * oneWaySeconds * 1000;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * 🔴 v0.47.0 r2 **P3 — 대역 밖 재개 글라이드** (민구 08-09 실기기 점검 FB-D)
+ *
+ * 민구 원문:
+ * > *"칩존 자동 스크롤시 사용자가 수동 스크롤후 뗀 자리가 아닌 이전 자리로 빠르게 돌아가서
+ * >  다시 스크롤중"*
+ *
+ * ## 기전 — C4 계약이 **대역 밖에서** 깨진다
+ * v0.46.1 WP-4 C1이 왕복 구간을 «음성안내 칩들이 차지하는 범위» `[from, to]`로 좁혔다
+ * (`ChipZone.tsx`). 그런데 사용자는 트랙 **전체**를 스크롤할 수 있다 — 대역 밖에 손을 뗄 수 있다.
+ * 그 상태로 300ms 정적이 지나 재개되면 호출부가 `chipSweepStartFor(ts, scrollLeft - from, …)`을
+ * 부르는데, 위 함수의 `clamp`가 위상을 0..1로 접어 **다음 프레임의 `from + offset` 대입이
+ * 대역 안으로 점프**한다. 민구가 본 *"이전 자리로 빠르게 돌아가서"* 가 이 한 프레임이다.
+ *
+ * 산술 예 (`tests/v0470-r2-chip-glide.spec.ts`가 이 수를 그대로 단언한다):
+ *   from=200, to=600(range 400), 사용자가 scrollLeft=50에 손을 뗌
+ *   → (50-200)/400 = -0.375 → clamp 0 → 다음 프레임 scrollLeft = 200. **150px 순간 점프.**
+ *
+ * ## 처방 — 점프 대신 **왕복과 같은 등속으로** 대역까지 데려간다
+ * C4(*"재개는 지금 보이는 자리에서"*)를 대역 밖까지 확장하는 것이다. 도착하면 삼각파에 합류한다.
+ * 🔑 합류 방향이 자연스럽게 이어진다: 왼쪽 밖 → `from`에 닿으면 위상 0(상승, 계속 오른쪽으로),
+ *    오른쪽 밖 → `to`에 닿으면 위상 1(하강, 계속 왼쪽으로). 글라이드 방향과 왕복 방향이 같다.
+ *
+ * ⚠️ **등속의 대가를 숨기지 않는다.** 속도가 왕복과 같으므로 대역이 좁고 설정이 느리면
+ *    글라이드가 길다. 기본 단계 5(편도 26초) · range 300px이면 11.5px/s이고,
+ *    대역 밖 200px에서 재개하면 **약 17초**가 걸린다. 민구가 *"멈춘 것 같다"* 로 읽을 개연이
+ *    있다 — 처방은 민구 확정이므로 그대로 구현하고, 이 숫자를 다음 회차의 판단 근거로 남긴다.
+ *    (대안은 «글라이드만 더 빠르게»인데, 그러면 되돌아오는 속도가 왕복과 달라 다시 «튄다»로
+ *     보인다. 등속이 «점프가 아니다»를 눈으로 증명하는 유일한 속도다.)
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+/** 대역 안팎을 가르는 허용치(px).
+ *
+ *  🔴 `ChipZone`의 `onScroll` 자기쓰기 판별 ε(`max(1, 1/DPR)`)보다 **작으면 안 된다** —
+ *  작으면 경계에 다 온 위치가 «아직 밖»으로 판정돼 매 프레임 글라이드가 재시작하며 스터터한다.
+ *  `CHIP_SWEEP_MIN_TRAVEL_PX`와 같은 계보의 상수다(서브픽셀 잔여를 «움직이지 않음»으로 접는다). */
+export const CHIP_SWEEP_GLIDE_EPS_PX = 2;
+
+/**
+ * 재개 위치가 대역 밖이면 **다가갈 경계**를, 안이면 `null`을 돌려준다.
+ *
+ * @param scrollLeft 현재 위치(트랙 절대 좌표)
+ * @param from `to` 왕복 대역(트랙 절대 좌표). `from > to`인 퇴화 입력은 대역 없음으로 본다.
+ */
+export function chipSweepGlideTarget(scrollLeft: number, from: number, to: number): number | null {
+  if (!Number.isFinite(scrollLeft) || !Number.isFinite(from) || !Number.isFinite(to)) return null;
+  if (to < from) return null;
+  if (scrollLeft < from - CHIP_SWEEP_GLIDE_EPS_PX) return from;
+  if (scrollLeft > to + CHIP_SWEEP_GLIDE_EPS_PX) return to;
+  return null; // 대역 안(또는 ε 이내) — 글라이드할 것이 없다
+}
+
+/** 왕복 속도(px/ms). 편도 `oneWaySeconds`에 `range`px를 지나므로 그 몫이다.
+ *  0 이하 입력은 0(움직이지 않음)으로 접는다 — 호출부가 나눗셈 NaN을 만나지 않게. */
+export function chipSweepSpeedPxPerMs(oneWaySeconds: number, range: number): number {
+  if (!Number.isFinite(oneWaySeconds) || !Number.isFinite(range)) return 0;
+  if (oneWaySeconds <= 0 || range <= 0) return 0;
+  return range / (oneWaySeconds * 1000);
+}
+
+/**
+ * 글라이드 한 프레임. `current`에서 `target` 쪽으로 등속 이동하되 **지나치지 않는다.**
+ *
+ * 🔑 오버슈트 clamp가 이 함수의 존재 이유다. 프레임이 길면(백그라운드 복귀·저사양) 한 스텝이
+ * 남은 거리를 넘어서는데, 그대로 대입하면 대역 반대편으로 튀어 **고치려던 점프를 다시 만든다.**
+ *
+ * @param dtMs 이전 프레임과의 간격. 음수·비유한수는 0으로 접는다(시계 되감김·첫 프레임).
+ */
+export function chipSweepGlideNext(
+  current: number, target: number, oneWaySeconds: number, range: number, dtMs: number,
+): number {
+  const speed = chipSweepSpeedPxPerMs(oneWaySeconds, range);
+  if (speed <= 0) return target; // 왕복이 없으면 글라이드도 의미가 없다 — 즉시 붙인다
+  const dt = Number.isFinite(dtMs) && dtMs > 0 ? dtMs : 0;
+  const step = speed * dt;
+  const delta = target - current;
+  if (Math.abs(delta) <= step) return target; // 도달 — 오버슈트를 여기서 막는다
+  return current + Math.sign(delta) * step;
 }

@@ -3,7 +3,10 @@ import { T } from '../../tokens';
 import { ColumnChip } from './ColumnChip';
 import { nestedAutoValue } from '../../lib/autoValue';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { chipSweepOffset, chipSweepStartFor, shouldChipSweep } from '../../lib/chipSweep';
+import {
+  chipSweepOffset, chipSweepStartFor, shouldChipSweep,
+  chipSweepGlideTarget, chipSweepGlideNext,
+} from '../../lib/chipSweep';
 import { commitMarkKey, useSessionCommitMarks } from './useVoiceCommitMark';
 import type { Column } from '../../types';
 
@@ -109,6 +112,12 @@ function useChipSweep(
     // 짝이 어긋나는데, 그 오판이 "루프 이벤트 = 사용자"쪽으로 굳으면 **왕복이 영구 정지**한다.
     // 위치 비교는 오판이 나도 이벤트 1건짜리 일과성이다(다음 이벤트가 바로잡는다).
     let lastSelfLeft = -1;
+    /** 🔴 v0.47.0 r2 P3 — 대역 밖에서 대역으로 **등속 이동 중**인가. `start`와 배타적이다:
+     *  글라이드 중에는 삼각파를 대입하지 않는다(둘이 같은 프레임에 쓰면 서로를 덮는다). */
+    let gliding = false;
+    /** 글라이드 dt의 기준. 🔴 진입 프레임에서 `ts`로 세우지 않으면 첫 dt가 `ts` 자체(수십만 ms)가
+     *  되어 목표로 **즉시 점프**한다 — 이 과제가 고치는 그 버그가 그대로 재현된다. */
+    let lastTs = 0;
     /** 마지막 사용자 scroll 후 재개 대기(ms). 관성 스크롤은 멈출 때까지 이벤트를 계속 내므로
      *  이 값은 이벤트 사이 간격만 덮으면 된다(60Hz≈16ms, 스로틀돼도 수십 ms). 300ms는 그
      *  여유 10배이면서, 편도 8초 왕복 대비 사람이 못 느끼는 재개 지연이다. */
@@ -156,12 +165,49 @@ function useChipSweep(
       // 대상이 이미 한 화면에 다 들어오면 왕복할 거리가 없다 — 억지로 흔들지 않는다.
       if (!shouldChipSweep(seconds, range)) {
         resyncRef.current = true;
+        gliding = false;
         return;
       }
+      // 🔴 v0.47.0 r2 P3(FB-D, 민구 08-09) — **대역 밖 재개는 점프가 아니라 글라이드다.**
+      //
+      //    사용자는 트랙 **전체**를 스크롤할 수 있는데 왕복 대역은 `[from, to]`로 좁다.
+      //    대역 밖에 손을 뗀 채 재개되면 `chipSweepStartFor`의 clamp가 위상을 접어 다음 프레임
+      //    대입이 **대역 안으로 점프**한다 — 민구가 본 *"이전 자리로 빠르게 돌아가서"*가 그것이다.
+      //    👉 왕복과 **같은 등속**으로 대역까지 데려간 뒤 삼각파에 합류한다(산술 SSOT는 lib).
+      //    🔑 목표 경계를 **캐시하지 않는다** — 활성 칩·표식 집합이 바뀌면 대역이 움직이므로
+      //       매 프레임 그 프레임의 `[from, to]`에서 다시 구한다.
       if (resyncRef.current || start < 0) {
-        start = chipSweepStartFor(ts, el.scrollLeft - from, seconds, range);
-        resyncRef.current = false;
+        const target = chipSweepGlideTarget(el.scrollLeft, from, to);
+        if (target !== null) {
+          // 글라이드 진입. 🔴 `lastTs`를 **여기서** 세운다 — 안 하면 첫 프레임의 dt가 `ts`
+          //    (수십만 ms)가 되어 목표로 즉시 점프한다. 고치려던 그 버그의 재현이다.
+          if (!gliding) { gliding = true; lastTs = ts; }
+        } else {
+          gliding = false;
+          start = chipSweepStartFor(ts, el.scrollLeft - from, seconds, range);
+          resyncRef.current = false;
+        }
       }
+      if (gliding) {
+        const target = chipSweepGlideTarget(el.scrollLeft, from, to);
+        if (target === null) {
+          // 도착 — 지금 위치에서 위상을 이어받는다. 경계에 붙었으므로 clamp가 일어나지 않는다.
+          //   `from`이면 위상 0(상승), `to`이면 위상 1(하강) — 글라이드 방향이 그대로 이어진다.
+          gliding = false;
+          start = chipSweepStartFor(ts, el.scrollLeft - from, seconds, range);
+          resyncRef.current = false;
+        } else {
+          const glided = chipSweepGlideNext(el.scrollLeft, target, seconds, range, ts - lastTs);
+          lastTs = ts;
+          // 🔴 왕복 대입과 **같은 방어**가 필요하다 — 글라이드도 scrollLeft를 쓰므로 scroll
+          //    이벤트를 낸다. 기록하지 않으면 `onScroll`이 이를 사용자로 오판해 매 프레임
+          //    `userScrollUntil`을 연장하고 **글라이드가 영구 정지**한다.
+          lastSelfLeft = glided;
+          el.scrollLeft = glided;
+          return;
+        }
+      }
+      lastTs = ts;
       const next = from + chipSweepOffset(ts - start, seconds, range);
       lastSelfLeft = next; // 대입 **전에** 기록 — 이 대입의 scroll 이벤트가 자기쓰기로 판별되게.
       el.scrollLeft = next;
