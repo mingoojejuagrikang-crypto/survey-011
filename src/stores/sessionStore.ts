@@ -168,9 +168,13 @@ interface SessionState {
    *  complete:false placeholder rows so the 데이터탭 shows the gap; removed when the
    *  row is later completed. */
   skippedRows: number[];
-  /** When user jumps to another row (modify/chip), where to return after that row finishes */
-  returnRow: number | null;
-  returnColIdx: number | null;
+  /** When user jumps to another row (modify/chip), where to return after that row finishes.
+   *  🔴 v0.47.0-r3(이중 콜드 리뷰 08-09, codex f3) — 단일 좌표 → **스택**. 복귀 예약이 이미 걸린
+   *  상태에서 P1 교차행 직접수정 알람이 또 이동하면 예약이 2건 중첩되는데, 단일 returnRow로는
+   *  안쪽 출발점을 표현할 수 없어 확인 후 바깥 예약 행으로 건너뛰었다(오귀속 위험).
+   *  의미론: **최상단이 다음 복귀처**(LIFO). 깊이 ≤1에서는 종전 단일 좌표와 동작이 같다.
+   *  ⚠️ 이 스토어는 메모리 전용이다(persist 미들웨어 없음) — 스택은 직렬화 경로에 닿지 않는다. */
+  returnStack: Array<{ row: number; colIdx: number | null }>;
 
   setPhase: (p: VoicePhase) => void;
   setEndReached: (v: boolean) => void;
@@ -201,7 +205,13 @@ interface SessionState {
   markRowIncomplete: (row: number) => void;
   markRowSkipped: (row: number) => void;
   isRowComplete: (row: number) => boolean;
+  /** 종전 단일 좌표 의미 그대로 — null이면 **전체 클리어**, 값이면 스택을 [단일 항목]으로 **교체**.
+   *  jumpToRow(덮어쓰기)·goNextRow(해제)의 기존 계약을 바꾸지 않기 위한 유지 축이다. */
   setReturn: (row: number | null, colIdx: number | null) => void;
+  /** P1 교차행 직접수정 알람 전용 — 기존 예약을 덮지도 버리지도 않고 **위에 쌓는다**(중첩). */
+  pushReturn: (row: number, colIdx: number | null) => void;
+  /** advance() 소비부 전용 — 최상단 1건만 내린다(나머지 예약은 다음 행 완료가 소비). */
+  popReturn: () => void;
   resetAll: () => void;
   restorePendingValidation: (session: Session) => void;
 }
@@ -232,8 +242,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   allRowValues: {},
   completedRows: [],
   skippedRows: [],
-  returnRow: null,
-  returnColIdx: null,
+  returnStack: [],
 
   // phase가 'complete'를 벗어나면 endReached는 의미를 잃는다 — 단일 지점에서 자동 해제해
   // 호출부마다 짝 맞춰 끄는 실수를 구조적으로 없앤다(스테일 '완료' 화면 방지).
@@ -302,7 +311,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   isRowComplete: (row) => get().completedRows.includes(row),
 
-  setReturn: (returnRow, returnColIdx) => set({ returnRow, returnColIdx }),
+  setReturn: (row, colIdx) =>
+    set({ returnStack: row == null ? [] : [{ row, colIdx }] }),
+  pushReturn: (row, colIdx) =>
+    set((s) => ({ returnStack: [...s.returnStack, { row, colIdx }] })),
+  popReturn: () => set((s) => ({ returnStack: s.returnStack.slice(0, -1) })),
 
   restorePendingValidation: (session) => {
     const pending = session.pendingValidation;
@@ -353,8 +366,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       allRowValues: {},
       completedRows: [],
       skippedRows: [],
-      returnRow: null,
-      returnColIdx: null,
+      returnStack: [],
       // WP-F — 세션이 끝나면 검은 화면도 함께 풀린다(위 blackout 주석).
       blackout: false,
     }),

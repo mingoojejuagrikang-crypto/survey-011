@@ -131,3 +131,168 @@ test('P1ⓒ-review 🔴 검토 대기 출신 직접 수정: 알람 해소 후 �
   // 갱신값이 재낭독에 반영돼 있어야 한다(재낭독의 의미 — 종전 계약 보존의 증거).
   expect(after[1], '검토 재낭독에 정정값 반영').toContain('120.5');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.47.0-r3 판정축 오라클 3건 (이중 콜드 리뷰 2026-08-09 — codex f1·f2·f3 / claude §1).
+// 셋 다 게이트 164 passed와 공존하던 기존 오라클의 사각이다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('P1ⓒ-review-재위반 🔴 정정값이 또 위반이어도 검토 대기 예약이 산다 — 2번째 알람 확인 후 재진입', async ({ page }) => {
+  // 이중 확인(codex f2 · claude §1): 재위반 재무장(:2499)만 resumeReview를 복사하지 않아,
+  // 「위반 → 새 값(또 위반) → 확인」 조합에서만 v0.33.0 항목2 계약이 깨진다.
+  // 위 ⓒ-review(첫 알람 즉시 확인)는 green인 채로 — 정확히 그 사각을 메우는 오라클이다.
+  await boot(page, PHONE_402, {
+    settings: MINI_SETTINGS as unknown as typeof AZ_SETTINGS,
+    headers: MINI_HEADERS,
+    sheetRows: MINI_ROWS,
+  });
+
+  await fireStt(page, '100.0', 700);
+  await fireStt(page, '10.0', 900);
+  await fireStt(page, '이전', 1500);
+  expect(reviewSays(await ttsLog(page)), '검토 대기 진입 낭독 1회').toHaveLength(1);
+
+  // 첫 위반 알람.
+  await fireStt(page, '수정 120.5', 1200);
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible({ timeout: 6000 });
+
+  // '확인' 대신 **여전히 위반인 새 값** — 재위반 재무장 경로는 이때만 돈다.
+  await fireStt(page, '130.5', 1500);
+  await expect(page.locator('[data-testid="anomaly-alert"]'), '재위반 → 알람 재무장').toBeVisible();
+  await expect(chip(page, '측정항목01')).toContainText('130.5');
+
+  // 2번째 알람에서 '확인' → 검토 대기 재진입. 재무장이 예약을 버렸으면 advance로 빠져 낭독이
+  // 늘지 않는다(red).
+  await fireStt(page, '확인', 1200);
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toHaveCount(0);
+  const after = reviewSays(await ttsLog(page));
+  expect(after, '재위반 해소 후에도 검토 대기 재진입(낭독 2회째)').toHaveLength(2);
+  expect(after[1], '재낭독에 최종 정정값 반영').toContain('130.5');
+});
+
+/** IDB sessions에서 (rowIndex, colId) 값을 읽는다 — persist 내구화 오라클용
+ *  (correction-flow.spec.ts의 getIdbSessions 패턴, 셀 단위로 축소). */
+async function idbRowValue(page: Page, rowIndex: number, colId: string): Promise<string | null> {
+  return page.evaluate(async ({ rowIndex, colId }) => {
+    const db = await new Promise<IDBDatabase | null>((res) => {
+      const r = indexedDB.open('survey-011');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => res(null);
+    });
+    if (!db) return null;
+    const sessions = await new Promise<Array<{ rows?: Array<{ index: number; values?: Record<string, string> }> }>>((res) => {
+      const tx = db.transaction('sessions', 'readonly');
+      const req = tx.objectStore('sessions').getAll();
+      req.onsuccess = () => res(req.result as never);
+      req.onerror = () => res([]);
+    });
+    db.close();
+    const last = sessions[sessions.length - 1];
+    const row = last?.rows?.find((r) => r.index === rowIndex);
+    return row?.values?.[colId] ?? null;
+  }, { rowIndex, colId });
+}
+
+test('P1-persist 🔴 현재 행·무클립 셀 직접수정도 알람 대기 전에 IDB로 내구화된다', async ({ page }) => {
+  // codex f1: targetRow===curRow && 무클립 && !reviewTarget 조합은 두 저장 갈래
+  // (saveSession/persistSession)를 모두 건너뛴다 → 알람/다음 필드 대기 중 reload가 오면
+  // IDB의 이전 값으로 복귀(값 유실). 수동으로 입력한 셀이 정확히 이 무클립 조건에 도달한다.
+  await boot(page, PHONE_402);
+
+  // 측정항목01(v0)을 **수동으로** 100 입력 — 수동 커밋은 클립 포인터를 남기지 않는다(무클립 전제).
+  await page.locator('[data-testid="column-chip"][data-col-name="측정항목01"]').click();
+  await expect(page.locator('[data-testid="manual-value-sheet"]')).toBeVisible({ timeout: 3000 });
+  for (const k of ['1', '0', '0']) {
+    await page.locator(`[data-testid="manual-key-${k}"]`).click();
+  }
+  await page.locator('[data-testid="manual-commit"]').click();
+  await expect(page.locator('[data-testid="manual-value-sheet"]')).toHaveCount(0);
+  // 수동 커밋(awaiting 셀)은 흐름을 재개한다 — 다음 필드 대기까지 전진.
+  await page.waitForFunction(
+    () => (document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null)
+      ?.dataset.colName === '측정항목02',
+    undefined,
+    { timeout: 6000 },
+  );
+  // 전제 확인 — 이 시점에 120.5는 IDB 어디에도 없다(아래 본단언이 직접수정의 persist만 재도록).
+  //   ⚠️ '100'을 기대하지 마라: persistCellValue는 행이 아직 IDB에 없으면 sessionStore만 갱신하고
+  //   다음 persistSession에 미룬다(:3799 계약) — 세션 첫 셀의 수동 커밋 직후 IDB엔 행 자체가 없다.
+  //   그래서 이 조합의 유실은 「이전 값 복귀」가 아니라 **행 통째 미영속**으로 나타난다(더 나쁘다).
+  expect(await idbRowValue(page, 1, 'v0'), '직접수정 전 IDB 전제').not.toBe('120.5');
+
+  // 현재 행의 무클립 셀을 음성 직접수정(직전 100.0 → 120.5 = increase 위반) → 알람.
+  await fireStt(page, '수정 120.5', 1000);
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toBeVisible({ timeout: 6000 });
+  await expect(chip(page, '측정항목01')).toContainText('120.5'); // 메모리 값은 섰다(알림 ≠ 롤백)
+
+  // 🔴 본축 — 알람 노출 시점(응답 대기 무기한)에 IDB가 이미 120.5여야 한다.
+  //    persist 0회면 행이 통째로 미영속(실측 null — codex f1), 이 poll이 타임아웃으로 red가 된다.
+  await expect.poll(() => idbRowValue(page, 1, 'v0'), { timeout: 5000 }).toBe('120.5');
+});
+
+/** 중첩 복귀 픽스처 — **마지막** 음성 컬럼(m2)에만 추세 규칙. 교차행 직접수정("수정 <값>")의
+ *  대상은 이전 행 마지막 음성 컬럼이므로, 중첩 시나리오의 알람은 m2에서 떠야 한다. */
+const NESTED_COLUMNS = [
+  { id: 'cd', name: '조사일자', type: 'date', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '오늘' }, sampleKey: false },
+  { id: 'cf', name: '농가명', type: 'text', input: 'auto', ttsAnnounce: false, auto: { kind: 'fixed', value: '이원창' }, sampleKey: true },
+  { id: 'c0', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 3 }, sampleKey: true },
+  { id: 'm1', name: '측정항목01', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+  { id: 'm2', name: '측정항목02', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false, trendRule: 'increase' },
+];
+const NESTED_SETTINGS = {
+  ...AZ_SETTINGS,
+  state: { ...AZ_SETTINGS.state, columns: NESTED_COLUMNS, totalRows: 3, sessionAutoLabel: 'r3-p1-nested' },
+};
+const NESTED_HEADERS = ['조사일자', '농가명', '조사나무', '측정항목01', '측정항목02'];
+const NESTED_ROWS = [
+  [PREV_ROUND, '이원창', '1', '5.0', '100.0'],
+  [PREV_ROUND, '이원창', '2', '5.0', '100.0'],
+  [PREV_ROUND, '이원창', '3', '5.0', '100.0'],
+];
+
+/** 화면의 행 표시("N / 3 행")에서 현재 행을 읽는다 — nav-unidirectional.spec.ts의 패턴. */
+async function activeRowOf(page: Page): Promise<number> {
+  const text = await page.evaluate(() => document.body.innerText);
+  const m = text.match(/(\d+)\s*\/\s*3\s*행/);
+  return m ? parseInt(m[1], 10) : -1;
+}
+
+test('P1-중첩복귀 🔴 기존 복귀 예약 위의 교차행 직접수정: 확인 후 안쪽 출발 행으로 먼저, 바깥 예약은 그 행 완료 후', async ({ page }) => {
+  // codex f3: 복귀 예약(returnRow)이 이미 걸려 있으면 교차행 직접수정 알람이 출발점을 기록하지
+  // 못한다(:1259 "덮지 않는다" 조건). '확인' 후 advance가 **바깥** 예약을 소비해 안쪽 출발 행을
+  // 건너뛰고, 이후 값이 엉뚱한 행에 들어갈 수 있다(오귀속).
+  await boot(page, PHONE_402, {
+    settings: NESTED_SETTINGS as unknown as typeof AZ_SETTINGS,
+    headers: NESTED_HEADERS,
+    sheetRows: NESTED_ROWS,
+  });
+
+  // 1행 완주(m1=5.0, m2=100.0 통과값) → 2행 m1 대기.
+  await fireStt(page, '5.0', 700);
+  await fireStt(page, '100.0', 1200);
+  await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(2);
+
+  // '다음'으로 2행 skip → 3행(복귀 예약 없음) → '이전'으로 2행 복귀 = **바깥 예약(3행) 성립**.
+  await fireStt(page, '다음', 1200);
+  await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(3);
+  await fireStt(page, '이전', 1500);
+  await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(2);
+  expect(await activeChipName(page), '2행 첫 미완료 필드 착지').toBe('측정항목01');
+
+  // 2행 m1 대기 중 「수정 120.5」 → 대상은 1행 m2(직전 100.0, increase 위반) → 알람 + 포인터 1행.
+  await fireStt(page, '수정 120.5', 1200);
+  await expect(page.locator('[data-testid="anomaly-alert"]'), '교차행 직접수정 위반 → 알람')
+    .toBeVisible({ timeout: 6000 });
+  expect(await activeRowOf(page), '알람 중 포인터 = 수정 대상 행').toBe(1);
+
+  // 🔴 본축 — '확인' 후 **안쪽 출발 행(2)** 복귀. 예약이 유실되면 바깥 예약(3)으로 점프한다(red).
+  await fireStt(page, '확인', 1500);
+  await expect(page.locator('[data-testid="anomaly-alert"]')).toHaveCount(0);
+  await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(2);
+  expect(await activeChipName(page), '안쪽 출발 좌표(2행 m1) 복원').toBe('측정항목01');
+
+  // 경계 조건 — 바깥 예약(3행)은 파괴되지 않는다: 2행 완주가 그것을 소비한다(:977-994 계약 유지).
+  await fireStt(page, '5.0', 700);
+  await fireStt(page, '100.0', 1500);
+  await expect.poll(() => activeRowOf(page), { timeout: 8000 }).toBe(3);
+});

@@ -974,21 +974,24 @@ export function useVoiceSession() {
     await announceRowComplete(row);
     if (epochRef.current !== startEpoch) return;
 
-    // If returnRow set (came from modify/jump), go back.
+    // If a return reservation is set (came from modify/jump), go back.
     // v0.5.0 NAV-1 이중 가드: 복귀 대상이 이미 완료된 행이면 복귀하지 않는다 — 완료 행을
     // 재프롬프트하며 같은 행으로 반복 복귀하던 루프의 2차 차단(1차는 goNextRow의 setReturn 제거).
-    const ret = sess.returnRow;
-    const retCol = sess.returnColIdx;
-    if (ret != null && ret !== row) {
-      sess.setReturn(null, null);
-      if (!isRowVoiceComplete(ret, vc)) {
-        const targetCol = retCol ?? firstIncompleteColIdx(ret, vc);
-        sess.setActiveRow(ret);
+    // v0.47.0-r3(codex f3) — 단일 returnRow → returnStack **최상단 1건 소비**(pop). 깊이 ≤1에서는
+    // 종전(읽고 즉시 클리어)과 동작이 같고, P1 교차행 알람이 쌓은 중첩 예약(깊이 2)에서만
+    // 안쪽 출발점이 먼저 나온다. 폴스루(완료 행 복귀 무시) 시에도 pop한 1건만 버려진다 —
+    // 남은 바깥 예약은 다음 행 완료가 소비한다(종전 계약의 스택 일반화).
+    const ret = sess.returnStack[sess.returnStack.length - 1] ?? null;
+    if (ret != null && ret.row !== row) {
+      sess.popReturn();
+      if (!isRowVoiceComplete(ret.row, vc)) {
+        const targetCol = ret.colIdx ?? firstIncompleteColIdx(ret.row, vc);
+        sess.setActiveRow(ret.row);
         sess.setActiveCol(targetCol);
         sess.setRecognized('');
         sess.setPhase('active');
         awaitingFieldRef.current = null;
-        await announceRowDiff(row, ret);
+        await announceRowDiff(row, ret.row);
         if (epochRef.current !== startEpoch) return;
         if (vc[targetCol]) await announceField(vc[targetCol]);
         return;
@@ -1182,10 +1185,16 @@ export function useVoiceSession() {
           };
           useDataStore.getState().upsertSession(updatedSession);
           void saveSession(updatedSession).catch(() => {});
-        } else if (targetRow < curRow || reviewTarget) {
-          // If we modified an earlier row — or a reviewed (already-complete/persisted) row whose
-          // cell had no clip pointer to hang the update on — make sure it's (re)persisted.
-          // persistSession preserves sheetRow/syncState and demotes synced→dirty on change.
+        } else {
+          // If the cell had no clip pointer to hang the update on, make sure the new value is
+          // (re)persisted. persistSession preserves sheetRow/syncState and demotes synced→dirty
+          // on change.
+          // 🔴 v0.47.0-r3(이중 콜드 리뷰 08-09, codex f1) — 종전 조건(targetRow < curRow ||
+          //   reviewTarget)은 **현재 행의 무클립 셀**(수동으로 입력한 셀이 정확히 이 조합)을
+          //   건너뛰어 두 저장 갈래 모두 persist 0회였다. 그 뒤 아래 P1 알람 분기가 무기한 응답
+          //   대기로 들어가므로, 알람/다음 필드 대기 중 reload가 오면 값이 유실됐다(행이 아직
+          //   IDB에 없던 경우 행 통째 미영속 — 실측). 값이 서는 모든 커밋은 persist를 동반한다.
+          //   오라클: tests/v0470-r2-p1-direct-modify-trend.spec.ts 「P1-persist」.
           void persistSession();
         }
         // #3 error-vs-intent: log the direct-modify commit with previousValue → parsed.
@@ -1254,10 +1263,15 @@ export function useVoiceSession() {
           //   원래 대기하던 필드에 그대로 착지한다(별도 복귀 로직 불필요).
           //   부수 효과가 오히려 목적에 맞는다: 알람이 떠 있는 동안 칩존의 **활성 칩이 알람 난
           //   셀**이 되어 일반 음성 알람과 화면이 같아진다(P5가 그 칩의 ✓를 다루므로 중요).
-          //   행이 다르면 자연 진행만으로는 원래 행으로 못 돌아오니 returnRow를 세운다 — 단
-          //   **이미 걸린 복귀 예약은 덮지 않는다**(진행 중이던 예약 유실 방지).
-          if (targetRow !== curRow && useSessionStore.getState().returnRow == null) {
-            sess.setReturn(curRow, curIdx);
+          //   행이 다르면 자연 진행만으로는 원래 행으로 못 돌아오니 복귀 예약을 세운다.
+          // 🔴 v0.47.0-r3(이중 콜드 리뷰 08-09, codex f3) — 종전 「이미 걸린 예약은 덮지 않는다」
+          //   조건은 바깥 예약을 지키는 대신 **안쪽 출발점을 버렸다**: '이전' 등으로 이미 예약이
+          //   걸린 상태에서 교차행 직접수정 알람이 뜨면, 확인 후 advance가 바깥 예약을 소비해
+          //   출발 행을 건너뛰었다(값 오귀속 위험). 이제 **위에 쌓는다**(pushReturn) — 안쪽 복귀가
+          //   먼저(알람 대상 행 완료 시), 바깥 예약은 그 행 완료가 소비한다(LIFO, advance 소비부의
+          //   스택 일반화 주석 참조). 오라클: 같은 스펙 「P1-중첩복귀」.
+          if (targetRow !== curRow) {
+            sess.pushReturn(curRow, curIdx);
           }
           sess.setActiveRow(targetRow);
           sess.setActiveCol(targetIdx);
@@ -2496,10 +2510,17 @@ export function useVoiceSession() {
       });
       // 응답 대기 상태 무장 — 새 값 발화가 기존 수정(isModify) 의미론으로 재커밋되도록
       // previousValue=방금 커밋된 값과 함께 세팅한다.
+      // 🔴 v0.47.0-r3(이중 콜드 리뷰 08-09, codex f2 + claude §1 독립 일치) — **재위반 재무장도
+      //   resumeReview를 보존한다.** 종전엔 이 재무장만 예약을 복사하지 않아, 검토 대기 출신
+      //   직접 수정이 「위반 → 새 값(또 위반) → 확인」 조합에서만 advance로 새어 나갔다
+      //   (v0.33.0 항목2 계약 파괴 — 해소 지점 4곳은 전부 새 객체에서 resumeReviewOf를 읽으므로
+      //   여기서 떨어뜨리면 전 지점이 undefined를 받는다). demoteTrendConfirm(:136)과 같은 관례.
+      //   오라클: tests/v0470-r2-p1-direct-modify-trend.spec.ts 「P1ⓒ-review-재위반」.
       awaitingFieldRef.current = {
         kind: 'trendConfirm',
         row: awaiting.row, colId: awaiting.colId, name: awaiting.name,
         previousValue: parsed,
+        ...(resumeReviewOf(awaiting) != null ? { resumeReview: resumeReviewOf(awaiting) } : {}),
       };
       // 응답 발화('확인'/새 값) 클립 시작 — announceField 패턴(TTS 이전 시작, barge-in 수록).
       armClipForCell(awaiting.row, awaiting.colId);
