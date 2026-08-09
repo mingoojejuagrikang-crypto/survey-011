@@ -88,8 +88,8 @@ interface AwaitingBase {
  */
 type AwaitingField =
   | (AwaitingBase & { kind: 'value'; fractionWhole?: string })
-  | (AwaitingBase & { kind: 'modify'; previousValue?: string; fractionWhole?: string })
-  | (AwaitingBase & { kind: 'trendConfirm'; previousValue: string; fractionWhole?: string })
+  | (AwaitingBase & { kind: 'modify'; previousValue?: string; fractionWhole?: string; resumeReview?: number })
+  | (AwaitingBase & { kind: 'trendConfirm'; previousValue: string; fractionWhole?: string; resumeReview?: number })
   | (AwaitingBase & { kind: 'atEnd' })
   | (AwaitingBase & { kind: 'reviewWait' });
 
@@ -103,6 +103,19 @@ function previousValueOf(a: AwaitingField): string | undefined {
   return a.kind === 'modify' || a.kind === 'trendConfirm' ? a.previousValue : undefined;
 }
 
+/** 🔴 v0.47.0-r2 P1(FB-A) — 알람 해소 후 **검토 대기 재진입** 예약(그 행 번호).
+ *  검토 대기(reviewWait) 중의 직접 수정("수정 88.9")이 이상치 알람을 띄운 경우에만 선다.
+ *  왜 필요한가: 알람 해소 경로는 전부 `advance()`로 끝나는데, v0.33.0 항목2는 *"검토 대기 출신
+ *  커밋은 advance로 검토를 강제 종료하지 않는다"* 를 계약으로 못박았다(enterModifyMode 직접값
+ *  분기의 `enterReviewWait` 복귀가 그 이행이다). 알람이 중간에 끼면 그 복귀 지점이 사라지므로
+ *  대기 상태가 착지처를 들고 다닌다. **다른 경로는 이 필드를 세우지 않는다** — 세우지 않으면
+ *  값이 undefined라 모든 기존 흐름이 종전대로 `advance()`로 간다(무해한 추가).
+ *  `demoteTrendConfirm`('수정' 등 타 명령으로 강등)도 이 예약을 **보존**한다 — 강등 뒤 재커밋의
+ *  착지 역시 검토 대기여야 한다. */
+function resumeReviewOf(a: AwaitingField): number | undefined {
+  return a.kind === 'modify' || a.kind === 'trendConfirm' ? a.resumeReview : undefined;
+}
+
 /** 종전 `awaiting.fractionWhole` 접근(모드 무관 optional 읽기 지점용). 추세확인 중 소수부 유실
  *  재질문(trendConfirm+fractionWhole)도 실측 도달 조합이라 포함한다. */
 function fractionWholeOf(a: AwaitingField): string | undefined {
@@ -113,11 +126,13 @@ function fractionWholeOf(a: AwaitingField): string | undefined {
 
 /** trendConfirm → modify 강등(알림 해제, 수정 의미론 유지 — 종전 `trendConfirm=false` 변이와 동등).
  *  **fractionWhole을 반드시 보존한다** — 소수부 재질문 중 강등되면 정수부 문맥('111')이 유실돼
- *  다음 소수부 발화가 전체값으로 오커밋되던 회귀(v0.35.3 리뷰 r1, 3모델 공통 Critical/High). */
-function demoteTrendConfirm(a: AwaitingBase & { kind: 'trendConfirm'; previousValue: string; fractionWhole?: string }): AwaitingField {
+ *  다음 소수부 발화가 전체값으로 오커밋되던 회귀(v0.35.3 리뷰 r1, 3모델 공통 Critical/High).
+ *  v0.47.0-r2 P1 — `resumeReview`(검토 대기 착지 예약)도 같은 이유로 보존한다. */
+function demoteTrendConfirm(a: AwaitingBase & { kind: 'trendConfirm'; previousValue: string; fractionWhole?: string; resumeReview?: number }): AwaitingField {
   return {
     kind: 'modify', row: a.row, colId: a.colId, name: a.name,
     previousValue: a.previousValue, fractionWhole: a.fractionWhole,
+    ...(a.resumeReview != null ? { resumeReview: a.resumeReview } : {}),
   };
 }
 
@@ -1134,6 +1149,73 @@ export function useVoiceSession() {
         sess.setRecognized(parsed);
         sess.pushValueBurst(target.name, parsed, target.id); // I-3: 중앙 버스트 + 칩 V(UI③)
         useSessionCommitMarks.getState().add(targetRow, target.id); // W4 — 직접 수정도 성공 커밋
+
+        // ── 🔴 v0.47.0-r2 P1(FB-A · 민구 실기기 08-09) — **직접 수정도 추세 평가를 받는다** ──
+        //   종전엔 이 경로만 evaluateTrend를 부르지 않았다: 일반 커밋 경로와 수동 커밋 경로만
+        //   검사해서, 음성 「수정 <값>」으로 들어온 값은 아무리 이상해도 조용히 섰다.
+        //   실측(08-09 세션 +84.5초): row4 횡경 117→77 direct_modify, 직전 회차 111.1 대비
+        //   -30.9%로 설정(decrease·10%)을 넘겼는데 **trend 이벤트 0건**. 민구 제보 *"지금 값
+        //   알람 조건에 맞을거야. 근데 알람 발생이 없어"* 의 실체가 이 누락이다.
+        //   조립·발화·무장은 일반 커밋 경로와 **같은 부품**을 쓴다(buildAnomalyAlert가 SSOT).
+        const directViolation = evaluateTrend(target, targetRow, target.id, parsed);
+        if (directViolation) {
+          const alertExtra = getAnomalyAlertData(targetRow);
+          const { alertText, logExtra, alert } = buildAnomalyAlert({
+            col: target, v: directViolation, colName: target.name,
+            next: formatForTts(parsed), row: targetRow,
+            sampleKey: alertExtra.sampleKey, prevDate: alertExtra.prevDate,
+          });
+          // ⚠️ value 이벤트는 **바로 위에서 이미** 남겼다(extra:'direct_modify') — 여기서는 trend만
+          //   추가한다. 그래서 이 경로만 value→trend 순이다(일반 경로는 trend→value). 순서에
+          //   의존하는 파서·스펙이 없음을 확인하고 택했다 — value를 여기서 또 남기면 direct_modify
+          //   커밋이 로그에서 2건으로 세어져 분석 모수가 오염된다. confidence는 이 경로에 존재하지
+          //   않는 값이라(직접값은 명령 발화에서 추출된다) 싣지 않는다.
+          logCell({
+            type: 'trend', extra: logExtra,
+            row: targetRow, colId: target.id, colName: target.name,
+            text: preExtractedValue, parsed, previousValue: String(directViolation.prev),
+          });
+          // 응답 대기 무장 — 좌표는 **수정 대상 셀**이다(안내 중이던 셀이 아니다).
+          //   '확인'/'유지'는 확정·진행, 새 값 발화는 수정 의미론으로 재커밋(재위반 시 재알림).
+          awaitingFieldRef.current = {
+            kind: 'trendConfirm',
+            row: targetRow, colId: target.id, name: target.name,
+            previousValue: parsed,
+            // 검토 대기 출신이면 해소 후 착지는 advance가 아니라 **검토 대기 재진입**이다
+            //   (아래 일반 복귀 계약을 알람 경유에서도 지킨다 — resumeReviewOf 주석 참조).
+            ...(reviewTarget ? { resumeReview: targetRow } : {}),
+          };
+          // 응답 발화 녹음 슬롯 재무장 — cmdModify의 preserveCommandClip이 활성 클립을 이미
+          //   **멈춰** 놨다([CLIP-VAL-1]① 와 같은 사유). 무장하지 않으면 알람에 새 값으로 답한
+          //   발화가 통째로 녹음되지 않는다. 「확인」으로 답하면 클립 저장이 일어나지 않으므로
+          //   (명령 경로) 위에서 cmdKey로 재연결해 둔 D1 재생 포인터는 그대로 산다.
+          armClipForCell(targetRow, target.id);
+          // 🔑 해소 후 「원위치 복귀」 — 캐스케이드 재녹음 경로와 **같은 계약**이다(그쪽 주석:
+          //   *"No returnRow — advance() naturally proceeds from targetIdx forward"*).
+          //   포인터를 수정 대상 셀에 세워 두면 해소 시 advance()가 채워진 칸을 건너뛰며 전진해
+          //   원래 대기하던 필드에 그대로 착지한다(별도 복귀 로직 불필요).
+          //   부수 효과가 오히려 목적에 맞는다: 알람이 떠 있는 동안 칩존의 **활성 칩이 알람 난
+          //   셀**이 되어 일반 음성 알람과 화면이 같아진다(P5가 그 칩의 ✓를 다루므로 중요).
+          //   행이 다르면 자연 진행만으로는 원래 행으로 못 돌아오니 returnRow를 세운다 — 단
+          //   **이미 걸린 복귀 예약은 덮지 않는다**(진행 중이던 예약 유실 방지).
+          if (targetRow !== curRow && useSessionStore.getState().returnRow == null) {
+            sess.setReturn(curRow, curIdx);
+          }
+          sess.setActiveRow(targetRow);
+          sess.setActiveCol(targetIdx);
+          sess.setPhase('active');
+          useSessionStore.getState().setAnomalyAlert({
+            ...alert, colId: target.id, awaitingResponse: true,
+          });
+          playBeep('alert');
+          useSessionStore.getState().setLastTts(alertText);
+          // 🔑 위반이면 **에코 대신 알림 TTS** — 일반 커밋 경로가 명문화한 계약 그대로다.
+          //   커밋 확인음 playBeep('commit')도 내지 않는다(아래 W2 분기를 타지 않는다):
+          //   「저장됐다」와 「이상하다」가 한 순간에 겹치면 두 신호가 섞여 구분이 안 된다.
+          await say(alertText);
+          return;
+        }
+
         // v0.47.0 W2 — 직접 수정("수정 88.9")도 성공 커밋이다: 화음 → 에코 순서 계약(WP-E).
         //   종전엔 이 경로만 무음이었다(재청취 경로의 성공음과 비대칭 — 값이 저장되는 모든
         //   커밋에 확인음이 난다는 WP-E 원칙에 합류).
@@ -1216,7 +1298,10 @@ export function useVoiceSession() {
     // 단 채 값을 기다리지 않도록 active로 전환(일반 경로는 이미 active — 무해).
     sess.setPhase('active');
     await announceField(target, { isModify: true, previousValue: prevTargetValue });
-  }, [announceField, enterReviewWait, persistSession, say]);
+    // v0.47.0-r2 P1 — evaluateTrend·getAnomalyAlertData·armClipForCell 추가. 세 콜백 모두 이
+    //   useCallback보다 **위**에서 정의돼야 한다(dep 배열은 렌더 중 평가된다 — TDZ). 추세 헬퍼
+    //   3종을 이 함수 위로 옮긴 선행 커밋이 그 전제를 만든다.
+  }, [announceField, armClipForCell, enterReviewWait, evaluateTrend, getAnomalyAlertData, persistSession, say]);
 
   // ── public: jump to a specific row (auto-chip change / 행 이동 공용) ──────
   const jumpToRow = useCallback(
@@ -1738,7 +1823,10 @@ export function useVoiceSession() {
         row: awaiting.row, colId: awaiting.colId,
         ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
       });
+      const resumeRow = resumeReviewOf(awaiting);
       awaitingFieldRef.current = null;
+      // P1 — 검토 대기 출신 직접 수정이 알람을 경유한 경우의 착지(resumeReviewOf 주석 참조).
+      if (resumeRow != null) { await enterReviewWait(resumeRow); return; }
       await advance();
       return;
     }
@@ -2461,8 +2549,14 @@ export function useVoiceSession() {
 
     // Guard against race: another handleFinal ran while we were awaiting
     if (epochRef.current !== myEpoch) return;
+    // v0.47.0-r2 P1 — 검토 대기 출신 직접 수정이 알람을 경유해 **새 값으로 재커밋**된 경우의
+    //   착지. 예약이 없으면(=기존 모든 흐름) 값이 undefined라 종전대로 advance로 간다.
+    {
+      const resumeRow = resumeReviewOf(awaiting);
+      if (resumeRow != null) { await enterReviewWait(resumeRow); return; }
+    }
     await advance();
-  }, [advance, enterModifyMode, say, goNextRow, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
+  }, [advance, enterModifyMode, enterReviewWait, say, goNextRow, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
 
   // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
   const handleInterim = useCallback((text: string, confidence?: number) => {
@@ -3941,9 +4035,11 @@ export function useVoiceSession() {
       row: awaiting.row, colId: awaiting.colId,
       ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
     });
+    const resumeRow = resumeReviewOf(awaiting);
     awaitingFieldRef.current = null;
+    if (resumeRow != null) { await enterReviewWait(resumeRow); return; } // P1 — 검토 대기 착지
     await advance();
-  }, [advance, clearAnomalyAlert]);
+  }, [advance, clearAnomalyAlert, enterReviewWait]);
 
   /** [수정] 버튼 — 음성 '수정'(trendConfirm 해제 → isModify 재청취)과 동일 착지: 같은 필드에서
    *  대기하며 기존값은 새 발화가 덮어쓰기 전까지 보존된다. 터치에는 보존할 명령 발화가 없으므로
