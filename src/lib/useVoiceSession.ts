@@ -4009,6 +4009,13 @@ export function useVoiceSession() {
         // 직전 값으로 롤백하고 보류 UI를 닫아 reload 전후가 동일한 확정값을 가리키게 한다.
         sess.setRowValue(row, colId, pendingValidation.previousValue);
         sess.setRecognized(pendingValidation.previousValue);
+        // v0.47.0-r2 P5 — 롤백은 ✓ 억제도 되돌린다. fireManualAlert가 방금 remove했는데
+        //   (이 셀에 **이전 성공 커밋의 ✓가 있었다면** 그게 지워진 상태다) 알람까지 사라지면
+        //   복원해 줄 지점이 없어, 「멀쩡한 값인데 체크만 없는」 칸이 세션 내내 남는다.
+        //   되돌아간 값이 실제로 있을 때만 되돌린다(빈 값은 렌더 게이트가 어차피 가린다).
+        if (pendingValidation.previousValue !== '') {
+          useSessionCommitMarks.getState().add(row, colId);
+        }
         clearAnomalyAlert('persist_rollback');
         const current = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
         if (current) useDataStore.getState().upsertSession(withoutPendingCandidate({ ...current, pendingValidation }));
