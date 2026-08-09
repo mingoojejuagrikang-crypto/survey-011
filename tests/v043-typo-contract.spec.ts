@@ -13,9 +13,10 @@ import * as path from 'node:path';
  * eslint.config.js:5 에 명시된 "규칙은 max-lines 하나뿐인 최소 구성 ... 필요 이상 도입 금지"
  * (GL-006 헌장 §5, 민구 채택) 원칙을 준수하기 위함입니다.
  *
- * ALLOWLIST는 라인 번호가 아닌 "내용 기반"으로 관리되므로,
- * 추후 남아있는 상한(clamp) 부채가 제거되면 이 검사기가 자동으로 알리고
- * ALLOWLIST에서 해당 항목을 지워 부채 관리를 자동화합니다.
+ * ALLOWLIST는 라인 번호가 아닌 "내용 기반"으로 관리됩니다. 각 항목이 소스에서
+ * 1줄 이상 매치되는지도 단언하므로(죽은 항목 가드, 아래 deadItems), 남아있던
+ * 상한(clamp) 부채가 제거되면 그 항목이 0줄이 되어 여기가 red로 알리고,
+ * 목록에서 지우면 다시 green이 됩니다 — 부채 소멸이 조용히 지나가지 않습니다.
  */
 
 const ALLOWLIST_ITEMS = [
@@ -24,7 +25,8 @@ const ALLOWLIST_ITEMS = [
   //  🔴 그때 기대값은 5 → 4로 내렸는데 **문자열은 목록에 남아 0줄을 세고 있었다.**
   //  `allowlistCount`는 «매치된 소스 줄» 단위라 죽은 항목은 개수에 안 잡힌다 —
   //  지우든 말든 4다. 그래서 검사기가 스스로는 이걸 못 알린다(lint의 lint가 없다).
-  //  제거해도 `toBe(4)`가 green인 것이 곧 「죽었다」의 반증 조건이었다 — 실측 green.)
+  //  제거해도 `toBe(4)`가 green인 것이 곧 「죽었다」의 반증 조건이었다 — 실측 green.
+  //  👉 이 구멍은 이제 「죽은 항목 가드」(아래 deadItems 단언)가 막는다 — 0줄 항목은 red다.)
   // (구 2. CompleteSummary:132 — v0.44.0 §C3에서 중앙 종료 버튼 자체가 삭제돼 부채도 소멸.
   //  상한 5건 부채 중 1건이 이렇게 닫혔다 — TODO.md 「상한 5건」 표 참조.)
   // 3. ReaskCue:39 — 부채: 상한 17px 잔존 (규칙 2 위반, UI-g 이후 제거 대상)
@@ -73,6 +75,14 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //    못 알아챈다. 실패했을 때 무엇이 어디로 갔는지 바로 보여야 한다. (독립 리뷰 C1)
   const comments: string[] = [];
   const allowlisted: string[] = [];
+  // 🔴 죽은 항목 가드(lint의 lint) — 08-08에 CompleteSummary:87 항목이 0줄을 세며 목록에
+  //    남아 있던 것이 발단이다. `allowlistCount`는 «매치된 소스 줄» 단위라 죽은 항목이
+  //    개수에 안 잡히므로, 항목별 히트를 따로 세어 0줄인 항목을 red로 알린다.
+  //    히트는 이 검사기의 시야(비주석 fontSize 줄) 기준이다 — 주석으로 밀려나 산 줄이
+  //    없어진 항목도 죽은 것으로 본다.
+  const allowlistHits = new Map<string, number>(
+    ALLOWLIST_ITEMS.map((item) => [item, 0] as const),
+  );
 
   for (const filePath of tsxFiles) {
     const relativePath = path.relative(process.cwd(), filePath);
@@ -97,8 +107,12 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
 
       // 2. ALLOWLIST 검사 — 줄 단위다.
       //    값 추출(`[^,}\n]+`)은 계약 문자열 내부의 콤마에서 끊기므로 allowlist는 줄로 본다.
-      if (ALLOWLIST_ITEMS.some((allowItem) => line.includes(allowItem))) {
-        allowlistCount++;
+      const hitItems = ALLOWLIST_ITEMS.filter((allowItem) => line.includes(allowItem));
+      if (hitItems.length > 0) {
+        allowlistCount++; // 줄 단위 1회 — 항목별 히트(allowlistHits)와는 세는 단위가 다르다.
+        for (const item of hitItems) {
+          allowlistHits.set(item, (allowlistHits.get(item) ?? 0) + 1);
+        }
         allowlisted.push(`${relativePath}:${index + 1} ${line.trim()}`);
         return;
       }
@@ -133,6 +147,12 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   if (violations.length > 0) {
     console.error('🔴 [TYPO-CONTRACT-VIOLATIONS]:');
     violations.forEach((v) => console.error(`  - ${v}`));
+  }
+
+  const deadItems = ALLOWLIST_ITEMS.filter((item) => allowlistHits.get(item) === 0);
+  if (deadItems.length > 0) {
+    console.error('🔴 [TYPO-CONTRACT-DEAD-ALLOWLIST] 소스 0줄 매치 — 부채가 소멸했다. 목록에서 지워라:');
+    deadItems.forEach((d) => console.error(`  - ${d}`));
   }
 
   // 🔴 리터럴 단언 (제품 상수를 import하지 마라 [TEAMOPS-38])
@@ -180,4 +200,10 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);
+
+  // 🔴 죽은 항목 가드 (08-08 제안 → 08-09 자동 회차): 부채가 소멸해 항목이 소스 0줄을
+  //    세게 되면 여기가 red다 — 기대값만 내리고 문자열을 안 지우는 실수(위 4개 단언이
+  //    전부 green인 채 사체가 목록에 남는 경로, 실제로 v0.46.0 WP-B 때 일어났다)를 잡는다.
+  //    toEqual([])이라 실패 메시지에 죽은 항목 문자열이 그대로 찍힌다.
+  expect(deadItems, 'ALLOWLIST 죽은 항목 (소스 0줄 매치 — 목록에서 지워라)').toEqual([]);
 });

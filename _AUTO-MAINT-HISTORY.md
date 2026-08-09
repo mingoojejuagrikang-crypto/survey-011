@@ -4,6 +4,15 @@
 > 🔴 `CHANGELOG.md`는 이 레인이 건드리지 않는다 — `check:release`가 `package.json` 버전과의 일치를
 > 강제하는데 이 레인은 버전 bump가 금지라 항목을 추가하는 순간 배포가 막힌다.
 
+- **2026-08-09** · `tests/v043-typo-contract.spec.ts`에 「죽은 allowlist 항목」 가드를 추가했다
+  (08-08 회차 제안 이행). 항목별 히트를 `allowlistHits` 맵으로 따로 세어, 소스 0줄 매치 항목을
+  `expect(deadItems, …).toEqual([])`로 red 처리한다. **기대값 4개는 손대지 않았다.**
+  **왜:** 08-08에 드러난 「lint의 lint 부재」 — `allowlistCount`는 «매치된 소스 줄» 단위라 죽은
+  항목이 개수에 안 잡혀, v0.46.0 WP-B 때 사체가 목록에 남아도 4개 단언 전부 green이었다.
+  **실측:** 편집 전후 런의 요약줄이 `contract=65 allowlist=4 comment=3 violation=0`으로 **바이트
+  동일**, 두 런 모두 `✘` 0건 · 1 passed · 예외 0건. **red 반증:** 임시 죽은 항목을 삽입한 런에서
+  `✘` 1건이 **단언 실패**(deadItems toEqual, 예외 아님)로 발화하고 실패 메시지에 죽은 항목
+  문자열이 그대로 찍히는 것을 확인한 뒤 임시 항목을 제거했다. `check:docs` OK · `lint` OK.
 - **2026-08-08** · `tests/v043-typo-contract.spec.ts`의 `ALLOWLIST_ITEMS`에서 죽은 항목 1건
   (`CompleteSummary:87`의 `'max(15px, calc(clamp(17px, min(5vw, 2.6vh), 26px) * var(--fit-lo, 1)))'`)을
   제거하고 그 자리에 소멸 경위 주석을 남겼다. **기대값 4개는 손대지 않았다.**
