@@ -4,6 +4,17 @@
 > 🔴 `CHANGELOG.md`는 이 레인이 건드리지 않는다 — `check:release`가 `package.json` 버전과의 일치를
 > 강제하는데 이 레인은 버전 bump가 금지라 항목을 추가하는 순간 배포가 막힌다.
 
+- **2026-08-10** · `knip@6.32.0` 도입 (Phase 0-b) — devDependency + `knip.jsonc` + `npm run check:unused`.
+  미사용 판정을 grep에서 모듈 그래프 해석으로 옮긴다(`[TEAMOPS-5]`·`[TEAMOPS-18]`). **검출물은
+  하나도 지우지 않았다** — 판정은 사람 몫(동적 참조 가능성·오디오 3파일 리뷰 대상).
+  설정 근거: ①`paths: {"/src/*": ["src/*"]}` — `page.evaluate` 안의 Vite 절대경로 동적 임포트
+  6건이 「미해석」 오탐이었고, 매핑 후 namespace 사용 추적까지 정확해짐(`auth.signOut()`은 사용,
+  `getClientId`는 미사용으로 갈림) ②`playwright.config` 2건 등록 — probe config 오탐 제거
+  ③`design-handoff/**` ignore — 앱 빌드 밖 참고 산출물. **실측:** 무설정 baseline 대비 미사용
+  파일 11→3(오탐 8 소거), 미해석 6→0. 잔존 검출: 파일 3(`test-sheets-url.mjs`·`Chip.tsx`·
+  `BeepPicker.tsx`) · export 64 · 타입 15 · 중복 export 1(`chipSweep.ts`). 미사용 의존성 0.
+  🔴 `check:release`에 연결하지 않았다(검출 존재 시 exit 1이라 연결하면 배포가 막힌다) —
+  실측 `check:release` EXIT=0 유지. src·tests 무변경이라 e2e 재실행 없음.
 - **2026-08-09** · `tests/v043-typo-contract.spec.ts`에 「죽은 allowlist 항목」 가드를 추가했다
   (08-08 회차 제안 이행). 항목별 히트를 `allowlistHits` 맵으로 따로 세어, 소스 0줄 매치 항목을
   `expect(deadItems, …).toEqual([])`로 red 처리한다. **기대값 4개는 손대지 않았다.**
