@@ -122,6 +122,13 @@ function useChipSweep(
      *  이 값은 이벤트 사이 간격만 덮으면 된다(60Hz≈16ms, 스로틀돼도 수십 ms). 300ms는 그
      *  여유 10배이면서, 편도 8초 왕복 대비 사람이 못 느끼는 재개 지연이다. */
     const USER_SCROLL_SETTLE_MS = 300;
+    /** 🔴 v0.47.0 r3(콜드 리뷰 claude §4b) — 글라이드 continuation의 dt 상한(ms). rAF가 서 있던
+     *  시간(백그라운드·화면잠금)은 이동 예산이 아니다. 위의 두 `gliding = false` 갈래는 tick이
+     *  **돌면서** 내리는 문이라, rAF 자체가 정지했던 경우(그동안 어떤 갈래도 안 돈다)는 못 덮는다.
+     *  복귀 첫 프레임의 dt가 이 상한을 넘으면 이동 대신 리셋한다 — resync가 다음 프레임에 현재
+     *  위치에서 글라이드를 다시 세운다(부트스트랩이 lastTs를 재설정). 값은 «최악 프레임 잭
+     *  (수백 ms)»보다 크고 «백그라운드 중단(수 초~)»보다 작으면 된다. */
+    const GLIDE_STALL_RESET_MS = 800;
     const tick = (ts: number) => {
       raf = requestAnimationFrame(tick);
       // 🔴 왕복 거리는 **매 프레임 실측**한다 — 칩 개수·항목명 길이·기기 폭에 대한 가정이 없다
@@ -129,6 +136,13 @@ function useChipSweep(
       const max = el.scrollWidth - el.clientWidth;
       if (!shouldChipSweep(seconds, max)) {
         resyncRef.current = true; // 다시 넘칠 때 현재 위치에서 이어받는다
+        // 🔴 v0.47.0 r3(콜드 리뷰 이중 확인 — claude §4a·codex 4) — **여기도 글라이드를 내린다**
+        //    (아래 `!shouldChipSweep(seconds, range)` 갈래와 일관). 안 내리면 글라이드 중 행 전환·
+        //    값 변경·회전으로 칩 폭이 줄어 오버플로가 잠시 사라졌다 재생길 때 `gliding`이 살아남아,
+        //    복원 첫 프레임이 `lastTs`를 부트스트랩하지 않고(`if (!gliding)` 안에 있다) 중단 시간
+        //    전체가 dt가 되어 경계로 점프한다 — FB-D 증상이 레이아웃 전환 문으로 되돌아온다.
+        //    오라클: `v0470-r2-chip-glide-wiring` ③ (이 줄을 지우면 red — r3에서 실측).
+        gliding = false;
         return;
       }
       if (held || paused || ts < userScrollUntil) {
@@ -196,6 +210,14 @@ function useChipSweep(
         }
       }
       if (gliding) {
+        // 🔴 r3 — rAF 정지(백그라운드/화면잠금) 복귀 가드. 오라클: `chip-glide-wiring` ④
+        //    (이 갈래를 지우면 red — r3에서 실측). 진입 프레임은 위에서 `lastTs = ts`를 방금
+        //    세웠으므로 dt가 0이라 여기 걸리지 않는다 — continuation만 거른다.
+        if (ts - lastTs > GLIDE_STALL_RESET_MS) {
+          gliding = false;
+          resyncRef.current = true;
+          return;
+        }
         const target = chipSweepGlideTarget(el.scrollLeft, from, to);
         if (target === null) {
           // 도착 — 지금 위치에서 위상을 이어받는다. 경계에 붙었으므로 clamp가 일어나지 않는다.

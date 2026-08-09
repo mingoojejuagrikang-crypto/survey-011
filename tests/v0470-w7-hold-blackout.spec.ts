@@ -445,3 +445,56 @@ test('⑧ 🔴 해제 차단막 — 뗀 직후 첫 click은 먹고 두 번째는
   expect(on.map((e) => e.extra), '해제도 진입과 대칭으로 계측된다 — 체류 시간 계산의 전제').toEqual(['src:hold']);
   expect(on.every((e) => e.type === 'command'), '새 이벤트 타입을 만들지 않았다').toBe(true);
 });
+
+/** 🔴 r3(콜드 리뷰 codex 5) — ⑧이 주장하는 «얼마나 오래 붙잡고 있든»을 실제로 잰다.
+ *
+ *  ⑧의 추가 홀드는 900ms라 종전 안전 상한(2000ms — 무장 시점, 즉 손가락이 아직 눌린 해제
+ *  2초 시점부터 셌다) **안**이었다. 그 상한이 `pointerup` 전에 만료되는 정상 장기 홀드(총 4초+)
+ *  에서는 리스너가 떼기 전에 전부 정리돼 첫 click이 하부로 그대로 샜다 — 차단막이 막으려던
+ *  바로 그 사고(종료·일시정지 오조작)가 «천천히 뗀 사용자»에게만 일어난다. 여기서는 추가
+ *  홀드를 그 상한 **너머**(2000 + 900ms — 리터럴 2000은 종전 `GHOST_SWALLOW_MAX_MS`,
+ *  [TEAMOPS-38] 관례로 import하지 않는다)로 늘려 같은 계약을 잰다.
+ *  r3 처방(상한을 포인터 소실 스톱로스 30초로 의미 축소)을 되돌리면 여기가 red다 — 실측 확인. */
+test('⑧-b 🔴 안전 상한 너머 장기 홀드(총 4.9초+)에서도 뗀 직후 첫 click을 먹는다 (r3 · codex 5)', async ({ page }) => {
+  await boot(page, PHONE_402);
+  await waitForTtsIdle(page);
+  await fireStt(page, '화면', 600);
+  await expect(overlay(page)).toBeVisible({ timeout: 4000 });
+
+  await page.evaluate(() => {
+    const w = window as unknown as { __leakedClicks: number };
+    w.__leakedClicks = 0;
+    window.addEventListener('click', () => { w.__leakedClicks += 1; }, false); // 버블 = 하부 도달
+  });
+
+  // 해제(2초)가 지나고도 2.9초를 더 붙잡는다 — 종전 코드면 이 사이(무장 후 2000ms)에 안전
+  //   타이머가 리스너를 걷어, 아래 첫 click이 그대로 샌다.
+  await holdCenter(page, WAKE_HOLD_MS + 2900, false);
+  await expect(overlay(page), '2초 시점에 해제된다 — 떼기를 기다리지 않는다').toBeHidden({ timeout: 3000 });
+  await page.mouse.up();
+  await page.waitForTimeout(80); // 브라우저가 mouseup→click을 합성할 여유
+
+  const [firstLeaked, secondLeaked] = await page.evaluate(() => {
+    const w = window as unknown as { __leakedClicks: number };
+    const fire = () => document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const before = w.__leakedClicks;
+    fire();
+    const afterFirst = w.__leakedClicks;
+    fire();
+    return [afterFirst - before, w.__leakedClicks - afterFirst];
+  });
+  expect(
+    firstLeaked,
+    '장기 홀드 후 뗀 직후 첫 click이 하부로 샌다 — 안전 상한이 pointerup 전에 차단막을 걷었다'
+    + '(codex 5). 천천히 떼는 사용자만 종료·일시정지 오조작 위험에 노출된다',
+  ).toBe(0);
+  expect(
+    secondLeaked,
+    '차단막이 두 번째 click까지 먹는다 — «켜자마자 누른 버튼이 안 먹는다» 반대쪽 회귀',
+  ).toBe(1);
+
+  // 하부 상태 확인 — 이벤트 수만 보면 «다른 경로로 눌렸다»를 놓친다(⑧과 같은 축).
+  await expect(page.locator('[data-testid="voice-active-state"]'), '세션 화면 유지').toBeVisible();
+  await expect(page.locator('[data-testid="exit-confirm-inline"]'), '종료 확인이 뜨지 않았다').toHaveCount(0);
+  await expect(page.locator('[data-testid="paused-card"]'), '일시정지되지 않았다').toHaveCount(0);
+});

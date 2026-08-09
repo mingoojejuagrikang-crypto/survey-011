@@ -210,89 +210,17 @@ test('[node] ⑤ 🔴 프레임 시뮬 — 대역 밖 재개의 어느 프레임
   );
 });
 
-// ── ⑤-b 중단 후 재개 — dt 누적 점프 ──────────────────────────
+// ── ⑤-b (r3에서 폐지) — 중단·재개 dt 누적은 **배선 스펙**이 잰다 ──────────────
 /**
- * 🔴 **글라이드 «도중에» 사용자가 다시 만지면?** — ⑤가 못 잡는 경로다.
- *
- * `ChipZone.tick`의 `held || paused || ts < userScrollUntil` 갈래는 그냥 return한다.
- * 여기서 `gliding`을 내리지 않으면, 재개 프레임이 `lastTs`를 부트스트랩하지 못하고
- * (부트스트랩이 `if (!gliding)` 안에 있다) **중단 시간이 통째로 `dt`가 된다.**
- * 3초 붙잡고 있었으면 `0.0154 px/ms × 3300ms ≈ 50px`을 한 프레임에 이동 —
- * 이 과제가 고치는 그 점프가 다른 문으로 돌아온다. 백그라운드 복귀도 같은 트리거다.
- *
- * 👉 이 테스트는 **호출부의 상태 전이**를 시뮬레이션한다(순수 함수만으로는 못 잡는다).
- *    `gliding = false`를 지우면 red가 나야 한다 — 그게 이 단언의 반증 조건이다.
+ * 종전 ⑤-b(「글라이드 중 재터치」)는 `ChipZone.tick`의 상태 전이를 테스트 안에 **자기복사**한
+ * 스펙이었다 — 제품 tick을 한 줄도 통과하지 않아, 제품의 `gliding = false`를 지워도 테스트 안의
+ * 복사본이 대신 내려 green이었다(v0.47.0-r2 콜드 리뷰 codex 4-4 — 공허-green. 심지어 반증
+ * 조건이라 주장한 그 줄이 :251에 그대로 복사돼 있었다). 그 계약(«중단 시간이 dt로 누적돼
+ * 점프하지 않는다»)은 이제 `tests/v0470-r2-chip-glide-wiring.spec.ts` ③(오버플로 소멸·복원)·
+ * ④(rAF 정지·복귀)가 **제품 코드로** 잰다 — `:130` 갈래의 `gliding = false`와 dt 상한 가드를
+ * 각각 지우면 red임을 r3에서 실측했다. 같은 함정을 반복하지 마라: **호출부 전이는 호출부를
+ * 통과하는 오라클로만 잰다.**
  */
-test('[node] ⑤-b 🔴 글라이드 중 재터치 — 중단 시간이 dt로 누적돼 점프하지 않는다', () => {
-  const from = 200;
-  const to = 600;
-  const range = to - from;
-  const seconds = 26;
-  const speed = chipSweepSpeedPxPerMs(seconds, range);
-  const FRAME = 16.7;
-  const HOLD_FRAMES = 200; // ≈3.3초 붙잡고 있는다
-
-  let pos = 50;
-  let gliding = false;
-  let resync = true;
-  let start = -1;
-  let ts = 100_000;
-  let lastTs = ts;
-  let maxDelta = 0;
-  let resumeDelta = -1;
-
-  for (let i = 0; i < 1200; i++) {
-    ts += FRAME;
-    const prev = pos;
-    // 300~500프레임 동안 손이 닿아 있다(held). tick은 그냥 return한다.
-    const held = i >= 300 && i < 300 + HOLD_FRAMES;
-    if (held) {
-      resync = true;
-      gliding = false; // 🔴 제품 코드의 그 한 줄. 지우면 이 테스트가 red다.
-      continue; // ts만 흐르고 pos는 그대로 — 사용자가 잡고 있다
-    }
-    if (resync || start < 0) {
-      const target = chipSweepGlideTarget(pos, from, to);
-      if (target !== null) {
-        if (!gliding) { gliding = true; lastTs = ts; }
-      } else {
-        gliding = false;
-        start = chipSweepStartFor(ts, pos - from, seconds, range);
-        resync = false;
-      }
-    }
-    if (gliding) {
-      const target = chipSweepGlideTarget(pos, from, to);
-      if (target === null) {
-        gliding = false;
-        start = chipSweepStartFor(ts, pos - from, seconds, range);
-        resync = false;
-        pos = from + chipSweepOffset(ts - start, seconds, range);
-      } else {
-        pos = chipSweepGlideNext(pos, target, seconds, range, ts - lastTs);
-        lastTs = ts;
-        const d = Math.abs(pos - prev);
-        if (i === 300 + HOLD_FRAMES) resumeDelta = d; // 재개 첫 프레임
-        maxDelta = Math.max(maxDelta, d);
-        continue;
-      }
-    } else {
-      lastTs = ts;
-      pos = from + chipSweepOffset(ts - start, seconds, range);
-    }
-    maxDelta = Math.max(maxDelta, Math.abs(pos - prev));
-  }
-
-  const cap = speed * FRAME;
-  expect(resumeDelta, '재개 첫 프레임이 측정됐다(시나리오가 실제로 그 경로를 밟았다)').toBeGreaterThanOrEqual(0);
-  expect(
-    resumeDelta,
-    `재개 첫 프레임이 ${resumeDelta.toFixed(2)}px 이동했다 — 중단 ${(HOLD_FRAMES * FRAME / 1000).toFixed(1)}초가 `
-    + `dt로 누적됐다. 등속 상한은 ${cap.toFixed(4)}px/frame`,
-  ).toBeLessThanOrEqual(cap * 1.05);
-  expect(maxDelta, '중단·재개를 포함한 어느 프레임도 등속 상한을 넘지 않는다')
-    .toBeLessThanOrEqual(Math.max(cap * 1.05, CHIP_SWEEP_GLIDE_EPS_PX));
-});
 
 // ── ⑥ 합류 방향의 연속성 ─────────────────────────────────────
 test('[node] ⑥ 합류 방향이 글라이드 방향과 이어진다 (경계에서 되튀지 않는다)', () => {

@@ -125,6 +125,141 @@ test('🔴 배선 — 대역 밖에 손을 뗀 뒤 재개하면 점프하지 않
   ).toBeGreaterThan(0);
 });
 
+/** ③·④ 공용 — 글라이드가 실제로 **진행 중**인 상태를 만든다(대역 왼쪽 밖 0px에서 출발).
+ *  반환값은 관측 시점의 위치. 🔴 아직 대역(from)에 못 미쳤는지는 **호출부가 단언**한다 —
+ *  글라이드가 이미 끝났다면 `gliding`이 내려가 있어 stale-dt 시나리오 자체가 성립하지 않는다
+ *  (버그가 있어도 green = 무판정). */
+async function startGlideFromZero(page: Page): Promise<number> {
+  await setScrollLeft(page, 0);
+  // USER_SCROLL_SETTLE_MS(300ms) + 글라이드 몇 프레임. 고정 대기 후 실측으로 판정한다.
+  await page.waitForTimeout(550);
+  return page.evaluate(() => (document.querySelector('[data-testid="voice-chip-grid"]') as HTMLElement).scrollLeft);
+}
+
+/** ③ 🔴 — **`ChipZone.tsx:130` 갈래(`!shouldChipSweep(seconds, max)`)의 `gliding = false`** 오라클.
+ *
+ *  종전 ⑤-b(`v0470-r2-chip-glide.spec.ts`)는 호출부 전이를 테스트 안에 자기복사해서 제품 줄을
+ *  지워도 green이었다(콜드 리뷰 codex 4-4 — 공허-green). 여기는 **실제 DOM**으로 만든다:
+ *  글라이드 중 트랙 폭을 키워 오버플로를 없앴다가(`max <= 1` — :130 갈래에 매 프레임 진입)
+ *  되돌린다. 그 갈래가 `gliding`을 안 내리면 복원 첫 프레임의 dt에 중단 시간이 통째로 들어가
+ *  경계로 점프한다.
+ *
+ *  ⚠️ 중단 시간(SHRINK_MS)은 제품의 rAF 정지 리셋 상한(800ms — 별개 수정 ④)보다 **짧아야**
+ *  한다. 길면 dt 가드가 이 경로를 대신 닫아, :130 반증(`gliding = false` 제거 → red)이
+ *  무판정이 된다. 400ms + 왕복 지연이면 그 상한 안에서 점프를 재현하기 충분하다. */
+test('③ 🔴 배선 — 글라이드 중 오버플로 소멸·복원(폭 변화)에서 중단 시간이 dt로 누적되지 않는다', async ({ page }) => {
+  const SHRINK_MS = 400;
+  await boot(page, PHONE_402, { settings: settingsWithSweep(SWEEP_SECONDS), preserveAnimations: true });
+  const geo = await bandGeometry(page);
+  const range = geo.to - geo.from;
+  const speedPxPerMs = range / (SWEEP_SECONDS * 1000);
+  const cap = speedPxPerMs * 120 * 2; // 표본 간격 120ms · 지터 여유 2배 (기존 ①과 같은 산식)
+  console.log(`[③] 대역 [${geo.from.toFixed(0)}, ${geo.to.toFixed(0)}] · 속도 ${(speedPxPerMs * 1000).toFixed(1)}px/s · cap ${cap.toFixed(1)}px`);
+
+  // 공허 방지 — 종전 코드의 점프(≥ min(speed×SHRINK_MS, from))가 cap보다 커야 이 스펙이 잡는다.
+  expect(geo.from, '대역 왼쪽 밖 공간').toBeGreaterThan(20);
+  expect(
+    Math.min(speedPxPerMs * SHRINK_MS, geo.from),
+    `종전 점프 하한이 cap(${cap.toFixed(1)}px) 이하다 — 이 테스트는 점프를 못 잡는다`,
+  ).toBeGreaterThan(cap);
+
+  const posBefore = await startGlideFromZero(page);
+  expect(posBefore, '글라이드가 실제로 진행 중이다(움직였다)').toBeGreaterThan(0.5);
+  expect(posBefore, '아직 대역에 못 미쳤다(글라이드 중이다) — 아니면 무판정').toBeLessThan(geo.from - 2);
+
+  // 오버플로 소멸: 첫 칩만 남기고 **숨긴다** → `scrollWidth - clientWidth <= 1` → :130 갈래.
+  //   ⚠️ 트랙 폭을 넓히는 수단은 못 쓴다 — 칩존이 `container-type: size`라 cqw 단위 칩이
+  //   컨테이너와 **함께 커져** 오버플로가 안 사라진다(4000px로 넓혔더니 max 10450px — 실측).
+  //   React 밖 DOM 직접 변형이라 재렌더·정렬 effect를 건드리지 않고, 브라우저가 scrollLeft를
+  //   0으로 clamp하므로 복원 시점 위치는 0(대역 밖)이다.
+  const duringShrink = await page.evaluate(() => {
+    const g = document.querySelector('[data-testid="voice-chip-grid"]') as HTMLElement;
+    const chips = Array.from(g.querySelectorAll('[data-testid="column-chip"]')) as HTMLElement[];
+    chips.slice(1).forEach((c) => { c.style.display = 'none'; });
+    return { max: g.scrollWidth - g.clientWidth, pos: g.scrollLeft };
+  });
+  expect(duringShrink.max, '축소 중 오버플로가 실제로 사라졌다(아니면 :130 갈래 미진입 = 무판정)').toBeLessThanOrEqual(1);
+  await page.waitForTimeout(SHRINK_MS);
+  const pos0 = await page.evaluate(() => {
+    const g = document.querySelector('[data-testid="voice-chip-grid"]') as HTMLElement;
+    const chips = Array.from(g.querySelectorAll('[data-testid="column-chip"]')) as HTMLElement[];
+    chips.forEach((c) => { c.style.display = ''; });
+    return g.scrollLeft;
+  });
+
+  // 복원 직후를 본다. 점프는 rAF 한 프레임이라 첫 표본 **이전**에 이미 일어났을 수 있다 —
+  //   복원 시점 위치(pos0)를 표본 0으로 넣어 그 창까지 델타로 잡는다.
+  const samples = [pos0, ...(await sample(page, 12, 120))];
+  console.log(`[③] 표본: ${samples.map((s) => s.toFixed(0)).join(' → ')}`);
+  const deltas = samples.slice(1).map((s, i) => Math.abs(s - samples[i]));
+  const maxDelta = Math.max(...deltas);
+  expect(
+    maxDelta,
+    `복원 후 표본 사이 ${maxDelta.toFixed(1)}px 이동 — 등속 상한(${cap.toFixed(1)}px) 초과. `
+    + ':130 갈래가 gliding을 안 내려 중단 시간이 dt로 누적된 점프다',
+  ).toBeLessThanOrEqual(cap);
+  // 영구 정지가 아니다(0 이동도 위 단언은 통과하므로 별도 확인).
+  expect(samples[samples.length - 1] - samples[0], '복원 후 글라이드가 실제로 재개됐다').toBeGreaterThan(0);
+});
+
+/** ④ 🔴 — **글라이드 continuation의 dt 상한 가드(`GLIDE_STALL_RESET_MS`)** 오라클.
+ *
+ *  ③의 갈래들은 tick이 «돌면서» 내리는 문이다 — **rAF 자체가 서 있던** 경우(백그라운드·화면잠금)
+ *  는 어떤 갈래도 돌지 않아 :130 수정으로도 안 닫힌다(claude §4b). 여기서는 rAF를 실제로 세운다:
+ *  `requestAnimationFrame`을 큐잉 스텁으로 바꿔 콜백을 붙잡았다가(제품 tick이 매 프레임 자기
+ *  재예약하므로 첫 프레임에서 즉시 멈춘다) 복원 시 그대로 흘려보낸다 — 제품 코드는 한 줄도
+ *  건드리지 않고 «rAF 정지 후 복귀»를 재현한다. 가드가 없으면 복귀 첫 프레임의 dt가 정지 시간
+ *  전체(1200ms)가 되어 경계 쪽으로 점프한다. */
+test('④ 🔴 배선 — rAF 정지(백그라운드) 중 글라이드였어도 복귀 프레임이 점프하지 않는다', async ({ page }) => {
+  const STALL_MS = 1200; // 제품 리셋 상한(800ms)보다 길어야 가드 발동 경로를 지난다
+  await boot(page, PHONE_402, { settings: settingsWithSweep(SWEEP_SECONDS), preserveAnimations: true });
+  const geo = await bandGeometry(page);
+  const range = geo.to - geo.from;
+  const speedPxPerMs = range / (SWEEP_SECONDS * 1000);
+  const cap = speedPxPerMs * 120 * 2;
+
+  const posBefore = await startGlideFromZero(page);
+  expect(posBefore, '글라이드가 실제로 진행 중이다').toBeGreaterThan(0.5);
+  expect(posBefore, '아직 대역에 못 미쳤다 — 아니면 무판정').toBeLessThan(geo.from - 2);
+
+  // rAF 정지 — 콜백을 큐에 붙잡는다. 패치 직전에 예약돼 있던 마지막 프레임 하나는 원본으로
+  //   발화할 수 있으므로, 동결 위치는 복원 직전에 다시 읽는다(아래 posFrozen).
+  await page.evaluate(() => {
+    const w = window as unknown as { __rafQ: FrameRequestCallback[]; __rafOrig: typeof requestAnimationFrame };
+    w.__rafOrig = window.requestAnimationFrame.bind(window);
+    w.__rafQ = [];
+    window.requestAnimationFrame = ((cb: FrameRequestCallback) => { w.__rafQ.push(cb); return -1; }) as typeof requestAnimationFrame;
+  });
+  await page.waitForTimeout(STALL_MS);
+  const posFrozen = await page.evaluate(() => {
+    const w = window as unknown as { __rafQ: FrameRequestCallback[]; __rafOrig: typeof requestAnimationFrame };
+    const g = document.querySelector('[data-testid="voice-chip-grid"]') as HTMLElement;
+    const pos = g.scrollLeft;
+    window.requestAnimationFrame = w.__rafOrig;
+    const q = w.__rafQ;
+    w.__rafQ = [];
+    for (const cb of q) window.requestAnimationFrame(cb);
+    return pos;
+  });
+  // 공허 방지 — 종전 코드의 복귀 점프(min(speed×STALL_MS, 남은 거리))가 cap보다 커야 잡힌다.
+  //   speed×1200 = cap×5이므로 구속 축은 남은 거리다.
+  expect(
+    Math.min(speedPxPerMs * STALL_MS, geo.from - posFrozen),
+    `종전 점프 하한이 cap(${cap.toFixed(1)}px) 이하다 — 정지를 더 일찍 걸어라(무판정)`,
+  ).toBeGreaterThan(cap);
+
+  const samples = [posFrozen, ...(await sample(page, 12, 120))];
+  console.log(`[④] 동결 ${posFrozen.toFixed(0)}px → 표본: ${samples.slice(1).map((s) => s.toFixed(0)).join(' → ')}`);
+  const deltas = samples.slice(1).map((s, i) => Math.abs(s - samples[i]));
+  const maxDelta = Math.max(...deltas);
+  expect(
+    maxDelta,
+    `복귀 후 표본 사이 ${maxDelta.toFixed(1)}px 이동 — 등속 상한(${cap.toFixed(1)}px) 초과. `
+    + 'rAF 정지 시간이 dt로 누적된 점프다(dt 상한 가드 부재)',
+  ).toBeLessThanOrEqual(cap);
+  expect(samples[samples.length - 1] - samples[0], '복귀 후 글라이드가 실제로 재개됐다').toBeGreaterThan(0);
+});
+
 test('배선 — 대역 안에서 재개할 때는 종전대로 즉시 왕복한다 (글라이드가 정상 경로를 늦추지 않는다)', async ({ page }) => {
   await boot(page, PHONE_402, { settings: settingsWithSweep(SWEEP_SECONDS), preserveAnimations: true });
   const geo = await bandGeometry(page);

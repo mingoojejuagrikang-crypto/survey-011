@@ -66,7 +66,12 @@ const CENTER_HIT_H = '50%';
 
 /** 🔴 민구 확정(08-09): *"화면을 킬 때도 2초간 터치로 변경"*.
  *  진입(3초)보다 짧다 — 켜기는 사용자가 **의도적으로 화면을 보려는** 동작이라 오터치 대가가
- *  진입 쪽(값이 날아간 것처럼 보인다)보다 작다. 스펙이 이 상수를 import한다(하드코딩 금지). */
+ *  진입 쪽(값이 날아간 것처럼 보인다)보다 작다.
+ *  ⚠️ 스펙은 이 상수를 **일부러 import하지 않는다** — 두 스펙(`v0470-w7-hold-blackout`·
+ *  `v0460-cr-blackout-escape`)이 [TEAMOPS-38](제품 상수 import 금지 — 제품이 값을 바꾸면 계약이
+ *  스펙에 남아 오라클이 신호를 낸다) 관례로 리터럴 2000을 쓴다. 이 값을 바꾸려면 그 스펙들의
+ *  리터럴도 **의도를 갖고** 함께 바꿔라. (r3 콜드 리뷰 §5 — 종전 주석 «스펙이 import한다»는
+ *  허위였다. 다음 편집자가 그 말을 믿고 import를 추가하면 [TEAMOPS-38] 위반이 된다.) */
 export const HOLD_TO_WAKE_MS = 2000;
 
 /** 진행 계단 칸 수. 2000 / 4 = 500ms 간격. */
@@ -82,9 +87,20 @@ const WAKE_SENTENCE = WAKE_LINES.join(' ');
 
 /** 고스트 클릭 삼킴 창(ms). **손가락을 뗀 시점부터** 센다(아래 §기준점 참조). */
 const GHOST_SWALLOW_MS = 400;
-/** 삼킴 리스너의 안전 상한(ms). `pointerup`도 `pointercancel`도 영영 안 오는 경우(포인터 소실·
- *  시스템 제스처)에만 발동한다. 이 값이 곧 «최악의 사각지대»이므로 짧게 잡는다. */
-const GHOST_SWALLOW_MAX_MS = 2000;
+/** 삼킴 리스너의 안전 상한(ms) — **포인터 소실 스톱로스**. `pointerup`도 `pointercancel`도
+ *  영영 안 오는 경우(포인터 소실·시스템 제스처의 무통보 강탈)에만 발동한다.
+ *
+ *  🔴 v0.47.0 r3(콜드 리뷰 codex 5) — **2000ms에서 올리고 이름을 바꿨다.** 이 타이머는 무장
+ *  시점(해제 2초 — 손가락이 **아직 눌린** 상태)부터 세므로, 종전 2000ms는 정상 장기 홀드
+ *  (총 4초+)에서 `pointerup` **전에** 리스너를 전부 걷었다 — 뗀 뒤 첫 click이 하부 종료·
+ *  일시정지로 그대로 샜다(이 차단막이 막으려던 바로 그 사고). «얼마나 오래 붙잡든 뗀 뒤
+ *  400ms» 계약(아래 §기준점)과 유한 상한은 시간만으로는 양립할 수 없다 — 눌린 채 조용한
+ *  손가락과 소실된 포인터는 이벤트로 구분되지 않는다. 👉 **우선순위로 정한다**: 조기 발동의
+ *  대가는 세션 오조작(사고)이고, 지연 발동의 대가는 소실 시 의도 탭 1회 삼킴(성가심 — §6과
+ *  같은 급, 그쪽도 low)이다. 30초는 어떤 현실적 wake 홀드보다 길어 정상 경로에서는 사실상
+ *  발동하지 않고, 소실 시 사각지대도 유한하게 남는다.
+ *  오라클: `v0470-w7-hold-blackout` ⑧-b(상한 너머 장기 홀드 — 종전 값 복원 시 red). */
+const GHOST_SWALLOW_LOST_POINTER_MS = 30_000;
 
 /** 해제 탭이 **아래 UI로 전파되지 않게** 한다(위험 축 ④).
  *
@@ -106,7 +122,12 @@ const GHOST_SWALLOW_MAX_MS = 2000;
  *  사라진다**(뒤이은 click이 그대로 하부로 샌다). 그래서 초기 타이머는 «up이 영영 안 올 때»만을
  *  위한 안전 상한이고, up/cancel이 오면 그 타이머를 **교체**한다.
  *  이 실패 모드는 `tests/v0470-w7-hold-blackout.spec.ts` ⑧이 잡는다 — 초안 구현이 거기서 red를
- *  냈다(스펙이 아니라 구현이 틀렸다). */
+ *  냈다(스펙이 아니라 구현이 틀렸다).
+ *  🔴 r3(콜드 리뷰 codex 5) — 같은 함정의 **잔존이 초기 상한 2000ms에도 있었다**: 400ms보다
+ *  길 뿐, 2초 넘게 더 붙잡는 정상 장기 홀드에서 똑같이 떼기 전에 만료됐다(⑧의 추가 홀드가
+ *  900ms라 그 상한 안이어서 못 잡았다). 처방은 상한의 **의미 축소**다 — 포인터 소실 스톱로스
+ *  (`GHOST_SWALLOW_LOST_POINTER_MS`, 30초)로만 남기고, 삼킴 창은 오로지 up/cancel 시점부터
+ *  센다. ⑧-b가 상한 너머 홀드로 이 경로를 잰다. */
 function swallowGhostClick(): void {
   let timer = 0;
   const disarm = () => {
@@ -129,7 +150,7 @@ function swallowGhostClick(): void {
   window.addEventListener('click', onClick, true);
   window.addEventListener('pointerup', onLift, true);
   window.addEventListener('pointercancel', onLift, true);
-  timer = window.setTimeout(disarm, GHOST_SWALLOW_MAX_MS);
+  timer = window.setTimeout(disarm, GHOST_SWALLOW_LOST_POINTER_MS);
 }
 
 export function BlackoutOverlay({ onRelease }: { onRelease: () => void }) {
@@ -178,6 +199,17 @@ export function BlackoutOverlay({ onRelease }: { onRelease: () => void }) {
     //    그러면 「중앙만 받는다」는 위치 계약이 시작 시점에만 걸리고 유지에는 안 걸린다.
     //    나가면 `pointerleave`가 취소하는 것이 이 설계의 의도다(히어로 진입과 다른 판단 —
     //    저쪽은 표면이 화면 전체라 «나간다»가 사실상 없다).
+    // 🔴 r3(콜드 리뷰 claude §2 — MONITORING) — «안 거는 것»으로는 부족하다: **터치(직접 조작)
+    //    포인터는 pointerdown 타깃에 암묵 캡처가 자동으로 걸린다**(iOS WebKit·Chromium 공통).
+    //    캡처 중에는 경계 이벤트가 억제되어 위 leave-취소 설계가 실기기에서 무효가 될 개연 —
+    //    주머니 접촉이 중앙에서 시작해 밖으로 흘러도 2초를 채우면 켜진다(오터치 방어 절반 상실).
+    //    명시 해제로 설계를 복원한다. 데스크톱 마우스는 암묵 캡처가 없어 no-op — 그래서 이 축은
+    //    데스크톱 스펙으로 못 재고(계약 #4), **iOS 실기기 확인 전까지 MONITORING**이다.
+    //    확인 절차: 중앙 홀드 시작 → 1초 내 손가락을 가장자리로 끌고 유지 → 게이지가 멈추고
+    //    화면이 안 켜지면 해소, 계속 차오르면 재발(리뷰 §2의 재현 절차).
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
     pointerIdRef.current = e.pointerId;
     firedRef.current = false;
     startRef.current = performance.now();
