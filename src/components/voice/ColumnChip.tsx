@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type Ref } from 'react';
 import { T } from '../../tokens';
 import type { Column } from '../../types';
 import { CHIP_TYPE } from './heroLayout';
+import type { CommitMarkTone } from './useVoiceCommitMark';
 
 /** v0.36.0 코덱스 시안(2026-07-20, 민구 확정) — 기능형 컬럼 칩을 **유동 폭 pill 플로우**로 재스타일.
  *  고정 간격 그리드 대신 칩 내부 "항목+값" 길이에 맞는 자연 폭(flex-wrap 플로우, 코덱스 pill 느낌).
@@ -15,7 +16,7 @@ import { CHIP_TYPE } from './heroLayout';
  *  (테스트 직접 클릭 계약). */
 export function ColumnChip({
   col, value, isActive, activeTone, isDone, isEditing, onActivate, onCommit, onCancel, containerRef,
-  compact = false, justCommitted = false,
+  compact = false, justCommitted = false, markTone = 'ok',
 }: {
   col: Column;
   value: string;
@@ -35,6 +36,12 @@ export function ColumnChip({
    *     민구 정정(08-05) — *"V는 체크표시를 이야기한거야."* 제보 F7의 " V 횡경 "도
    *     당시 렌더되던 '✓+항목명'을 텍스트로 옮겨 적은 것이었다. **표기의 이름이지 문자가 아니다.** */
   justCommitted?: boolean;
+  /** 🔴 v0.47.0-r2 P5(FB-F, 민구 08-09) — ✓ 글리프의 **상태색**.
+   *  `'ok'`(기본) 초록 = 지금 괜찮다 · `'alert'` 빨강 = 이 값에 이상치 알람이 걸려 있다.
+   *  민구 재정의: *"알람중에는 색이라도 붉은색으로 유지하고, 알람해제 조건이 성립되거나,
+   *  사용자가 '확인'시 해당 체크를 녹색으로 변경해줘."* — 마크를 지우는 게 아니라 색을 바꾼다.
+   *  표시 여부(`justCommitted`)와 **직교**한다: 마크가 없으면 색도 의미가 없다. */
+  markTone?: CommitMarkTone;
 }) {
   const [local, setLocal] = useState(value);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -160,8 +167,11 @@ export function ColumnChip({
         {justCommitted && (
           <span
             data-testid="chip-commit-mark"
+            // P5 — 색을 **속성으로도** 노출한다. 색상값 문자열 비교는 브라우저 정규화(rgb 변환)에
+            //   기대는 취약한 단언이라, 오라클이 상태를 직접 읽을 수 있게 한다.
+            data-mark-tone={markTone}
             aria-hidden
-            style={{ color: T.green, fontWeight: 800, marginRight: '0.3em' }}
+            style={{ color: markTone === 'alert' ? T.red : T.green, fontWeight: 800, marginRight: '0.3em' }}
           >
             ✓
           </span>

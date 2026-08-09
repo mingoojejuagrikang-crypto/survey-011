@@ -9,7 +9,7 @@ import { ManualValueSheet } from './ManualValueSheet';
 import { type ReaskReason } from './ReaskCue';
 import { TONE_BASE, type GlowTone } from './EdgeGlow';
 import { useReviewCommit } from './VoiceHero';
-import { useVoiceCommitMarkColId } from './useVoiceCommitMark';
+import { useVoiceCommitMarkColId, useCommitMarkAlertColId } from './useVoiceCommitMark';
 import { ActiveHeaderStrip } from './ActiveHeaderStrip';
 import { ChipZone } from './ChipZone';
 import { CenterStage } from './CenterStage';
@@ -101,6 +101,9 @@ export function ActiveState({
   const reviewCommit = useReviewCommit(completing, row);
   // v0.45.0 UI③ — 방금 음성 확정된 칩의 V 마크(중앙 ✓+항목명 라벨 삭제의 승계 표시).
   const commitMarkColId = useVoiceCommitMarkColId();
+  // v0.47.0-r2 P5(FB-F) — ✓의 **색**. 표시 여부(위)와 직교한 축이라 별도 파생이다.
+  //   이 행에 알람이 걸린 셀만 빨강 — 저장 상태가 아니라 anomalyAlert에서 매 렌더 파생된다.
+  const commitMarkAlertColId = useCommitMarkAlertColId(row);
   const pct = totalRows > 0 ? (row / totalRows) * 100 : 0;
   const rowValues = sess.getRowValues(row);
   const activeChipValue = currentColId ? rowValues[currentColId] : undefined;
@@ -303,6 +306,7 @@ export function ActiveState({
         //   없으므로 하이라이트·점멸을 거둔다(끝났는데 무언가를 기다리는 것처럼 보이지 않게).
         currentColId={endReached ? undefined : currentColId}
         commitMarkColId={commitMarkColId}
+        commitMarkAlertColId={commitMarkAlertColId}
         activeTone={chipAccent}
         anomalyPending={anomalyPending}
         editingColId={editingColId}

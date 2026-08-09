@@ -1230,9 +1230,9 @@ export function useVoiceSession() {
             row: targetRow, colId: target.id, colName: target.name,
             text: preExtractedValue, parsed, previousValue: String(directViolation.prev),
           });
-          // P5(FB-F) — 알람이 뜬 셀의 ✓ 억제. 위 add를 「되돌리는」 것이 아니라, ✓의 의미가
-          //   「채워졌다」에서 **「지금 괜찮다」** 로 바뀐 것이다(useVoiceCommitMark.ts 헤더가 SSOT).
-          useSessionCommitMarks.getState().remove(targetRow, target.id);
+          // P5(FB-F) 주의 — 위 add는 **그대로 둔다.** 알람 중 ✓는 지우는 게 아니라 **붉게**
+          //   물든다(민구 재정의 08-09). 색은 anomalyAlert에서 파생되므로 여기 배선이 없다 —
+          //   정본은 useVoiceCommitMark.ts 헤더.
           // 응답 대기 무장 — 좌표는 **수정 대상 셀**이다(안내 중이던 셀이 아니다).
           //   '확인'/'유지'는 확정·진행, 새 값 발화는 수정 의미론으로 재커밋(재위반 시 재알림).
           awaitingFieldRef.current = {
@@ -1881,9 +1881,6 @@ export function useVoiceSession() {
         row: awaiting.row, colId: awaiting.colId,
         ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
       });
-      // P5(FB-F) — 「확인」/「유지」 = 민구 정의의 **긍정 복귀**다(값은 이미 저장돼 있고 사용자가
-      //   그 값을 승인했다). 알람 발화 때 억제한 ✓를 여기서 되돌린다.
-      useSessionCommitMarks.getState().add(awaiting.row, awaiting.colId);
       const resumeRow = resumeReviewOf(awaiting);
       awaitingFieldRef.current = null;
       // P1 — 검토 대기 출신 직접 수정이 알람을 경유한 경우의 착지(resumeReviewOf 주석 참조).
@@ -2479,8 +2476,6 @@ export function useVoiceSession() {
         row: awaiting.row, colId: awaiting.colId,
         colName: awaiting.name, text, parsed, confidence, previousValue: String(v.prev),
       });
-      // P5(FB-F) — 알람이 뜬 셀의 ✓ 억제(위 :2085 add와 같은 셀). 복원은 긍정 해소 지점에서.
-      useSessionCommitMarks.getState().remove(awaiting.row, awaiting.colId);
       // value 이벤트는 정상 커밋과 동일하게 남긴다 — 분석 파이프라인이 위반 여부와 무관하게 본다.
       logCell({
         type: 'value',
@@ -3953,11 +3948,6 @@ export function useVoiceSession() {
         row, colId,
         colName: col.name, text: value, parsed: value, previousValue: String(v.prev),
       });
-      // P5(FB-F) — 알람이 뜬 셀의 ✓ 억제. hold=1 경로는 애초에 add를 안 지나므로 no-op이고
-      //   (보류 후보는 [확인] 때 add된다), 비-hold 정보성 알람에서는 persistCellValue가 방금
-      //   등록한 ✓를 거둔다. 🟡 그쪽은 확인 절차가 없어 재커밋 전까지 ✓가 돌아오지 않는다 —
-      //   민구 정의의 직접 귀결이다(useVoiceCommitMark.ts 헤더의 「알려진 결과」).
-      useSessionCommitMarks.getState().remove(row, colId);
       useSessionStore.getState().setAnomalyAlert({
         ...alert,
         colId, // v0.34.0 A1 — [수정]의 시트 재오픈 키(VoiceScreen)
@@ -4009,13 +3999,6 @@ export function useVoiceSession() {
         // 직전 값으로 롤백하고 보류 UI를 닫아 reload 전후가 동일한 확정값을 가리키게 한다.
         sess.setRowValue(row, colId, pendingValidation.previousValue);
         sess.setRecognized(pendingValidation.previousValue);
-        // v0.47.0-r2 P5 — 롤백은 ✓ 억제도 되돌린다. fireManualAlert가 방금 remove했는데
-        //   (이 셀에 **이전 성공 커밋의 ✓가 있었다면** 그게 지워진 상태다) 알람까지 사라지면
-        //   복원해 줄 지점이 없어, 「멀쩡한 값인데 체크만 없는」 칸이 세션 내내 남는다.
-        //   되돌아간 값이 실제로 있을 때만 되돌린다(빈 값은 렌더 게이트가 어차피 가린다).
-        if (pendingValidation.previousValue !== '') {
-          useSessionCommitMarks.getState().add(row, colId);
-        }
         clearAnomalyAlert('persist_rollback');
         const current = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
         if (current) useDataStore.getState().upsertSession(withoutPendingCandidate({ ...current, pendingValidation }));
@@ -4110,9 +4093,6 @@ export function useVoiceSession() {
       row: awaiting.row, colId: awaiting.colId,
       ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
     });
-    // P5(FB-F) — 터치 [확인]은 음성 '확인'과 **동일 동작·동일 로그**가 이 함수의 계약이다:
-    //   ✓ 복원도 대칭으로 간다.
-    useSessionCommitMarks.getState().add(awaiting.row, awaiting.colId);
     const resumeRow = resumeReviewOf(awaiting);
     awaitingFieldRef.current = null;
     if (resumeRow != null) { await enterReviewWait(resumeRow); return; } // P1 — 검토 대기 착지

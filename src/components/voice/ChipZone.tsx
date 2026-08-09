@@ -268,6 +268,7 @@ function useChipSweep(
 export function ChipZone({
   columns, rowValues, row, currentColId, activeTone, anomalyPending, editingColId,
   sweepPaused, activeChipRef, gridRef, onActivate, onCommit, onCancel, commitMarkColId,
+  commitMarkAlertColId,
 }: {
   columns: Column[];
   rowValues: Record<string, string>;
@@ -287,6 +288,9 @@ export function ChipZone({
   onCancel: () => void;
   /** v0.45.0 UI③ — 방금 음성 확정된 칩(V 마크 대상)의 colId. null=마크 없음. */
   commitMarkColId?: string | null;
+  /** v0.47.0-r2 P5(FB-F, 민구 08-09) — ✓를 **빨강**으로 물들일 칩의 colId(이 행의 알람 셀).
+   *  null=전부 초록. 파생 SSOT는 useVoiceCommitMark의 useCommitMarkAlertColId. */
+  commitMarkAlertColId?: string | null;
 }) {
   const sweepSeconds = useSettingsStore((s) => s.chipSweepSeconds);
   // v0.47.0 W4(FB-E, 민구 확정 08-08) — 세션 영속 ✓ 집합 조회. ✓ = "이 칸은 채워졌다"
@@ -364,6 +368,9 @@ export function ChipZone({
               (commitMarkColId != null && c.id === commitMarkColId) ||
               ((isVoice || isTouch) && hasValue && sessionMarks.has(commitMarkKey(row, c.id)))
             }
+            // v0.47.0-r2 P5 — 마크의 **색**만 가른다(표시 여부는 위 justCommitted 그대로).
+            //   알람을 유발한 그 칩만 빨강 — 다른 칩의 초록은 불변(민구 08-09).
+            markTone={commitMarkAlertColId != null && c.id === commitMarkAlertColId ? 'alert' : 'ok'}
             onActivate={() => onActivate(c)}
             onCommit={(newValue) => onCommit(c, newValue, value)}
             onCancel={onCancel}
