@@ -3,6 +3,21 @@ import type { Session } from '../types';
 
 export type VoicePhase = 'ready' | 'active' | 'paused' | 'complete' | 'stopping' | 'done';
 
+/** v0.48.1 r3 F6(리뷰 잔여, claude 재검증) — "세션이 살아 있다"(입력 중이거나 곧 재개될 수
+ *  있어 화면·동기화가 특별 취급해야 하는 상태)의 SSOT. App.tsx·useVoiceSession.ts·
+ *  sessionSync.ts가 각자 `phase !== 'ready' && phase !== 'done'`을 따로 들고 있었다 —
+ *  `'done'`은 어디서도 실제로 set되지 않는 죽은 상태라(전 코드베이스에서 `setPhase(` 호출을
+ *  다 훑어도 인자 `'done'`은 0건 — `useVoiceSession.ts`가 쓰는 값은 ready/active/paused/
+ *  complete/stopping뿐), 그 부정 조건 자체가 죽은 코드였다. 여기서는 **허용목록**으로 뒤집는다:
+ *  앞으로 `VoicePhase`에 새 값이 추가돼도 여기 명시적으로 넣기 전까진 "살아있지 않음"으로 안전하게 처리된다
+ *  (부정형은 반대로 fail-open이었다). DataScreen.tsx의 `isLiveProgress`(paused 제외, badge
+ *  분리용)·VoiceScreen.tsx의 `sessionLive`(stopping 제외, blackout 안전장치용)는 **의도적으로
+ *  더 좁은** 별도 허용목록이라 여기로 통합하지 않는다 — 이 술어는 "ready/done만 아니면 산 것"
+ *  이라는 원래의 넓은 의미를 그대로 보존한 것뿐이다. */
+export function isSessionLive(phase: VoicePhase): boolean {
+  return phase === 'active' || phase === 'paused' || phase === 'complete' || phase === 'stopping';
+}
+
 interface SessionState {
   phase: VoicePhase;
   /** Active session id (`sess_<ms>`). Lives in the store — NOT only in a hook ref — so an

@@ -23,7 +23,7 @@ import { captureForFeedback, initFeedbackQueueFlush, submitFeedback } from './li
 import { FeedbackModal } from './components/FeedbackModal';
 import { logger } from './lib/logger';
 import { bgEnterSnapshot, lifecycleSignal, visibilityContext } from './lib/logEvents';
-import { useSessionStore } from './stores/sessionStore';
+import { useSessionStore, isSessionLive } from './stores/sessionStore';
 import { onTokenSettled } from './lib/googleAuth';
 
 export default function App() {
@@ -35,7 +35,8 @@ export default function App() {
   // v0.33.0 항목4 [STT-16] — 음성 세션이 살아 있는 동안(활성/일시정지/완료 대기) VoiceScreen을
   // unmount하지 않기 위한 신호. 조건부 렌더(탭 전환)가 인식기·워치독을 통째로
   // teardown해 STT가 죽고 수동 pause/resume로만 회복되던 근인(07-13 로그 2/2 재현)의 해소 축.
-  const sessionLive = useSessionStore((s) => s.phase !== 'ready' && s.phase !== 'done');
+  // v0.48.1 r3 F6 — SSOT는 sessionStore.ts의 `isSessionLive`(허용목록 형태로 통합).
+  const sessionLive = useSessionStore((s) => isSessionLive(s.phase));
   const voiceTelemetryRef = useRef<VoiceTelemetryReaders | null>(null);
   const setVoiceTelemetryReaders = useCallback((readers: VoiceTelemetryReaders | null) => {
     voiceTelemetryRef.current = readers;

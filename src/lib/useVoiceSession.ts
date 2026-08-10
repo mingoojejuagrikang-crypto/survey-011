@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- [ENV-12] 기존 초과 파일(GL-006 §5 도입 시점), Stage 3(음성 코어 재설계)에서 해소. 해소 시 이 주석 제거. */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSettingsStore, minConfidenceForTolerance } from '../stores/settingsStore';
-import { useSessionStore } from '../stores/sessionStore';
+import { useSessionStore, isSessionLive } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { recountSynced } from './sessionSync';
 import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, isBareResponseWord } from './koreanNum';
@@ -3919,7 +3919,8 @@ export function useVoiceSession() {
   useEffect(() => {
     if (sessionIdRef.current) return;
     const s = useSessionStore.getState();
-    if (s.sessionId && s.phase !== 'ready' && s.phase !== 'done') {
+    // v0.48.1 r3 F6 — SSOT는 sessionStore.ts의 `isSessionLive`(허용목록 형태로 통합).
+    if (s.sessionId && isSessionLive(s.phase)) {
       sessionIdRef.current = s.sessionId;
       sessionLabelRef.current = s.sessionLabel;
       const restoredSession = useDataStore.getState().sessions.find((x) => x.id === s.sessionId);
