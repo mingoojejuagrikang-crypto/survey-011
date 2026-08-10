@@ -400,6 +400,13 @@ export function useVoiceSession() {
   // (`started`=true)까지는 못 잡는다 — `speak()`가 그 두 실패 모드를 구분해 반환하려면 반환값
   // 자체를 enum으로 바꿔야 하고, 그건 `speech.ts` 계약 변경(이번 라운드 범위 밖, union U2 처방
   // "speech.ts 대수술은 범위 밖"). 잔여 축(started-but-no-onend)은 실기기 관측 항목으로 남긴다.
+  // TODO(v0.49, review-codex.md 미해소2) — `started` 하나로는 못 가르는 잔여 두 갈래가 남는다:
+  //   (a) onstart 후 onend/onerror 둘 다 소실 → 1차도 watchdog 2.5s를 다 쓰고 `started=true`로
+  //       빠져나와 2차도 자기 watchdog을 또 써 총 ~5s(U2가 막은 건 "1차가 onstart조차 못 받은"
+  //       경우뿐). (b) onstart 후 onerror(실패) → `started=true`라 "성공"처럼 보여 불필요한
+  //       2차 발화를 시도한다. 둘 다 `speak()`가 `spoken | error | watchdog-unstarted |
+  //       watchdog-started` 같은 완료 상태를 반환해야 풀린다 — `Promise<boolean>` 계약 자체를
+  //       enum으로 넓히는 `speech.ts` 변경이라 이번 r3(소수정) 범위 밖. v0.49 이월.
   const say = useCallback(async (text: string, interrupt = true): Promise<boolean> => {
     if (!text) return false;
     const ttsStart = Date.now();
@@ -1354,7 +1361,18 @@ export function useVoiceSession() {
             && useSessionStore.getState().anomalyAlert?.awaitingResponse
             && bargeInEpochRef.current !== myEpoch
           ) {
-            await say(`인식값 ${alert.next}`);
+            // 🟡 v0.48.1 r3(codex 재검증 잔여, 재량 판단: 처방 비용 낮음 → 채택) — 기본
+            //   `interrupt=true`면 speak()가 cancel() 뒤 50ms를 **가드 재확인 없이** 기다린다(iOS
+            //   cancel-then-speak 완화, speech.ts:599-602) — 그 50ms 동안 터치 [확인]/[수정]이
+            //   알람을 해소해도 이 발화는 그대로 시작된다. `interrupt:false`로 그 50ms 자체를
+            //   없애 간극을 사실상 0으로 줄인다(가드 체크 직후 동기적으로 muteForTts()까지 진행,
+            //   speech.ts speak() 참조).
+            //   C-FIX4(알람 뒤 에코 큐잉 기각 이력, :426 부근)와는 다른 상황이다 — C-FIX4는
+            //   비대기(void) 호출이 **다른** interrupt:true 발화의 cancel-50ms 창과 레이스하는
+            //   경우였다. 여기 두 발화는 같은 함수 안에서 순차 `await`돼(`await say(alertText)`
+            //   완료 후에만 이 줄에 도달) 겹쳐 재생될 다른 발화가 없다 — cancel할 대상 자체가
+            //   없으므로 interrupt:false가 안전하다.
+            await say(`인식값 ${alert.next}`, false);
           }
           // F5(low, claude) — lastTts는 갱신하지 않는다: alertText가 triad(화면==TTS==로그) SSOT라
           //   2차 발화까지 반영하면 화면의 "마지막 안내"와 로그 text=가 어긋난다(의도된 선택).
@@ -2642,7 +2660,9 @@ export function useVoiceSession() {
         && useSessionStore.getState().anomalyAlert?.awaitingResponse
         && bargeInEpochRef.current !== myEpoch
       ) {
-        await say(`인식값 ${alert.next}`);
+        // 🟡 v0.48.1 r3(codex 재검증 잔여) — 직접수정 경로(:1332 부근)와 동일 근거로
+        //   `interrupt:false`. 상세 주석은 거기 참조.
+        await say(`인식값 ${alert.next}`, false);
       }
       // F5(low, claude) — lastTts는 갱신하지 않는다: alertText가 triad(화면==TTS==로그) SSOT라
       //   2차 발화까지 반영하면 화면의 "마지막 안내"와 로그 text=가 어긋난다(의도된 선택).
