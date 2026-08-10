@@ -188,7 +188,9 @@ const BG_RESUME_MESSAGE = '자리를 비운 동안 입력이 중지됐습니다.
  *  브리핑 텍스트는 발화 **시점**에 만든다(getBriefing 클로저) — 복원 예약 시점의 낡은 행
  *  좌표를 읽지 않게. 안내는 "재개 성공"(onStart)에만 건다는 계약([MIC-B2])은 그대로다. */
 function bgResumeAnnouncerOnce(
-  say: (text: string, interrupt?: boolean) => Promise<void>,
+  // v0.48.1 U2 — say()가 Promise<boolean>을 돌려주도록 넓어졌다(started 신호). 이 자리는 반환값을
+  // 안 쓰므로 시그니처만 맞춘다.
+  say: (text: string, interrupt?: boolean) => Promise<boolean>,
   getBriefing: () => string | null,
 ): () => void {
   let announced = false;
@@ -380,8 +382,17 @@ export function useVoiceSession() {
     // v0.47.0-r2 P2 — 알람이 내려갔으니 홀드 안내 1회 제한도 푼다(다음 알람은 다시 안내받는다).
     holdGuideKeyRef.current = null;
   }, []);
-  const say = useCallback(async (text: string, interrupt = true) => {
-    if (!text) return;
+  // v0.48.1 U2(리뷰 codex medium) — 반환값을 `Promise<boolean>`으로 넓혔다(기존 호출부 전부
+  // `await say(...)`로 반환값을 무시하므로 하위호환). `started`는 `speak()`의 `onStart`가 실제로
+  // 불렸는지(watchdog(`speech.ts:646`)이 onstart조차 못 받고 2.5초 뒤 대신 resolve했으면 false)다.
+  // P4의 두 번째 발화(:1298/:2562 부근) 직전 이 값을 확인해, **1차 발화가 시작도 못 한 경우** 2차를
+  // 생략한다 — 원래 watchdog 2.5초 피해가 두 발화 직렬이라 5초로 배증하던 것(U2)을 막는다.
+  // ⚠️ **부분 커버리지다.** onstart는 왔는데 onend/onerror가 안 와서 watchdog이 구제한 경우
+  // (`started`=true)까지는 못 잡는다 — `speak()`가 그 두 실패 모드를 구분해 반환하려면 반환값
+  // 자체를 enum으로 바꿔야 하고, 그건 `speech.ts` 계약 변경(이번 라운드 범위 밖, union U2 처방
+  // "speech.ts 대수술은 범위 밖"). 잔여 축(started-but-no-onend)은 실기기 관측 항목으로 남긴다.
+  const say = useCallback(async (text: string, interrupt = true): Promise<boolean> => {
+    if (!text) return false;
     const ttsStart = Date.now();
     let startDelayMs: number | null = null;
     await speak(text, {
@@ -396,6 +407,7 @@ export function useVoiceSession() {
       startDelayMs,
       row: useSessionStore.getState().activeRow,
     });
+    return startDelayMs !== null;
   }, []);
 
   const getColById = (id: string): Column | null =>
@@ -1295,13 +1307,38 @@ export function useVoiceSession() {
           // 🔑 위반이면 **에코 대신 알림 TTS** — 일반 커밋 경로가 명문화한 계약 그대로다.
           //   커밋 확인음 playBeep('commit')도 내지 않는다(아래 W2 분기를 타지 않는다):
           //   「저장됐다」와 「이상하다」가 한 순간에 겹치면 두 신호가 섞여 구분이 안 된다.
-          await say(alertText);
+          // 🔴 v0.48.1 U1(리뷰 F1/HIGH, claude+codex 독립일치) — barge-in 가드 기준점. 이 함수
+          //   (`enterModifyMode`)는 epochRef를 스스로 건드리지 않으므로, 여기서 캡처한 값은
+          //   `await say(alertText)` 진행 중 사용자가 응답(확인/새 값)하면 그 처리(`handleFinal`의
+          //   cmd 게이트:1889 또는 값 재커밋:2263)에서 반드시 bump된다 — RACE-1과 동일 기전.
+          const myEpoch = epochRef.current;
+          const started = await say(alertText);
           // v0.48.0 P4(NEW-3, 민구 제보 08-10) — 「수정 NN」도 음성 인식값이라 같은 처방을 받는다
           // (P4 계획은 일반 값-커밋 알람 경로만 적었지만, 이 경로도 STT 추출값이라 "소리만으론
           // 오인식 판별 불가"가 똑같이 적용된다 — 구현 중 발견해 범위에 포함, wlog로 보고).
           // alertText/logExtra는 불변 — 별도 두 번째 발화로 분리(§4 바이트 계약 회피, 아래 일반
           // 경로와 동일 근거).
-          await say(`인식값 ${alert.next}`);
+          // 🔴 U1 가드 — `await say(alertText)`의 resolve는 발화 종료를 뜻하지 않는다. `cancel()`도
+          //   `onend`를 쏘므로(barge-in이 :353·:1990 부근에서 건다) 응답 처리 중인 다른 frame이
+          //   먼저 이 프라미스를 조기 해제할 수 있다(review-claude.md F1 — 재진입 게이트 없음을
+          //   `handleFinal` 정의부로 확인). 세 절 각각 다른 구멍을 막는다: `epoch` 불변 = cmd/값
+          //   barge-in(같은 셀 재위반 포함, :2263이 값 재커밋마다 bump); `kind==='trendConfirm'` =
+          //   터치 종료 버튼의 `stop()`(`awaitingFieldRef.current=null`, epoch는 안 건드림, :3341);
+          //   `anomalyAlert?.awaitingResponse` = `clearAnomalyAlert` 경유 해소. 셋 다 참이어야
+          //   「아직 같은 알람이 대기 중」이 성립 — 그때만 지나간 값이 아니다.
+          // U2(codex medium) — `started`가 false면 1차 발화가 watchdog(2.5s)으로 스킵된 것이라
+          //   2차도 생략한다(직렬 대기가 5초로 배증하는 것 방지). `started`-but-no-onend 잔여는
+          //   위 `say()` 주석 참조(실기기 관측 항목, 이번 라운드 범위 밖).
+          if (
+            started
+            && epochRef.current === myEpoch
+            && awaitingFieldRef.current?.kind === 'trendConfirm'
+            && useSessionStore.getState().anomalyAlert?.awaitingResponse
+          ) {
+            await say(`인식값 ${alert.next}`);
+          }
+          // F5(low, claude) — lastTts는 갱신하지 않는다: alertText가 triad(화면==TTS==로그) SSOT라
+          //   2차 발화까지 반영하면 화면의 "마지막 안내"와 로그 text=가 어긋난다(의도된 선택).
           return;
         }
 
@@ -2559,14 +2596,34 @@ export function useVoiceSession() {
       });
       playBeep('alert');
       useSessionStore.getState().setLastTts(alertText);
-      await say(alertText);
+      // 🔴 v0.48.1 U1(리뷰 F1/HIGH, claude+codex 독립일치) — `myEpoch`는 이 값 커밋 시작 시점
+      //   (:2298)에 이미 캡처돼 있다 — 재사용한다(같은 handleFinal 호출, 같은 스코프).
+      const started = await say(alertText);
       // v0.48.0 P4(NEW-3, 민구 제보 08-10) — "값을 틀렸는지, 인식이 잘못됐는지 소리만으론 알 수
       // 없다"(원문). alertText는 팝업 라벨과 글자까지 동일해야 하는 §4 바이트 계약(logExtra의
       // text=)에 묶여 있어(위 :2494) 값을 거기 합치면 anomalyAlert.spec.ts·trend-alert.spec.ts
       // triad(화면==TTS==로그)가 깨진다(scout-v048 조사) — alertText/logExtra는 불변, **별도
       // 두 번째 발화**로만 분리한다. alert.next는 이미 formatForTts(parsed)로 조립돼 팝업
       // "현재" 값과 같은 문자열이다(시각·청각 일치).
-      await say(`인식값 ${alert.next}`);
+      // 🔴 U1 가드 — `await say(alertText)`의 resolve는 발화 종료를 뜻하지 않는다(`cancel()`도
+      //   `onend`를 쏜다 — barge-in이 :353·:1990 부근에서 건다, review-claude.md F1). 세 절이
+      //   각각 다른 재진입 구멍을 막는다: `epoch` 불변 = cmd/값 barge-in(같은 셀 재위반 포함 —
+      //   재위반도 값 재커밋이라 :2298에서 매번 새 epoch를 받는다); `kind==='trendConfirm'` =
+      //   터치 종료 버튼의 `stop()`(`awaitingFieldRef.current=null`, epoch는 안 건드림, :3341
+      //   부근); `anomalyAlert?.awaitingResponse` = `clearAnomalyAlert` 경유 해소. 셋 다 참이어야
+      //   「아직 같은 알람이 대기 중」이다 — 그때만 지나간 값이 아니다.
+      // U2(codex medium) — `started`=false(1차가 watchdog으로 스킵)면 2차도 생략해 직렬 대기가
+      //   5초로 배증하는 것을 막는다. 잔여 축(started-but-no-onend)은 `say()` 주석 참조.
+      if (
+        started
+        && epochRef.current === myEpoch
+        && awaitingFieldRef.current?.kind === 'trendConfirm'
+        && useSessionStore.getState().anomalyAlert?.awaitingResponse
+      ) {
+        await say(`인식값 ${alert.next}`);
+      }
+      // F5(low, claude) — lastTts는 갱신하지 않는다: alertText가 triad(화면==TTS==로그) SSOT라
+      //   2차 발화까지 반영하면 화면의 "마지막 안내"와 로그 text=가 어긋난다(의도된 선택).
       // v0.34.0 O1 — 재위반(정정값이 또 위반) 커밋도 검사 대상(이전 .then 무조건 실행과 동등) —
       // 단 알람 TTS까지 끝난 지금 시점에 스케줄한다.
       runCorrectedPersistCheck();
