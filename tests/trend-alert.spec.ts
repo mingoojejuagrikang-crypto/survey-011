@@ -357,6 +357,27 @@ test('이상치(증가) 값 → 알림 TTS(advance 중단) → "확인" → 값 
   expect(events.filter((e) => e.extra === 'trend_alert_corrected')).toHaveLength(0);
 });
 
+// v0.48.0 P4(NEW-3, 민구 제보 08-10) — "값을 틀렸는지, 인식이 잘못됐는지 소리만으론 알 수
+// 없다"(원문). alertText 자체는 §4 바이트 계약(logExtra text=)·위 "경보 문구 SSOT" triad
+// 오라클에 묶여 불변이라(scout-v048 조사), 인식값은 **별도의 두 번째 발화**로만 붙는다.
+// alertText 문구가 인식값을 삼키지 않는지(오염 없음)와, 인식값이 알람 뒤에 실제로 오는지
+// (순서 계약) 둘 다 이 테스트가 고정한다 — 신설 오라클.
+test('[NEW-3] 알람 발생 시 인식값도 별도 발화로 — alertText는 불변, 두 번째 say()로 분리', async ({ page }) => {
+  await setupAndStart(page);
+
+  // 행1 나무1·과실1, 직전 횡경 100.0 — 120.5는 increase 알람(20.5% 증가).
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '120.5', 500);
+
+  const tts = await getTtsLog(page);
+  const alarmIdx = tts.findIndex((t) => t === '추세 알람 증가 : 20.5');
+  const valueIdx = tts.findIndex((t) => t === '인식값 120.5');
+  // alertText 자체는 여전히 변화량만 말한다 — 인식값이 섞여 들어가지 않았다(§4·triad 불변 확인).
+  expect(alarmIdx).toBeGreaterThanOrEqual(0);
+  // 인식값은 알람 발화 **뒤**의 독립된 두 번째 발화다(순서 계약: 알람 → 인식값).
+  expect(valueIdx).toBeGreaterThan(alarmIdx);
+});
+
 // 🟢 §C0 완결(2026-08-04)로 `@pending-c0` 태그를 뗐다 — 정상 회귀 가드다.
 //    바닥 고정의 원인은 CenterStage 알람 `<style>`의 `line-height: 1 !important`였다
 //    (글리프 초과가 fit 높이 판정을 전 배율에서 실패시켰다). 그 강제를 제거해 통과한다.

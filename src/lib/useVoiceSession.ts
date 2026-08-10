@@ -1296,6 +1296,12 @@ export function useVoiceSession() {
           //   커밋 확인음 playBeep('commit')도 내지 않는다(아래 W2 분기를 타지 않는다):
           //   「저장됐다」와 「이상하다」가 한 순간에 겹치면 두 신호가 섞여 구분이 안 된다.
           await say(alertText);
+          // v0.48.0 P4(NEW-3, 민구 제보 08-10) — 「수정 NN」도 음성 인식값이라 같은 처방을 받는다
+          // (P4 계획은 일반 값-커밋 알람 경로만 적었지만, 이 경로도 STT 추출값이라 "소리만으론
+          // 오인식 판별 불가"가 똑같이 적용된다 — 구현 중 발견해 범위에 포함, wlog로 보고).
+          // alertText/logExtra는 불변 — 별도 두 번째 발화로 분리(§4 바이트 계약 회피, 아래 일반
+          // 경로와 동일 근거).
+          await say(`인식값 ${alert.next}`);
           return;
         }
 
@@ -2554,6 +2560,13 @@ export function useVoiceSession() {
       playBeep('alert');
       useSessionStore.getState().setLastTts(alertText);
       await say(alertText);
+      // v0.48.0 P4(NEW-3, 민구 제보 08-10) — "값을 틀렸는지, 인식이 잘못됐는지 소리만으론 알 수
+      // 없다"(원문). alertText는 팝업 라벨과 글자까지 동일해야 하는 §4 바이트 계약(logExtra의
+      // text=)에 묶여 있어(위 :2494) 값을 거기 합치면 anomalyAlert.spec.ts·trend-alert.spec.ts
+      // triad(화면==TTS==로그)가 깨진다(scout-v048 조사) — alertText/logExtra는 불변, **별도
+      // 두 번째 발화**로만 분리한다. alert.next는 이미 formatForTts(parsed)로 조립돼 팝업
+      // "현재" 값과 같은 문자열이다(시각·청각 일치).
+      await say(`인식값 ${alert.next}`);
       // v0.34.0 O1 — 재위반(정정값이 또 위반) 커밋도 검사 대상(이전 .then 무조건 실행과 동등) —
       // 단 알람 TTS까지 끝난 지금 시점에 스케줄한다.
       runCorrectedPersistCheck();
