@@ -5,10 +5,13 @@ import { sessionPending, sessionEverUploaded, sessionDirtyCount } from '../../li
 
 // ─── session card ────────────────────────────────────────────
 export function SessionCard({
-  session, expanded, onToggle, onDelete, onCellSave,
+  session, expanded, inProgress = false, onToggle, onDelete, onCellSave,
 }: {
   session: Session;
   expanded: boolean;
+  /** v0.48.0 P5(NEW-6) — 지금 음성탭에서 살아있는 바로 그 세션인가(App.tsx:38 sessionLive와
+   *  같은 판정을 DataScreen이 계산해 넘긴다). 기본값 false — 호출부가 아직 안 넘겨도 안전. */
+  inProgress?: boolean;
   onToggle: () => void;
   onDelete: () => void;
   onCellSave: (rowIndex: number, colId: string, value: string) => void;
@@ -60,15 +63,34 @@ export function SessionCard({
           }}
         >
           <div>
-            <div
-              style={{
-                fontSize: 16, fontWeight: 700, color: T.text,
-                letterSpacing: -0.2,
-                fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {session.date}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div
+                style={{
+                  fontSize: 16, fontWeight: 700, color: T.text,
+                  letterSpacing: -0.2,
+                  fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {session.date}
+              </div>
+              {/* v0.48.0 P5(NEW-6, 민구 제보 08-10) — "지금의 탭에서 진행중이던 세션은 '진행중'
+                  이란 표현을 추가해주길 바람." 완료 전 세션도 실시간으로 이 목록에 뜨는데
+                  (커밋마다 upsertSession) 카드엔 그게 "지금 그 세션"이라는 표시가 없었다. */}
+              {inProgress && (
+                <span
+                  data-testid={`session-inprogress-${session.id}`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center',
+                    padding: '2px 8px', borderRadius: 999,
+                    background: T.blueGlow, border: `1px solid ${T.blue}`,
+                    color: T.blue, fontSize: 11, fontWeight: 800,
+                    whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  진행중
+                </span>
+              )}
             </div>
             {session.label && (
               <div style={{ fontSize: 13, color: T.textMute, marginTop: 3 }}>{session.label}</div>

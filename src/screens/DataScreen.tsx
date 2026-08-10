@@ -3,6 +3,7 @@ import { T } from '../tokens';
 import { I } from '../components/icons';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { useDataStore } from '../stores/dataStore';
+import { useSessionStore } from '../stores/sessionStore';
 import { hydrateSessions } from '../lib/hydrate';
 import { clipPlayer } from '../lib/clipPlayer';
 import { sessionPending } from '../lib/sessionSync';
@@ -55,6 +56,15 @@ export function DataScreen() {
   const expandedSessionId = useDataStore((s) => s.expandedSessionId);
   const toggleExpand = useDataStore((s) => s.toggleExpand);
   const hydrationError = useDataStore((s) => s.hydrationError);
+  // v0.48.0 P5(NEW-6, 민구 제보 08-10) — "지금의 탭에서 진행중이던 세션은 '진행중' 표현을
+  // 추가해주길 바람." 활성 세션도 커밋마다 upsertSession돼 완료 전부터 이 목록에 실시간으로
+  // 뜨는데(useVoiceSession.ts), 카드엔 그게 "지금 그 세션"이라는 표시가 없었다(scout-v048 조사).
+  // App.tsx:38의 sessionLive(phase!=='ready'&&phase!=='done')와 같은 판정을 재사용한다.
+  // 🔴 sessionId는 stop() 후에도 안 지워진다(다음 세션 시작 시 resetAll()에서만 초기화) — phase
+  // 조건 없이 id만 비교하면 방금 끝난 세션도 "진행중"으로 잘못 뜬다(scout 함정 발견).
+  const liveSessionId = useSessionStore((s) =>
+    s.phase !== 'ready' && s.phase !== 'done' ? s.sessionId : null,
+  );
 
   const unsynced = sessions.filter((s) => sessionPending(s) > 0).length;
   const empty = sessions.length === 0;
@@ -211,6 +221,7 @@ export function DataScreen() {
               key={s.id}
               session={s}
               expanded={expandedSessionId === s.id}
+              inProgress={s.id === liveSessionId}
               onToggle={() => toggleExpand(s.id)}
               onDelete={() => setDeleteTarget(s)}
               onCellSave={(rowIndex, colId, value) => handleCellSave(s.id, rowIndex, colId, value)}

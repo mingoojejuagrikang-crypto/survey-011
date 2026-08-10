@@ -445,6 +445,40 @@ test('[STT-16] 탭 전환(입력→데이터→입력) 후 STT 자동 생존 —
   expect(row1?.values['c9']).toBe('28.3');
 });
 
+// v0.48.0 P5(NEW-6, 민구 제보 08-10) — "지금의 탭에서 진행중이던 세션은 '진행중'이란 표현을
+// 추가해주길 바람." 완료 전 세션도 값 커밋마다 upsertSession돼 데이터탭에 실시간으로 뜨는데
+// (이 파일의 keep-alive 계약과 같은 축 — 세션이 탭 전환을 관통해 산다), 카드엔 그게 "지금 그
+// 세션"이라는 표시가 없었다. `App.tsx:38`의 sessionLive(phase!=='ready'&&phase!=='done')와
+// 같은 판정을 DataScreen이 재사용해 SessionCard에 배지를 얹는다 — 종료(phase='ready') 후에는
+// sessionId가 안 지워지므로 phase 조건 없이 id만 비교하면 안 된다(scout 함정, 이 테스트가 잠근다).
+test('[NEW-6] 데이터탭 세션 카드 — 진행중인 세션에 「진행중」 배지, 종료 후 사라짐', async ({ page }) => {
+  await startSession(page);
+
+  // 최소 1개 값 커밋 — persistSession이 activeHasData로 세션을 dataStore에 올린다(빈 세션은
+  // 목록에 안 뜬다).
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '35.1', 300);
+  await waitForActiveChip(page, '종경');
+
+  // 데이터탭으로 전환 — 세션은 아직 살아있다(phase='active', STT-16 keep-alive와 같은 상태).
+  await page.locator('[data-testid="tab-data"]').click();
+  await page.waitForTimeout(500);
+
+  const badge = page.locator('[data-testid^="session-inprogress-"]');
+  await expect(badge).toHaveCount(1);
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveText('진행중');
+
+  // 음성탭 복귀 → 종료(음성 명령) → 데이터탭 재방문: phase가 'ready'로 내려가면 배지는 사라진다.
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(300);
+  await fireStt(page, '종료', 1000);
+
+  await page.locator('[data-testid="tab-data"]').click();
+  await page.waitForTimeout(500);
+  await expect(page.locator('[data-testid^="session-inprogress-"]')).toHaveCount(0);
+});
+
 // v0.44.0 §C8 F18 재작성 — 구 오라클(재진입 fresh mount마다 prewarm 재발화)은 prewarm 폐지로
 // 매체를 잃었다. 같은 자리(세션 없는 입력탭 수명주기)를 F18 계약으로 다시 고정한다:
 // **어떤 탭 왕복도 getUserMedia를 호출하지 않는다**(요청 시점은 오직 '음성 입력 시작' 클릭).
