@@ -239,6 +239,15 @@ export function useVoiceSession() {
   const [sessionColumns, setSessionColumns] = useState<Column[] | null>(null);
   const awaitingFieldRef = useRef<AwaitingField | null>(null);
   const epochRef = useRef(0);
+  // 🔴 v0.48.1 r3 U1 4절 — interim barge-in이 일어난 시점의 epoch를 기록한다. speech.ts:353는
+  //   TTS가 뮤트 중일 때 비어있지 않은 interim만 오면 즉시 cancel()하지만, epochRef는 건드리지
+  //   않는다(final에서만 bump) — 그래서 알람 2차 발화 가드의 「epoch 불변」 절이 이 경로를 못
+  //   잡는다(review-claude.md F1). `await say(alertText)` 뒤 isTtsMuted()를 다시 읽는 처방ⓐ
+  //   원안은 채택하지 않았다 — done()이 resolve 직전에 무조건 unmuteForTts()부터 돌려서
+  //   barge-in 여부와 무관하게 항상 false로 읽힌다(코드로 반증: speech.ts의 done() 참조).
+  //   대신 barge-in이 실제 발생하는 이 시점(=아직 뮤트 중인데 interim이 들어온 순간)에서
+  //   epoch 스냅샷을 남겨, 가드가 "이 alertText 재생 도중 barge-in이 있었는가"를 물을 수 있게 한다.
+  const bargeInEpochRef = useRef(-1);
   const lastConfidenceRef = useRef<number>(1);
   // v0.9.0 딜레이 계측 — 마지막 interim(중간) 결과의 텍스트·도착시각. final 시 (final.ts − 이 시각)
   // = EOS 꼬리(브라우저 무음 종료감지 대기)를 정량화한다(stt_eos_tail).
@@ -1329,11 +1338,21 @@ export function useVoiceSession() {
           // U2(codex medium) — `started`가 false면 1차 발화가 watchdog(2.5s)으로 스킵된 것이라
           //   2차도 생략한다(직렬 대기가 5초로 배증하는 것 방지). `started`-but-no-onend 잔여는
           //   위 `say()` 주석 참조(실기기 관측 항목, 이번 라운드 범위 밖).
+          // 🔴 v0.48.1 r3 U1 4절(리뷰 F1 잔여, claude+codex 재검증 일치) — 위 세 절은 **final**이
+          //   먼저 도착해 상태를 바꾼 경우만 잡는다. 실제로는 interim이 먼저 TTS를 끊고(barge-in,
+          //   speech.ts:353) final은 그보다 수백ms~수초 늦게 온다 — 그 사이엔 epoch도
+          //   awaitingFieldRef도 anomalyAlert도 안 바뀌어 위 세 절이 전부 그대로 참이다. 4절이
+          //   그 구멍을 막는다: `bargeInEpochRef`는 handleInterim이 "지금 이 epoch에서 뮤트 중에
+          //   비어있지 않은 interim이 들어왔다"를 관찰한 순간 기록한다(위 handleInterim 참조).
+          //   isTtsMuted()를 **여기서(await 이후)** 다시 읽는 처방ⓐ 원안은 쓰지 않았다 — done()이
+          //   resolve 직전에 unmuteForTts()부터 무조건 돌려서, barge-in 여부와 무관하게 이 시점엔
+          //   항상 false로 읽힌다(speech.ts의 done() 참조 — 반증 가능).
           if (
             started
             && epochRef.current === myEpoch
             && awaitingFieldRef.current?.kind === 'trendConfirm'
             && useSessionStore.getState().anomalyAlert?.awaitingResponse
+            && bargeInEpochRef.current !== myEpoch
           ) {
             await say(`인식값 ${alert.next}`);
           }
@@ -2614,11 +2633,14 @@ export function useVoiceSession() {
       //   「아직 같은 알람이 대기 중」이다 — 그때만 지나간 값이 아니다.
       // U2(codex medium) — `started`=false(1차가 watchdog으로 스킵)면 2차도 생략해 직렬 대기가
       //   5초로 배증하는 것을 막는다. 잔여 축(started-but-no-onend)은 `say()` 주석 참조.
+      // 🔴 v0.48.1 r3 U1 4절 — 직접수정 경로(:1332 부근)와 동일 근거. `bargeInEpochRef` 선언부·
+      //   handleInterim 주석 참조.
       if (
         started
         && epochRef.current === myEpoch
         && awaitingFieldRef.current?.kind === 'trendConfirm'
         && useSessionStore.getState().anomalyAlert?.awaitingResponse
+        && bargeInEpochRef.current !== myEpoch
       ) {
         await say(`인식값 ${alert.next}`);
       }
@@ -2736,6 +2758,13 @@ export function useVoiceSession() {
     //   중엔 임시값을 띄우지 않는다. 명령어는 확정값이 아니므로 제외. 순수 표시 — 조기확정·커밋·
     //   텔레메트리 경로는 아래 로직 그대로(이 write는 그 앞에서 무조건 실행, fastRecognition 무관).
     const trimmedInterim = text.trim();
+    // 🔴 v0.48.1 r3 U1 4절 — speech.ts:353와 같은 조건(뮤트 중 + 비어있지 않은 interim)을 여기서도
+    //   재확인해, "이 순간 barge-in이 실제로 발생했다"를 이 알람의 epoch에 못박는다. cancel()이
+    //   쏘는 onend는 비동기라 이 시점엔 아직 unmuteForTts()가 돌지 않았으므로 isTtsMuted()가
+    //   true로 읽힌다(위 bargeInEpochRef 선언부 주석 — done() 대조로 반증됨).
+    if (trimmedInterim && ctrlRef.current?.isTtsMuted()) {
+      bargeInEpochRef.current = epochRef.current;
+    }
     const awaitingForDisplay = awaitingFieldRef.current;
     const showInterim =
       !!trimmedInterim &&

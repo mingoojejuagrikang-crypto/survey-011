@@ -241,6 +241,17 @@ async function fireStt(page: Page, transcript: string, waitMs = 300) {
   await page.waitForTimeout(waitMs);
 }
 
+// v0.48.1 r3 ② — interim(비확정) 결과 주입. speech.ts:353의 barge-in 컷 조건(뮤트 중 + 비어있지
+// 않은 interim)을 재현하려면 final이 아니라 interim 이벤트가 필요하다(MockSTT.fireInterim, 위
+// MOCK_INIT_SCRIPT 참조).
+async function fireSttInterim(page: Page, transcript: string, waitMs = 100) {
+  await page.evaluate((t) => {
+    (window as unknown as { __mockSTT?: { fireInterim: (t: string, c: number) => void } })
+      .__mockSTT?.fireInterim(t, 0.6);
+  }, transcript);
+  await page.waitForTimeout(waitMs);
+}
+
 async function getTtsLog(page: Page): Promise<string[]> {
   return page.evaluate(() => (window as unknown as { __ttsLog: string[] }).__ttsLog ?? []);
 }
@@ -376,6 +387,31 @@ test('[NEW-3] 알람 발생 시 인식값도 별도 발화로 — alertText는 �
   expect(alarmIdx).toBeGreaterThanOrEqual(0);
   // 인식값은 알람 발화 **뒤**의 독립된 두 번째 발화다(순서 계약: 알람 → 인식값).
   expect(valueIdx).toBeGreaterThan(alarmIdx);
+});
+
+// v0.48.1 r3 U1 4절(리뷰 F1 잔여, claude+codex 재검증 일치) — [NEW-3]가 고정한 "정상" 순서
+// (알람 → 인식값)와 달리, 실제 말끊기는 **final보다 interim이 먼저** alertText를 끊는다
+// (speech.ts:353, "이어폰 기본" barge-in). epoch/awaitingFieldRef/anomalyAlert는 final에서만
+// 바뀌므로, 그 사이엔 U1의 기존 세 절이 전부 참인 채로 남는다 — 4절(bargeInEpochRef)이 그
+// 구멍을 막는다(useVoiceSession.ts 상단 bargeInEpochRef 선언부 참조). 재현은 claude의
+// review-claude.md F1 스니펫을 이 파일 mock에 맞춘 것: alertText 발화 중(onend 지연으로 창을
+// 벌린다) interim '확인'이 뮤트 중에 도착 → final '확인'은 그보다 늦게 옴 → 구 인식값 0회.
+test('[NEW-7] alertText 발화 중 interim barge-in → final 도착 전 구 인식값 미발화', async ({ page }) => {
+  await setupAndStart(page);
+
+  // 행1 나무1·과실1, 직전 횡경 100.0 — 120.5는 increase 알람(20.5% 증가).
+  await waitForActiveChip(page, '횡경');
+  // alertText 재생에 지연을 둬 자연 종료 전에 interim이 끼어들 창을 연다(기본 0=동기 onend로는
+  // interim이 도착할 시점에 이미 첫 발화가 끝나 있어 재현이 안 된다).
+  await page.evaluate(() => { (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = 300; });
+
+  await fireStt(page, '120.5', 50); // 위반값 커밋 → say(alertText) 시작(300ms간 진행 중)
+  await fireSttInterim(page, '확인', 50); // barge-in: 아직 뮤트 중 → bargeInEpochRef 마킹
+  await page.waitForTimeout(300); // alertText onend 자연 발화 대기(await say(alertText) resolve)
+  await fireStt(page, '확인', 500); // final은 그보다 늦게 도착 — 두 번째 발화(인식값) 시도 지점
+
+  const tts = await getTtsLog(page);
+  expect(tts.filter((t) => t === '인식값 120.5')).toHaveLength(0);
 });
 
 // 🟢 §C0 완결(2026-08-04)로 `@pending-c0` 태그를 뗐다 — 정상 회귀 가드다.
