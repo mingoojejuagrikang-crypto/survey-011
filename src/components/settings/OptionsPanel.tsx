@@ -248,10 +248,12 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
       </div>
 
       {/* 🔑 민구 원 제보의 침묵을 갚는 자리 — 이미 있는 값을 넣었을 때 **아무 말도 없던** 것이
-          FB-2의 출발점이었다. 이제 왜 추가가 안 되는지 화면이 말한다. */}
+          FB-2의 출발점이었다. 이제 왜 추가가 안 되는지 화면이 말한다.
+          v0.48.0 P2(SCOUT-1 결정 ⓐ) — 기본 버튼 문구가 「삭제」에서 「추가/삭제」로 바뀌어
+          이 안내도 실제 버튼 글자를 그대로 인용하도록 맞춘다. */}
       {isDuplicate && (
         <span data-testid={`opt-dup-${col.id}`} style={{ fontSize: 12, fontWeight: 700, color: T.amber }}>
-          「{draft}」는 이미 있습니다 — 지우려면 입력을 비우고 「삭제」를 누르세요
+          「{draft}」는 이미 있습니다 — 지우려면 입력을 비우고 「추가/삭제」를 누르세요
         </span>
       )}
 
@@ -266,7 +268,9 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
             }
           }}
           data-testid={`opt-input-${col.id}`}
-          placeholder={deleteMode ? "지울 값을 눌러주세요" : "값 입력 후 「추가」 · 비우고 「삭제」"}
+          // v0.48.0 P2(NEW-1) — 실사용 흐름대로: 기본 문구는 버튼을 누른 뒤 실제로 벌어지는 일
+          // (칩 선택)까지 적는다 — "삭제"가 즉시 지운다는 오해를 막는다(삭제는 버튼→칩 탭 2단계).
+          placeholder={deleteMode ? "지울 값을 눌러주세요" : "값 입력 후 「추가」 · 비우고 눌러 지울 칩 선택"}
           style={{
             flex: 1, height: 36, borderRadius: 8,
             background: T.bg, border: `1px solid ${T.line}`,
@@ -306,7 +310,23 @@ export function OptionsPanel({ col, onChange }: { col: Column; onChange: (c: Col
             whiteSpace: 'nowrap',
           }}
         >
-          {draft.length > 0 ? '+ 추가' : deleteMode ? '취소' : '삭제'}
+          {/* v0.48.0 P2(NEW-1, SCOUT-1 결정 ⓐ, 민구 08-10) — **기본 상태만** 「삭제」→「추가/삭제」
+              (「추가」 부분 강조)로 바꾼다. 입력 有 상태(`+ 추가`)는 원문 미언급이라 종전 그대로
+              — OptionsPanel.tsx:69-70 계약("버튼 글자가 미리 바뀐다")을 두 상태가 똑같은 글자로
+              보이게 만들어 흐리지 않는다. ⚠️ **삭제모드 중(`deleteMode`)도 종전 「취소」 그대로**
+              — 민구 원문은 "빈 값, 버튼 누를시 '삭제'만 하이라이트"를 적었지만, WP-7 커밋
+              (`14b10d6`)이 스스로 기록한 대로 `취소`라는 글자 자체가 "실수로 켠 삭제모드를 빠져
+              나올 수 있다"는 유일한 시각 신호다 — 그 신호를 지우면 기능은 살아도 발견성이
+              죽는다. 08-10 결정 3(SCOUT-1 ⓐ)이 이 축돌을 명시적으로 취소 유지 쪽으로 정리했다
+              (`_ASK-scout-v048.md` SCOUT-1). 하이라이트 전환 자체(눌렀을 때 강조가 넘어가는 감각)는
+              전용 UI 없이 기존 삭제모드 시각 신호(칩 테두리·배경이 빨강으로 바뀜, :194 이하)로
+              충분하다고 가정한다(🟡 NON-BLOCKING — 아니면 `_ASK-scout-v048.md`에 적어달라). */}
+          {draft.length > 0 ? '+ 추가' : deleteMode ? '취소' : (
+            <>
+              <span style={{ fontWeight: 900 }}>추가</span>
+              <span style={{ opacity: 0.55 }}>/삭제</span>
+            </>
+          )}
         </button>
       </div>
     </div>

@@ -206,13 +206,17 @@ test('J-5 — 지운 선택지는 재연결해도 돌아오지 않는다(끝에�
   //    이유는 현장이다 — 장갑 낀 손으로 긴 값을 오타 없이 치는 것이 삭제보다 어려웠다.
   //    ⚠️ 이 테스트의 본질(J-5: 지운 값은 재연결해도 안 돌아온다)은 그대로다. 경로만 바뀐다.
   await expect(page.locator(`[data-testid="opt-input-${farmId}"]`)).toHaveValue('');
-  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText('삭제');
+  // v0.48.0 P2(NEW-1) — 기본 상태 문구가 「삭제」→「추가/삭제」(「추가」 강조)로 바뀌었다
+  // (SCOUT-1 결정 ⓐ). toHaveText는 두 span의 textContent를 이어붙여 비교한다.
+  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText('추가/삭제');
   await page.locator(`[data-testid="opt-apply-${farmId}"]`).click();
   // 삭제 모드 진입 표식 — 칩 앞 `×`가 실제로 뜬다.
   await expect(page.locator(`[data-testid="opt-del-mark-${farmId}-강남호"]`)).toBeVisible();
   await page.locator(`[data-testid="opt-chip-${farmId}-강남호"]`).click();
   // 민구 지정 — 1건 삭제되면 모드가 꺼진다(오탭 1회가 2건을 지우지 못하게).
-  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText('삭제');
+  // v0.48.0 P2(NEW-1) — 기본 상태 문구가 「삭제」→「추가/삭제」(「추가」 강조)로 바뀌었다
+  // (SCOUT-1 결정 ⓐ). toHaveText는 두 span의 textContent를 이어붙여 비교한다.
+  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText('추가/삭제');
 
   await expect.poll(async () => {
     const s = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? 'null'), STORE_KEY);
