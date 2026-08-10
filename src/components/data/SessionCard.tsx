@@ -5,13 +5,17 @@ import { sessionPending, sessionEverUploaded, sessionDirtyCount } from '../../li
 
 // ─── session card ────────────────────────────────────────────
 export function SessionCard({
-  session, expanded, inProgress = false, onToggle, onDelete, onCellSave,
+  session, expanded, inProgress = false, paused = false, onToggle, onDelete, onCellSave,
 }: {
   session: Session;
   expanded: boolean;
-  /** v0.48.0 P5(NEW-6) — 지금 음성탭에서 살아있는 바로 그 세션인가(App.tsx:38 sessionLive와
-   *  같은 판정을 DataScreen이 계산해 넘긴다). 기본값 false — 호출부가 아직 안 넘겨도 안전. */
+  /** v0.48.1 P5 보완(리뷰 F7, 민구 2차 결정) — `active`·`complete`·`stopping` 중 지금 이
+   *  세션인가(paused는 별도 프로퍼티로 분리됐다). DataScreen.tsx가 phase를 나눠 계산해 넘긴다.
+   *  기본값 false — 호출부가 아직 안 넘겨도 안전. `inProgress`·`paused`는 배타적(DataScreen이
+   *  분리된 phase 집합에서 파생하므로 동시에 true일 수 없다). */
   inProgress?: boolean;
+  /** v0.48.1 P5 보완(리뷰 F7) — 지금 이 세션이 일시정지 중인가. */
+  paused?: boolean;
   onToggle: () => void;
   onDelete: () => void;
   onCellSave: (rowIndex: number, colId: string, value: string) => void;
@@ -76,7 +80,9 @@ export function SessionCard({
               </div>
               {/* v0.48.0 P5(NEW-6, 민구 제보 08-10) — "지금의 탭에서 진행중이던 세션은 '진행중'
                   이란 표현을 추가해주길 바람." 완료 전 세션도 실시간으로 이 목록에 뜨는데
-                  (커밋마다 upsertSession) 카드엔 그게 "지금 그 세션"이라는 표시가 없었다. */}
+                  (커밋마다 upsertSession) 카드엔 그게 "지금 그 세션"이라는 표시가 없었다.
+                  v0.48.1 P5 보완(F7) — 일시정지 중엔 이 배지 대신 아래 「일시정지」 배지를 쓴다
+                  (DataScreen이 넘기는 inProgress/paused가 배타적이라 동시에 안 뜬다). */}
               {inProgress && (
                 <span
                   data-testid={`session-inprogress-${session.id}`}
@@ -89,6 +95,24 @@ export function SessionCard({
                   }}
                 >
                   진행중
+                </span>
+              )}
+              {/* v0.48.1 P5 보완(리뷰 F7, 민구 2차 결정) — 일시정지는 "진행중"과 다른 배지다.
+                  색은 T.mono(무채) — VoiceScreen의 기존 상태색 우선순위(ActiveControlBar 주석
+                  "이상치/마이크소실(red) > 일시정지(mono) > 수정(amber) > 입력중(green)")와
+                  같은 톤을 재사용해, 이 탭에서도 "일시정지 = amber 아님"이 흔들리지 않는다. */}
+              {paused && (
+                <span
+                  data-testid={`session-paused-${session.id}`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center',
+                    padding: '2px 8px', borderRadius: 999,
+                    background: T.monoGlow, border: `1px solid ${T.mono}`,
+                    color: T.mono, fontSize: 11, fontWeight: 800,
+                    whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  일시정지
                 </span>
               )}
             </div>

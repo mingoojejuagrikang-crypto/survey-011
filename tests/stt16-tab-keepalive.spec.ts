@@ -448,9 +448,9 @@ test('[STT-16] 탭 전환(입력→데이터→입력) 후 STT 자동 생존 —
 // v0.48.0 P5(NEW-6, 민구 제보 08-10) — "지금의 탭에서 진행중이던 세션은 '진행중'이란 표현을
 // 추가해주길 바람." 완료 전 세션도 값 커밋마다 upsertSession돼 데이터탭에 실시간으로 뜨는데
 // (이 파일의 keep-alive 계약과 같은 축 — 세션이 탭 전환을 관통해 산다), 카드엔 그게 "지금 그
-// 세션"이라는 표시가 없었다. `App.tsx:38`의 sessionLive(phase!=='ready'&&phase!=='done')와
-// 같은 판정을 DataScreen이 재사용해 SessionCard에 배지를 얹는다 — 종료(phase='ready') 후에는
-// sessionId가 안 지워지므로 phase 조건 없이 id만 비교하면 안 된다(scout 함정, 이 테스트가 잠근다).
+// 세션"이라는 표시가 없었다. DataScreen.tsx가 phase 기반으로 판정해 SessionCard에 배지를
+// 얹는다 — 종료(phase='ready') 후에는 sessionId가 안 지워지므로 phase 조건 없이 id만 비교하면
+// 안 된다(scout 함정, 이 테스트가 잠근다).
 test('[NEW-6] 데이터탭 세션 카드 — 진행중인 세션에 「진행중」 배지, 종료 후 사라짐', async ({ page }) => {
   await startSession(page);
 
@@ -475,8 +475,49 @@ test('[NEW-6] 데이터탭 세션 카드 — 진행중인 세션에 「진행중
   await fireStt(page, '종료', 1000);
 
   await page.locator('[data-testid="tab-data"]').click();
+  // 🔴 v0.48.1 F11(리뷰 claude low) — 종전엔 여기서 `waitForTimeout(500)` 뒤 기본 5초 폴링
+  // 여유(≈6.5초)에 기대는 **시간 가정**이었다. `stop()`은 `'stopping'`을 먼저 세우고 persist
+  // (세션 저장 + 클립 flush)가 끝난 뒤에야 `'ready'`로 내려간다(`useVoiceSession.ts` — v0.35.0
+  // R2-FIX-1이 의도적으로 그 순서로 만들었다) — 행·클립이 많거나 부하 상태면 6.5초를 넘을 수
+  // 있다(AGENTS.md 30초 체크: "부하 지연이 결함을 가릴 수 있다"). `waitForTimeout` 자체는
+  // 지워도 효과가 없다(`toHaveCount`가 어차피 폴링 단언이라 흡수한다) — 대신 타임아웃을 넉넉히
+  // 명시해 상태 도달을 실제로 기다리게 한다(상태 대기 훅 `window.__sessionPhase`는 프로덕션에
+  // 없고, 테스트만을 위해 새로 만들면 표면이 늘어나 이번 라운드 범위 밖 — union U2와 같은 판단).
+  await expect(page.locator('[data-testid^="session-inprogress-"]')).toHaveCount(0, { timeout: 20_000 });
+});
+
+// v0.48.1 P5 보완(리뷰 F7, 민구 2차 결정 — "일시정지는 별도 배지로 분리") — F10이 지적한
+// "넓힌 쪽에 오라클 0건"을 이 배지에서 반복하지 않는다. 일시정지 중엔 「일시정지」 배지가
+// 뜨고 「진행중」 배지는 **동시에 뜨지 않는다**(상호배타)는 것까지 잠근다 — 재개하면 원복.
+test('[NEW-6b] 데이터탭 세션 카드 — 일시정지 중엔 「일시정지」 배지, 「진행중」과 상호배타', async ({ page }) => {
+  await startSession(page);
+
+  await waitForActiveChip(page, '횡경');
+  await fireStt(page, '35.1', 300);
+  await waitForActiveChip(page, '종경');
+
+  // 일시정지 — 음성탭 하단 상태 버튼(제목 "일시정지", ActiveControlBar.tsx)을 누른다.
+  await page.locator('button[title="일시정지"]').click();
+  await expect(page.locator('[data-testid="paused-card"]')).toBeVisible({ timeout: 3000 });
+
+  await page.locator('[data-testid="tab-data"]').click();
   await page.waitForTimeout(500);
+
+  await expect(page.locator('[data-testid^="session-paused-"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid^="session-paused-"]')).toHaveText('일시정지');
+  // 상호배타 — 같은 세션이 두 배지를 동시에 달면 "지금 무슨 상태인지" 신호가 모순된다.
   await expect(page.locator('[data-testid^="session-inprogress-"]')).toHaveCount(0);
+
+  // 재개 — 「진행중」으로 되돌아오고 「일시정지」는 사라진다.
+  await page.locator('[data-testid="tab-voice"]').click();
+  await page.waitForTimeout(300);
+  await page.locator('button[title="재시작"]').click();
+  await expect(page.locator('[data-testid="paused-card"]')).toHaveCount(0, { timeout: 3000 });
+
+  await page.locator('[data-testid="tab-data"]').click();
+  await page.waitForTimeout(500);
+  await expect(page.locator('[data-testid^="session-inprogress-"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid^="session-paused-"]')).toHaveCount(0);
 });
 
 // v0.44.0 §C8 F18 재작성 — 구 오라클(재진입 fresh mount마다 prewarm 재발화)은 prewarm 폐지로

@@ -59,12 +59,23 @@ export function DataScreen() {
   // v0.48.0 P5(NEW-6, 민구 제보 08-10) — "지금의 탭에서 진행중이던 세션은 '진행중' 표현을
   // 추가해주길 바람." 활성 세션도 커밋마다 upsertSession돼 완료 전부터 이 목록에 실시간으로
   // 뜨는데(useVoiceSession.ts), 카드엔 그게 "지금 그 세션"이라는 표시가 없었다(scout-v048 조사).
-  // App.tsx:38의 sessionLive(phase!=='ready'&&phase!=='done')와 같은 판정을 재사용한다.
   // 🔴 sessionId는 stop() 후에도 안 지워진다(다음 세션 시작 시 resetAll()에서만 초기화) — phase
   // 조건 없이 id만 비교하면 방금 끝난 세션도 "진행중"으로 잘못 뜬다(scout 함정 발견).
-  const liveSessionId = useSessionStore((s) =>
-    s.phase !== 'ready' && s.phase !== 'done' ? s.sessionId : null,
-  );
+  //
+  // v0.48.1 P5 보완(리뷰 F6·F7, 민구 2차 결정) — **일시정지는 별도 배지로 가른다.**
+  //   F7(claude low): `App.tsx:38`의 `sessionLive`는 "VoiceScreen을 unmount하지 않기 위한
+  //   신호"가 존재 이유고 배지의 "지금 그 세션이다"와 목적이 다르다 — `paused`·`stopping`·
+  //   `complete`를 뭉뚱그려 전부 "진행중"으로 보여줬다. 민구가 `paused`만 분리하기로 결정
+  //   (`stopping`·`complete`는 언급 없음 — 그 둘은 여전히 "진행중"으로 남긴다. F7 처방ⓐ
+  //   취지: 침묵은 곧 현행 유지, 이 사실을 명시해 둔다).
+  //   F6(low): `phase !== 'done'`은 `'done'`이 실제로 세팅되는 곳이 0건인 죽은 절의 복제였다
+  //   (`App.tsx:38`·`sessionSync.ts:20`과 동일 지적). 부정조건으로 죽은 값을 반복하지 않고,
+  //   실제로 도달하는 phase만 허용목록으로 나열한다 — `App.tsx`는 소유 파일 밖이라 안 건드리고
+  //   이 파일 안에서만 SSOT를 새로 정한다(공유 셀렉터로 옮기는 안은 범위 밖).
+  const livePhase = useSessionStore((s) => s.phase);
+  const liveSessionId = useSessionStore((s) => s.sessionId);
+  const isLiveProgress = livePhase === 'active' || livePhase === 'complete' || livePhase === 'stopping';
+  const isLivePaused = livePhase === 'paused';
 
   const unsynced = sessions.filter((s) => sessionPending(s) > 0).length;
   const empty = sessions.length === 0;
@@ -221,7 +232,8 @@ export function DataScreen() {
               key={s.id}
               session={s}
               expanded={expandedSessionId === s.id}
-              inProgress={s.id === liveSessionId}
+              inProgress={s.id === liveSessionId && isLiveProgress}
+              paused={s.id === liveSessionId && isLivePaused}
               onToggle={() => toggleExpand(s.id)}
               onDelete={() => setDeleteTarget(s)}
               onCellSave={(rowIndex, colId, value) => handleCellSave(s.id, rowIndex, colId, value)}
