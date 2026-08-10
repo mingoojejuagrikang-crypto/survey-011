@@ -407,6 +407,14 @@ export function useVoiceSession() {
   //       2차 발화를 시도한다. 둘 다 `speak()`가 `spoken | error | watchdog-unstarted |
   //       watchdog-started` 같은 완료 상태를 반환해야 풀린다 — `Promise<boolean>` 계약 자체를
   //       enum으로 넓히는 `speech.ts` 변경이라 이번 r3(소수정) 범위 밖. v0.49 이월.
+  //   (c) 같은 갈래의 파생 — codex 재검증 잔여 ③: P4 2차 발화(`인식값 ...`)의 `interrupt:true`
+  //       cancel()+50ms 대기는 가드 재확인 없이 지나가는 창이라 `interrupt:false`로 없애는 안을
+  //       검토했지만, (a)에서 `done()`이 watchdog으로 resolve될 때 `synth.cancel()`을 호출하지
+  //       않는다(`speech.ts` `done()` 참조) — 즉 (a)가 벌어진 채 여기 도달하면 1차 utterance가
+  //       여전히 살아있을 수 있고, 그 상태의 `interrupt:false`는 2차를 큐잉시켜 뮤트 구간을
+  //       늘린다(C-FIX4가 기각한 "큐잉이 뮤트 해제 창을 연다" 부류, WP-1이 줄이려던 마비와 동종).
+  //       (a)/(b)와 같은 완료상태 enum이 있어야 "1차가 정상 종료했다"를 안전하게 전제할 수
+  //       있으므로 별도로 풀지 않고 여기 합류시킨다 — 그때까지 두 발화 모두 `interrupt:true` 유지.
   const say = useCallback(async (text: string, interrupt = true): Promise<boolean> => {
     if (!text) return false;
     const ttsStart = Date.now();
@@ -1328,6 +1336,12 @@ export function useVoiceSession() {
           //   `await say(alertText)` 진행 중 사용자가 응답(확인/새 값)하면 그 처리(`handleFinal`의
           //   cmd 게이트:1889 또는 값 재커밋:2263)에서 반드시 bump된다 — RACE-1과 동일 기전.
           const myEpoch = epochRef.current;
+          // 🔴 v0.48.1 r3 U1 4절 — 이 함수는 epoch를 bump하지 않고 **읽기만** 하므로, 이전에
+          //   전혀 다른(무관한) TTS 도중 기록된 `bargeInEpochRef`가 우연히 같은 epoch 값으로
+          //   남아 있으면 이번 alertText가 실제로는 끊기지 않았는데도 4절이 거짓으로 걸린다
+          //   (claude 재검증 후 발견 — 피해는 인식값 에코 1회 생략뿐, 데이터 영향 없음이지만
+          //   교정). 여기서 지워 "이 alertText 재생 중"으로만 좁힌다.
+          bargeInEpochRef.current = -1;
           const started = await say(alertText);
           // v0.48.0 P4(NEW-3, 민구 제보 08-10) — 「수정 NN」도 음성 인식값이라 같은 처방을 받는다
           // (P4 계획은 일반 값-커밋 알람 경로만 적었지만, 이 경로도 STT 추출값이라 "소리만으론
@@ -1361,18 +1375,19 @@ export function useVoiceSession() {
             && useSessionStore.getState().anomalyAlert?.awaitingResponse
             && bargeInEpochRef.current !== myEpoch
           ) {
-            // 🟡 v0.48.1 r3(codex 재검증 잔여, 재량 판단: 처방 비용 낮음 → 채택) — 기본
-            //   `interrupt=true`면 speak()가 cancel() 뒤 50ms를 **가드 재확인 없이** 기다린다(iOS
-            //   cancel-then-speak 완화, speech.ts:599-602) — 그 50ms 동안 터치 [확인]/[수정]이
-            //   알람을 해소해도 이 발화는 그대로 시작된다. `interrupt:false`로 그 50ms 자체를
-            //   없애 간극을 사실상 0으로 줄인다(가드 체크 직후 동기적으로 muteForTts()까지 진행,
-            //   speech.ts speak() 참조).
-            //   C-FIX4(알람 뒤 에코 큐잉 기각 이력, :426 부근)와는 다른 상황이다 — C-FIX4는
-            //   비대기(void) 호출이 **다른** interrupt:true 발화의 cancel-50ms 창과 레이스하는
-            //   경우였다. 여기 두 발화는 같은 함수 안에서 순차 `await`돼(`await say(alertText)`
-            //   완료 후에만 이 줄에 도달) 겹쳐 재생될 다른 발화가 없다 — cancel할 대상 자체가
-            //   없으므로 interrupt:false가 안전하다.
-            await say(`인식값 ${alert.next}`, false);
+            // 🟡 v0.48.1 r3(codex 재검증 잔여) — `interrupt:false`로 50ms cancel-대기 자체를
+            //   없애는 안을 검토했으나 **철회**했다: "겹쳐 재생될 다른 발화가 없다"는 전제가
+            //   1차가 정상 종료(onend/onerror)한 경우에만 성립한다. ④ TODO의 잔여
+            //   (`started`=true인데 onend/onerror 둘 다 소실 → watchdog이 대신 resolve)에서는
+            //   `done()`이 `cancel()`을 부르지 않으므로(위 `say()` 선언부 TODO 참조) 브라우저
+            //   utterance가 여전히 살아있는 채로 여기 도달할 수 있다 — 그 상태에서
+            //   `interrupt:false`면 2차가 **큐잉**돼(자연 종료를 무기한 기다림) 뮤트 구간이
+            //   그만큼 늘어난다. 정확히 C-FIX4·`isManualHoldBlocked`가 경계했던 "큐잉이 뮤트
+            //   해제 창을 연다" 부류이고, WP-1(워치독 10s→2.5s)이 줄이려던 바로 그 마비다. 이
+            //   전제를 지키려면 1차가 "정상 종료했는지"를 알아야 하는데, 그건 ④와 같은
+            //   `speech.ts` 완료상태 enum 없이는 판별 불가 — 그래서 50ms 창은 고치지 않고 ④
+            //   TODO에 합류시킨다(interrupt:true 유지가 지금은 더 안전).
+            await say(`인식값 ${alert.next}`);
           }
           // F5(low, claude) — lastTts는 갱신하지 않는다: alertText가 triad(화면==TTS==로그) SSOT라
           //   2차 발화까지 반영하면 화면의 "마지막 안내"와 로그 text=가 어긋난다(의도된 선택).
@@ -2635,6 +2650,9 @@ export function useVoiceSession() {
       useSessionStore.getState().setLastTts(alertText);
       // 🔴 v0.48.1 U1(리뷰 F1/HIGH, claude+codex 독립일치) — `myEpoch`는 이 값 커밋 시작 시점
       //   (:2298)에 이미 캡처돼 있다 — 재사용한다(같은 handleFinal 호출, 같은 스코프).
+      // 🔴 v0.48.1 r3 U1 4절 — 직접수정 경로(:1338 부근)와 동일 이유로, 이 alertText 재생 전
+      //   구간에 우연히 같은(방금 bump된) epoch로 기록된 낡은 barge-in 흔적을 지운다.
+      bargeInEpochRef.current = -1;
       const started = await say(alertText);
       // v0.48.0 P4(NEW-3, 민구 제보 08-10) — "값을 틀렸는지, 인식이 잘못됐는지 소리만으론 알 수
       // 없다"(원문). alertText는 팝업 라벨과 글자까지 동일해야 하는 §4 바이트 계약(logExtra의
@@ -2660,9 +2678,9 @@ export function useVoiceSession() {
         && useSessionStore.getState().anomalyAlert?.awaitingResponse
         && bargeInEpochRef.current !== myEpoch
       ) {
-        // 🟡 v0.48.1 r3(codex 재검증 잔여) — 직접수정 경로(:1332 부근)와 동일 근거로
-        //   `interrupt:false`. 상세 주석은 거기 참조.
-        await say(`인식값 ${alert.next}`, false);
+        // 🟡 v0.48.1 r3(codex 재검증 잔여) — `interrupt:false` 전환은 철회했다. 직접수정
+        //   경로(:1332 부근)와 동일 근거 — 상세는 거기 주석 참조(④ TODO에 합류).
+        await say(`인식값 ${alert.next}`);
       }
       // F5(low, claude) — lastTts는 갱신하지 않는다: alertText가 triad(화면==TTS==로그) SSOT라
       //   2차 발화까지 반영하면 화면의 "마지막 안내"와 로그 text=가 어긋난다(의도된 선택).
