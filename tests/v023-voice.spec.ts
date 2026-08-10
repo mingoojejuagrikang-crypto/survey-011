@@ -502,6 +502,14 @@ test('B2 — 저신뢰도(conf<허용범위) 발화 → 사유 큐 low_confidenc
   // 실제 임계(minConf)를 함께 싣는다. 기본 0.60 → minConfidenceForTolerance(0.6)=0.60. conf 0.3<0.6 거부.
   expect(lowConf?.extra).toBe('tolerance:0.6,minConf:0.6'); // 설정값 vs 신뢰도 대조 근거(방향 명시)
 
+  // v0.48.1 U3(리뷰 codex medium) — 화면 사유(data-reason)와 로그만 검사하고 TTS 문자열 자체를
+  // 아무도 안 재고 있었다("green이 P3 요구를 보장 안 함"). 여기서 **화면과 같은 사유 어휘가
+  // 실제로 스피커에서 나갔는지**를 전체 문자열 리터럴로 잠근다 — 제품 상수(REASK_COPY)를
+  // expected로 import하지 않고 손으로 그대로 옮겨 적는다(REASK_COPY만 바뀌어도 이 줄은 안 따라
+  // 바뀐다 — prefix가 통째로 삭제돼야만 검출되는 진짜 회귀 오라클). 반증 확인: useVoiceSession.ts
+  // 저신뢰 분기의 `REASK_COPY.low_confidence`. prefix만 지우면 이 줄이 red다(수동 확인 완료).
+  expect(await ttsLog(page)).toContain(`소리가 불확실. 잘 못 들었습니다. ${LONG_NAME} 다시 말씀해 주세요.`);
+
   // 성공 커밋 → 사유 큐 해제.
   await fireSttConf(page, '105.0', 0.95, 700);
   await expect(cue).toBeHidden({ timeout: 2500 });
@@ -520,4 +528,9 @@ test('B2 — 고신뢰지만 파싱 실패 → 사유 큐 parse_failed + stt_par
   expect(events.some((e) => e.type === 'stt_parse_failed')).toBe(true);
   // 저신뢰 이벤트는 없어야 한다(이건 신뢰도 문제가 아니라 파싱 문제).
   expect(events.some((e) => e.type === 'stt_rejected_low_confidence')).toBe(false);
+
+  // v0.48.1 U3(리뷰 codex medium) — 위 low_confidence 짝과 동일 근거: 화면·로그만이 아니라
+  // 실제 TTS 문자열을 리터럴로 잠근다. 민구 원문 예시("숫자로 인식 실패"+"횡경 다시 말씀해
+  // 주세요")와 정확히 같은 형태. 반증 확인: REASK_COPY.parse_failed prefix 제거 시 red(수동 확인).
+  expect(await ttsLog(page)).toContain(`숫자로 인식 실패. ${LONG_NAME} 다시 말씀해 주세요.`);
 });

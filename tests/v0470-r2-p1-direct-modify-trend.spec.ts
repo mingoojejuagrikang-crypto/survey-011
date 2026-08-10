@@ -91,6 +91,13 @@ test('P1ⓐⓑⓒ 🔴 직접 수정이 이상치면 알람이 뜨고, 에코 �
     '알람 TTS가 실제로 발화됐다(무음 알람 금지 — fb-27-9 계약)',
   ).not.toHaveLength(0);
 
+  // v0.48.1 U3(리뷰 claude F10/medium) — P4(NEW-3)가 구현 중 이 직접수정 경로까지 넓혔는데
+  // 오라클이 없었다("`say('인식값 …')`은 지금 어떤 테스트도 지키지 않는다 — 지워도 green이다").
+  // 알람 뒤에 별도의 「인식값 120.5」 발화가 실제로 나가는지 순서까지 잠근다.
+  const modIdx = spoken.findIndex((t) => t.startsWith('추세 알람'));
+  const valIdx = spoken.findIndex((t) => t === '인식값 120.5');
+  expect(valIdx, '직접수정 알람도 인식값을 별도 발화한다(알람 뒤)').toBeGreaterThan(modIdx);
+
   // ⓒ '확인' → 해소 후 **원래 대기하던 필드**(측정항목02)로 복귀.
   await fireStt(page, '확인', 1000);
   await expect(page.locator('[data-testid="anomaly-alert"]')).toHaveCount(0);
