@@ -1,6 +1,6 @@
 import { T } from '../../tokens';
 import { useSessionStore } from '../../stores/sessionStore';
-import { decimalReaskPrompt } from '../../lib/voicePrompts';
+import { decimalReaskPrompt, REASK_COPY } from '../../lib/voicePrompts';
 
 /** v0.23.0 입력탭#2(재질문 사유 큐, Vance) — 상단 인식률 %(허용범위 기준 색)와 **구분되는** 짧은
  *  사유 큐. 인식률은 높은데도 재질문되는 경우(파싱 실패) vs 신뢰도 자체가 낮은 경우를 사용자가 알게
@@ -8,13 +8,9 @@ import { decimalReaskPrompt } from '../../lib/voicePrompts';
  *  null로 리셋하면 자동으로 사라진다. listening hero의 하위 보조선으로 두어 4-way 상호배타(일시정지
  *  /이상치/수정/hero)와 경쟁하지 않는다 — hero가 보일 때만(=듣는 중) 함께 노출된다.
  *   - 'low_confidence' → "소리가 불확실"(소음·잡음으로 신뢰도 미달)
- *   - 'parse_failed'   → "숫자로 인식 실패"(인식은 됐으나 숫자로 파싱 불가) */
+ *   - 'parse_failed'   → "숫자로 인식 실패"(인식은 됐으나 숫자로 파싱 불가)
+ *  v0.48.0 P3 — 문구 자체는 `voicePrompts.ts`의 `REASK_COPY`로 옮겼다(TTS와 공유 SSOT). */
 export type ReaskReason = 'low_confidence' | 'parse_failed' | null;
-
-const REASK_COPY: Record<NonNullable<ReaskReason>, string> = {
-  low_confidence: '소리가 불확실',
-  parse_failed: '숫자로 인식 실패',
-};
 
 export function ReaskCue({ reason }: { reason: ReaskReason }) {
   // v0.36.0 FB#4(Vance) — 소수점 유실 재질문이면 TTS와 **글자까지 일치**하는 프롬프트를 화면에도

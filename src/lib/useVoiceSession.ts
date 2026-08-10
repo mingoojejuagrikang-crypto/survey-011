@@ -8,7 +8,7 @@ import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingle
 // [ENV-12] v0.43.0 #3 — 값 파싱 시도는 순수 모듈이 소유한다(부수효과 없음). 이 파일은 호출만.
 import { attemptParseValue, parseValueForCol } from './valueParseAttempt';
 import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiCommandSignal } from './voiceCommands';
-import { decimalReaskPrompt } from './voicePrompts';
+import { decimalReaskPrompt, REASK_COPY } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, setBargeInEnabled, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColumn } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
@@ -2164,7 +2164,9 @@ export function useVoiceSession() {
       recorderRef.current?.startClip(); // restart clip
       useSessionStore.getState().setRecognized('');
       useSessionStore.getState().setReaskReason('low_confidence');
-      await say(`잘 못 들었습니다. ${awaiting.name} 다시 말씀해 주세요.`);
+      // v0.48.0 P3(NEW-2, 민구 제보 08-10) — 재질문 사유를 TTS 맨 앞에 붙인다. 화면(ReaskCue)이
+      // 이미 REASK_COPY로 같은 문구를 보여주고 있었는데 TTS만 사유를 안 읽었다(scout-v048 조사).
+      await say(`${REASK_COPY.low_confidence}. 잘 못 들었습니다. ${awaiting.name} 다시 말씀해 주세요.`);
       return;
     }
 
@@ -2243,7 +2245,11 @@ export function useVoiceSession() {
         await say(decimalReaskPrompt(fractionWhole));
       } else {
         recorderRef.current?.startClip(); // restart clip (전체 재발화 유도 분기 — 새 클립이 옳다)
-        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+        // v0.48.0 P3(NEW-2, 민구 제보 08-10) — 사유(REASK_COPY.parse_failed="숫자로 인식 실패")를
+        // 맨 앞에 붙인다. 민구 원문 예시("숫자로 인식 실패"+"횡경 다시 말씀해 주세요")와 일치.
+        // 꼬리("{name} 다시 말씀해 주세요.")는 바이트 불변 — decimal-targeted-reask.spec.ts:351이
+        // 부분일치(.includes)로 이 꼬리를 검증한다.
+        await say(`${REASK_COPY.parse_failed}. ${awaiting.name} 다시 말씀해 주세요.`);
       }
       return;
     }

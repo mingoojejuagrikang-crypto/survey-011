@@ -5,3 +5,14 @@
 export function decimalReaskPrompt(whole: string | number): string {
   return `${whole} 점, 소수점 아래 숫자만 말씀해 주세요.`;
 }
+
+/** v0.48.0 P3(NEW-2, 민구 제보 08-10) — 재질문 사유 2버킷의 SSOT. 화면(`ReaskCue`)과
+ *  TTS(`useVoiceSession`)가 같은 문자열을 공유한다(위 `decimalReaskPrompt`와 동일 패턴,
+ *  PRINCIPLES §2 시각·청각 일치 계약). 종전엔 `ReaskCue.tsx` 로컬 상수라 화면에만 떴고 TTS는
+ *  못 읽었다 — 민구 원문: *"음성인식 실패시, 원인도 음성안내 할 것. 예) '숫자로 인식 실패' +
+ *  '횡경 다시 말씀해 주세요'"*. 사유 세분화(digit_token_unparsed/multi_numeric/extraneous_token)
+ *  없이 기존 2버킷 그대로 쓴다 — 민구 예시 자체가 버킷 수준과 일치한다(scout-v048 조사). */
+export const REASK_COPY: Record<'low_confidence' | 'parse_failed', string> = {
+  low_confidence: '소리가 불확실',
+  parse_failed: '숫자로 인식 실패',
+};
