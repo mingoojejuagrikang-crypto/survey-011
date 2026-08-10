@@ -206,16 +206,25 @@ test('J-5 — 지운 선택지는 재연결해도 돌아오지 않는다(끝에�
   //    이유는 현장이다 — 장갑 낀 손으로 긴 값을 오타 없이 치는 것이 삭제보다 어려웠다.
   //    ⚠️ 이 테스트의 본질(J-5: 지운 값은 재연결해도 안 돌아온다)은 그대로다. 경로만 바뀐다.
   await expect(page.locator(`[data-testid="opt-input-${farmId}"]`)).toHaveValue('');
-  // v0.48.0 P2(NEW-1) — 기본 상태 문구가 「삭제」→「추가/삭제」(「추가」 강조)로 바뀌었다
-  // (SCOUT-1 결정 ⓐ). toHaveText는 두 span의 textContent를 이어붙여 비교한다.
+  // v0.48.1 P2 재작업(리뷰 F2/U5, 민구 2차 결정) — 버튼은 **전 상태**에서 「추가/삭제」 두 단어다
+  // (하이라이트만 모드에 따라 바뀐다, 「취소」 문구는 폐지). toHaveText는 두 span의 textContent를
+  // 이어붙여 비교하므로 기본 상태도 delete모드 상태도 똑같이 '추가/삭제'를 기대한다.
   await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText('추가/삭제');
+  // v0.48.1 리뷰 F3/U4 — aria-label이 화면 어휘와 같은지 잠근다(스크린리더가 존재하지 않는
+  // 단독 「삭제」 버튼을 가리키던 결함, F3). 기본 상태에선 삭제모드 진입 결과를 안내한다.
+  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`))
+    .toHaveAccessibleName('「추가/삭제」 — 누르면 삭제 모드로 바뀝니다. 그 다음 지울 값을 누르세요');
   await page.locator(`[data-testid="opt-apply-${farmId}"]`).click();
   // 삭제 모드 진입 표식 — 칩 앞 `×`가 실제로 뜬다.
   await expect(page.locator(`[data-testid="opt-del-mark-${farmId}-강남호"]`)).toBeVisible();
+  // 🔴 v0.48.1 재작업의 핵심 회귀축 — 삭제모드 **중에도** 버튼 글자는 여전히 '추가/삭제'다
+  // (종전엔 이 상태에서 '취소'로 바뀌었다). 옛 문구로 되돌리면 이 줄이 깨진다(반증 확인됨).
+  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText('추가/삭제');
+  // U4 — 삭제모드 aria-label도 새 어휘로 동기화됐는지("취소됩니다" 잔존 금지).
+  await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`))
+    .toHaveAccessibleName('「추가/삭제」 — 삭제 모드입니다. 지울 값을 누르세요. 이 버튼을 다시 누르면 삭제 모드가 꺼집니다');
   await page.locator(`[data-testid="opt-chip-${farmId}-강남호"]`).click();
   // 민구 지정 — 1건 삭제되면 모드가 꺼진다(오탭 1회가 2건을 지우지 못하게).
-  // v0.48.0 P2(NEW-1) — 기본 상태 문구가 「삭제」→「추가/삭제」(「추가」 강조)로 바뀌었다
-  // (SCOUT-1 결정 ⓐ). toHaveText는 두 span의 textContent를 이어붙여 비교한다.
   await expect(page.locator(`[data-testid="opt-apply-${farmId}"]`)).toHaveText('추가/삭제');
 
   await expect.poll(async () => {
