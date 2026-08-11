@@ -1,9 +1,12 @@
-# knip 검출물 판정표 (baseline 2026-08-11)
+# knip 검출물 판정표 (baseline 2026-08-11 · 재검증 2026-08-12)
 
 > 08-10 회차(`825dc9e`)가 `npm run check:unused`(knip)를 도입하면서 **검출물을 하나도 지우지 않고**
 > "판정과 제거는 사람 몫"이라고 남겼다. 이 문서가 그 판정이다. **코드는 한 줄도 바꾸지 않았다.**
 >
 > 대상: `knip@6.32.0` · 검출 **83건**(파일 3 · export 64 · 타입 15 · 중복 export 1) · 전량 판정.
+>
+> **08-12 회차** — 판정을 새로 하지 않고 **직전 판정을 반증했다.** §12가 스스로 적어둔 한계 ③을
+> 실측해 **판정 5건이 틀렸음**을 찾아 §13에 실었다(조치가 뒤집힌 것 2건). 코드는 여전히 무변경.
 
 ---
 
@@ -25,17 +28,22 @@ knip의 발견이 뒷받침하는 유일한 조치는 **`export` 키워드 제�
 |---|------|------|------|
 | §2 | **의도적 보존** — 되살리는 방법이 소스에 적혀 있다 | 2 | 유지. 건드리지 마라 |
 | §3 | **계약 상수** — 스펙이 *일부러* import 안 하고 값을 복제한다 | 8 | 유지. `export` 제거도 재검토 대상 |
-| §4 | **완전 미사용 후보** — 파일 안팎 어디서도 안 쓰임 | 11 | 다음 회차 제거 후보(민구 승인 필요) |
+| §4 | **완전 미사용 후보** — 파일 안팎 어디서도 안 쓰임 | 11 | 다음 회차 제거 후보(민구 승인 필요) — 🔴 **단 2건은 §13-A에서 철회(실질 9건)** |
 | §5 | **상속 복제 유물** — survey-011에서 한 번도 쓰인 적 없다 | 2(파일) | 제거 후보. 근거 최강 |
 | §6 | **죽은 호환 재노출** — "기존 경로 호환"인데 그 경로 이용자가 0 | 2 | 제거 후보 |
 | §6′ | **살아 있는 재노출** — 스펙이 배선을 감시한다 (`applyAppSchema`) | 1 | 🔴 유지. §6과 혼동 금지 |
 | §7 | **픽스처 미채택 부채** — SSOT 픽스처를 두고 스펙이 로컬 복제 | 4 | 🔴 제거 금지. 반대로 채택이 답이다 |
-| §8 | **`export` 키워드만 불필요** — 파일 안에서는 살아 있다 | 52 | 심볼 삭제 금지 |
+| §8 | **`export` 키워드만 불필요** — 파일 안에서는 살아 있다 | 52 | 심볼 삭제 금지 — 🔴 **4건은 §13-B·C에서 값 계약 보유로 승격**(§3 취급) |
 | §9 | **중복 export**(별칭) | 1 | 유지. 통합은 제안만 |
 | §10 | **판정 제외** — 오디오 3파일 규칙 | (§8 내 1건) | 판정하지 않음 |
 
 합계 검산: 2 + 8 + 11 + 2 + 2 + 1 + 4 + 52 + 1 = **83** = knip 출력 83건. **전량 판정, 누락 0.**
 각 검출물은 **정확히 한 절**에만 계수된다(§10의 `createRecognition`은 §8 안에 있고 그 자리에 「제외」로 표시했다).
+
+> 🔴 **2026-08-12 재판정 — §13을 먼저 읽어라.** §12 한계 ③(「값만 박힌 계약」 누락)을 실측으로
+> 닫으면서 **판정 5건이 틀린 것으로 드러났다.** 그 중 `RECOGNITION_TOLERANCE_MIN`·`MAX`는
+> **조치가 정반대로 뒤집힌다**(제거 후보 → 🔴 제거 금지). 계수는 위 표 그대로 두었다 —
+> §13은 계수 절이 아니라 **조치 갱신 절**이다(각 검출물의 계수 절은 여전히 하나뿐이다).
 
 knip 출력 축으로도 검산된다 — **파일 3**(§2 1 + §5 2) · **export 64**(§2 1 + §3 8 + §4 9 + §6 2 +
 §6′ 1 + §7 4 + §8 39) · **타입 15**(§4 2 + §8 13) · **중복 1**(§9).
@@ -70,7 +78,7 @@ knip 출력 축으로도 검산된다 — **파일 3**(§2 1 + §5 2) · **expor
 | `RESERVED_ROWS` — `StateDots.tsx:71` | 4 | `_probe-fb5-threshold.spec.ts:6` · `v0461-p-dot-pill-short.spec.ts:31` |
 | `FIELD_COLS` — `StateDots.tsx:45` | — | `KNOWN-ISSUES.md:1818` |
 | `VOICE_COMMIT_MARK_MS` — `useVoiceCommitMark.ts:15` | 1500 | `v047-w4-commit-mark-session.spec.ts:6,99` · `v035-hero-confirm.spec.ts:431,433` |
-| `HOLD_TO_WAKE_MS` — `BlackoutOverlay.tsx:75` | 2000 | `v0470-w7-hold-blackout.spec.ts:62` — *"제품 상수와 같아야 한다"* |
+| `HOLD_TO_WAKE_MS` — `BlackoutOverlay.tsx:75` | 2000 | `v0470-w7-hold-blackout.spec.ts:62` — *"제품 상수와 같아야 한다"* · 🔴 **`v0460-cr-blackout-escape.spec.ts:82`**(`const WAKE_HOLD_MS = 2000`) — 08-12 재판정에서 보강. 소스 주석 `BlackoutOverlay.tsx:70-72`가 **두 스펙을 이름으로 지목**하는데 이 표는 하나만 적고 있었다 |
 | `HOLD_TO_BLACKOUT_MS` — `HeroHoldToBlackout.tsx:65` | 3000 | `v0470-w7-hold-blackout.spec.ts:58` — *"import하지 않는 건 의도다"* |
 
 **조치:** 전부 유지. `export` 키워드 제거조차 신중하다 — 값이 스펙에 리터럴로 복제돼 있어 **상수를
@@ -96,12 +104,18 @@ knip 출력 축으로도 검산된다 — **파일 3**(§2 1 + §5 2) · **expor
 | `OVERLAY_DIM_STRONG` | `src/components/ModalBase.tsx:7` | `0eab777` 2026-08-02 | 값 `rgba(0,0,0,0.68)` — 종료 확인용. 인라인 종료 확인 도입 때 소멸한 듯 |
 | `HERO_FIT_STEPS` | `src/components/voice/useFitScale.ts:23` | `36a01b1` 2026-08-01 | upward-open fit group 도입 때 대체된 듯 |
 | `PRIMARY_COMMANDS` | `src/lib/voiceCommands.ts:136` | `bbf6a1e` 2026-07-08 | v0.31.0 입력탭 UI 개편 |
-| `RECOGNITION_TOLERANCE_MIN` | `src/stores/settingsStore.ts:85` | `a903d76` 2026-07-03 | 값 0.4 — v0.26.0 허용범위 다이얼 **반전 원복**의 사체로 보인다 |
-| `RECOGNITION_TOLERANCE_MAX` | `src/stores/settingsStore.ts:86` | `a903d76` 2026-07-03 | 값 0.9 — 동상 |
+| ~~`RECOGNITION_TOLERANCE_MIN`~~ | `src/stores/settingsStore.ts:85` | `a903d76` 2026-07-03 | 🔴 **판정 철회 — §13-A 참조.** 사체가 아니라 **채택 못 된 SSOT**(§7 성격)다. 제거 금지 |
+| ~~`RECOGNITION_TOLERANCE_MAX`~~ | `src/stores/settingsStore.ts:86` | `a903d76` 2026-07-03 | 🔴 **판정 철회 — §13-A 참조.** 동상 |
 | `trimSilenceToWav` | `src/lib/audioTrim.ts:434` | `8360b64` 2026-06-10 | ⚠️ **제거 제안 붙이지 않음** — 소비자였을 `audioRecorder.ts`가 규칙 5 제외 대상이라 소멸 경위 추적이 막혔다 |
 
 **조치:** 전부 「후보」다. 이번 회차는 제거하지 않았다. 🔴 제거는 민구 승인 뒤에 한다 —
 **삭제된 심볼은 어떤 테스트도 잡아주지 못한다.**
+
+> 🔴 **2026-08-12 정정 — 이 절은 11건이 아니라 9건이다.** `RECOGNITION_TOLERANCE_MIN`·`MAX`는
+> §13-A에서 판정이 철회됐다(제거 후보 → **제거 금지**). 「파일 안팎 어디서도 안 쓰임」이라는
+> **관측은 맞았지만 결론이 틀렸다** — 값이 소스에 리터럴로 복제돼 살아 있어서, 미사용의 사인이
+> 「죽음」이 아니라 「SSOT 미채택」이었다. 이 절에 남은 9건은 그 축을 다시 재서 **복제본 0**임을
+> 확인했다(§13-D). 계수는 §1 표 그대로 11로 둔다.
 
 ---
 
@@ -171,6 +185,10 @@ import돼 쓰인다 — 픽스처 파일 전체가 죽은 게 아니라 **이 4�
 `MOCK_INIT_SCRIPT` 복제본 35벌이 서로 드리프트하고 있는지는 **이 문서의 범위 밖**이며,
 독립 회차가 필요하다(§11 제안 ①).
 
+> 🔴 **2026-08-12 — 이 절의 구조가 `tests/`에만 있는 게 아니었다.** §13-A가 `src/`에서 같은 것을
+> 찾았다(`RECOGNITION_TOLERANCE_MIN`·`MAX`). 08-11 판정은 그것을 §4「제거 후보」로 보냈다 —
+> **이 절과 §4를 가르는 축은 「미사용이냐」가 아니라 「그 값이 어딘가에 복제돼 살아 있느냐」다.**
+
 ---
 
 ## 8. `export` 키워드만 불필요 (52건) — 🔴 심볼 삭제 금지
@@ -200,14 +218,20 @@ import돼 쓰인다 — 픽스처 파일 전체가 죽은 게 아니라 **이 4�
 
 ### 8-b. 언급 없음 (38건)
 
+> 🔴 **2026-08-12 정정 — 이 제목은 부정확했다.** 「이름 언급이 없음」과 「계약이 없음」은 다른데
+> 이 절은 둘을 같이 취급했다. 아래 🔴 표시 4건은 **이름은 없지만 값이 스펙에 리터럴로 박혀 감시
+> 중**이다 — §3과 같은 취급이 맞다(**값을 바꾸려면 그 스펙의 리터럴도 함께 바꿔야 한다**).
+> 나머지 34건은 재실측에서 계약 없음이 확인됐다(§13-D). 근거는 §13-B·C.
+
 | 심볼 | 위치 |
 |------|------|
 | `formatAge` | `ConnectionStatusCard.tsx:31` |
-| `OVERLAY_DIM` | `ModalBase.tsx:5` |
-| `RELEASE_STEPS` · `RELEASE_STEP_MS` | `BlackoutOverlay.tsx:78,80` |
+| `OVERLAY_DIM` | `ModalBase.tsx:5` — ⚠️ 소스 복제 1건(§13-E) |
+| 🔴 `RELEASE_STEPS` · `RELEASE_STEP_MS` | `BlackoutOverlay.tsx:78,80` — **값 계약 보유(§13-B)** |
 | `COMPLETE_RECEIPT_MS` | `CompleteSummary.tsx:8` |
 | `COMPLETE_SUMMARY_MIN_FONT_PX` · `COMPLETE_RECEIPT_MIN_FONT_PX` · `HERO_LABEL_PROVISIONAL_RESERVE_PX` | `heroLayout.ts:8,14,19` |
-| `CHIP_SWEEP_FASTEST_SECONDS` · `CHIP_SWEEP_SLOWEST_SECONDS` · `CHIP_SWEEP_MAX_SECONDS` · `CHIP_SWEEP_MIN_TRAVEL_PX` | `chipSweep.ts:43,46,64,81` |
+| `CHIP_SWEEP_FASTEST_SECONDS` · `CHIP_SWEEP_SLOWEST_SECONDS` · `CHIP_SWEEP_MAX_SECONDS` | `chipSweep.ts:43,46,64` — 계약 없음 확인. 🔑 스펙이 리터럴을 **금지**하고 SSOT를 import한다(§13-D 반례) |
+| 🔴 `CHIP_SWEEP_MIN_TRAVEL_PX` | `chipSweep.ts:81` — **값 계약 보유(부분·§13-C)** |
 | `uploadLogToUserDrive` · `uploadLogToAdminTeamFolder` | `driveUpload.ts:159,234` |
 | `CAPTURE_TIMEOUT_MS` · `feedbackFilename` · `buildFeedbackZip` · `flushFeedbackQueue` | `feedback.ts:43,46,103,263` |
 | `legacySessionLabel` | `legacySyncFlow.ts:37` |
@@ -216,8 +240,8 @@ import돼 쓰인다 — 픽스처 파일 전체가 죽은 게 아니라 **이 4�
 | `CAPTURE_JPEG_QUALITY` | `screenshot.ts:24` |
 | `fetchAllRows` | `sheets.ts:393` — **구세대 API**(후속 `fetchAllRowsUnbounded`, `sheets.ts:418`) |
 | `parseValueForColWithReason` | `valueParseAttempt.ts:182` |
-| `SIMULATED_INSETS` | `tests/fixtures/safeArea.ts:14` |
-| `VOICE_MOCK_INIT_SCRIPT` | `tests/fixtures/stt.ts:33` |
+| 🔴 `SIMULATED_INSETS` | `tests/fixtures/safeArea.ts:14` — **값 계약 보유(§13-C)** |
+| `VOICE_MOCK_INIT_SCRIPT` | `tests/fixtures/stt.ts:33` — §7 아님. `stt.ts:122-123`의 `installVoiceMocks`가 쓰고 스펙은 그 함수를 import한다(정상 배선·§13-D) |
 | **타입 12건** — `FitMemberRef`(`useFitGroup.ts:4`) · `BeepSegment`(`beepVariants.ts:13`) · `FailedCellCommit`(`cellPersistError.ts:21`) · `ClipManifestEntry`(`clipsManifest.ts:40`) · `ManualChoiceKind`(`manualInput.ts:21`) · `ListRecoverResult`(`recoverFromDrive.ts:46`) · `SheetInfo`(`sheets.ts:17`) · `ColParseResult`·`ParseAttemptEvent`(`valueParseAttempt.ts:35,44`) · `AutoValue`·`TrendRule`(`types.ts:6,14`) · `NodePrint`(`tests/fixtures/previewVerify.ts:46`) | |
 
 ---
@@ -248,6 +272,18 @@ import돼 쓰인다 — 픽스처 파일 전체가 죽은 게 아니라 **이 4�
 ② **§6 죽은 호환 재노출 2건 제거** — `beep.ts:24` · `sync.ts:19`. 두 파일 모두 스펙이 있어 규칙 6은 통과한다.
    🔴 `applyAppSchema`는 함께 지우면 안 된다(§6 혼동 주의).
 
+   **실행 명세**(08-12 회차 실측 — 승인 회차가 그대로 집행할 수 있게 남긴다. 이번에도 미실행):
+   - `src/lib/beep.ts` — **`:24` 한 줄만** 지운다(`export { BEEP_VOLUME_MAX };`).
+     🔴 `:16`의 **import는 남겨라** — `:141`이 `Math.min(Math.max(0, mult), BEEP_VOLUME_MAX)`로 실제로 쓴다.
+     지우면 클리핑 상한이 깨진다. 실측 importer: `beep.ts` 경로로 이 심볼을 가져가는 곳 **0**
+     (`beep.ts`를 import하는 둘은 `BeepPicker.tsx:3`→`previewBeep` · `useVoiceSession.ts:16`→`playBeep`,`unlockAudioPlayback`).
+   - `src/lib/sync.ts` — **`:19` 한 줄만** 지운다(`export { recountSynced } from './sessionSync';`).
+     🔴 `:9`의 **import는 남겨라** — `:371`이 `recountSynced(mergedRows)`로 쓴다. 실측 importer: `sync.ts`
+     경로 이용자 **0**(`FailureModal.tsx:3`→타입만 · `useDataActions.ts:12`→`syncSelected`,`SyncReport`).
+   - 🔑 두 줄 다 `export { … }` / `export … from` 구문이라 **로컬 바인딩을 만들지 않는다** — 지워도
+     같은 파일의 import·사용은 영향받지 않는다. 회귀는 `npm run build`(tsc)가 잡는다:
+     누군가 이 경로로 import하고 있었다면 컴파일이 깨진다.
+
 ③ **`chipSweep.ts` 별칭 통합** — 스펙 보유(규칙 6 통과)라 방어 가능하지만 이번 과제는 판정이라 미실행.
 
 ④ **§4·§5 제거** — 민구 승인 필요. `Chip.tsx`·`test-sheets-url.mjs`·`AppSettings`·`VoiceState`·
@@ -255,6 +291,16 @@ import돼 쓰인다 — 픽스처 파일 전체가 죽은 게 아니라 **이 4�
 
 ⑤ **`check:unused`를 `check:release`에 연결하지 마라 (현행 유지)** — 판정이 끝나도 §3·§7·§8의
    68건은 정당하게 남는다. 연결하면 exit 1로 배포가 막힌다. 「보고용」이 이 검사기의 올바른 자리다.
+
+⑥ 🆕 **`RECOGNITION_TOLERANCE_MIN`·`MAX` SSOT 채택** (08-12 §13-A) — `settingsStore.ts:557-558`의
+   coercion이 리터럴 `0.4`/`0.9` 대신 이 두 상수를 쓰게 한다. 그러면 미사용이 자연 소멸하고
+   대역이 한 곳에서만 산다. 🔴 **`v026-tolerance-strict.spec.ts`의 리터럴 0.4/0.9는 그대로 둬라** —
+   그건 [TEAMOPS-38] 관례(제품 상수 import 금지)라 없애면 오라클이 값 변경을 못 잡는다.
+   같은 파일 안 편집이고 `v026-tolerance-strict.spec.ts`가 그 게이트를 재므로 규칙 6은 통과한다.
+
+⑦ 🆕 **§13-B·C의 4건을 §3 계약 목록에 정식 편입** — `RELEASE_STEPS`·`RELEASE_STEP_MS`·
+   `SIMULATED_INSETS`·`CHIP_SWEEP_MIN_TRAVEL_PX`. 지금은 §8-b에 🔴 표시로만 붙어 있다.
+   문서 정리라 코드 변경이 없다.
 
 ---
 
@@ -280,4 +326,94 @@ EXIT=1은 검출 존재 시 정상이며 게이트 밖이라 배포 무영향). 
 
 **한계** — ①런타임 동적 참조 중 `knip.jsonc`의 `paths` 매핑(`/src/*`)이 못 잡는 형태가 있다면 놓친다.
 ②§7의 복제본들이 서로 다른 값을 갖는지는 조사하지 않았다(제안 ①).
-③값 리터럴 계약은 **스펙이 이름을 언급한 경우**만 확인했다 — 이름 언급 없이 값만 박힌 계약은 놓칠 수 있다.
+③~~값 리터럴 계약은 **스펙이 이름을 언급한 경우**만 확인했다 — 이름 언급 없이 값만 박힌 계약은 놓칠 수 있다.~~
+   🔴 **2026-08-12 닫힘 — 이 한계가 실제로 판정을 5건 틀리게 했다. §13이 그 실측이다.**
+
+---
+
+## 13. 값 리터럴 계약 재검증 (2026-08-12) — §12 한계 ③을 닫는다
+
+§12가 스스로 적어둔 한계 ③(*"이름 언급 없이 값만 박힌 계약은 놓칠 수 있다"*)을 실측했다.
+**놓치고 있었다 — 판정 5건이 틀렸고, 그 중 2건은 조치가 정반대로 뒤집힌다.**
+
+**방법** — §4·§8-b의 **값 상수 전량**(19건)에 대해 이름이 아니라 **값**으로 두 축을 쟀다:
+① **소스 안 리터럴 복제** — 상수가 미사용인데 같은 값이 소스에 박혀 있으면 그건 「죽은 상수」가
+   아니라 **「채택 못 된 SSOT」**(§7과 같은 구조)다. ②**스펙 안 리터럴 계약** — 값이 스펙에 박혀
+   감시 중이면 §3과 같은 취급이다. 히트는 전부 **그 스펙이 그 심볼의 소유 모듈을 재는지**까지 확인했다
+   (`0.68`·`24`·`4000` 같은 흔한 수는 무관 맥락 히트가 압도적이라 개수로는 아무것도 판정할 수 없다).
+
+### 13-A. 🔴 판정 철회 2건 — `RECOGNITION_TOLERANCE_MIN` · `MAX` (§4 → §7 성격)
+
+§4는 이 둘을 *"v0.26.0 허용범위 다이얼 **반전 원복**의 사체로 보인다"*며 **제거 후보**로 올렸다.
+「파일 안팎 어디서도 안 쓰임」이라는 관측은 **맞다**. 사인(死因) 진단이 틀렸다:
+
+| 축 | 실측 |
+|----|------|
+| 소스 리터럴 복제 | 🔴 **같은 파일** `settingsStore.ts:557-558` — `s.recognitionTolerance < 0.4 \|\| s.recognitionTolerance > 0.9` 로 **대역을 리터럴로 복제해 coercion 게이트를 돌린다** |
+| 소스 주석 복제 | `ActiveControlSteppers.tsx:53` — *"허용범위(recognitionTolerance) **0.40~0.90** → %로 표시"* |
+| 소스가 계약이라 선언 | `settingsStore.ts:82` — *"저장값·다이얼 위치·기본값(0.60)·**대역[0.40~0.90]은 전 과정 내내 불변**"* |
+| 스펙 리터럴 계약 | `v026-tolerance-strict.spec.ts:163`(`setupAndStart(page, 0.9)` — T1 엄격 끝) · `:184`·`:203`(`0.4` — T2 관대 끝) · `:179` `expect(lowConf?.extra).toBe('tolerance:0.9,minConf:0.9')`. 그 스펙은 **`settingsStore`의 tolerance 매핑 전용 오라클**이고 헤더가 *"반드시 민구 결정 이력(settingsStore.ts 주석)을 확인하고 수정할 것"*이라 적었다 |
+
+**대역 [0.4, 0.9]는 죽지 않았다 — 지금도 게이트·UI·스펙 셋이 함께 지키는 살아 있는 계약이고,
+상수만 그 SSOT 자리에서 채택되지 못했다.** 이는 §7(픽스처 미채택 부채)과 **정확히 같은 구조**이며,
+§7의 조치가 여기에도 그대로 적용된다:
+
+> 🔴 **제거하지 마라. 제거하면 「대역이 리터럴로 복제돼 있다」는 실제 부채가 검출기 시야에서 사라진다.**
+> 올바른 방향은 반대다 — `:557-558`이 이 상수를 **쓰도록** 채택하는 것(제안 ⑥).
+
+⚠️ 제거해도 **앱도 스펙도 즉시 깨지지는 않는다**(리터럴 복제본이 남으므로). 그래서 위험하다 —
+§4가 시키는 대로 지웠으면 **아무 오라클도 신호를 내지 않은 채** SSOT만 소멸했을 것이다.
+
+### 13-B. `RELEASE_STEPS`(4) · `RELEASE_STEP_MS`(500) — §8-b「언급 없음」 → 값 계약 보유
+
+소스 `BlackoutOverlay.tsx:236`이 `Math.round(p * RELEASE_STEPS) / RELEASE_STEPS`로 진행 격자를 만들고
+`:231`이 `RELEASE_STEP_MS` 간격으로 틱한다. 스펙이 **그 격자를 값으로 감시한다**:
+
+- `v0470-w7-hold-blackout.spec.ts:249` — *"**계단은 500ms 간격이므로** 900ms 시점엔 최소 한 칸 차 있어야 한다"*
+  → 이어지는 `:251` `data-progress > 0` 단언이 `RELEASE_STEP_MS=500`에 걸려 있다.
+- `:333-335` — *"여러 번 읽어도 **0.25 배수**만 나온다 = 연속 애니메이션이 아니다"* →
+  `Math.abs(Number(v) * 4 - Math.round(Number(v) * 4)) > 1e-6` 로 **`RELEASE_STEPS=4`를 리터럴 4로 박아** 격자 밖 값을 red 처리.
+
+**조치:** §8(export 제거 가능)은 유지하되 **§3 취급을 더한다** — 값을 바꾸면 위 두 리터럴도 의도를 갖고
+함께 바꿔야 한다. `RELEASE_STEP_MS`는 `HOLD_TO_WAKE_MS / RELEASE_STEPS` 파생이라 §3의 `HOLD_TO_WAKE_MS`와
+**같은 계약 뭉치**다 — 원래부터 §3 옆에 있었어야 했다.
+
+### 13-C. `SIMULATED_INSETS` · `CHIP_SWEEP_MIN_TRAVEL_PX` — 같은 축, 밀도는 다름
+
+| 심볼 | 값 | 스펙 계약 | 밀도 |
+|------|-----|----------|------|
+| `SIMULATED_INSETS` — `tests/fixtures/safeArea.ts:14` | `top:62,bottom:34` | `safe-area.spec.ts:113` — `expect(…).toBe('sa_insets:top=62,bottom=34,left=0,right=0,standalone=browser')` **바이트 단언** · `:112` *"픽스처가 주입한 --sat:62/--sab:34를 …그대로 기록해야 한다"* · `v0440-chip-viewport-sweep.spec.ts:176` *"픽스처와 같은 값: top 62 / bottom 34"* | **강함** — 픽스처 값을 바꾸면 즉시 red |
+| `CHIP_SWEEP_MIN_TRAVEL_PX` — `chipSweep.ts:81` | `1` | `v046-chip-sweep.spec.ts:107` — `expect(chipSweepOffset(3000, 8, 1), '1px 이하는 왕복 아님').toBe(0)`. `chipSweepOffset`이 `shouldChipSweep`을 거치고 그 문이 `maxScroll > CHIP_SWEEP_MIN_TRAVEL_PX`(`:97`)다 | **부분** — 상수를 **0으로 낮추면 red**지만 2로 올리면 green 유지(한쪽 방향만 감시) |
+
+### 13-D. 반례 — 판정이 옳았음이 확인된 것들 (이 축에서 닫힌 범위)
+
+「전량 재검증」이 되려면 틀린 것만이 아니라 **맞은 것도 실측돼야 한다**:
+
+- **`OVERLAY_DIM_STRONG`(`rgba(0,0,0,0.68)`) · `HERO_FIT_STEPS`(`[1.18, 1.1, …]`)** — 소스·스펙 리터럴 복제
+  **0건**(`1.18` 히트 3건은 전부 `global.css`의 `filter: saturate(1.18)`로 무관). **§4 제거 후보 근거 유지.**
+- **`CHIP_SWEEP_FASTEST_SECONDS`(12) 등 3건** — 🔑 **§3의 반대 사례다.** `v046-chip-sweep.spec.ts:132`가
+  *"🔴 단계의 초는 **리터럴로 적지 마라** — chipSweep.ts의 배분식이 SSOT다(이중 기록 금지)"*라고 적고
+  `:136`에서 실제로 `chipSweepSecondsForLevel(10)`을 **import해서 쓴다**. 주석의 "12초"는 설명 문자열일 뿐
+  단언값이 아니다. 이 레포가 §3(리터럴 고정)과 SSOT import를 **축마다 갈라서** 쓰고 있다는 증거다.
+- **`COMPLETE_RECEIPT_MS`(3000) · `SEQ_BUTTON_MAX`(24) · `CAPTURE_TIMEOUT_MS`(4000) ·
+  `CAPTURE_JPEG_QUALITY`(0.45) · `COMPLETE_SUMMARY_MIN_FONT_PX`(24) · `COMPLETE_RECEIPT_MIN_FONT_PX`(15) ·
+  `HERO_LABEL_PROVISIONAL_RESERVE_PX`(55)** — 히트는 전부 무관 맥락(playwright `timeout: 3000/4000`,
+  `borderRadius: 24`, 존 비율 `24%`, `saturate` 계수 …). **§8-b 유지.**
+- **`VOICE_MOCK_INIT_SCRIPT`** — §7(픽스처 미채택)이 아니다. `stt.ts:122-123`에서 `installVoiceMocks`가
+  소비하고 스펙들은 그 함수를 import한다 → **배선 정상.** §8 유지.
+- **§4의 비값 항목**(`AppSettings`·`VoiceState`·`loadUnsyncedSessions`·`deleteAudioClip`·`appendRow`·
+  `PRIMARY_COMMANDS`·`trimSilenceToWav`) — 값이 아니라 이 축의 대상이 아니다. §4 판정 그대로.
+
+### 13-E. 부수 발견 — `OVERLAY_DIM` SSOT 미채택 1건
+
+`ModalBase.tsx:5`의 `OVERLAY_DIM = 'rgba(0,0,0,0.6)'`은 *"기존 셸들의 실측값을 이름으로 고정한다"*는
+dim 토큰인데, `CommandHelpPopup.tsx:23`이 같은 용도(`background: 'rgba(0,0,0,0.6)'`)에서 **토큰을 안 쓰고
+값을 박았다.** 13-A와 같은 구조지만 **스펙 계약이 0**이라 판정을 바꾸지는 않는다(§8-b 유지) — 메모만 남긴다.
+(`PersistErrorBanner.tsx:48`·`CellPersistErrorBanner.tsx:53`의 같은 값은 `boxShadow`라 **다른 용도**다.)
+
+### 13-F. 이 재검증의 한계
+
+- **값 상수만 쟀다.** 함수·타입 검출물은 이 축의 대상이 아니다(§4의 `appendRow`류는 §12 방법 그대로).
+- **소스가 값을 *변형*해 복제한 경우는 못 잡는다** — 예컨대 `0.4`를 `40/100`으로 적었다면 이 실측은 놓친다.
+- **§12의 스캔 범위 한계(`Deliverables/`·`public/`)는 그대로다.** 이번에도 보지 않았다.
+- `RELEASE_STEP_MS`(500)는 파생값이라 소스에 리터럴이 없다 — 스펙 쪽 리터럴만 쟀다.
