@@ -168,7 +168,12 @@ export function ActiveControlBar({
                 </>
               ) : (
                 <>
-                  <EdgeButton kind="icon" testId="voice-control-prev" label="이전" title="이전 행으로 이동" onClick={onPrevRow} icon="‹" />
+                  {/* 🔴 v0.49 F-1(민구 08-12) — **표기만** 「이전행」으로 맞춘다. 기능·testId·onClick은
+                      불변(행 이동 그대로). 음성 「이전」이 이제 **항목 이동**을 뜻하므로, 버튼에
+                      「이전」 표기가 남으면 같은 말이 화면에선 행·음성에선 항목을 가리켜 오해를 부른다.
+                      ⚠️ 항목 이동 버튼은 만들지 않는다 — 버튼을 누를 수 있는 상황이면 손으로 칩존을
+                      스크롤할 수 있다(민구 근거). */}
+                  <EdgeButton kind="icon" testId="voice-control-prev" label="이전행" title="이전 행으로 이동" onClick={onPrevRow} icon="‹" />
                   <EdgeButton
                     kind="icon"
                     testId={indicatorExit ? 'voice-status-control' : 'voice-control-stop'}
@@ -191,7 +196,8 @@ export function ActiveControlBar({
                     // U+23F8 + U+FE0E — 텍스트 프레젠테이션 강제(§C2 ③).
                     icon={'⏸︎'}
                   />
-                  <EdgeButton kind="icon" testId="voice-control-next" label="다음" title="다음 행으로 이동" onClick={onNextRow} icon="›" />
+                  {/* v0.49 F-1 — prev와 동일 근거(표기만 「다음행」, 기능·testId 불변). */}
+                  <EdgeButton kind="icon" testId="voice-control-next" label="다음행" title="다음 행으로 이동" onClick={onNextRow} icon="›" />
                 </>
               )}
             </div>

@@ -423,14 +423,28 @@ function formatNum(n: number, maxDecimals?: number): string {
 import { VOICE_COMMANDS, type VoiceCommand } from './voiceCommands';
 export type { VoiceCommand } from './voiceCommands';
 
+/** 🔴 v0.49 F-1 — **최장 일치 우선**을 위한 파생 정렬 사본(word 긴 것부터).
+ *
+ *  ⚠️ `VOICE_COMMANDS` **자체를 재정렬하지 마라.** `CommandHelpPopup.tsx`가 그 배열을
+ *  **순서대로** 렌더하므로 배열 순서 = 도움말 표시 순서다. 매칭 우선순위와 표시 순서는
+ *  서로 다른 관심사이므로, 정렬은 여기(매칭 쪽)에서만 한다.
+ *
+ *  모듈 로드 시 1회만 정렬한다 — detectCommand는 발화마다 불린다. */
+const COMMANDS_LONGEST_FIRST = [...VOICE_COMMANDS].sort((a, b) => b.word.length - a.word.length);
+
 export function detectCommand(raw: string): VoiceCommand {
   const s = raw.replace(/[\s.,]+/g, '');
   if (!s) return null;
   // 후치 정정: "178.1 수정" → modify (값-우선 형태, 숫자 시작만). 별칭 '정정'은 단일화로 제거됨.
   if (/수정$/.test(s) && /^[0-9]/.test(s)) return 'modify';
-  // 전치 매칭: 각 명령의 단일 표준 단어로 시작하면 그 명령. 표준 단어는 서로 prefix 관계가 아니므로
-  // (voiceCommands.ts 불변식) 순회 순서와 무관하게 모호성이 없다. 활용형 꼬리("수정해줘")는 허용.
-  for (const c of VOICE_COMMANDS) {
+  // 전치 매칭: 각 명령의 단일 표준 단어로 시작하면 그 명령. 활용형 꼬리("수정해줘")는 허용.
+  //
+  // 🔴 v0.49 F-1 — **긴 word가 이긴다.** 종전엔 "표준 단어끼리 prefix 관계가 없다"는
+  //   voiceCommands.ts 불변식 덕에 순회 순서가 무관했지만, 08-12 민구 결정이 '이전'⊂'이전행'·
+  //   '다음'⊂'다음행'을 의도적으로 만들었다. 선언 순서대로 돌면 「이전행」 발화가 짧은
+  //   '이전'(prevField)에 먼저 걸려 **행 이동이 영영 불가능해진다** — 그래서 정렬 사본을 쓴다.
+  //   공백은 위에서 이미 제거되므로 「다음 행」(띄어쓰기 STT 변형)도 '다음행'으로 잡힌다.
+  for (const c of COMMANDS_LONGEST_FIRST) {
     if (s.startsWith(c.word)) return c.id;
   }
   return null;

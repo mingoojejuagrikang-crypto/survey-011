@@ -1623,6 +1623,77 @@ export function useVoiceSession() {
     await jumpToRow(row + 1, { setReturn: false, source });
   }, [announceField, enterReviewWait, jumpToRow, persistSession, say]);
 
+  // ── 🔴 v0.49 F-1 (민구 결정 2026-08-12): 「이전」/「다음」 = **입력 항목 한 칸 이동** ─────────
+  // 민구 원문: *"「이전」, 「다음」은 사용자가 입력 대상 항목들을 하나씩 이동하고, 「이전행」,
+  // 「다음행」은 아예 입력행 자체를 이동했으면 좋겠어."*
+  // 종전엔 이 두 단어가 **행 이동**이었다(v0.33.0 백로그 A) — 08-12 결정이 행 이동을
+  // '이전행'/'다음행'으로 옮기고, 짧은 두 단어를 항목 이동에 재배정했다.
+  //
+  // 🔴 **대상 집합 = `voiceColsList()`(input==='voice')** — 민구 확정 08-12 *"건너뛰어도 돼"*.
+  //   민구 원문의 "자동입력되지 않는 항목"을 문자대로 읽으면 `input!=='auto'`(voice+**touch**)지만,
+  //   `activeColIdx`는 애초에 voiceColsList()의 인덱스이고(:441) touch 컬럼은 칩 인라인 편집이
+  //   소유한다(`ActiveState.tsx:334-339`). STT가 채울 수 없는 컬럼(예: '비고' text)에 값 대기를
+  //   **새로 만드는 대신 건너뛴다** — 민구가 현행 구조를 택했다.
+  //
+  // 🔴 **경계에서 행을 넘기지 않는다.** 의미 분리가 이 기능의 목적이므로 행 이동은
+  //   '이전행'/'다음행' 전용이다. 무음 금지(REVIEW-4)라 경계에서도 짧은 안내 + 현재 필드
+  //   재안내를 한다 — `gotoAdjacentRow`의 '첫 행입니다' 패턴과 대칭.
+  //
+  // 🔴 **검토 대기(reviewWait)·끝 도달(atEnd) 스코프에서는 이동하지 않는다.** `announceField`는
+  //   `awaitingFieldRef`에 `kind:'value'`를 열어 **bare 값 커밋을 허용**하는데(:846-856), 그건
+  //   v0.33.0 결정 3의 「완료 행 덮어쓰기 금지」 계약을 깬다 — `gotoAdjacentRow:1545-1550`이 첫 행
+  //   경계에서 정확히 같은 이유로 announceField를 피하고 enterReviewWait을 재무장한다.
+  //   그 스코프의 정본 진입로는 '수정'/'수정 <컬럼명>'이므로 그렇게 안내한다.
+  //   ⚠️ 안내 문구를 늘리지 마라 — [TTS-WATCHDOG-1]에서 **긴 발화일수록 절단률이 단조 증가**한다.
+  //
+  // **값은 건드리지 않는다** — 커서만 옮긴다(setRecognized('')는 화면의 인식 중 텍스트만 비운다).
+  // 오라클: tests/v049-f1-field-nav.spec.ts
+  const gotoAdjacentField = useCallback(async (delta: -1 | 1) => {
+    const sess = useSessionStore.getState();
+    if (sess.phase === 'stopping') return;
+    // manualHold 중 이동 거부 — gotoAdjacentRow/goNextRow와 동일 근거(미확인 이상치 우회 차단).
+    if (isManualHoldBlocked(delta < 0 ? 'prev_field' : 'next_field')) return;
+
+    const parsed = delta < 0 ? 'prevField' : 'nextField';
+    const row = sess.activeRow;
+    const awaiting = awaitingFieldRef.current;
+
+    if (awaiting?.kind === 'reviewWait' || awaiting?.kind === 'atEnd') {
+      cancelTts();
+      epochRef.current++;
+      logCell({ type: 'command', parsed, extra: `field_nav_blocked:${awaiting.kind}`, row });
+      const msg = '검토 중입니다. 수정이라고 말하세요.';
+      sess.setLastTts(msg);
+      await say(msg);
+      return;
+    }
+
+    const vc = voiceColsList();
+    const curIdx = sess.activeColIdx;
+    const target = curIdx + delta;
+    cancelTts();
+    epochRef.current++; // in-flight 안내 체인 무효화 (RACE-1 패턴 유지)
+
+    if (target < 0 || target >= vc.length) {
+      const msg = delta < 0 ? '첫 항목입니다.' : '마지막 항목입니다.';
+      logCell({
+        type: 'command', parsed,
+        extra: `field_nav_edge:${delta < 0 ? 'first' : 'last'}`,
+        row,
+      });
+      sess.setLastTts(msg);
+      await say(msg);
+      const cur = vc[curIdx];
+      if (cur) await announceField(cur);
+      return;
+    }
+
+    logCell({ type: 'command', parsed, extra: `field_nav:${curIdx}->${target}`, row });
+    sess.setActiveCol(target);
+    sess.setRecognized('');
+    await announceField(vc[target]);
+  }, [announceField, say]);
+
   // ── v0.22.0 P0: 클립 레코더 스트림 소실 → micLost 게이트 ──────────────
   /** 빈/극소 클립이 났을 때의 처리. 이 콜백 자체에서는 **재-getUserMedia를 하지 않는다** —
    *  recoverStream은 destructive-first(살아있던 스트림을 먼저 stop·null 처리)이고 이 콜백은
@@ -2048,13 +2119,21 @@ export function useVoiceSession() {
           cancelTts();
           await resumeRef.current('voice'); // v0.20.0 Phase 5 #3 — 음성 명령으로 재개
           return;
+        // 🔴 v0.49 F-1(민구 결정 08-12) — 항목 이동. 짧은 두 단어가 여기로 재배정됐다.
+        case 'prevField':
+          await gotoAdjacentField(-1);
+          return;
+        case 'nextField':
+          await gotoAdjacentField(1);
+          return;
         case 'prevRow':
-          // v0.33.0 백로그 A(민구 결정 1): 음성 '이전' = ◀ 버튼과 동일한 단순 행 이동(재입력 모드 폐지).
-          // 완료 행 착지는 jumpToRow가 "값 읽어주기 + 검토 대기"로 처리한다(결정 3).
+          // v0.33.0 백로그 A(민구 결정 1): 음성 **'이전행'**(v0.49 F-1 전에는 '이전') = ◀ 버튼과
+          // 동일한 단순 행 이동(재입력 모드 폐지). **행 이동 로직 자체는 08-12에도 바뀌지 않았다 —
+          // 어휘만 옮겨졌다.** 완료 행 착지는 jumpToRow가 "값 읽어주기 + 검토 대기"로 처리한다(결정 3).
           await gotoAdjacentRow(-1, 'voice');
           return;
         case 'nextRow':
-          // v0.44.0 §C8 F13: '다음'은 '이전'과 대칭인 항상 +1 이동(goNextRow) —
+          // v0.44.0 §C8 F13: **'다음행'**(v0.49 F-1 전에는 '다음')은 '이전행'과 대칭인 항상 +1 이동(goNextRow) —
           // 미완료 행은 skip(placeholder) 처리, returnRow 미등록, 마지막 행에서 멈춤
           // (NAV-1 무한루프 방지의 대체 계약 — goNextRow 본문 주석 참조).
           await goNextRow('voice');

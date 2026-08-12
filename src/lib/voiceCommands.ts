@@ -12,15 +12,30 @@
  * `stt_command_miss` telemetry (handleFinal) records near-misses so the field data — not guesswork
  * — tells us whether any word needs a fallback later.
  *
- * IMPORTANT for matching: no canonical `word` may be a prefix of another (detectCommand uses
- * startsWith). Keep that invariant when editing this list — e.g. '이전'(prevRow) vs '다음'(nextRow)
- * are safe because neither prefixes the other. (사용자가 '이전행'/'다음행'으로 말해도 startsWith로
- * 동일하게 인식된다.)
+ * IMPORTANT for matching (🔴 v0.49 F-1에서 **불변식이 교체됐다**): detectCommand(koreanNum.ts)는
+ * startsWith로 맞추되 **가장 긴 word가 이긴다**(longest-match-wins).
+ *   - 종전 불변식: *"어떤 word도 다른 word의 접두일 수 없다"* — '이전'(prevRow)·'다음'(nextRow)이
+ *     서로 접두가 아니라서 성립했다.
+ *   - **08-12 민구 결정이 그 불변식을 대체한다.** 「이전」/「다음」을 항목 이동에, 「이전행」/
+ *     「다음행」을 행 이동에 배정하면서 `'이전'⊂'이전행'`·`'다음'⊂'다음행'` 접두 쌍이
+ *     **의도적으로** 생겼다. 접두 관계는 이제 금지가 아니라 **최장 일치로 해소**된다.
+ *   - 현재 접두 쌍은 **정확히 2개**(위 둘)뿐이다. '인식률낮추기'/'인식률높이기',
+ *     '안내속도느리게'/'안내속도빠르게'는 앞부분을 공유할 뿐 서로 접두가 아니다.
+ *
+ * ⚠️ **정확 일치(exact match)로 바꾸지 마라** — 두 계약이 죽는다: ① `screenOff`의 word는 일부러
+ *   짧은 '화면'이고 그래야 "화면 꺼"가 잡힌다(:117-120의 근거 주석), ② "수정해줘" 같은 활용형
+ *   꼬리 허용(koreanNum.ts detectCommand 주석)이 사라진다.
+ *
+ * 새 word를 넣을 때: 접두 관계 자체는 허용되지만 **긴 쪽이 먼저 잡히길 원하는 게 맞는지**
+ * 반드시 확인하라. (사용자가 「다음 행」처럼 띄어 말해도 detectCommand가 공백을 먼저 지우므로
+ * '다음행'으로 정규화돼 동일하게 잡힌다.)
  */
 
 export type VoiceCommand =
   | 'modify'
   | 'cancel'
+  | 'prevField'
+  | 'nextField'
   | 'prevRow'
   | 'nextRow'
   | 'keep'
@@ -92,15 +107,28 @@ export interface CommandSpec {
 
 export const VOICE_COMMANDS: CommandSpec[] = [
   { id: 'modify',  word: '수정',     display: '수정',     desc: '직전에 입력한 값을 고칩니다',      primary: true, minConfidence: 0.55 },
-  // v0.33.0 백로그 A(민구 결정 1·3): '이전' = 버튼과 동일한 단순 행 이동. 완료된 행에 착지하면
-  // 기록값을 읽어주고 명령 대기(수정은 '수정' 명령으로만 — bare 값 덮어쓰기 없음).
-  { id: 'prevRow', word: '이전',     display: '이전',     desc: '이전 행으로 이동합니다 (완료된 행은 값을 읽어주고 대기)' },
-  { id: 'nextRow', word: '다음',     display: '다음',     desc: '다음 행으로 넘어갑니다 (입력 중이던 행은 빈 행으로 남아 데이터 탭에서 채울 수 있어요)', primary: true },
+  // 🔴 v0.49 F-1 (민구 결정 2026-08-12) — **어휘 재배정**. 결정 계보를 지우지 말 것:
+  //   · v0.33.0 백로그 A(민구 결정 1·3): '이전'=prevRow / '다음'=nextRow, 즉 **둘 다 행 이동**이었다.
+  //     ('이전'은 버튼과 동일한 단순 행 이동 — v0.4.5 I3의 재입력 모드는 그때 폐지됐다.)
+  //   · **08-12에 대체됨**: 민구 원문 *"「이전」, 「다음」은 사용자가 입력 대상 항목들을 하나씩
+  //     이동하고, 「이전행」, 「다음행」은 아예 입력행 자체를 이동했으면 좋겠어."*
+  //     → 짧은 말(2음절)이 잦은 동작(항목)에, 긴 말이 드문 동작(행)에 간다.
+  //   · 행 이동 **로직 자체는 이전됐을 뿐 바뀌지 않았다** — 완료 행 착지 시 값을 읽어주고
+  //     명령 대기하는 v0.33.0 결정 3의 계약은 '이전행'이 그대로 승계한다.
+  //   ⚠️ desc는 **'유지'(keep)와 구별되게** 쓴다. 둘 다 "값을 안 건드리고 옆으로"처럼 들리지만
+  //     실제 동작이 다르다: '유지'는 **값이 있어야** 동작하고(없으면 거부) `advance()`를 타
+  //     채워진 칸을 건너뛴다(:1922-1936). 항목 이동은 값 유무와 무관하게 **인접 한 칸**만 간다.
+  //     도움말에서 두 줄이 같은 말로 읽히면 민구 요구 ④(바뀐 기능을 가르치기)가 실패한다.
+  { id: 'prevField', word: '이전',   display: '이전',     desc: '값 입력 없이 바로 앞 항목으로 돌아갑니다' },
+  { id: 'nextField', word: '다음',   display: '다음',     desc: '값 입력 없이 바로 뒤 항목으로 건너뜁니다' },
+  { id: 'prevRow', word: '이전행',   display: '이전행',   desc: '이전 행으로 이동합니다 (완료된 행은 값을 읽어주고 대기)' },
+  { id: 'nextRow', word: '다음행',   display: '다음행',   desc: '다음 행으로 넘어갑니다 (입력 중이던 행은 빈 행으로 남아 데이터 탭에서 채울 수 있어요)', primary: true },
   { id: 'cancel',  word: '취소',     display: '취소',     desc: '현재 인식된 값을 지웁니다' },
   { id: 'keep',    word: '유지',     display: '유지',     desc: '현재 항목의 값을 그대로 두고 다음으로 넘어갑니다' },
   // v0.7.0 B4: 추세 검증 알림의 확인 응답("확인해주세요" → "확인"). 알림 상태 밖에서는 짧은
   // 재안내만 한다(useVoiceSession). prefix 불변식 검증: 기존 단어(수정·이전·다음·취소·유지·
-  // 일시정지·재시작·종료) 어느 것과도 서로 prefix 관계가 아니다.
+  // 일시정지·재시작·종료) 어느 것과도 서로 prefix 관계가 아니다. (v0.49 F-1: 최장 일치 체계로
+  // 바뀐 뒤에도 '확인'은 접두 쌍 2개 어디에도 끼지 않는다 — 위 헤더 주석의 계수와 일치.)
   { id: 'confirm', word: '확인',     display: '확인',     desc: '추세 알림에서 방금 입력한 값을 그대로 확정합니다' },
   { id: 'pause',   word: '일시정지', display: '일시정지', desc: '입력을 잠시 멈춥니다',            primary: true },
   { id: 'resume',  word: '재시작',   display: '재시작',   desc: '멈춘 입력을 다시 시작합니다',      primary: true },
@@ -117,7 +145,8 @@ export const VOICE_COMMANDS: CommandSpec[] = [
   // v0.46.0 WP-F(F13② · 민구 R2) — word를 '화면끄기'가 아니라 **'화면'**으로 둔 것이 핵심이다.
   //   detectCommand는 공백을 지우고 startsWith로 맞추므로(koreanNum.ts), 민구가 말한 **"화면 꺼"**는
   //   '화면꺼'가 되어 '화면끄기'로는 **안 잡힌다.** '화면'이면 "화면 꺼"·"화면 끄기"·"화면꺼"가 전부 걸린다.
-  //   prefix 불변식 확인: 다른 14개 word 중 '화면'을 접두로 갖거나 '화면'의 접두인 것은 없다.
+  //   접두 확인(v0.49 F-1 기준 재계수): 다른 **17개** word 중 '화면'을 접두로 갖거나 '화면'의
+  //   접두인 것은 없다 — 최장 일치로 바뀐 뒤에도 '화면'은 단독으로 잡힌다.
   //   🔴 v0.47.0 V-FIX4 — desc의 해제 안내는 **계약이다**: 도움말이 틀린 조작을 가르치면
   //     사용자는 «켜지지 않는 화면»에 갇힌 것으로 받아들인다 — 이 기능의 유일한 실패 모드가
   //     그것이라 문구 1건도 계약이다.
@@ -128,7 +157,8 @@ export const VOICE_COMMANDS: CommandSpec[] = [
   //     ⚠️ 진입 문구는 손대지 않는다: 음성 「화면」은 W7 이후에도 그대로 산다(홀드가 추가됐을 뿐).
   //     ⚠️ 명령 시작어 대조(레인A 08-09 「화면」 충돌 전례): desc는 CommandHelpPopup **화면 렌더
   //       전용**이고 TTS로 낭독되지 않는다. 바뀐 꼬리(「…2초 누르면 다시 켜집니다」)는 명령
-  //       16종 어느 word와도 새 prefix 관계를 만들지 않는다('화면' 시작은 종전과 동일).
+  //       **18종**(v0.49 F-1에서 16→18) 어느 word와도 새 prefix 관계를 만들지 않는다
+  //       ('화면' 시작은 종전과 동일).
   { id: 'screenOff',           word: '화면',             display: '화면 끄기',        desc: '화면을 꺼서 배터리를 아낍니다. 음성 입력은 계속됩니다 — 화면 가운데를 2초 누르면 다시 켜집니다' },
 ];
 
