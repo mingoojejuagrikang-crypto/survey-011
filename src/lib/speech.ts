@@ -593,11 +593,36 @@ export interface SpeakOptions {
   onStart?: (startDelayMs: number) => void;
 }
 
+/** 2단(종료 감시) 워치독 상한 — **`onstart` 시각 기준**. `onend`/`onerror`가 끝내 안 오는
+ *  경우의 무한 hang만 막는 안전망이고, 정상 재생을 자르는 것은 임무가 아니다.
+ *
+ *  🔑 근거(08-12 실기기, iOS 26.6, rate 1.05, 정상 종료 143건의 재생시간 = `durationMs - startDelayMs`):
+ *  글자수 구간별 p50이 **1-4자 458ms · 5-9자 750 · 10-14자 1062 · 15-19자 1639 · 20-24자 2168 ·
+ *  25-29자 2341** 로 거의 선형이다 → **절편 ≈ 400ms + 75ms/글자**.
+ *  여기에 **3배 + 1초**를 얹는다. 3배인 이유: 재생시간은 글자수만의 함수가 아니다 —
+ *  숫자·기호가 음절로 펼쳐진다(`-78%` 4자 → "마이너스 칠십팔 퍼센트"). 실측에서 같은 12자
+ *  `범위 알람 : -78%`의 재생이 2.2초여서 회귀 추정(1.3초)의 1.7배였다. 오탐이 곧 「문장이
+ *  중간에 끊긴다」이므로 여유를 크게 잡는다.
+ *  `rate`는 사용자 설정(`ttsRate`)이라 실측 기준 1.05로 정규화한다 — 느리게 설정하면 그만큼 길어진다.
+ *  ⚠️ 20초 clamp는 안전망의 안전망이다. 이 값에 도달했다는 것은 엔진이 죽었다는 뜻이고,
+ *     그때는 `tts_watchdog_fired:...,stage=end`가 로그에 남는다. */
+function ttsEndWatchdogMs(textLen: number, rate: number): number {
+  const estPlayMs = 400 + 75 * textLen;
+  const budget = (estPlayMs * 3 + 1_000) * (1.05 / Math.max(0.1, rate));
+  return Math.min(20_000, Math.max(2_500, budget));
+}
+
 /** Speak text. Returns a Promise that resolves when finished. */
 export async function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
-  if (!synth) return;
+  // 🔴 v0.49 P-1 — 모듈 상수 `synth`(:518 부근)는 **import 시점**에 굳는다. 테스트 하네스의
+  //    `window` shim은 구조적으로 import보다 늦으므로(같은 워커에서 다른 spec이 먼저 import하면
+  //    끝이다), **TTS 발화 경로 전체가 오라클을 가질 수 없는 상태**였다 — speak()의 워치독을
+  //    지키는 스펙이 한 개도 없었고, 그 눈먼 축에서 이번 결함(2.5초 상시 절단)이 살아남았다.
+  //    호출 시점에 한 번 더 읽는다. 실제 브라우저에선 같은 객체를 얻으므로 동작 변화가 없다.
+  const engine = synth ?? (typeof window !== 'undefined' ? window.speechSynthesis : null);
+  if (!engine) return;
   if (opts.interrupt) {
-    synth.cancel();
+    engine.cancel();
     // iOS Safari: cancel() 직후 speak()하면 onend 미발생 버그 완화
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -614,6 +639,10 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     let settled = false;
     let started = false;
     let watchdog: ReturnType<typeof setTimeout> | null = null;
+    /** 지금 무장된 워치독이 「시작 감시」인가 「종료 감시」인가. 로그로 두 갈래를 가른다. */
+    let stage: 'start' | 'end' = 'start';
+    /** 워치독이 실제로 대신 resolve했는가. 늦게 도착한 end/error를 계측할지 판정한다. */
+    let watchdogFired = false;
     const done = () => {
       if (settled) return;
       settled = true;
@@ -622,13 +651,47 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
       resolve();
     };
 
+    const fireWatchdog = () => {
+      // 🔑 `onstart`조차 못 받았는가 = 「엔진이 발화를 시작도 못 했다」. 그냥 늦은 것과 다르다.
+      //    `started=`는 형식을 유지한다 — Larry 판독 파이프와 과거 로그 대조가 이 키를 읽는다.
+      //    `stage=`가 1단(시작 감시)/2단(종료 감시)을 가르는 새 축이다.
+      try {
+        logger.log({ type: 'app', extra: `tts_watchdog_fired:started=${started ? 'yes' : 'no'},ms=${Date.now() - enqueuedAt},stage=${stage},len=${text.length}` });
+      } catch { /* 계측은 best-effort — 절대 발화 경로를 막지 않는다 */ }
+      watchdogFired = true;
+      done();
+    };
+
+    /** 🔴 v0.49 P-1 — **워치독이 판정한 뒤 도착한 종료 이벤트를 기록한다.**
+     *
+     *  종전엔 `done()`의 `settled` 가드가 이걸 조용히 삼켰다. 그래서 08-12 실기기 로그로는
+     *  **「onend가 늦게 온다」와 「끝내 안 온다」를 구조적으로 가릴 수 없었다** — 워치독이
+     *  2.5초에 관측을 잘라버리므로 그 뒤에 무슨 일이 있었는지 아무 기록이 없다.
+     *  이 한 줄이 다음 실기기 회차에서 그 UNCLEAR를 한 번에 판정한다. */
+    const finish = (reason: 'end' | 'error') => {
+      if (settled) {
+        if (watchdogFired) {
+          try {
+            logger.log({ type: 'app', extra: `tts_late_end:reason=${reason},afterMs=${Date.now() - enqueuedAt},stage=${stage}` });
+          } catch { /* 계측은 best-effort */ }
+        }
+        return;
+      }
+      done();
+    };
+
     u.onstart = () => {
       if (settled) return;
       started = true;
       opts.onStart?.(Date.now() - enqueuedAt);
+      // 🔑 **앵커 이동** — 시작이 확인됐으므로 「시작 감시」를 풀고 「종료 감시」로 갈아 무장한다.
+      //    기준 시각도 enqueue가 아니라 **지금(onstart)** 이다. 아래 상수 주석의 근거 참조.
+      if (watchdog) clearTimeout(watchdog);
+      stage = 'end';
+      watchdog = setTimeout(fireWatchdog, ttsEndWatchdogMs(text.length, u.rate));
     };
-    u.onend = done;
-    u.onerror = done;
+    u.onend = () => finish('end');
+    u.onerror = () => finish('error');
 
     /** 🔴 v0.46.1 WP-1(민구 실기기 08-07) — **10초에서 2.5초로 줄였다.**
      *
@@ -642,21 +705,23 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
      *  처방했다. 이 상수는 **그 처방이 실패했을 때의 피해를 1/4로 줄이는 2차 방어**다.
      *  🔑 2.5초인 이유: 정상 발화의 `startDelayMs`는 08-07 실측 **중앙값 ~300ms · 최대 377ms**였다.
      *  2.5초는 그 6배가 넘어 정상 발화를 자를 위험이 없으면서, 마비 구간을 사람이 견딜 만큼 짧게 만든다.
-     *  ⚠️ 값을 다시 올리려면 **그 실측 분포부터 다시 재라.** */
-    const TTS_WATCHDOG_MS = 2_500;
-    watchdog = setTimeout(() => {
-      // 🔑 `onstart`조차 못 받았는가 = 「엔진이 발화를 시작도 못 했다」. 그냥 늦은 것과 다르다.
-      //    다음 로그에서 이 두 갈래를 갈라야 처방의 효과를 판정할 수 있다.
-      try {
-        logger.log({ type: 'app', extra: `tts_watchdog_fired:started=${started ? 'yes' : 'no'},ms=${Date.now() - enqueuedAt}` });
-      } catch { /* 계측은 best-effort — 절대 발화 경로를 막지 않는다 */ }
-      done();
-    }, TTS_WATCHDOG_MS);
+     *  ⚠️ 값을 다시 올리려면 **그 실측 분포부터 다시 재라.**
+     *
+     *  🔴 v0.49 P-1(민구 실기기 08-12) — **값은 그대로 두고 「감시 대상」을 좁혔다.**
+     *  위 근거는 `startDelayMs`(= enqueue→**시작**)를 재고 썼는데, 이 타이머는 `enqueuedAt`에
+     *  걸린 채 `onstart` 이후에도 풀리지 않아 실제로는 **「발화 전체 시간 상한 2.5초」로 동작**했다.
+     *  그래서 정상 발화가 상시 잘렸다 — 08-12 실측(9.4분, tts 161건):
+     *  글자수별 워치독율이 **1-9자 0/95(0%) → 10-19자 1/46 → 20-24자 1/4 → 25-29자 6/9 →
+     *  30자+ 7/7(100%)** 로 단조 증가했고, 워치독 15건 **전원의 `startDelayMs`가 정상**
+     *  (2~628ms; 전체 p50=106·p90=337 안)이었다. 즉 시작 실패가 아니라 **재생이 아직 안 끝난 것**이다.
+     *  → 1단은 그대로 두고, `onstart`에서 2단(아래)으로 **앵커를 옮긴다.** */
+    const TTS_START_WATCHDOG_MS = 2_500;
+    watchdog = setTimeout(fireWatchdog, TTS_START_WATCHDOG_MS);
 
     // synth.speak → onstart 사이 50~500ms 갭 동안 STT 값이 필터링 안 되는 버그 수정:
     // muteForTts를 onstart가 아닌 synth.speak 직전에 호출
     _activeController?.muteForTts();
-    synth.speak(u);
+    engine.speak(u);
   });
 }
 
