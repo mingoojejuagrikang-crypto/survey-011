@@ -243,6 +243,65 @@ test('⑦ 행 경계 재안내도 filled 셀을 열지 않는다 (_ASK-fix49 Q1 
   expect(after).not.toContain('99.9');
 });
 
+/** ⑨⑩는 v0.49 fix49b(max 리뷰 #2·#3)가 추가한 **잔여 경로 2개**다.
+ *
+ *  fix49는 「커서를 filled 셀에 `kind:'value'`로 세우는 경로」를 5개 닫았는데, 그 표는
+ *  **커서를 세우는 쪽**(activeColIdx 기록자)만 셌다. 실제 위험은 그 커서를 **읽어서 재안내하는
+ *  쪽**에도 있다 — F-1 이전엔 기록자 전량이 빈 칸을 가리켰으므로 재안내 지점들은 값 유무를
+ *  물을 이유가 없었고, 항목 이동이 그 전제를 깬 뒤에도 두 곳이 남았다.
+ *  그 구조적 이유는 [NAV-FILLED-CELL-1]에 이미 기록돼 있다 — 이 두 케이스가 그 마지막 두 개다. */
+test('⑨ 마지막 행 경계(「다음행」)의 재안내도 filled 셀을 열지 않는다 (fix49b #2)', async ({ page }) => {
+  await seedAndOpenVoiceTab(page);
+  await clickStart(page);
+
+  // 마지막 행(3행)까지 내려간다 — 지나온 행은 미완료 skip placeholder가 된다(F13 계약).
+  await speakWhenArmed(page, '다음행', 1200);
+  await speakWhenArmed(page, '다음행', 1200);
+
+  await speakWhenArmed(page, '35.1', 700);
+  await speakWhenArmed(page, '이전');            // 값 있는 횡경에 주차(cellWait)
+  expect(await activeChipName(page)).toContain('횡경');
+
+  // 🔴 `goNextRow`의 `row >= total` 경계는 **행이 미완료면** 현재 필드를 재안내한다. 그 필드가
+  //    지금은 filled 셀이다 — 경계 안내 뒤 무심코 말한 숫자가 확정값을 덮는다.
+  await speakWhenArmed(page, '다음행', 1300);
+  expect((await ttsLog(page)).join(' | ')).toContain('마지막 행입니다');
+
+  await speakWhenArmed(page, '99.9', 900);
+  const after = await chipText(page, '횡경');
+  expect(after, '마지막 행 경계 재안내가 filled 셀에 kind:value를 열었다').toContain('35.1');
+  expect(after).not.toContain('99.9');
+});
+
+test('⑩ 복귀 예약(returnStack) 소비도 filled 셀을 열지 않는다 (fix49b #3)', async ({ page }) => {
+  await seedAndOpenVoiceTab(page);
+  await clickStart(page);
+
+  // 1행을 완료시킨다 → 완료 직후 자동 전진으로 2행 횡경 대기.
+  await speakWhenArmed(page, '35.1', 700);
+  await speakWhenArmed(page, '42.0', 700);
+  await speakWhenArmed(page, '50.0', 1500);
+
+  // 2행 횡경에 값을 넣고, 「이전」으로 그 filled 셀에 **주차**한다(activeColIdx=0).
+  await speakWhenArmed(page, '31.5', 700);
+  await speakWhenArmed(page, '이전');
+  expect(await activeChipName(page)).toContain('횡경');
+
+  // 「이전행」 = jumpToRow(setReturn:true) → 복귀 예약에 **주차된 colIdx**가 실린다.
+  //   1행은 완료 행이라 검토 대기로 착지하고, 「유지」가 advance()를 태워 예약을 소비한다.
+  await speakWhenArmed(page, '이전행', 1500);
+  expect((await ttsLog(page)).join(' | ')).toContain('완료됨');
+  await speakWhenArmed(page, '유지', 1800);
+
+  // 🔴 advance()의 예약 소비는 `ret.colIdx`를 그대로 써 `announceField`를 부른다 —
+  //    F-1 이전엔 그 값이 항상 빈 칸이었지만, 항목 이동 주차가 filled 셀을 기록시킨다.
+  expect(await activeChipName(page)).toContain('횡경');
+  await speakWhenArmed(page, '99.9', 900);
+  const after = await chipText(page, '횡경');
+  expect(after, '복귀 예약 소비가 filled 셀에 kind:value를 열었다').toContain('31.5');
+  expect(after).not.toContain('99.9');
+});
+
 test('⑧ 일시정지 → 재시작이 착지 상태를 복원한다 — 재안내가 filled 셀을 열지 않는다', async ({ page }) => {
   await seedAndOpenVoiceTab(page);
   await clickStart(page);

@@ -1005,6 +1005,12 @@ export function useVoiceSession() {
     useModifyPhase.getState().setCommitted(false);
     sess.setRecognized('');
     sess.setReaskReason(null);
+    // 🔴 v0.49 fix49b(max 리뷰 #14) — 형제 착지 핸들러 둘과 **대칭**(announceField :845
+    //   'announce_field' · enterReviewWait :951 'review_wait'). v0.9.0 계약 「다음 필드로
+    //   진입하면 이전 이상치 알람 팝업은 해제」의 세 번째 착지 지점이다. 빠뜨리면
+    //   「빈 칸에 착지하면 팝업이 사라지고 값 있는 칸에 착지하면 남는」, 사용자에게는 보이지도
+    //   않는 내부 구분에 따라 화면이 갈린다(PRINCIPLES §2 시각·청각 일치).
+    clearAnomalyAlert('cell_wait');
     awaitingFieldRef.current = {
       kind: 'cellWait', row, colId: col.id, name: col.name, previousValue: value,
     };
@@ -1017,7 +1023,7 @@ export function useVoiceSession() {
     const msg = `${col.name} 기록값 ${formatForTts(value)}.`;
     sess.setLastTts(msg);
     await say(msg);
-  }, [say]);
+  }, [clearAnomalyAlert, say]);
 
   /** 착지 셀의 현재 값(음성 컬럼) — 있으면 cellWait, 없으면 종전 `announceField`. */
   const announceOrCellWait = useCallback(async (col: Column) => {
@@ -1096,7 +1102,11 @@ export function useVoiceSession() {
         awaitingFieldRef.current = null;
         await announceRowDiff(row, ret.row);
         if (epochRef.current !== startEpoch) return;
-        if (vc[targetCol]) await announceField(vc[targetCol]);
+        // 🔴 v0.49 fix49b(max 리뷰 #3) — `ret.colIdx`는 `jumpToRow`가 **떠날 때의 activeColIdx**를
+        //   그대로 적어 둔 것이다. F-1 이전엔 그 값이 언제나 빈 칸을 가리켰지만(기록자 전량이
+        //   그랬다), 항목 이동이 커서를 **filled 셀에 주차**시킬 수 있게 되면서 예약에 채워진
+        //   칸이 실린다 — 그대로 `announceField`를 부르면 B-1이 여기서 다시 열린다.
+        if (vc[targetCol]) await announceOrCellWait(vc[targetCol]);
         return;
       }
       // 완료 행으로의 복귀는 무시하고 아래 '다음 미완료 행' 탐색으로 폴스루.
@@ -1119,7 +1129,7 @@ export function useVoiceSession() {
     await announceRowDiff(row, next);
     if (epochRef.current !== startEpoch) return;
     if (vc[targetCol]) await announceField(vc[targetCol]);
-  }, [announceField, announceRowComplete, announceRowDiff, announceEndReached, persistSession, say]);
+  }, [announceField, announceOrCellWait, announceRowComplete, announceRowDiff, announceEndReached, persistSession, say]);
 
   /** v0.35.3 Stage 3-5 — 커밋 경로 진행 공용. 검토 대기(reviewWait) 출신 커밋은 검토 대기를
    *  재무장해 갱신값을 재낭독하고(advance로 검토를 강제 종료하지 않음 — v0.33.0 항목2 계약),
@@ -1134,10 +1144,21 @@ export function useVoiceSession() {
       await enterReviewWait(awaiting.row);
       return;
     }
+    // 🔴 v0.49 fix49b(max 리뷰 #7) — **셀 검토 대기도 재무장한다**(행 검토와 같은 계약, 스코프만
+    //   셀). 사용자가 「이전」/「다음」으로 **의도적으로 이동해 들어온** 검토 문맥인데, 그 문맥이
+    //   초대한 정정(키패드 재커밋·보류 해소)이 문맥 자체를 파괴하고 advance로 튀어 나가면
+    //   검토가 성립하지 않는다. 음성 「수정 <값>」은 이미 cellWait으로 복귀한다(fix49 오라클 ⑤) —
+    //   같은 상태·같은 목적의 조작이 입력 수단에 따라 갈리지 않게 한다.
+    //   `enterCellWait`이 갱신값을 낭독하므로 echo는 넘기지 않는다(행 검토 분기와 동일 이유).
+    if (awaiting?.kind === 'cellWait') {
+      const col = getColById(awaiting.colId);
+      const v = useSessionStore.getState().getRowValues(awaiting.row)[awaiting.colId] ?? '';
+      if (col && v !== '') { await enterCellWait(col, v); return; }
+    }
     awaitingFieldRef.current = null;
     if (opts?.echoValue != null) await say(formatForTts(opts.echoValue));
     await advance();
-  }, [advance, enterReviewWait, say]);
+  }, [advance, enterCellWait, enterReviewWait, say]);
 
   // ── v0.7.0 B4: 추세 검증 ───────────────────────────────────
   /** trend_skip 텔레메트리 — 같은 원인은 세션당 1회만 기록(셀마다 반복돼 로그를 도배하지 않게).
@@ -1530,7 +1551,16 @@ export function useVoiceSession() {
     // Cascade clear in-memory only: target col through end of row (so user re-records all remaining cols).
     // Persisted IDB/dataStore state is left intact until the row is successfully re-completed and
     // persistSession() overwrites it — this ensures old measurements survive a crash/reload during correction.
-    for (let i = targetIdx; i < vc.length; i++) {
+    //
+    // 🔴 v0.49 fix49b(max 리뷰 #4) — **셀 검토 대기 출신은 그 셀 하나만 다시 받는다.**
+    //   캐스케이드는 «행 전체 검토»(reviewWait)의 계약이다: 그 행은 이미 다 채워졌고 사용자가
+    //   처음부터 다시 부르겠다고 선언한 상태다. 진행 중인 행의 **한 칸에 주차해** '수정'이라고
+    //   말한 사용자는 그 칸만 다시 부를 생각인데, 종전 범위(targetIdx→행 끝)는 바꾸겠다고 한
+    //   적 없는 뒤 칸의 확정값까지 지웠다(중단되면 그대로 유실).
+    //   같은 상태의 직접값 경로("수정 41.4", :1249 분기)는 이미 **그 셀만** 고친다 — 한 상태에서
+    //   같은 명령의 두 형태가 파괴성으로 갈리면 안 된다. 여기서 대칭을 맞춘다.
+    const clearEnd = reviewTarget?.land === 'cell' ? targetIdx + 1 : vc.length;
+    for (let i = targetIdx; i < clearEnd; i++) {
       sess.setRowValue(targetRow, vc[i].id, '');
       // Clip preservation (was: delete pending clips). Archive the prior attempt under an attempt
       // key so the misrecognised original audio survives, then unlink the pending pointer so the
@@ -1682,8 +1712,12 @@ export function useVoiceSession() {
         await enterReviewWait(row);
         return;
       }
+      // 🔴 v0.49 fix49b(max 리뷰 #2) — 미완료 행이어도 **커서가 값 있는 칸에 서 있을 수 있다.**
+      //   `gotoAdjacentRow`의 첫 행 경계(:1633)가 fix49에서 정확히 같은 이유로 전환됐다 —
+      //   두 경계는 대칭이므로 처리도 대칭이어야 한다(한쪽만 고치면 '이전행'은 안전하고
+      //   '다음행'은 값을 잃는, 사용자가 예측할 수 없는 비대칭이 남는다).
       const cur = vc[sess.activeColIdx];
-      if (cur) await announceField(cur);
+      if (cur) await announceOrCellWait(cur);
       return;
     }
     if (!isRowVoiceComplete(row, vc)) {
@@ -1702,7 +1736,7 @@ export function useVoiceSession() {
     }
     // 완료 행 착지는 jumpToRow가 검토 대기로, 미완료 행 착지는 첫 미완료 필드 안내로 처리한다.
     await jumpToRow(row + 1, { setReturn: false, source });
-  }, [announceField, enterReviewWait, jumpToRow, persistSession, say]);
+  }, [announceOrCellWait, enterReviewWait, jumpToRow, persistSession, say]);
 
   // ── 🔴 v0.49 F-1 (민구 결정 2026-08-12): 「이전」/「다음」 = **입력 항목 한 칸 이동** ─────────
   // 민구 원문: *"「이전」, 「다음」은 사용자가 입력 대상 항목들을 하나씩 이동하고, 「이전행」,
@@ -1800,6 +1834,11 @@ export function useVoiceSession() {
     const target = curIdx + delta;
     cancelTts();
     epochRef.current++; // in-flight 안내 체인 무효화 (RACE-1 패턴 유지)
+    // 🔴 v0.49 fix49b(max 리뷰 #6) — bump **직후** 값을 잡아 둔다. 아래 경계 분기는 이 함수에서
+    //   유일하게 `await say(...)` **뒤에** 재무장하는 지점이고, `advance()`는 그런 지점마다
+    //   재확인 가드를 둔다(:1077·:1098·:1120). F-1이 이 함수를 만들 때 bump만 복사하고 그
+    //   재확인을 빠뜨렸다.
+    const startEpoch = epochRef.current;
 
     if (target < 0 || target >= vc.length) {
       const msg = delta < 0 ? '첫 항목입니다.' : '마지막 항목입니다.';
@@ -1810,6 +1849,12 @@ export function useVoiceSession() {
       });
       sess.setLastTts(msg);
       await say(msg);
+      // 🔴 경계 안내 중 barge-in이 들어오면 그 명령의 핸들러가 이미 **커서와 대기 상태를 옮긴**
+      //   뒤다. 여기서 낡은 `curIdx`로 재무장하면 사용자가 귀로 들은 대상("수정. 종경.")과
+      //   실제 커밋 대상이 갈린다 — 무음도 오류도 아닌 **정상처럼 보이는 오귀속**이라 시트에서만
+      //   뒤늦게 드러난다. fix49의 H-2 드레인이 `cancelTts()` 시점에 이 `say()`를 즉시
+      //   결말지어 주므로 낡은 체인은 **명령 처리 도중에** 깨어난다(창이 더 앞당겨졌다).
+      if (epochRef.current !== startEpoch) return;
       const cur = vc[curIdx];
       // 경계에서도 **재안내 대상이 filled 셀일 수 있다**(값 넣고 「이전」으로 되돌아온 뒤 「이전」).
       if (cur) await announceOrCellWait(cur);
@@ -2063,11 +2108,25 @@ export function useVoiceSession() {
       await say(msg);
     }
 
+    /** 🔴 v0.49 fix49b(max 리뷰 #9) — **셀 검토 대기가 값을 요구하지 않는다는 것의 SSOT.**
+     *
+     *  이 상태는 bare 값을 **흡수**한다(덮어쓰기 금지 — B-1). 그런데 값 대기(`kind:'value'`)
+     *  문맥에서 쓰던 재질문 문구("○○ 다시 말씀해 주세요")가 이 상태에서도 그대로 나갔다:
+     *  앱이 값을 말하라고 시키고, 시킨 대로 하면 흡수가 "수정이라고 말하세요"로 되받는다 —
+     *  서로를 부정하는 두 문장 사이에 음성 전용 사용자가 갇힌다.
+     *  화면을 끄고 2~3m 떨어져 쓰는 사용자에게 TTS는 **유일한 조작 설명서**다(v0.47.0 V-FIX4).
+     *
+     *  흡수 안내(:2370)와 **같은 문구**를 쓴다 — 같은 상태에 두 이름을 주지 않는다.
+     *  ⚠️ 늘리지 마라([TTS-WATCHDOG-1] 긴 발화일수록 절단률이 단조 증가). */
+    const cellWaitPrompt = (name: string) => `${name} 기록값입니다. 수정이라고 말하세요.`;
+
     /** '확인'(추세 알림 밖) — 상태 변경 없이 짧은 재안내만(v0.7.0 B4, 무음 금지 REVIEW-4).
      *  trendConfirm 중의 '확인'은 resolveFinal이 trendResolve로 먼저 처리한다. */
     async function cmdConfirm(a: AwaitingField): Promise<void> {
       cancelTts();
-      const msg = `확인할 알림이 없습니다. ${a.name} 말씀해 주세요.`;
+      const msg = a.kind === 'cellWait'
+        ? `확인할 알림이 없습니다. ${cellWaitPrompt(a.name)}`
+        : `확인할 알림이 없습니다. ${a.name} 말씀해 주세요.`;
       useSessionStore.getState().setLastTts(msg);
       await say(msg);
     }
@@ -2125,6 +2184,14 @@ export function useVoiceSession() {
     async function cmdCancel(a: AwaitingField): Promise<void> {
       cancelTts();
       useSessionStore.getState().setRecognized('');
+      // 셀 검토 대기에는 **취소할 인식값이 없다**(값을 받는 상태가 아니다). 녹음 슬롯 재무장도
+      //   의미가 없으므로 상태를 그대로 두고 판별 문구만 다시 말한다(#9 — 위 SSOT 주석).
+      if (a.kind === 'cellWait') {
+        const msg = cellWaitPrompt(a.name);
+        useSessionStore.getState().setLastTts(msg);
+        await say(msg);
+        return;
+      }
       armClipForCell(a.row, a.colId);
       await say(`${a.name} 다시 말씀해 주세요.`);
     }
@@ -2175,7 +2242,10 @@ export function useVoiceSession() {
       useSessionStore.getState().setRecognized('');
       // Do NOT replay the full field prompt (that is the ~10s cost T-2 reported). Stay on the
       // current field with a short re-ask so the user can simply repeat the command/value.
-      await say(`${awaiting.name} 다시 말씀해 주세요.`);
+      // (#9 — 셀 검토 대기에서는 값을 요구하지 않는다: 위 cellWaitPrompt SSOT 주석.)
+      await say(awaiting.kind === 'cellWait'
+        ? cellWaitPrompt(awaiting.name)
+        : `${awaiting.name} 다시 말씀해 주세요.`);
       return;
     }
 
@@ -2351,7 +2421,11 @@ export function useVoiceSession() {
     // '수정' 명령으로만). atEnd 가드와 동일한 흡수 패턴.
     if (awaiting.kind === 'reviewWait') {
       useSessionStore.getState().setRecognized('');
-      await say(`${awaiting.row}행은 완료된 행입니다. 수정하려면 '수정', 다음 행은 '다음'이라고 말씀해 주세요.`);
+      // 🔴 v0.49 fix49b(max 리뷰 #8) — **어휘 재배정(F-1, 08-12) 미이관.** 「다음」은 이제
+      //   항목 이동이고, 항목 이동은 이 상태(reviewWait)에서 거부된다 — 즉 이 안내는 앱이 곧
+      //   거절할 단어를 가르쳤다. 행을 넘기는 말은 '다음행'이고, 그 말은 **어떤 안내에도**
+      //   등장하지 않아 음성 전용 사용자가 완료 행에 갇혔다(V-FIX4급 안내계약 위반).
+      await say(`${awaiting.row}행은 완료된 행입니다. 수정하려면 '수정', 다음 행은 '다음행'이라고 말씀해 주세요.`);
       return;
     }
 
@@ -3010,7 +3084,13 @@ export function useVoiceSession() {
       if (resumeRow != null) { await enterReviewWait(resumeRow); return; }
     }
     await advance();
-  }, [advance, enterModifyMode, enterReviewWait, say, goNextRow, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
+    // 🔴 v0.49 fix49b(max 리뷰 #13) — `gotoAdjacentField`가 dep에 없었다(dispatch에서 두 번 부른다).
+    //   지금은 잠복이다: 이 함수가 타고 내려가는 체인(announceOrCellWait→announceField/
+    //   enterCellWait→say)이 전부 `[]`-안정이라 신원이 안 변한다. 그러나 그 사슬 어느 고리든
+    //   변하는 값을 갖는 순간(예: announceField가 설정 파생값을 참조) 이 명령만 **낡은 클로저로
+    //   dispatch**되어 「이전」/「다음」이 옛 로직을 돈다 — 이 파일의 dep 배열을 유지보수하는
+    //   이유가 정확히 그 드리프트다. 같은 diff가 형제들(goNextRow·gotoAdjacentRow)은 등재했다.
+  }, [advance, enterModifyMode, enterReviewWait, say, goNextRow, gotoAdjacentField, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
 
   // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
   const handleInterim = useCallback((text: string, confidence?: number) => {
@@ -4393,7 +4473,16 @@ export function useVoiceSession() {
     if (violation && ownsFlow) {
       epochRef.current++;
       cancelTts();
-      if (awaiting!.kind !== 'reviewWait') {
+      // 🔴 v0.49 fix49b(max 리뷰 #7) — 셀 검토 대기도 행 검토와 **같이** 보존한다. 보류가
+      //   [확인]으로 풀리면 `confirmManualAnomaly`가 `proceedAfterCommit(awaiting)`을 부르고,
+      //   그 SSOT가 kind별 착지를 결정한다 — 여기서 `modify`로 덮으면 그 분기가 영영 안 잡혀
+      //   사용자가 이동해 들어온 검토 문맥이 보류 해소와 함께 사라진다.
+      //   ⚠️ **reload 복원(:3980)은 여기 못 따라온다** — `pendingValidation`은 `reviewWait`
+      //   boolean만 싣고, cellWait을 기존 필드로 파생할 수도 없다(후보값이 이미 셀에 서 있어
+      //   「값 있음」이 항상 참 · `previousValue`는 캐스케이드가 IDB를 안 지우므로 modify와
+      //   구별 불가). 스키마 확장은 마이그레이션 동반 계약이라 이 라운드 범위 밖 —
+      //   [CELLWAIT-HOLD-RELOAD-1]에 기록했다.
+      if (awaiting!.kind !== 'reviewWait' && awaiting!.kind !== 'cellWait') {
         awaitingFieldRef.current = { kind: 'modify', row, colId, name: col.name, previousValue: value };
       }
       sess.setRowValue(row, colId, value);
