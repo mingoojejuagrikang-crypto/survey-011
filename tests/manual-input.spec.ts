@@ -381,7 +381,7 @@ test('검토 대기(항목2)와 상호작용 — 완료 행 검토 중 칩 수�
   await waitForActiveChip(page, '종경');
   await fireStt(page, '22.2', 300);
   await waitForRow(page, 2);
-  await fireStt(page, '이전', 600);
+  await fireStt(page, '이전행', 600);
   await waitForRow(page, 1);
 
   // 검토 대기 중 종경 칩 탭 → 시트 → 30.7 수동 커밋.
@@ -412,7 +412,7 @@ test('검토 대기(항목2)와 상호작용 — 완료 행 검토 중 칩 수�
   await waitForRow(page, 1);
 
   // "다음"으로 검토 종료 → 종료 후 값 확인(수동 30.7 반영, bare 99.9 미반영).
-  await fireStt(page, '다음', 600);
+  await fireStt(page, '다음행', 600);
   await waitForRow(page, 2);
   await fireStt(page, '종료', 1000);
   const sessions = await getIdbSessions(page);

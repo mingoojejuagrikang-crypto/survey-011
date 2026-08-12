@@ -285,7 +285,7 @@ test('[EXIT-PERSIST-1] 끝 도달 뒤 완료 행을 이동해도 하단 4버튼�
   await expect(persistentExit).toHaveAttribute('title', '입력 종료');
 
   // 끝 도달 뒤 다른 완료 행을 보면 중앙 요약은 사라지지만 하단 종료는 남는다.
-  await page.getByRole('button', { name: '이전', exact: true }).click();
+  await page.getByRole('button', { name: '이전행', exact: true }).click();
   await waitForRow(page, 1);
   await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
   await expect(centralExit).toHaveCount(0);
@@ -293,7 +293,7 @@ test('[EXIT-PERSIST-1] 끝 도달 뒤 완료 행을 이동해도 하단 4버튼�
   await expect(page.locator('[data-testid="review-pause-hint"]')).toHaveCount(0);
 
   // 완료 행에서 [다음]으로 완료 행에 재진입해도 announceEndReached가 재발화하지 않는다.
-  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByRole('button', { name: '다음행', exact: true }).click();
   await waitForRow(page, 2);
   await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
   await expect(centralExit).toHaveCount(0);
@@ -476,7 +476,7 @@ test('(d) 완료행을 "이전"으로 재방문(새 커밋 없음) → 중앙은
   }, undefined, { timeout: 6000 });
 
   // '이전' → 완료행(1) 재방문 = enterReviewWait(새 영수증 없음). stale 값도 시각 상태어도 없다.
-  await fireStt(page, '이전', 600);
+  await fireStt(page, '이전행', 600);
   await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
   await expect(page.locator('[data-testid="hero-primary"]'), 'stale 값·`1행 완료` 시각 문구 미렌더').toHaveCount(0);
   await expect(page.getByRole('status', { name: '1행 완료, 명령 대기' })).toBeVisible();

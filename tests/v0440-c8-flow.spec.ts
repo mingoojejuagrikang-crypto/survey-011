@@ -185,27 +185,27 @@ test('F13 — "다음"은 완료 행을 건너뛰지 않는다: jump delta 전 �
   expect(await getActiveRow(page, TOTAL)).toBe(3);
 
   // '이전' ×2 → 행 1(완료, 검토 대기).
-  await speakWhenArmed(page, '이전', 700);
+  await speakWhenArmed(page, '이전행', 700);
   await waitForRow(page, 2, TOTAL);
-  await speakWhenArmed(page, '이전', 700);
+  await speakWhenArmed(page, '이전행', 700);
   await waitForRow(page, 1, TOTAL);
   expect(await getActiveRow(page, TOTAL)).toBe(1);
 
   // 🔑 핵심 반증축: 행 2가 완료여도 '다음'은 행 2에 선다(+1). 건너뛰기 로직(구
   // findNextIncompleteRow)을 되살리면 1→3(+2)으로 튀어 여기서 red.
-  await speakWhenArmed(page, '다음', 700);
+  await speakWhenArmed(page, '다음행', 700);
   await waitForRow(page, 2, TOTAL);
   expect(await getActiveRow(page, TOTAL)).toBe(2);
 
-  await speakWhenArmed(page, '다음', 700);
+  await speakWhenArmed(page, '다음행', 700);
   await waitForRow(page, 3, TOTAL);
   expect(await getActiveRow(page, TOTAL)).toBe(3);
 
   // 미완료 행에서의 '다음' = skip 마킹 + 1행 전진(skip 개념 유지 축).
-  await speakWhenArmed(page, '다음', 700);
+  await speakWhenArmed(page, '다음행', 700);
   await waitForRow(page, 4, TOTAL);
   expect(await getActiveRow(page, TOTAL)).toBe(4);
-  await speakWhenArmed(page, '다음', 700);
+  await speakWhenArmed(page, '다음행', 700);
   await waitForRow(page, 5, TOTAL);
   expect(await getActiveRow(page, TOTAL)).toBe(5);
 
@@ -240,17 +240,17 @@ test('F13 — 마지막 행(미완료)에서 "다음"은 멈춘다: 이동·끝�
   await waitForActiveChip(page, '종경');
   await speakWhenArmed(page, '28.3', 500);
   await waitForRow(page, 2, TOTAL);
-  await speakWhenArmed(page, '다음', 600);
+  await speakWhenArmed(page, '다음행', 600);
   await waitForRow(page, 3, TOTAL);
-  await speakWhenArmed(page, '다음', 600);
+  await speakWhenArmed(page, '다음행', 600);
   await waitForRow(page, 4, TOTAL);
-  await speakWhenArmed(page, '다음', 600);
+  await speakWhenArmed(page, '다음행', 600);
   await waitForRow(page, 5, TOTAL);
   expect(await getActiveRow(page, TOTAL)).toBe(5);
 
   // 🔑 마지막 행 경계: '다음'은 이동하지 않고 멈춘다. 구 코드는 여기서 announceEndReached로
   // 끝도달 화면(complete-summary)에 진입했다 — 그 전환이 일어나면 red.
-  await speakWhenArmed(page, '다음', 900);
+  await speakWhenArmed(page, '다음행', 900);
   expect(await getActiveRow(page, TOTAL)).toBe(5);
   expect((await ttsLog(page)).some((t) => t.includes('마지막 행입니다'))).toBe(true);
   await expect(page.locator('[data-testid="complete-summary"]')).toHaveCount(0);
@@ -280,15 +280,15 @@ test('F13 — 마지막 행(완료)에서 "다음"은 검토 대기를 재무장
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 4000 });
 
   // '이전' → 행 2 검토 대기(끝도달 해제) → '다음' → 행 3(완료, 검토 대기).
-  await speakWhenArmed(page, '이전', 800);
+  await speakWhenArmed(page, '이전행', 800);
   await waitForRow(page, 2, TOTAL);
-  await speakWhenArmed(page, '다음', 800);
+  await speakWhenArmed(page, '다음행', 800);
   await waitForRow(page, 3, TOTAL);
   expect(await getActiveRow(page, TOTAL)).toBe(3);
 
   // 🔑 마지막 행 경계(완료): 멈춤 + "마지막 행입니다" 안내 + 검토 대기 재무장(값 재낭독).
   const reviewsBefore = (await ttsLog(page)).filter((t) => t.includes('3행 완료됨')).length;
-  await speakWhenArmed(page, '다음', 900);
+  await speakWhenArmed(page, '다음행', 900);
   expect(await getActiveRow(page, TOTAL)).toBe(3);
   const tts = await ttsLog(page);
   expect(tts.some((t) => t.includes('마지막 행입니다'))).toBe(true);

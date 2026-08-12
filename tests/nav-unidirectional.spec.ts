@@ -252,7 +252,7 @@ test('NAV-1 — "다음" 행 skip → 후속 행 완료 시 완료 행 복귀 �
 
   // ── Row 2: "다음"으로 skip (2026-06-10 로그의 행 17 skip 재현) ──
   await waitForActiveChip(page, '횡경');
-  await fireStt(page, '다음', 400);
+  await fireStt(page, '다음행', 400);
   await waitForRow(page, 3);
   expect(await getActiveRow(page)).toBe(3);
 
@@ -341,7 +341,7 @@ test('NAV-1 — "종료" 명령 시에도 skip된 빈 행 안내 1회', async ({
   await fireStt(page, '28.3', 300);
   await waitForRow(page, 2);
   await waitForActiveChip(page, '횡경');
-  await fireStt(page, '다음', 400);
+  await fireStt(page, '다음행', 400);
   await waitForRow(page, 3);
   await fireStt(page, '종료', 1200);
 
@@ -405,7 +405,7 @@ test('NAV-2 / W3 — "유지": 빈 칸이면 명시 피드백, 완료 행 검토
   // (구 동작: 행 1 재입력 모드 진입 + 필드별 "유지" 2회. 신 동작: 단순 이동 + 값 낭독 대기,
   //  "유지" 1회로 검토를 마치고 returnRow(행 2)로 복귀.)
   await waitForActiveChip(page, '횡경');
-  await fireStt(page, '이전', 600); // 행 1(완료)로 단순 이동 → 검토 대기
+  await fireStt(page, '이전행', 600); // 행 1(완료)로 단순 이동 → 검토 대기
   await waitForRow(page, 1);
   expect(await getActiveRow(page)).toBe(1);
   await fireStt(page, '유지', 600); // 검토 종료 → 원래 있던 행 2로 복귀
@@ -453,7 +453,7 @@ test('REVIEW — "이전"으로 완료 행 착지: 값 낭독 + bare 값 무시 
 
   // "이전" → 완료 행 1 착지: 기록값 낭독("1행 완료됨. 횡경 35.1, 종경 28.3") 후 명령 대기
   await waitForActiveChip(page, '횡경');
-  await fireStt(page, '이전', 600);
+  await fireStt(page, '이전행', 600);
   await waitForRow(page, 1);
   const events1 = await loadLogEventsFromIDB(page);
   const reviewTts = events1.find(
@@ -484,7 +484,7 @@ test('REVIEW — "이전"으로 완료 행 착지: 값 낭독 + bare 값 무시 
   expect(await getActiveRow(page)).toBe(1);
 
   // "다음" → 검토를 마치고 다음 미완료 행(2)으로 전진.
-  await fireStt(page, '다음', 600);
+  await fireStt(page, '다음행', 600);
   await waitForRow(page, 2);
   expect(await getActiveRow(page)).toBe(2);
 

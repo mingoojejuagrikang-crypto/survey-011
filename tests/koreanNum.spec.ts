@@ -379,19 +379,40 @@ test.describe('T-2 — command confidence gate (detection contract the gate reli
 });
 
 test.describe('v0.4.4 — 명령어 통합·리네임 (이전/다음, 스킵·다시 제거)', () => {
-  // 행 이동 명령은 '이전행/다음행' → '이전/다음'으로 리네임됨.
-  test('"이전" → prevRow', () => {
-    expect(detectCommand('이전')).toBe('prevRow');
+  // 🔴 v0.49 F-1(민구 결정 2026-08-12) — **의미가 재배정됐다.** 이 describe의 원 기대값
+  //   ('이전'→prevRow · '다음'→nextRow)은 v0.4.4가 '이전행/다음행'을 '이전/다음'으로 리네임한
+  //   결과였고, 08-12 결정이 그것을 되돌리며 **짧은 두 단어를 항목 이동에 재배정**했다.
+  //   여기 4개 단언은 **정당 파손**이다 — 아래가 새 계약이다.
+  //   전체 항목/행 이동 동작 오라클은 tests/v049-f1-field-nav.spec.ts.
+  test('"이전" → prevField (v0.49 F-1: 항목 이동으로 재배정)', () => {
+    expect(detectCommand('이전')).toBe('prevField');
   });
-  test('"다음" → nextRow', () => {
-    expect(detectCommand('다음')).toBe('nextRow');
+  test('"다음" → nextField (v0.49 F-1: 항목 이동으로 재배정)', () => {
+    expect(detectCommand('다음')).toBe('nextField');
   });
-  // 활용형 꼬리 허용(startsWith): "다음행"도 여전히 nextRow로 인식(접두 일치).
-  test('"다음행" → nextRow (접두 일치)', () => {
+  // 🔴 **최장 일치 우선**의 핵심 단언. '이전'⊂'이전행'이므로 선언 순서대로 순회하면 짧은 쪽
+  //   (prevField)이 먼저 걸려 **행 이동이 영영 불가능해진다.** 이 2건이 그 회귀를 잡는다.
+  test('"다음행" → nextRow (최장 일치 — 짧은 nextField에 가로채이지 않는다)', () => {
     expect(detectCommand('다음행')).toBe('nextRow');
   });
-  test('"이전행" → prevRow (접두 일치)', () => {
+  test('"이전행" → prevRow (최장 일치 — 짧은 prevField에 가로채이지 않는다)', () => {
     expect(detectCommand('이전행')).toBe('prevRow');
+  });
+  // STT가 「다음 행」처럼 띄어 내놓는 변형 — detectCommand가 공백을 먼저 지우므로 동일하게 잡힌다.
+  test('"다음 행"(띄어쓰기 STT 변형) → nextRow', () => {
+    expect(detectCommand('다음 행')).toBe('nextRow');
+  });
+  test('"이전 행"(띄어쓰기 STT 변형) → prevRow', () => {
+    expect(detectCommand('이전 행')).toBe('prevRow');
+  });
+  // 🔴 최장 일치로 바꾸면서 **죽이면 안 되는** 두 기존 계약(정확 일치를 못 쓰는 이유):
+  //   ① screenOff의 word는 일부러 짧은 '화면'이라 "화면 꺼"가 잡혀야 한다(voiceCommands:117-120).
+  //   ② 활용형 꼬리 허용("수정해줘").
+  test('"화면 꺼" → screenOff (짧은 word의 startsWith 계약 보존)', () => {
+    expect(detectCommand('화면 꺼')).toBe('screenOff');
+  });
+  test('"수정해줘" → modify (활용형 꼬리 허용 보존)', () => {
+    expect(detectCommand('수정해줘')).toBe('modify');
   });
   // 스킵: '다음'으로 통합되어 제거됨 → 더 이상 명령으로 인식되지 않는다.
   test('"스킵" → null (다음으로 통합·제거됨)', () => {

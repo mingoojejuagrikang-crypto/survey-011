@@ -741,7 +741,7 @@ test('REVIEW+A3 — 검토 대기 중 "수정 <컬럼명>": 지목 컬럼(종경
 
   // 행 1 완료(35.1/28.3) → 행 2 → "이전" → 검토 대기(포인터=첫 컬럼 횡경, v0.34.0 A3).
   await inputRow(page, '35.1', '28.3', 2);
-  await fireStt(page, '이전', 600);
+  await fireStt(page, '이전행', 600);
   await waitForRow(page, 1);
   await waitForActiveChip(page, '횡경'); // 착지 포인터 = 첫 음성 필드
 

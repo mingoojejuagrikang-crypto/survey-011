@@ -326,7 +326,7 @@ test('P1-2 — 완료 검토→종료: stopping 중 stale 이전/다음 탭은 �
   await startSession(page);
   await fireStt(page, '35.1', 350);
   await fireStt(page, '28.3', 450); // 1행 완료 후 2행
-  await fireStt(page, '이전', 500); // 완료된 1행 검토(phase complete)
+  await fireStt(page, '이전행', 500); // 완료된 1행 검토(phase complete)
   await expect(page.locator('[data-testid="active-row"]')).toHaveText('1');
 
   const prev = await page.locator('button[title="이전 행으로 이동"]').elementHandle();

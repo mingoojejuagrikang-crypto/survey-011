@@ -122,7 +122,7 @@ test('P1ⓒ-review 🔴 검토 대기 출신 직접 수정: 알람 해소 후 �
   // 완료 행 착지 = 검토 대기(값 낭독 + 명령 대기).
   await fireStt(page, '100.0', 700);
   await fireStt(page, '10.0', 900);
-  await fireStt(page, '이전', 1500);
+  await fireStt(page, '이전행', 1500);
   expect(reviewSays(await ttsLog(page)), '검토 대기 진입 낭독 1회').toHaveLength(1);
 
   // 검토 대기 중 「수정 120.5」 = 포인터 컬럼(측정항목01) 직접 수정 → 위반 → 알람.
@@ -156,7 +156,7 @@ test('P1ⓒ-review-재위반 🔴 정정값이 또 위반이어도 검토 대기
 
   await fireStt(page, '100.0', 700);
   await fireStt(page, '10.0', 900);
-  await fireStt(page, '이전', 1500);
+  await fireStt(page, '이전행', 1500);
   expect(reviewSays(await ttsLog(page)), '검토 대기 진입 낭독 1회').toHaveLength(1);
 
   // 첫 위반 알람.
@@ -285,9 +285,9 @@ test('P1-중첩복귀 🔴 기존 복귀 예약 위의 교차행 직접수정: �
   await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(2);
 
   // '다음'으로 2행 skip → 3행(복귀 예약 없음) → '이전'으로 2행 복귀 = **바깥 예약(3행) 성립**.
-  await fireStt(page, '다음', 1200);
+  await fireStt(page, '다음행', 1200);
   await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(3);
-  await fireStt(page, '이전', 1500);
+  await fireStt(page, '이전행', 1500);
   await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(2);
   expect(await activeChipName(page), '2행 첫 미완료 필드 착지').toBe('측정항목01');
 
@@ -346,7 +346,7 @@ test('P1-미완료대상 🔴 skip 행을 겨냥한 교차행 직접수정 알�
   });
 
   // 1행을 **비운 채** '다음' → skip placeholder로 영속 + 2행 m1 대기.
-  await fireStt(page, '다음', 1500);
+  await fireStt(page, '다음행', 1500);
   await expect.poll(() => activeRowOf(page), { timeout: 6000 }).toBe(2);
 
   // 2행 m1에서 「수정 120.5」 → 대상은 skip된 1행의 **마지막** 칸 m2(직전 100.0, increase 위반).

@@ -478,10 +478,10 @@ test('§공통규칙5 — 인디케이터 아래 `[‹][⏹][⏸][›]` 4심볼(
   await boot(page);
   const bar = await page.locator('[data-testid="voice-control-bar"]').boundingBox();
   const actionRow = await page.locator('[data-testid="voice-nav-row"]').boundingBox();
-  const prev = await page.locator('button[aria-label="이전"]').boundingBox();
+  const prev = await page.locator('button[aria-label="이전행"]').boundingBox();
   const stop = await page.locator('button[aria-label="종료"]').boundingBox();
   const pause = await page.locator('button[aria-label="일시정지"]').boundingBox();
-  const next = await page.locator('button[aria-label="다음"]').boundingBox();
+  const next = await page.locator('button[aria-label="다음행"]').boundingBox();
   const band = await page.locator('[data-testid="live-listen-band"]').boundingBox();
   expect(actionRow).not.toBeNull(); expect(prev).not.toBeNull(); expect(stop).not.toBeNull();
   expect(pause).not.toBeNull(); expect(next).not.toBeNull(); expect(band).not.toBeNull();
@@ -790,8 +790,8 @@ test('UI-e1 paused — 중앙·상단 상태어 비움 + 하단 4심볼 토글 +
   await expect(page.locator('button[title="재시작"]'), '재시작 토글은 심볼로 그린다').toHaveText('⏸︎');
   await expect(page.locator('button[aria-label="재개"]'), '옛 라벨은 남아 있지 않다').toHaveCount(0);
   await expect(page.locator('button[title="입력 종료"]')).toBeVisible();
-  await expect(page.locator('button[aria-label="이전"]')).toBeVisible();
-  await expect(page.locator('button[aria-label="다음"]')).toBeVisible();
+  await expect(page.locator('button[aria-label="이전행"]')).toBeVisible();
+  await expect(page.locator('button[aria-label="다음행"]')).toBeVisible();
   await expect(page.locator('[data-testid="voice-nav-row"] [data-testid="control-symbol"]'))
     .toHaveText(['‹', '⏹︎', '⏸︎', '›']);
 
@@ -953,8 +953,8 @@ test('UI-c complete — 중앙 `X / N` + aria 완료 상태, 체크 도트, 시�
   await expect(page.locator('[data-testid="session-complete-badge"]')).toHaveCount(0);
   await expect(page.locator('button[aria-label="음성 명령어 도움말"]'), '완료 중에도 도움말 유지').toBeVisible();
   // 하단 `<` `>` **유지**(§[4] "하단 `<` `>` 유지").
-  await expect(page.locator('button[aria-label="이전"]')).toBeVisible();
-  await expect(page.locator('button[aria-label="다음"]')).toBeVisible();
+  await expect(page.locator('button[aria-label="이전행"]')).toBeVisible();
+  await expect(page.locator('button[aria-label="다음행"]')).toBeVisible();
   // 파형 자리 = V(체크) 도트.
   await expect(page.locator('[data-testid="state-dots"]')).toHaveAttribute('data-glyph', 'check');
   // 완료도 같은 4버튼이며 일시정지 상태명은 title/aria에 남는다.
@@ -968,7 +968,7 @@ test('UI-c complete — 중앙 `X / N` + aria 완료 상태, 체크 도트, 시�
 test('§[4] — `X / N`의 X는 실제로 채워진 행 수다(스킵 행은 빠진다)', async ({ page }) => {
   await boot(page);
   // 1행을 값 없이 '다음'으로 건너뛴다 → skippedRows로 갈라져 completedRows에 들어가지 않는다.
-  await page.locator('button[aria-label="다음"]').click();
+  await page.locator('button[aria-label="다음행"]').click();
   await page.waitForTimeout(700);
   await fillAllRows(page);
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 10_000 });
@@ -982,7 +982,7 @@ test('§[4] 대비 — 완료 **행 검토 대기**는 [1] active 레이아웃�
   await fillAllRows(page);
   await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 8000 });
   // 끝 도달 → '이전'으로 완료 행 검토 대기 진입(phase는 그대로 'complete', endReached만 내려간다).
-  await page.locator('button[aria-label="이전"]').click();
+  await page.locator('button[aria-label="이전행"]').click();
   await page.waitForTimeout(700);
   await expect(page.locator('[data-testid="complete-summary"]'), '검토 대기는 완료 화면이 아니다').toHaveCount(0);
   await expect(page.locator('[data-testid="session-complete-badge"]')).toHaveCount(0);

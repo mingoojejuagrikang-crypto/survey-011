@@ -274,7 +274,7 @@ test('T5 — 명령어 도움말이 열린 동안 STT 명령은 실행되지 않
   await page.locator('button[title="음성 명령어 도움말"]').first().click();
   await expect(page.locator('[data-testid="command-help-popup"]')).toBeVisible();
 
-  await fireSttConf(page, '다음', 0.95, 500);
+  await fireSttConf(page, '다음행', 0.95, 500);
   await expect(page.locator('[data-testid="active-row"]')).toHaveText('1');
   let events = await loadLogEvents(page);
   expect(events.some((e) => e.type === 'command' && e.parsed === 'nextRow')).toBe(false);
@@ -282,10 +282,10 @@ test('T5 — 명령어 도움말이 열린 동안 STT 명령은 실행되지 않
   await page.locator('[data-testid="cmd-help-close"]').click();
   await expect(page.locator('[data-testid="command-help-popup"]')).toBeHidden();
 
-  await fireSttConf(page, '다음', 0.95, 700);
+  await fireSttConf(page, '다음행', 0.95, 700);
   events = await loadLogEvents(page);
   expect(events.some((e) => e.type === 'command' && e.parsed === 'ui_resume' && e.extra === 'command_help')).toBe(true);
-  expect(events.some((e) => e.type === 'command' && e.parsed === 'nextRow' && e.text === '다음')).toBe(true);
+  expect(events.some((e) => e.type === 'command' && e.parsed === 'nextRow' && e.text === '다음행')).toBe(true);
 });
 
 /**

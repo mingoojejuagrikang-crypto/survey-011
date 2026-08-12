@@ -109,8 +109,25 @@ test('v0.38.0 #4-③ — 가시 UI 명령은 매핑되고 숫자·단위 발화�
     expect(detectCommand(measurement), `${measurement}는 측정값 발화`).toBeNull();
   }
 
+  // 🔴 v0.49 F-1(민구 결정 2026-08-12) — 이 가드가 강제하던 **「접두 충돌 0」 불변식이 대체됐다.**
+  //   종전: 어떤 word도 다른 word의 접두일 수 없다(그래야 startsWith 순회가 순서 무관).
+  //   현재: 「이전」/「다음」=항목 · 「이전행」/「다음행」=행으로 재배정되며 접두 쌍이 **의도적으로**
+  //         생겼고, detectCommand가 **최장 일치**로 해소한다(koreanNum.ts COMMANDS_LONGEST_FIRST).
+  //   그래서 가드를 지우지 않고 **뒤집어 잰다**: 접두 쌍은 «정확히 이 2개»여야 하고(모르는 사이에
+  //   3번째가 생기면 red), 각 쌍에서 **긴 쪽이 이겨야** 한다.
   const normalizedWords = VOICE_COMMANDS.map((command) => command.word.replace(/\s+/g, ''));
+  const prefixPairs: string[] = [];
   for (const word of normalizedWords) {
-    expect(normalizedWords.filter((candidate) => candidate !== word && candidate.startsWith(word)), `${word} prefix 충돌`).toEqual([]);
+    for (const candidate of normalizedWords) {
+      if (candidate !== word && candidate.startsWith(word)) prefixPairs.push(`${word}⊂${candidate}`);
+    }
   }
+  expect(prefixPairs.sort(), '의도되지 않은 접두 쌍이 생겼다 — 최장 일치로 해소되는지 확인하라')
+    .toEqual(['다음⊂다음행', '이전⊂이전행']);
+
+  // 긴 쪽이 이긴다 — 여기가 red면 행 이동 어휘가 짧은 항목 이동 어휘에 가로채인 것이다.
+  expect(detectCommand('이전행')).toBe('prevRow');
+  expect(detectCommand('다음행')).toBe('nextRow');
+  expect(detectCommand('이전')).toBe('prevField');
+  expect(detectCommand('다음')).toBe('nextField');
 });

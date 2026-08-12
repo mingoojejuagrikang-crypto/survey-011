@@ -131,7 +131,7 @@ test('ⓑ 완료를 벗어나면 접힌 필이 돌아온다 — 숨김은 완료
 
   // '이전' 명령으로 완료를 벗어난다 → phase가 complete를 벗어나며 endReached가 자동 해제된다
   // (`sessionStore.ts:230` setPhase). 그 자동 해제가 복귀 경로다 — 별도 배선이 없다.
-  await fireStt(page, '이전', 800);
+  await fireStt(page, '이전행', 800);
   await expect(
     pill,
     '완료를 벗어났는데 필이 안 돌아온다 — 터치로 서랍을 영영 못 여는 회귀다',

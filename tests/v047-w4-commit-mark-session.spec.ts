@@ -110,7 +110,7 @@ test('W4-①②③④ — ✓ 누적·행 전환 무이식·이전 행 복귀 �
   await expect(allMarks(page), '새 행 ✓ 0 (이식 없음)').toHaveCount(0);
 
   // ③ '이전' → 1행 검토 대기 — 이 세션에서 커밋한 두 셀의 ✓가 **복원**된다(FB-E 본축).
-  await fireStt(page, '이전', 800);
+  await fireStt(page, '이전행', 800);
   await expect(markIn(page, '당도'), '복귀 시 당도 ✓ 복원').toBeVisible({ timeout: 3000 });
   await expect(markIn(page, '산도'), '복귀 시 산도 ✓ 복원').toBeVisible();
   await expect(allMarks(page), '커밋된 두 셀 전부 ✓(누적)').toHaveCount(2);

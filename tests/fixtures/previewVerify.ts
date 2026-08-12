@@ -39,8 +39,8 @@ const TRACKED_SELECTORS = [
   '[data-testid="input-control-toggle"]',
   '[data-testid="stepper-tolerance"]',
   '[data-testid="stepper-tts-rate"]',
-  'button[aria-label="이전"]',
-  'button[aria-label="다음"]',
+  'button[aria-label="이전행"]',
+  'button[aria-label="다음행"]',
 ] as const;
 
 export interface NodePrint {

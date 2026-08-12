@@ -95,7 +95,7 @@ test('P5b-ⓑ 🔴 기존 값이 있던 셀의 후보 — 칩은 직전 확정�
   await fireStt(page, '100.0', 700);
   await fireStt(page, '5.0', 700);
   await fireStt(page, '1.0', 900);
-  await fireStt(page, '이전', 1500);
+  await fireStt(page, '이전행', 1500);
   await expect(chip(page, '측정항목01')).toContainText('100');
   expect(await markIn(page, '측정항목01').getAttribute('data-mark-tone'), '정상 커밋 = 초록').toBe('ok');
 

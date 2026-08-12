@@ -288,7 +288,7 @@ test('D [EXIT-PERSIST-1] — 검토 행 상시 종료 취소 후 suspend 래치�
   await reachEnd(page);
 
   // 마지막 행 완료 뒤 다른 완료 행을 검토해 중앙 종료가 사라진 상태를 만든다.
-  await page.getByRole('button', { name: '이전', exact: true }).click();
+  await page.getByRole('button', { name: '이전행', exact: true }).click();
   await waitForRow(page, 1);
   await expect(page.locator('[data-hero-state="review"]')).toBeVisible({ timeout: 4000 });
   await expect(page.locator('[data-testid="complete-summary"]')).toHaveCount(0);

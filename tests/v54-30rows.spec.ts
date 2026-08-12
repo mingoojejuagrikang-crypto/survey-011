@@ -358,7 +358,7 @@ test('30행 음성 입력 — TTS/칩/값/순서/수정/스킵/일시정지 종�
       console.log(`\n[ 행 ${row} ] skip('다음') 시나리오`);
       // 횡경 대기
       await waitForActiveChip(page, '횡경', 3000);
-      await fireStt(page, '다음', 400);
+      await fireStt(page, '다음행', 400);
       await waitForRow(page, 21, 5000);
       const rowAfterSkip = await getActiveRow(page);
       console.log(`  skip 후 행 카운터: ${rowAfterSkip} (expected: 21)`);
