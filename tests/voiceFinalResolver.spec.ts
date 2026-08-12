@@ -79,13 +79,22 @@ test('[리뷰#1] trendConfirm 중 UI 전용 명령은 알림을 소모하지 않
     .toEqual({ act: 'dispatch', cmd: 'help', trendDemoted: false });
 });
 
-test('센티넬 흡수 — atEnd/reviewWait의 일반 값 발화, 명령은 정상 디스패치', () => {
+test('센티넬 흡수 — atEnd/reviewWait/cellWait의 일반 값 발화, 명령은 정상 디스패치', () => {
   expect(resolveFinal({ ...base, awaitingKind: 'atEnd', cmd: null })).toEqual({ act: 'absorbAtEnd' });
   expect(resolveFinal({ ...base, awaitingKind: 'reviewWait', cmd: null })).toEqual({ act: 'absorbReviewWait' });
   expect(resolveFinal({ ...base, awaitingKind: 'reviewWait', cmd: 'modify' }))
     .toEqual({ act: 'dispatch', cmd: 'modify', trendDemoted: false });
   expect(resolveFinal({ ...base, awaitingKind: 'atEnd', cmd: 'end' }))
     .toEqual({ act: 'dispatch', cmd: 'end', trendDemoted: false });
+
+  // 🔴 v0.49 fix49(리뷰 B-1) — 셀 검토 대기: 값이 든 셀에 항목 이동으로 착지한 상태.
+  //   커밋 지점에 셀 단위 거절 게이트가 없어 흡수하지 않으면 확정값이 bare 숫자로 덮인다.
+  expect(resolveFinal({ ...base, awaitingKind: 'cellWait', cmd: null })).toEqual({ act: 'absorbCellWait' });
+  // 명령은 그대로 산다 — 특히 '수정'(정정 진입로)과 항목 이동(착지 후에도 이동 계속).
+  for (const cmd of ['modify', 'prevField', 'nextField', 'nextRow'] as const) {
+    expect(resolveFinal({ ...base, awaitingKind: 'cellWait', cmd }))
+      .toEqual({ act: 'dispatch', cmd, trendDemoted: false });
+  }
 });
 
 test('일반 값 대기 — 명령 없으면 값 경로', () => {

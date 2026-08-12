@@ -15,12 +15,12 @@
  *     화면 버튼은 알림을 유지하는데 음성만 해제하면 음성/터치가 어긋나고, 무엇보다 사용자가
  *     이상치를 **확인하지 않은 채** 다음으로 넘어갈 수 있다(데이터 무결성).
  *  4. 명령 디스패치.
- *  5. atEnd/reviewWait 센티넬은 일반 값 발화를 흡수(안내만).
+ *  5. atEnd/reviewWait/cellWait 센티넬은 일반 값 발화를 흡수(안내만).
  *  6. 값 경로.
  */
 import { VOICE_COMMANDS, isVoiceUiCommand, type VoiceCommand } from './voiceCommands';
 
-export type AwaitingKind = 'value' | 'modify' | 'trendConfirm' | 'atEnd' | 'reviewWait';
+export type AwaitingKind = 'value' | 'modify' | 'trendConfirm' | 'atEnd' | 'reviewWait' | 'cellWait';
 
 export type FinalAction =
   | { act: 'pausedResume' }
@@ -31,6 +31,7 @@ export type FinalAction =
   | { act: 'dispatch'; cmd: Exclude<VoiceCommand, null>; trendDemoted: boolean }
   | { act: 'absorbAtEnd' }
   | { act: 'absorbReviewWait' }
+  | { act: 'absorbCellWait' }
   | { act: 'value'; trendCorrection: boolean };
 
 export function resolveFinal(input: {
@@ -64,5 +65,8 @@ export function resolveFinal(input: {
   if (cmd) return { act: 'dispatch', cmd, trendDemoted: false };
   if (awaitingKind === 'atEnd') return { act: 'absorbAtEnd' };
   if (awaitingKind === 'reviewWait') return { act: 'absorbReviewWait' };
+  // v0.49 fix49 — 셀 검토 대기(값 있는 셀 착지)도 일반 값 발화를 흡수한다. 커밋 지점에 셀 단위
+  // 거절 게이트가 없으므로, 여기서 흡수하지 않으면 확정된 값이 bare 숫자로 덮인다(B-1).
+  if (awaitingKind === 'cellWait') return { act: 'absorbCellWait' };
   return { act: 'value', trendCorrection: false };
 }
