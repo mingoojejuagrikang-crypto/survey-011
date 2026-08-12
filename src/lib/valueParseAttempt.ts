@@ -158,6 +158,13 @@ export function attemptParseValue(input: {
         //      자체를 단언**한다. 값 수용만 되고 echo가 없으면 그건 계약 위반이다.
         //   로그: 일반 alt 수용과 **같은 형태**(`stt_alt_used`, extra 없음)로 남긴다 — SOP-003
         //      바이트 계약에 새 패턴을 추가하지 않는다.
+        //   🔴 v0.49 fix49(리뷰 L-1, 기록만 — 계약 문언은 그대로 둔다) — 조건 ③이 비교하는 상대는
+        //      `fractionWhole`(재질문이 기다리는 정수부)이 **아니라** `failWhole`(이번 발화 primary가
+        //      잃은 정수부)이다. 그래서 `fractionWhole=211` 문맥에서 "311점1"을 말해 primary가
+        //      실패하면 alt `311.1`이 수용된다 — **문맥과 다른 전체값**이다. 민구가 고른 3조건
+        //      문언 그대로이고, 그 상황은 사용자가 정수부까지 다시 말한 경우라 맞는 값일 공산이
+        //      크다(그래서 안 바꾼다). ⚠️ 다만 **이 경로의 유일한 방어선이 위 echo 계약**이라는
+        //      뜻이다 — echo가 약해지면 여기가 **먼저** 다친다. echo를 손대는 사람은 이 줄을 보라.
         if (failReason === 'decimal_fraction_lost' && failWhole != null) {
           const altFull = col ? parseValueForCol(col, alt) : null;
           if (altFull !== null && altFull.includes('.') && altFull.split('.')[0] === failWhole) {

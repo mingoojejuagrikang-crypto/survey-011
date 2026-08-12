@@ -61,6 +61,39 @@
   아카이브 `[AUTH-1]`의 핵심.
 - **출처:** `growth-survey-010@55bb61e → @ad60ba5 → @222f337`
 
+### [CELL-OVERWRITE-1] 🔴 **커서를 값이 든 셀 위에 `kind:'value'`로 세우지 마라**
+- **규칙:** 커밋 지점(`sessionStore.setRowValue`)에는 **셀 단위 거절 게이트가 없다** — 값이
+  있든 없든 무조건 덮는다(`useVoiceSession.ts`의 `prevValue` 읽기는 **로그용**이지 게이트가
+  아니다). 그래서 확정된 측정값을 지키는 **유일한 불변식**이 「`awaitingFieldRef`를 filled 셀에
+  `kind:'value'`로 세우지 않는다」이다. `activeColIdx`를 쓰는 코드를 추가할 때는 착지 셀의 값
+  유무를 반드시 판정하라 — 정본 헬퍼는 **`announceOrCellWait`** 이고, 값이 있으면
+  `enterCellWait`(값 낭독 + 명령 대기 + bare 값 흡수)으로 받는다.
+- **사건:** v0.49 F-1이 항목 이동(`gotoAdjacentField`)을 신설하며 인접 인덱스를 값 유무와
+  무관하게 썼다 — `activeColIdx` 기록자 중 **처음으로** 그 문을 열었다. 실측 재현: 35.1 커밋 →
+  「이전」 → 무심코 "99.9" → **확정 셀이 조용히 99.9로 덮였다.** 같은 라운드에서 파생 경로 3개가
+  더 나왔다(행 경계 재안내 `gotoAdjacentRow` · 직접 수정 복귀 `announceField(vc[curIdx])` ·
+  interim 조기확정). **하나만 막으면 나머지로 샌다.**
+- ⚠️ **`reviewWait`으로 대체하지 마라.** 그쪽은 이동 자체를 거부하는 **행** 상태라, 셀 착지에
+  재사용하면 값 있는 셀에 한 번 서는 순간 항목 이동 기능이 통째로 죽는다.
+- **오라클:** `tests/v049-fix49-cell-guard.spec.ts`(7케이스) — 특히 ①(덮어쓰기 금지)과
+  ③(빈 셀은 종전대로 값 수신)이 짝이다. 한쪽만 보면 과잉 차단을 못 잡는다.
+- **출처:** `2ae8649`(처방) · 리뷰 `workspace_teamops/deliverables/2026-08-12-v049-review-claude.md` B-1
+
+### [PHASE-NAV-1] 답을 기다리는 국면에서 이동 명령을 통과시키지 마라 — **거부는 두 곳에서 성립한다**
+- **규칙:** 이상치 알람 응답 대기(`trendConfirm`)·수정 재청취(`modify`)·소수부 재질문
+  (`fractionWhole` 보유)에서 이동 명령을 받으면 **거부 + 한 마디 안내**다(무음 금지 `[REVIEW-4]`).
+  🔴 **핸들러 가드만 넣으면 무의미하다** — `voiceFinalResolver`가 `trendConfirm` 중의 「나머지
+  명령」을 `trendDemoted:true`로 분류하고, 호출부가 **dispatch 이전에**
+  `clearAnomalyAlert('trend_dismissed')`를 부른다. 알람을 보존하려면 resolver에서
+  `trendDemoted:false`로 통과시키는 짝 처리가 **함께** 있어야 한다(UI 명령과 같은 모양).
+- **사건:** v0.49 F-1의 어휘 재배정으로 「다음」이 *옆 칸 한 칸*이 되어 심리적 비용이 사라졌고,
+  미확인 이상치가 그 한 마디로 사라지는 문이 구조적으로 자주 열렸다(실측: `anomaly-alert` 노드
+  소멸). `isManualHoldBlocked`가 터치 이동에 대해 막던 우회를 음성이 그대로 열어 둔 형태.
+- ⚠️ **행 이동(`prevRow`/`nextRow`)은 이 규칙 밖이다**(민구 결정 2026-08-12) — 종전 의미 유지.
+  resolver 특성화의 대조군(nextRow/prevRow는 여전히 강등)이 그 경계를 지킨다.
+- **오라클:** `tests/v049-fix49-phase-guard.spec.ts`(4) + `tests/voiceFinalResolver.spec.ts`
+- **출처:** `b9714c1` · 리뷰 같은 문서 M-1·M-2
+
 ---
 
 ## ③ 문구·값의 조립부는 하나여야 한다

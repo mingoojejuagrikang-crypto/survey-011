@@ -1993,3 +1993,46 @@ TTS 구간(`:2522-2523`)에 오버레이가 열리면 **모달 뒤에서 STT 인
   **목록 컨테이너의 `scrollHeight > clientHeight`를 직접 재야** 보인다.
   ③ 명령을 새로 추가할 때는 이 수치를 다시 재라 — 지금은 "스크롤 단서 없는 잘림"이
   **명령 12개 분량**만큼 쌓여 있다.
+
+---
+
+## 2026-08-12 v0.49 fix49 리뷰 수정 라운드 (회차 SSOT: `workspace_teamops/deliverables/2026-08-12-fix49-review-fixes.md`)
+
+### [TTS-CANCEL-MUTE-1] `cancelTts()`가 STT 뮤트를 안 풀어 **앱이 자른 발화가 마이크를 워치독까지 죽였다**
+
+- **카테고리:** ③ iOS/TTS · ① 음성/STT
+- **상태:** `MONITORING` (처방 들어감 — **실기기 확인 전 RESOLVED 금지**, AGENTS 계약 4)
+- **기전:** 뮤트를 거는 쪽은 `speak()`(`engine.speak` 직전)인데 푸는 쪽은 `done()`
+  (`onend`/`onerror` **또는 워치독**)이다. 따라서 **종료 워치독 지속시간 = STT가 죽어 있는 시간의
+  상한**. [TTS-WATCHDOG-1]의 처방이 그 상한을 2.5초 고정 → 최대 20초로 넓혔으므로(정상 발화
+  절단을 막는 옳은 방향), 「`onstart`는 왔는데 `onend`가 끝내 안 오는」 축의 피해가 8배가 됐다.
+  `cancelTts()`는 `synth.cancel()`만 불렀다 — **앱이 스스로 자른 발화**인데도 해제를 엔진에 맡겼다.
+- 🔴 **실측으로 드러난 두 번째 축(물림):** 엔진이 `cancel()`에 `onend`를 안 쏘면(iOS Safari
+  알려진 버그 — `speak()`가 50ms 지연으로 완화 중) **잘린 발화의 2단 워치독이 살아남는다.**
+  그 다음 안내가 재생되는 도중 만료되면 `done()`이 unmute를 불러 **재생 중인 TTS가 STT로 새는
+  창**이 열린다. 재현: A(12자, 2단 상한 ~5.1s) 재생 → `cancelTts()` → B 재생 시작 →
+  A 워치독 만료 → `muted=false`(B는 아직 재생 중). 같은 기전으로 `await say(...)`도
+  워치독까지 매달렸다(**4903ms**/12자, clamp면 최대 20초).
+- **대응:** ①`cancel()` **뒤에** 즉시 unmute(`isTtsMuted()` 게이트 — 이 함수는 명령 핸들러
+  선두에서 방어적으로 수십 곳에서 불려, 무조건 호출하면 그 전량에 `halfDuplexHold` 해제·
+  `scheduleRestart()` 부작용이 붙는다) ②in-flight `speak()`의 `done()` 드레인(워치독·프라미스
+  동시 종결). 오라클 `tests/v049-fix49-cancel-unmute.spec.ts` 7케이스.
+- ⚠️ **clamp 20s는 유지했다.** 내리면 긴 발화에서 워치독이 재생 중 `done()`을 불러
+  **뮤트만 풀리고 TTS는 계속** = 위 물림의 재개방이다. 20s 판정은 [TTS-WATCHDOG-1]의
+  `tts_late_end` 계측이 다음 로그 수거에서 한다.
+- **실기기 확인 절차(다음 회차):** ① 명령 발화 직후(= `cancelTts` 경로) STT가 곧바로 듣는지
+  민구 체감 ② `lifecycle:restart_resched_after_tts` 빈도가 늘었는지(설계된 증가 — _ASK-fix49 Q3)
+  ③ 안내 재생 중 자기 목소리가 인식되는 물림이 **없는지**.
+
+### [NAV-FILLED-CELL-1] 항목 이동이 연 「확정 셀 덮어쓰기」 — 파생 경로가 4개였다
+
+- **카테고리:** ⑦ 입력흐름
+- **상태:** `GUARDRAIL`로 승격 — 규칙 본문은 [ENGINEERING-GUARDRAILS.md](./ENGINEERING-GUARDRAILS.md)
+  `[CELL-OVERWRITE-1]`. 여기엔 **왜 4개였는지**만 남긴다(다음 사람이 같은 형태를 셀 것).
+- **관측:** 리뷰가 지목한 것은 `gotoAdjacentField`의 두 경로였는데, 실측하니 같은 불변식을 깨는
+  경로가 넷이었다 — ①일반 이동 ②항목 경계 재안내 ③**행** 경계 재안내(`gotoAdjacentRow`,
+  v0.33.0 낡은 코드인데 **커서를 filled 셀에 주차시키는 경로가 없어서** 그동안 도달 불가였다)
+  ④직접 수정(「수정 41.4」) 복귀의 `announceField(vc[curIdx])`.
+- 👉 **다음 사람에게:** 「커서를 세우는 새 경로」를 만들면 **그 커서를 쓰는 기존 재안내 지점 전부**가
+  새 도달 조건을 얻는다. 리뷰의 「기록자 N곳 전수 확인」 표는 **그 변경 이전 기준**이라 이 조합이
+  구조적으로 빠진다 — 표를 물려받지 말고 **새 상태에서 다시 세라.**
