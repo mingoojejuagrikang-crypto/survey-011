@@ -3921,9 +3921,20 @@ export function useVoiceSession() {
         armClipForCell(awaiting.row, awaiting.colId);
         return;
       }
+      // 🔴 v0.49 fix49 — 셀 검토 대기(cellWait)도 **문맥을 보존해야 하는 국면**이다(위 두 분기와
+      //   같은 축). 여기서 아래 `announceField(cur)`로 떨어지면 커서가 서 있던 **값 있는 셀에
+      //   `kind:'value'`가 다시 열려** B-1이 재개방된다 — 실측 확인: 35.1 주차 → 일시정지 →
+      //   재시작 → "99.9" → 셀이 99.9. 이동 경로만 막고 여기를 두면 처방이 반만 닫힌다.
+      //   ⚠️ `reviewWait`/`atEnd`도 같은 형태로 새는 것을 실측했으나 **F-1 이전부터 있던
+      //   선행 파손**이라(기준 `18776ca`에서도 red) 이 라운드에서 건드리지 않는다 —
+      //   `_ASK-fix49` Q5 참조. 그쪽을 고칠 사람은 이 목록에 두 kind를 더 얹으면 된다.
+      if (awaiting?.kind === 'cellWait') {
+        const target = getColById(awaiting.colId);
+        if (target) { await enterCellWait(target, awaiting.previousValue); return; }
+      }
       if (cur) await announceField(cur, fw != null ? { fractionWhole: fw } : undefined);
     }
-  }, [announceField, armClipForCell, handleFinal, handleInterim, say, buildReturnBriefing]);
+  }, [announceField, armClipForCell, enterCellWait, handleFinal, handleInterim, say, buildReturnBriefing]);
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
   useEffect(() => { resumeRef.current = resume; }, [resume]);

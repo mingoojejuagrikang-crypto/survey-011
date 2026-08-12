@@ -243,3 +243,23 @@ test('⑦ 행 경계 재안내도 filled 셀을 열지 않는다 (_ASK-fix49 Q1 
   expect(after).not.toContain('99.9');
 });
 
+test('⑧ 일시정지 → 재시작이 착지 상태를 복원한다 — 재안내가 filled 셀을 열지 않는다', async ({ page }) => {
+  await seedAndOpenVoiceTab(page);
+  await clickStart(page);
+
+  await speakWhenArmed(page, '35.1', 700);
+  await speakWhenArmed(page, '이전');            // 값 있는 횡경에 주차(cellWait)
+  expect(await activeChipName(page)).toContain('횡경');
+
+  // 🔴 `resume()`은 보존된 awaiting 문맥을 kind별로 복원한다(modify·trendConfirm이 이미 그렇다).
+  //   cellWait이 그 목록에서 빠지면 `announceField(cur)`로 떨어져 **B-1이 재개방**된다 —
+  //   이동 경로만 막고 여기를 두면 처방이 반만 닫힌 것이다(실측으로 red 확인 후 추가).
+  await speakWhenArmed(page, '일시정지', 900);
+  await speakWhenArmed(page, '재시작', 1400);
+
+  await speakWhenArmed(page, '99.9', 900);
+  const after = await chipText(page, '횡경');
+  expect(after, '재시작 재안내가 filled 셀에 kind:value를 열었다').toContain('35.1');
+  expect(after).not.toContain('99.9');
+});
+
