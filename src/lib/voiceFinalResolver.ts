@@ -70,7 +70,7 @@ export function resolveFinal(input: {
     //   「알림을 소모하지 않는다」는 성질이 **명령 선언부에서 보이지 않아**, 다음에 같은 성질의
     //   명령이 생기거나 id가 바뀔 때 이 줄을 함께 고쳐야 한다는 걸 알 방법이 없다(잊으면 M-1이
     //   조용히 되살아난다). 성질을 `CommandSpec.preservesAlert`로 옮겨 선언과 계약을 붙였다.
-    if (preservesAnomalyAlert(cmd)) return { act: 'dispatch', cmd, trendDemoted: false };
+    if (cmd && preservesAnomalyAlert(cmd)) return { act: 'dispatch', cmd, trendDemoted: false };
     if (cmd) return { act: 'dispatch', cmd, trendDemoted: true };
     return { act: 'value', trendCorrection: true };
   }
