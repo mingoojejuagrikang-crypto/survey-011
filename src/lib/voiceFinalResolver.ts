@@ -58,6 +58,15 @@ export function resolveFinal(input: {
     // v0.38.0 리뷰#1 — 화면 표시만 바꾸는 명령(도움말·조절판·인식률·안내속도)은 이상치 판단과
     // 무관하므로 알림을 소모하지 않는다. 같은 동작의 화면 버튼과 동등해야 한다.
     if (isVoiceUiCommand(cmd)) return { act: 'dispatch', cmd, trendDemoted: false };
+    // 🔴 v0.49 fix49(리뷰 M-1 · 민구 확정 08-12 「거부+안내」) — **항목 이동은 알림을 소모하지
+    //   않는다.** 종전엔 「나머지」로 떨어져 `trendDemoted:true` → 호출부가
+    //   `clearAnomalyAlert('trend_dismissed')`로 팝업을 닫은 **뒤** dispatch했다. 즉 미확인
+    //   이상치가 「다음」 한 마디로 소멸했다 — `isManualHoldBlocked`가 터치 이동에 대해 막던
+    //   바로 그 우회다(음성 발동 알람은 `manualHold`가 아니라 그 게이트를 안 탄다).
+    //   어휘 재배정(08-12)으로 「다음」이 *옆 칸 한 칸*이 되어 심리적 비용이 사라진 만큼 노출
+    //   확률이 구조적으로 커졌다. 여기서 알림을 **보존한 채** 통과시키고, 실제 거부와 안내는
+    //   `gotoAdjacentField`의 국면 가드가 한다(같은 계약의 두 반쪽 — 한쪽만 고치면 무의미하다).
+    if (cmd === 'prevField' || cmd === 'nextField') return { act: 'dispatch', cmd, trendDemoted: false };
     if (cmd) return { act: 'dispatch', cmd, trendDemoted: true };
     return { act: 'value', trendCorrection: true };
   }

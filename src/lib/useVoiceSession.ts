@@ -1727,6 +1727,14 @@ export function useVoiceSession() {
   //   그 스코프의 정본 진입로는 '수정'/'수정 <컬럼명>'이므로 그렇게 안내한다.
   //   ⚠️ 안내 문구를 늘리지 마라 — [TTS-WATCHDOG-1]에서 **긴 발화일수록 절단률이 단조 증가**한다.
   //
+  // 🔴 **미해결 국면에서는 이동하지 않는다**(v0.49 fix49 — 리뷰 M-1+M-2, 민구 확정 08-12
+  //   「거부+안내」). 알람 응답 대기(`trendConfirm`)·수정 재청취(`modify`)·소수부 재질문
+  //   (`fractionWhole` 보유)은 **답을 기다리는 상태**다. 이동은 그 문맥을 조용히 파기한다:
+  //   알람은 확인 없이 사라지고(미확인 이상치 우회 = `isManualHoldBlocked`가 막던 바로 그 축),
+  //   재질문은 정수부 문맥을 잃는다. 어휘 재배정으로 「다음」이 *한 칸 이동*이 되어 심리적
+  //   비용이 낮아진 만큼 이 문은 훨씬 자주 열린다 — 그래서 게이트를 명시한다.
+  //   ⚠️ 행 이동(`prevRow`/`nextRow`)은 **이 결정의 범위 밖**이다(민구 08-12) — 종전 의미 유지.
+  //
   // 🔴 **값이 든 셀에 착지하면 `announceField`가 아니라 `enterCellWait`이다**(fix49 — 리뷰 B-1
   //   blocker). 인접 인덱스를 값 유무와 무관하게 쓰므로, 이 함수는 filled 셀에 `kind:'value'`를
   //   여는 **첫 경로**였다 — 확정·저장된 값이 뒤이은 bare 숫자로 조용히 덮인다(실측 재현:
@@ -1755,6 +1763,33 @@ export function useVoiceSession() {
       const msg = awaiting.kind === 'atEnd'
         ? '입력이 끝났습니다. 수정이라고 말하세요.'
         : '검토 중입니다. 수정이라고 말하세요.';
+      sess.setLastTts(msg);
+      await say(msg);
+      return;
+    }
+
+    // 🔴 v0.49 fix49 — 미해결 국면 거부(위 헤더 주석). 국면을 로그에 남긴다.
+    //   `trendConfirm`이 여기까지 **살아서** 도달하는 것은 `voiceFinalResolver`가 이 두 명령을
+    //   `trendDemoted:false`로 통과시키기 때문이다(UI 명령과 같은 모양). 그 처리가 없으면
+    //   dispatch **이전에** `clearAnomalyAlert('trend_dismissed')`가 이미 팝업을 닫아,
+    //   여기서 거부해 봐야 알람은 사라진 뒤다 — 두 파일이 한 계약이다.
+    const blockedPhase = awaiting?.kind === 'trendConfirm'
+      ? 'trendConfirm'
+      : awaiting?.kind === 'modify'
+        ? 'modify'
+        : (awaiting && fractionWholeOf(awaiting) != null) ? 'fractionWhole' : null;
+    if (awaiting && blockedPhase) {
+      cancelTts();
+      epochRef.current++;
+      logCell({
+        type: 'command', parsed, extra: `field_nav_blocked:${blockedPhase}`,
+        row, colId: awaiting.colId,
+      });
+      // 한 마디로 짧게 — H-2(긴 발화일수록 TTS 절단률 단조 증가). 어절 선두가 명령 단어와
+      //   겹치지 않는다(detectCommand는 공백 제거 후 startsWith — "먼저…"로 시작하므로 안전).
+      const msg = blockedPhase === 'trendConfirm'
+        ? '먼저 알람을 확인하세요.'
+        : '먼저 값을 말씀해 주세요.';
       sess.setLastTts(msg);
       await say(msg);
       return;

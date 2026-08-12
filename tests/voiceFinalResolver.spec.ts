@@ -74,6 +74,16 @@ test('[리뷰#1] trendConfirm 중 UI 전용 명령은 알림을 소모하지 않
       .toEqual({ act: 'dispatch', cmd, trendDemoted: true });
   }
 
+  // 🔴 v0.49 fix49(리뷰 M-1 · 민구 확정 08-12) — **항목 이동은 알림을 소모하지 않는다.**
+  //   호출부가 trendDemoted에서 `clearAnomalyAlert`를 부르므로, 여기서 true를 돌려주면
+  //   실제 거부 가드(`gotoAdjacentField`)가 돌기 **전에** 팝업이 이미 사라진다.
+  //   ⚠️ 위 대조군의 `nextRow`/`prevRow`가 여전히 강등인 것이 이 계약의 짝이다 —
+  //   **행 이동은 이번 결정의 범위 밖**이라 종전 의미를 그대로 둔다(민구 08-12).
+  for (const cmd of ['prevField', 'nextField'] as const) {
+    expect(resolveFinal({ ...tc, cmd }), `${cmd}는 알림을 유지해야 한다(거부는 가드가 한다)`)
+      .toEqual({ act: 'dispatch', cmd, trendDemoted: false });
+  }
+
   // 이상치 대기가 아닐 때는 UI 명령도 종전과 동일(강등 개념 자체가 없다).
   expect(resolveFinal({ ...base, awaitingKind: 'value', cmd: 'help' }))
     .toEqual({ act: 'dispatch', cmd: 'help', trendDemoted: false });
