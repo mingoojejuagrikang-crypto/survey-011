@@ -152,6 +152,33 @@ test.describe('v0.49 P-1 — TTS 워치독 2단 분리', () => {
     expect(fired[0]).toContain('stage=end');     // 1단과 갈린다
   });
 
+  test('⑤ interrupt:true(앱의 주 경로)에서도 2단이 무장된다 — cancel 왕복이 앵커를 흘리지 않는다', async () => {
+    const { speak } = await loadSpeech();
+    const { logger } = await import('../src/lib/logger');
+    logger.clear();
+
+    // 🔑 앱은 이 경로를 상시 탄다: say()의 기본값이 interrupt=true이고(useVoiceSession.ts:418),
+    //    echo 발화도 true다(:2740). ①~④가 전부 interrupt:false라 주 경로가 미측정이었다.
+    //    cancel()은 앞 utterance의 onend를 유발하므로, 그 종료 처리가 새 발화의 stage/watchdog을
+    //    흘리면(클로저 격리 실패) 2단이 무장되지 않고 다시 2.5초에 잘린다.
+    const LONG = '입력이 끝났습니다. 종료하려면 \'종료\'라고 말씀하거나 종료 버튼을 누르세요.';
+
+    const t0 = Date.now();
+    let resolvedAt = 0;
+    const p = speak(LONG, { interrupt: true }).then(() => { resolvedAt = Date.now() - t0; });
+
+    const u = await waitUtterance();
+    expect(MockSynth.cancelCount).toBeGreaterThanOrEqual(1);  // cancel 왕복이 실제로 일어났다
+    u.onstart?.();
+    await sleep(4000);
+    u.onend?.();
+    await p;
+
+    expect(resolvedAt).toBeGreaterThanOrEqual(3900);
+    const fired = logger.getAll().filter((e) => String(e.extra ?? '').startsWith('tts_watchdog_fired'));
+    expect(fired).toHaveLength(0);
+  });
+
   test('④ 워치독 이후 도착한 onend를 계측한다 — 「늦게 옴 vs 끝내 안 옴」 판별용', async () => {
     const { speak } = await loadSpeech();
     const { logger } = await import('../src/lib/logger');
