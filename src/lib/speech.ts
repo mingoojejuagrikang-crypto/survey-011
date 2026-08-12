@@ -612,6 +612,22 @@ function ttsEndWatchdogMs(textLen: number, rate: number): number {
   return Math.min(20_000, Math.max(2_500, budget));
 }
 
+/** 🔴 v0.49 fix49 — 아직 종결되지 않은 `speak()` 인스턴스들의 `done` 핸들.
+ *
+ *  `cancelTts()`가 이걸 드레인한다. **왜 필요한가**(실측 근거):
+ *  엔진이 `cancel()`에 `onend`를 안 쏘면(iOS Safari 알려진 버그 — :626-627이 50ms로 완화 중)
+ *  잘린 발화의 **2단 워치독이 그대로 살아남는다.** 그 다음 안내가 재생되는 도중 그 워치독이
+ *  만료되면 `done()`이 `unmuteForTts()`를 불러 **재생 중인 TTS가 STT로 새는 창**이 열린다
+ *  (= 물림·자기입력). 실측: A 발화(12자, 2단 상한 ~5.1s) → `cancelTts()` → B 발화 재생 중
+ *  A의 워치독 만료 → `muted=false`. B는 아직 재생 중이었다.
+ *  같은 이유로 `await say(...)` 체인도 워치독까지(최대 20초) 매달렸다(실측 4.9초/12자).
+ *
+ *  드레인은 **새 동작이 아니다** — 정상 브라우저에서 `cancel()`은 `onend`를 쏘므로 `done()`이
+ *  어차피 그 시점에 돈다. iOS 버그 케이스를 정상 경로와 같게 맞추는 것이다.
+ *  `epoch`·큐 계약은 건드리지 않는다(큐는 `synth.cancel()`이 이미 비웠고, epoch는
+ *  useVoiceSession 소유다). */
+const _pendingSpeakDone = new Set<() => void>();
+
 /** Speak text. Returns a Promise that resolves when finished. */
 export async function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
   // 🔴 v0.49 P-1 — 모듈 상수 `synth`(:518 부근)는 **import 시점**에 굳는다. 테스트 하네스의
@@ -646,10 +662,13 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     const done = () => {
       if (settled) return;
       settled = true;
+      _pendingSpeakDone.delete(done);
       if (watchdog) { clearTimeout(watchdog); watchdog = null; }
       _activeController?.unmuteForTts();
       resolve();
     };
+    // 🔴 v0.49 fix49 — `cancelTts()`가 드레인할 수 있도록 등록한다(선언부 주석 참조).
+    _pendingSpeakDone.add(done);
 
     const fireWatchdog = () => {
       // 🔑 `onstart`조차 못 받았는가 = 「엔진이 발화를 시작도 못 했다」. 그냥 늦은 것과 다르다.
@@ -725,8 +744,46 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
   });
 }
 
+/** 진행 중인 TTS를 자른다.
+ *
+ *  🔴 v0.49 fix49(리뷰 H-2 · Larry 확정 = revc 후보 (c)) — **뮤트를 여기서 직접 푼다.**
+ *
+ *  종전엔 `synth.cancel()`만 불렀다. 그런데 뮤트를 거는 쪽은 `speak()`이고(engine.speak 직전,
+ *  :723) 푸는 쪽은 `done()`이라(`onend`/`onerror` **또는 워치독**), 결과적으로
+ *  **「종료 워치독 지속시간 = STT가 죽어 있는 시간의 상한」** 이 된다. v0.49 P-1이 그 상한을
+ *  2.5초 고정에서 최대 20초로 넓혔으므로(정상 발화 절단을 막는 옳은 변경이지만),
+ *  「`onstart`는 왔는데 `onend`가 끝내 안 오는」 축의 피해가 8배가 됐다.
+ *  **앱이 스스로 자른 발화의 뮤트 해제를 엔진 이벤트에 맡길 이유가 없다** — iOS Safari의
+ *  「cancel() 직후 onend 미발생」은 이미 알려진 버그이고(:626-627이 50ms로 완화 중),
+ *  그 완화가 실패하는 케이스가 정확히 이 축이다.
+ *
+ *  ⚠️ **순서가 계약이다** — `cancel()`이 오디오를 먼저 죽인 **뒤에** 푼다. 뒤집으면 아직
+ *  재생 중인 발화가 STT로 새어 자기입력(물림)이 된다.
+ *
+ *  ⚠️ **뮤트 중일 때만 푼다.** 이 함수는 명령 핸들러 선두에서 방어적으로 수십 곳에서 불리고
+ *  대부분 TTS가 안 나가는 상태다. 무조건 부르면 그 전량에 `halfDuplexHold` 해제와
+ *  `scheduleRestart()` 부작용이 붙는다(유령 재시작 + 라이프사이클 로그 빈도 급증).
+ *  `ttsMuted`는 `muteForTts`가 동기로 세우므로 판정이 신뢰할 수 있다.
+ *
+ *  🔴 clamp 20s는 **그대로 둔다**(후보 (a) 미채택) — 내리면 긴 발화에서 워치독이 재생 중
+ *  `done()`을 불러 **뮤트만 풀리고 TTS는 계속** = 물림 재개방이다. 20s의 실기기 판정은
+ *  P-1이 심은 `tts_late_end` 계측이 다음 로그 수거에서 한다.
+ *
+ *  ⚠️ interim barge-in 컷(:353)은 이 함수가 아니라 `synth?.cancel()`을 **직접** 부른다 —
+ *  그래서 `handleInterim`이 `isTtsMuted() === true`를 읽는 전제(v0.48.1 r3 U1 4절)는 안 깨진다.
+ *  건드리려거든 그 4절부터 다시 읽어라.
+ *
+ *  오라클: tests/v049-fix49-cancel-unmute.spec.ts */
 export function cancelTts() {
   if (synth) synth.cancel();
+  // 잘린 발화의 워치독·프라미스를 함께 종결한다(`_pendingSpeakDone` 선언부에 실측 근거).
+  //   `done()`이 워치독을 clear하고 unmute까지 하므로, 아래 게이트는 「in-flight speak은 없는데
+  //   뮤트만 남은」 잔여 상태를 받는다.
+  if (_pendingSpeakDone.size > 0) {
+    for (const done of [..._pendingSpeakDone]) done();
+    _pendingSpeakDone.clear();
+  }
+  if (_activeController?.isTtsMuted()) _activeController.unmuteForTts();
 }
 
 /** v0.33.0 항목4 — 포그라운드 복귀 시 TTS 엔진 해동. iOS Safari는 백그라운드 전환 시 synthesis를
