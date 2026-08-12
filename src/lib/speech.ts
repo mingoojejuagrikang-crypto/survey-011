@@ -625,22 +625,81 @@ function ttsEndWatchdogMs(textLen: number, rate: number): number {
  *  드레인은 **새 동작이 아니다** — 정상 브라우저에서 `cancel()`은 `onend`를 쏘므로 `done()`이
  *  어차피 그 시점에 돈다. iOS 버그 케이스를 정상 경로와 같게 맞추는 것이다.
  *  `epoch`·큐 계약은 건드리지 않는다(큐는 `synth.cancel()`이 이미 비웠고, epoch는
- *  useVoiceSession 소유다). */
+ *  useVoiceSession 소유다).
+ *
+ *  🔴 v0.49 fix49b(max 리뷰 #1·#11) — 이 집합이 담는 것이 **넓어졌다.** 종전엔 「재생 중인
+ *  발화의 done」뿐이었는데, 그 정의로는 두 구멍이 남았다:
+ *   ① 드레인이 `cancelTts()` 안에만 있었다 — 그런데 엔진을 자르는 곳은 거기만이 아니다.
+ *      `speak({interrupt:true})`가 매 호출 `engine.cancel()`을 부르고 `say()`의 기본값이
+ *      그것이다. **주 발화 경로 전체**가 드레인 없이 엔진을 잘랐다.
+ *   ② `interrupt:true`의 50ms 대기 창(:642)에 있는 발화는 아직 아무 데도 등록돼 있지 않아
+ *      **취소도 드레인도 안 됐다** — 「취소됐다」고 답한 뒤 50ms 후에 유령처럼 말을 시작했다.
+ *  그래서 지금 이 집합은 **「엔진 cancel이 일어나면 종결해야 하는 핸들」**이다 —
+ *  재생 중인 발화의 `done`과, 아직 말하지 않았지만 곧 말할 발화의 `abort`가 함께 산다.
+ *  ⚠️ 새 발화 경로를 추가하면 **이 집합에 등록부터 하라.** 두 구멍 다 「등록되지 않은 발화」였다. */
 const _pendingSpeakDone = new Set<() => void>();
+
+/** 엔진 cancel 지점의 공통 계약 — 잘린 발화들을 종결한다(위 선언부 주석의 근거).
+ *  정상 브라우저에서 `cancel()`은 `onend`를 쏘므로 `done()`이 어차피 도는 경로다 —
+ *  `onend`를 삼키는 엔진(iOS Safari)을 정상 경로와 같게 맞추는 것이지 새 동작이 아니다. */
+function drainPendingSpeakDone(): void {
+  if (_pendingSpeakDone.size === 0) return;
+  for (const done of [..._pendingSpeakDone]) done();
+  _pendingSpeakDone.clear();
+}
+
+/** 🔴 v0.49 fix49b(max 리뷰 #5) — **큐에서 차례를 기다리는 발화의 시작 워치독 무장자들.**
+ *
+ *  1단 워치독(2.5초)은 「엔진이 발화를 시작조차 못 했다」를 잡는 FB-3 방어선인데, 종전엔
+ *  **enqueue 시점**에 걸렸다. `interrupt:false`로 큐잉된 발화는 앞 발화가 재생되는 동안
+ *  당연히 시작하지 못하므로, 앞 발화가 2.5초보다 길면(P-1이 정확히 그것을 허용했다)
+ *  뒤 발화의 워치독이 **앞 발화 재생 도중** 터졌다: `done()` → `unmuteForTts()` →
+ *  재생 중인 TTS가 살아 있는 인식기로 샌다. 게다가 그 뒤 실제로 `onstart`가 와도
+ *  `if (settled) return`이 재-뮤트를 막아 **그 발화는 통째로 언뮤트 상태로 재생된다.**
+ *  (부수 피해: 그런 만료가 전부 `tts_watchdog_fired:started=no`로 찍혀 FB-3 텔레메트리에
+ *   평범한 큐 대기가 섞인다.)
+ *
+ *  🔑 앵커를 「내 앞의 발화가 끝나는 시점」으로 옮긴다. **FB-3 경로는 문자 그대로 불변이다** —
+ *  in-flight가 없으면(=첫 발화) 종전처럼 **지금 즉시** 무장한다. 2.5초 상수도 안 건드린다.
+ *  삽입 순서가 곧 큐 순서다(JS `Set`은 삽입 순서를 보장한다) — `done()`이 자기 다음 하나만
+ *  깨운다. */
+const _pendingStartArm = new Set<() => void>();
+
+/** 🔴 v0.49 P-1 — 모듈 상수 `synth`(:518 부근)는 **import 시점**에 굳는다. 테스트 하네스의
+ *  `window` shim은 구조적으로 import보다 늦으므로(같은 워커에서 다른 spec이 먼저 import하면
+ *  끝이다), **TTS 발화 경로 전체가 오라클을 가질 수 없는 상태**였다 — speak()의 워치독을
+ *  지키는 스펙이 한 개도 없었고, 그 눈먼 축에서 P-1이 고친 결함(2.5초 상시 절단)이 살아남았다.
+ *  호출 시점에 한 번 더 읽는다. 실제 브라우저에선 같은 객체를 얻으므로 동작 변화가 없다.
+ *
+ *  🔴 v0.49 fix49b(max 리뷰 #10) — **엔진에 닿는 함수는 전부 이걸 쓴다.** P-1은 `speak()`만
+ *  고쳐서, 같은 파일 안에서 발화는 되는데 취소는 안 되는 비대칭을 남겼다(`cancelTts` 참조).
+ *  새 함수를 추가할 때 `synth`를 직접 읽지 마라 — 그 비대칭이 바로 되살아난다. */
+function getEngine(): SpeechSynthesis | null {
+  return synth ?? (typeof window !== 'undefined' ? window.speechSynthesis ?? null : null);
+}
 
 /** Speak text. Returns a Promise that resolves when finished. */
 export async function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
-  // 🔴 v0.49 P-1 — 모듈 상수 `synth`(:518 부근)는 **import 시점**에 굳는다. 테스트 하네스의
-  //    `window` shim은 구조적으로 import보다 늦으므로(같은 워커에서 다른 spec이 먼저 import하면
-  //    끝이다), **TTS 발화 경로 전체가 오라클을 가질 수 없는 상태**였다 — speak()의 워치독을
-  //    지키는 스펙이 한 개도 없었고, 그 눈먼 축에서 이번 결함(2.5초 상시 절단)이 살아남았다.
-  //    호출 시점에 한 번 더 읽는다. 실제 브라우저에선 같은 객체를 얻으므로 동작 변화가 없다.
-  const engine = synth ?? (typeof window !== 'undefined' ? window.speechSynthesis : null);
+  const engine = getEngine();
   if (!engine) return;
+  /** 50ms 창에서 `cancelTts()`(또는 다른 interrupt)가 이 발화를 무산시켰는가(#11). */
+  let abortedBeforeSpeak = false;
   if (opts.interrupt) {
     engine.cancel();
+    // 🔴 v0.49 fix49b(#1) — 엔진을 자르는 **모든** 지점의 계약이다(선언부 주석). 여기서
+    //   드레인하지 않으면 잘린 발화의 2단 워치독이 살아남아 아래 새 발화 재생 도중 만료된다.
+    drainPendingSpeakDone();
     // iOS Safari: cancel() 직후 speak()하면 onend 미발생 버그 완화
+    // 🔴 v0.49 fix49b(#11) — 이 창 동안에도 **취소 가능해야 한다.** 등록을 sleep 뒤로 미루면
+    //   그 사이의 `cancelTts()`는 이 발화를 찾지 못하고, 취소가 성공했다고 답한 뒤에 유령
+    //   발화가 살아나 사용자가 방금 취소한 값을 되읽으며 STT를 다시 뮤트한다.
+    const abort = () => { abortedBeforeSpeak = true; };
+    _pendingSpeakDone.add(abort);
     await new Promise((r) => setTimeout(r, 50));
+    _pendingSpeakDone.delete(abort);
+    // 취소됐다 — 말하지 않고 끝낸다. ⚠️ 여기서 unmute하지 않는다: 이 발화는 아직
+    //   `muteForTts()`를 걸지 않았고, 뮤트 소유권은 `cancelTts()`의 게이트가 이미 처리했다.
+    if (abortedBeforeSpeak) return;
   }
   const enqueuedAt = Date.now();
   return new Promise((resolve) => {
@@ -659,15 +718,31 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     let stage: 'start' | 'end' = 'start';
     /** 워치독이 실제로 대신 resolve했는가. 늦게 도착한 end/error를 계측할지 판정한다. */
     let watchdogFired = false;
+    /** 1단(시작 감시) 무장 — 「내 차례가 왔다」 시점에 불린다(#5 선언부 주석). */
+    const armStartWatchdog = () => {
+      if (settled || started) return;
+      _pendingStartArm.delete(armStartWatchdog);
+      stage = 'start';
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = setTimeout(fireWatchdog, TTS_START_WATCHDOG_MS);
+    };
     const done = () => {
       if (settled) return;
       settled = true;
       _pendingSpeakDone.delete(done);
+      _pendingStartArm.delete(armStartWatchdog);
       if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+      // 🔴 v0.49 fix49b(#5) — 내가 끝났으니 **큐의 바로 다음 하나**가 이제 시작을 기다릴
+      //   차례다. 전부 깨우면 큐 3번째까지 같이 무장해 원래 결함이 그대로 재현된다.
+      const next = _pendingStartArm.values().next();
+      if (!next.done) next.value();
       _activeController?.unmuteForTts();
       resolve();
     };
     // 🔴 v0.49 fix49 — `cancelTts()`가 드레인할 수 있도록 등록한다(선언부 주석 참조).
+    //   ⚠️ 크기 판정(아래 1단 무장)은 **등록 전** 값을 써야 한다 — 자기 자신을 앞 발화로 세면
+    //   첫 발화조차 영영 무장되지 않는다(FB-3 방어선 전체가 죽는다).
+    const inFlightBefore = _pendingSpeakDone.size;
     _pendingSpeakDone.add(done);
 
     const fireWatchdog = () => {
@@ -702,6 +777,9 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     u.onstart = () => {
       if (settled) return;
       started = true;
+      // 시작이 확인됐으니 대기열 무장자에서 뺀다(#5) — 앞 발화의 done()이 뒤늦게 깨우면
+      //   이미 2단으로 넘어간 발화를 1단으로 되돌린다.
+      _pendingStartArm.delete(armStartWatchdog);
       opts.onStart?.(Date.now() - enqueuedAt);
       // 🔑 **앵커 이동** — 시작이 확인됐으므로 「시작 감시」를 풀고 「종료 감시」로 갈아 무장한다.
       //    기준 시각도 enqueue가 아니라 **지금(onstart)** 이다. 아래 상수 주석의 근거 참조.
@@ -734,8 +812,16 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
      *  30자+ 7/7(100%)** 로 단조 증가했고, 워치독 15건 **전원의 `startDelayMs`가 정상**
      *  (2~628ms; 전체 p50=106·p90=337 안)이었다. 즉 시작 실패가 아니라 **재생이 아직 안 끝난 것**이다.
      *  → 1단은 그대로 두고, `onstart`에서 2단(아래)으로 **앵커를 옮긴다.** */
+    //
+    //  🔴 v0.49 fix49b(max 리뷰 #5) — **값은 또 그대로 두고 「언제부터 재는가」를 옮겼다.**
+    //  위 P-1 근거는 `startDelayMs`(= 내 차례가 온 뒤 **시작**까지)를 재고 썼는데, 타이머는
+    //  enqueue에 걸려 있었다 — `interrupt:false`로 큐잉된 발화에는 **앞 발화의 재생시간이
+    //  통째로 포함**된다. P-1이 정상 발화를 2.5초 넘게 재생하도록 허용한 순간, 그 조합이
+    //  「큐 대기 = 시작 실패」 오판이 됐다(_pendingStartArm 선언부에 피해 서술).
+    //  in-flight가 없으면 **종전과 완전히 동일하게 지금 무장한다** — FB-3 경로 불변.
     const TTS_START_WATCHDOG_MS = 2_500;
-    watchdog = setTimeout(fireWatchdog, TTS_START_WATCHDOG_MS);
+    if (inFlightBefore === 0) armStartWatchdog();
+    else _pendingStartArm.add(armStartWatchdog);
 
     // synth.speak → onstart 사이 50~500ms 갭 동안 STT 값이 필터링 안 되는 버그 수정:
     // muteForTts를 onstart가 아닌 synth.speak 직전에 호출
@@ -775,14 +861,18 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
  *
  *  오라클: tests/v049-fix49-cancel-unmute.spec.ts */
 export function cancelTts() {
-  if (synth) synth.cancel();
+  // 🔴 v0.49 fix49b(max 리뷰 #10) — `getEngine()`으로 통일. 종전엔 모듈 상수 `synth`를 직접
+  //   읽었는데, P-1이 `speak()`만 호출 시점 재평가로 고쳐 **같은 파일 안에서 두 함수가 서로
+  //   다른 엔진을 보는** 상태가 됐다: 하네스(shim이 import보다 늦다)에서 speak은 발화하고
+  //   cancelTts는 cancel을 통째로 건너뛴 채 드레인·unmute만 했다 — 이 함수 자신의 주석이
+  //   「물림 재개방」이라 부르는 **순서 역전 그 자체**이고, 순서를 재는 오라클
+  //   (v049-fix49-cancel-unmute ①)이 cancel을 관측하지 못해 false-green이었다.
+  //   실제 브라우저에선 같은 객체를 얻으므로 동작 변화가 없다.
+  getEngine()?.cancel();
   // 잘린 발화의 워치독·프라미스를 함께 종결한다(`_pendingSpeakDone` 선언부에 실측 근거).
   //   `done()`이 워치독을 clear하고 unmute까지 하므로, 아래 게이트는 「in-flight speak은 없는데
   //   뮤트만 남은」 잔여 상태를 받는다.
-  if (_pendingSpeakDone.size > 0) {
-    for (const done of [..._pendingSpeakDone]) done();
-    _pendingSpeakDone.clear();
-  }
+  drainPendingSpeakDone();
   if (_activeController?.isTtsMuted()) _activeController.unmuteForTts();
 }
 
@@ -790,7 +880,9 @@ export function cancelTts() {
  *  paused로 얼려두는 경우가 있어(다음 speak()가 무음으로 씹힘), 복귀 직후 resume()을 불러준다.
  *  paused가 아니면 no-op(무해). */
 export function resumeTtsEngine() {
-  try { synth?.resume(); } catch { /* ignore — 미지원/모의 환경 */ }
+  // #10 — cancelTts와 같은 근거로 호출 시점 재평가(위 주석). 이 함수는 포그라운드 복귀
+  //   **직후**에만 불리므로, 굳은 상수가 null이면 해동 자체가 조용히 안 일어났다.
+  try { getEngine()?.resume(); } catch { /* ignore — 미지원/모의 환경 */ }
 }
 
 /** Pre-warm the TTS engine to reduce first-utterance delay.

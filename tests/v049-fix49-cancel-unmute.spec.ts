@@ -89,6 +89,17 @@ test.describe('v0.49 fix49 — cancelTts()의 강제 unmute (STT 뮤트 사망 �
     (globalThis as any).window = {
       setTimeout, clearTimeout, setInterval, clearInterval,
       webkitSpeechRecognition: MockRec,
+      // 🔴 v0.49 fix49b(max 리뷰 #10) — **①이 무엇을 재는지 바뀐다.** 종전엔 `cancelTts()`가
+      //   import 시점에 굳은 모듈 상수를 읽어 이 하네스에서 엔진 cancel을 통째로 건너뛰었고,
+      //   그래서 ①의 단언에 'cancel'이 아예 없었다(스펙 본문이 "synth를 끼워 넣을 수는 없다"고
+      //   적어 둔 그 한계). fix49b가 `getEngine()`으로 통일하면서 관측이 가능해졌으므로
+      //   **순서 계약의 진짜 절반**(cancel이 unmute보다 먼저)을 여기서 고정한다 —
+      //   그게 없으면 cancel을 지우거나 뒤로 옮기는 회귀가 이 스펙을 전부 통과한다.
+      speechSynthesis: {
+        onvoiceschanged: null, getVoices: () => [],
+        cancel() { callOrder.push('cancel'); },
+        resume() {}, speak(_u: unknown) {},
+      },
     } as any;
     setBargeInEnabled(true);
   });
@@ -150,13 +161,14 @@ test.describe('v0.49 fix49 — cancelTts()의 강제 unmute (STT 뮤트 사망 �
     MockRec.instances[0].fire('start');
     c.muteForTts();
 
-    // synth를 이 시점에 끼워 넣을 수는 없다(모듈 상수) — 대신 컨트롤러 쪽 순서를 고정한다:
     // unmute는 cancelTts() **안에서** 일어나야 하고(호출 전후가 아니라), 그 앞에 cancel이 있다.
+    // 🔴 fix49b(#10) 이후 **엔진 cancel까지 관측된다** — 이 한 칸이 순서 계약의 본체다:
+    //   뒤집히면 아직 재생 중인 오디오가 살아 있는 인식기로 샌다(물림·자기입력).
     callOrder.push('before-cancelTts');
     cancelTts();
     callOrder.push('after-cancelTts');
 
-    expect(callOrder).toEqual(['before-cancelTts', 'unmute', 'after-cancelTts']);
+    expect(callOrder).toEqual(['before-cancelTts', 'cancel', 'unmute', 'after-cancelTts']);
     expect(c.isTtsMuted()).toBe(false);
   });
 
@@ -172,7 +184,9 @@ test.describe('v0.49 fix49 — cancelTts()의 강제 unmute (STT 뮤트 사망 �
     cancelTts();
     cancelTts();
 
-    expect(callOrder, 'no-op cancel이 unmute 부작용을 만들었다').toEqual([]);
+    // ⚠️ 재는 것은 **unmute 부작용의 부재**다 — 엔진 cancel 자체는 뮤트가 아니어도 무해하게
+    //   불린다(큐를 비우는 것이 이 함수의 원래 일이다. fix49b #10 이후 그게 관측된다).
+    expect(callOrder.filter((c) => c === 'unmute'), 'no-op cancel이 unmute 부작용을 만들었다').toEqual([]);
     await sleep(40);
     expect(MockRec.instances.length, '유령 재시작이 생겼다').toBe(1);
   });
