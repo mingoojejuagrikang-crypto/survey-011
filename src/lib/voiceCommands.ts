@@ -103,6 +103,29 @@ export interface CommandSpec {
    * a comfortable margin above the noise cluster (max 0.313).
    */
   minConfidence?: number;
+  /**
+   * 🔴 v0.49 fix49b(max 리뷰 #15) — **미확인 이상치 알림을 소모하지 않는다.**
+   *
+   * `voiceFinalResolver`의 trendConfirm 분기는 「나머지」 명령을 `trendDemoted:true`로 넘기고,
+   * 호출부는 그걸 받아 dispatch **이전에** `clearAnomalyAlert('trend_dismissed')`로 팝업을 닫는다.
+   * 즉 이 플래그가 없는 명령은 **핸들러가 거부하든 말든 알람이 이미 사라진 뒤**다 —
+   * fix49 M-1이 고친 것이 정확히 그 형태였다(「다음」 한 마디로 미확인 이상치가 소멸).
+   *
+   * 그 판정을 resolver 내부의 id 리터럴로 두면 **선언과 계약이 떨어진다**: 다음에 비소모 명령을
+   * 추가하거나 id를 바꾸는 사람이 resolver를 함께 고쳐야 한다는 걸 알 방법이 없고, 잊으면
+   * M-1이 조용히 되살아난다(팝업은 닫히는데 오라클은 green인 형태). 선언부에 붙여 둔다.
+   *
+   * `VOICE_UI_COMMAND_IDS`와는 **다른 축**이다 — 그쪽은 "값·행·세션을 아예 건드리지 않는다",
+   * 이쪽은 "건드리지만 그 전에 사용자에게 알람부터 답하게 한다".
+   * ⚠️ 이 플래그만으로는 아무것도 막지 못한다. 실제 거부와 안내는 핸들러의 국면 가드
+   * (`gotoAdjacentField`)가 한다 — 한쪽만 있으면 무의미하다는 것이 [PHASE-NAV-1]의 요지다.
+   */
+  preservesAlert?: boolean;
+}
+
+/** 이 명령이 미확인 이상치 알림을 소모하지 않는가(= 알람을 띄운 채 통과시켜야 하는가). */
+export function preservesAnomalyAlert(cmd: VoiceCommand): boolean {
+  return cmd != null && (VOICE_COMMANDS.find((c) => c.id === cmd)?.preservesAlert ?? false);
 }
 
 export const VOICE_COMMANDS: CommandSpec[] = [
@@ -119,8 +142,10 @@ export const VOICE_COMMANDS: CommandSpec[] = [
   //     실제 동작이 다르다: '유지'는 **값이 있어야** 동작하고(없으면 거부) `advance()`를 타
   //     채워진 칸을 건너뛴다(:1922-1936). 항목 이동은 값 유무와 무관하게 **인접 한 칸**만 간다.
   //     도움말에서 두 줄이 같은 말로 읽히면 민구 요구 ④(바뀐 기능을 가르치기)가 실패한다.
-  { id: 'prevField', word: '이전',   display: '이전',     desc: '값 입력 없이 바로 앞 항목으로 돌아갑니다' },
-  { id: 'nextField', word: '다음',   display: '다음',     desc: '값 입력 없이 바로 뒤 항목으로 건너뜁니다' },
+  //   ⚠️ `preservesAlert`는 M-1 계약이다(속성 선언부 주석 참조) — 지우면 「다음」 한 마디로
+  //     미확인 이상치가 소멸하던 결함이 되살아난다. 짝은 `gotoAdjacentField`의 국면 가드다.
+  { id: 'prevField', word: '이전',   display: '이전',     desc: '값 입력 없이 바로 앞 항목으로 돌아갑니다', preservesAlert: true },
+  { id: 'nextField', word: '다음',   display: '다음',     desc: '값 입력 없이 바로 뒤 항목으로 건너뜁니다', preservesAlert: true },
   { id: 'prevRow', word: '이전행',   display: '이전행',   desc: '이전 행으로 이동합니다 (완료된 행은 값을 읽어주고 대기)' },
   { id: 'nextRow', word: '다음행',   display: '다음행',   desc: '다음 행으로 넘어갑니다 (입력 중이던 행은 빈 행으로 남아 데이터 탭에서 채울 수 있어요)', primary: true },
   { id: 'cancel',  word: '취소',     display: '취소',     desc: '현재 인식된 값을 지웁니다' },

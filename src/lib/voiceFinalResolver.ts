@@ -18,7 +18,7 @@
  *  5. atEnd/reviewWait/cellWait 센티넬은 일반 값 발화를 흡수(안내만).
  *  6. 값 경로.
  */
-import { VOICE_COMMANDS, isVoiceUiCommand, type VoiceCommand } from './voiceCommands';
+import { VOICE_COMMANDS, isVoiceUiCommand, preservesAnomalyAlert, type VoiceCommand } from './voiceCommands';
 
 export type AwaitingKind = 'value' | 'modify' | 'trendConfirm' | 'atEnd' | 'reviewWait' | 'cellWait';
 
@@ -66,7 +66,11 @@ export function resolveFinal(input: {
     //   어휘 재배정(08-12)으로 「다음」이 *옆 칸 한 칸*이 되어 심리적 비용이 사라진 만큼 노출
     //   확률이 구조적으로 커졌다. 여기서 알림을 **보존한 채** 통과시키고, 실제 거부와 안내는
     //   `gotoAdjacentField`의 국면 가드가 한다(같은 계약의 두 반쪽 — 한쪽만 고치면 무의미하다).
-    if (cmd === 'prevField' || cmd === 'nextField') return { act: 'dispatch', cmd, trendDemoted: false };
+    //   🔴 v0.49 fix49b(max 리뷰 #15) — 종전엔 여기에 id 리터럴 두 개가 박혀 있었다. 그러면
+    //   「알림을 소모하지 않는다」는 성질이 **명령 선언부에서 보이지 않아**, 다음에 같은 성질의
+    //   명령이 생기거나 id가 바뀔 때 이 줄을 함께 고쳐야 한다는 걸 알 방법이 없다(잊으면 M-1이
+    //   조용히 되살아난다). 성질을 `CommandSpec.preservesAlert`로 옮겨 선언과 계약을 붙였다.
+    if (preservesAnomalyAlert(cmd)) return { act: 'dispatch', cmd, trendDemoted: false };
     if (cmd) return { act: 'dispatch', cmd, trendDemoted: true };
     return { act: 'value', trendCorrection: true };
   }
