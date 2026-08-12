@@ -2441,7 +2441,9 @@ export function useVoiceSession() {
         extra: `cell_wait_absorb:${awaiting.colId}`, text,
         row: awaiting.row, colId: awaiting.colId,
       });
-      await say(`${awaiting.name} 기록값입니다. 수정이라고 말하세요.`);
+      // ⚠️ 문구는 `cellWaitPrompt`(위 #9 SSOT)를 쓴다 — 이 문장이 그 SSOT의 **원본**이지만,
+      //   여기 리터럴을 남겨 두면 「선언은 하나인데 사본이 있는」 [PAST-2] 형태가 된다.
+      await say(cellWaitPrompt(awaiting.name));
       return;
     }
 

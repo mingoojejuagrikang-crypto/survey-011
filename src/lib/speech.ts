@@ -671,9 +671,16 @@ const _pendingStartArm = new Set<() => void>();
  *  지키는 스펙이 한 개도 없었고, 그 눈먼 축에서 P-1이 고친 결함(2.5초 상시 절단)이 살아남았다.
  *  호출 시점에 한 번 더 읽는다. 실제 브라우저에선 같은 객체를 얻으므로 동작 변화가 없다.
  *
- *  🔴 v0.49 fix49b(max 리뷰 #10) — **엔진에 닿는 함수는 전부 이걸 쓴다.** P-1은 `speak()`만
- *  고쳐서, 같은 파일 안에서 발화는 되는데 취소는 안 되는 비대칭을 남겼다(`cancelTts` 참조).
- *  새 함수를 추가할 때 `synth`를 직접 읽지 마라 — 그 비대칭이 바로 되살아난다. */
+ *  🔴 v0.49 fix49b(max 리뷰 #10) — **발화 수명주기 함수는 전부 이걸 쓴다**(`speak`·`cancelTts`·
+ *  `resumeTtsEngine`). P-1은 `speak()`만 고쳐서, 같은 파일 안에서 발화는 되는데 취소는 안 되는
+ *  비대칭을 남겼다(`cancelTts` 참조). 새 함수를 추가할 때 `synth`를 직접 읽지 마라.
+ *
+ *  ⚠️ **의도적 예외 2곳**(고칠 때 이 문단부터 읽어라):
+ *   · `warmupTts()` — `synth.speak()` 호출이 **동기여야** 제스처 컨텍스트 계약(`f6de49c`)이
+ *     산다. 지금 형태가 그 계약을 눈으로 확인하기 쉬운 모양이라 남겼다(리뷰 범위 밖이기도 하다).
+ *     바꾸려면 동기성이 유지되는지부터 증명하라 — 깨지면 iOS에서 **첫 발화가 통째로 안 난다.**
+ *   · `refreshVoices`/`onvoiceschanged`(:534·:556) — 음성 목록은 발화 수명주기가 아니고,
+ *     `synth`가 null이면 애초에 등록할 이벤트도 없다. */
 function getEngine(): SpeechSynthesis | null {
   return synth ?? (typeof window !== 'undefined' ? window.speechSynthesis ?? null : null);
 }
