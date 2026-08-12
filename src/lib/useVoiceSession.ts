@@ -4218,6 +4218,43 @@ export function useVoiceSession() {
       // 성공적인 정상 재커밋만 보류를 해소한다. 시트 취소는 이 함수에 들어오지 않으므로 유지된다.
       clearAnomalyAlert('manual_recommit');
     }
+
+    // 🔴 v0.49 P-2(민구 제보 08-12 · Larry (A) 승인 08-12 10:55) — **키패드 해소도 즉시 초록.**
+    //   음성 경로(:2700-2710)와 **대칭**인 전이다: 알람이 걸린 바로 그 셀에 위반 없는 값이
+    //   커밋되면 팝업을 `next=정정값 · status:'corrected'`로 뒤집는다. 종전엔 이 전이가
+    //   **수동 경로에만 없어서**, 음성으로 뜬 알람을 키패드로 해소하면 `announceField`의
+    //   `clearAnomalyAlert('announce_field')`(:835)까지 붉은톤이 그대로 남았다.
+    //   08-12 실측(2건 전부 이 형태): 09:51:53 발동 → 09:52:04.099 키패드 `188.8` →
+    //   09:52:09.102 해제 = **5.003초** · 09:55:01 → 09:55:09.610 `344.4` → 09:55:13.441 =
+    //   **3.831초**. 지연의 정체는 announce까지의 TTS 직렬이다(echo 1.414s + 행완료 1.095s +
+    //   행헤더 2.189s). 같은 세션의 음성 해소 6건은 전부 인식 순간 corrected라 체감 0초였고,
+    //   수동 발동 알람(manualHold, 위 `manual_recommit`)도 이미 0.318초였다 — **이 경로만 구멍.**
+    //   표시 4곳이 전부 같은 게이트를 읽으므로 이 한 전이가 함께 되돌린다: 글로우
+    //   (`VoiceScreen.tsx:139`) · FB-F 칩 적색(`useVoiceCommitMark.ts:132`) · 알람 카드
+    //   (`CenterStage.tsx:139` FB-10) · 팝업 색(`AnomalyAlertPopup.tsx:74`). 계약 위반이 아니라
+    //   v0.47 "확인·수정으로 해소한 뒤에만 녹색"을 키패드 경로에도 **적용**하는 것이다.
+    //   부수 해소: 종전 5초 동안 팝업이 **옛 이상치값**을 띄운 채 echo TTS만 정정값을 말했다
+    //   (PRINCIPLES §2 시각·청각 불일치) — `next` 갱신이 그것도 같이 닫는다.
+    //
+    //   위치·가드 근거(승인 조건):
+    //   ⓐ **durable persist 성공 이후**다(:4189 게이트 통과). 저장되지 못한 값에 초록을 주지 않는다.
+    //   ⓑ **row+colId 일치 가드** — 다른 셀 알람(정보성 팝업)은 이 커밋과 무관하므로 불변.
+    //   ⓒ **`!violation`** — 정보성 이상치(awaiting이 다른 셀)로 여기 도달한 커밋은 그 자체가
+    //      위반이다. :4251의 `fireManualAlert`가 곧 새 알람을 세우므로 초록 1프레임도 주면 안 된다.
+    //   ⓓ manualHold 보류는 위에서 `clearAnomalyAlert('manual_recommit')`로 이미 내려갔다 →
+    //      여기 도달 시 `alert === null` → no-op. **그 경로의 로그 바이트는 불변**이다.
+    //   ⓔ 화음은 **미러하지 않는다.** 음성 경로는 `playBeep('corrected')` 하나지만 수동 경로는
+    //      v0.47 W1(민구 08-08)이 "모든 확정 커밋에 화음"을 이미 보장한다(:4206) — 여기서
+    //      corrected 화음을 더 내면 같은 커밋이 두 번 울린다.
+    if (!violation) {
+      const liveAlert = useSessionStore.getState().anomalyAlert;
+      if (liveAlert && liveAlert.row === row && liveAlert.colId === colId && liveAlert.status !== 'corrected') {
+        useSessionStore.getState().setAnomalyAlert({
+          ...liveAlert, next: formatForTts(value), status: 'corrected',
+        });
+      }
+    }
+
     if (awaiting?.kind === 'reviewWait') {
       epochRef.current++;
       cancelTts();
