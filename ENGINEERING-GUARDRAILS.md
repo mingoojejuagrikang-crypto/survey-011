@@ -75,9 +75,24 @@
   interim 조기확정). **하나만 막으면 나머지로 샌다.**
 - ⚠️ **`reviewWait`으로 대체하지 마라.** 그쪽은 이동 자체를 거부하는 **행** 상태라, 셀 착지에
   재사용하면 값 있는 셀에 한 번 서는 순간 항목 이동 기능이 통째로 죽는다.
-- **오라클:** `tests/v049-fix49-cell-guard.spec.ts`(7케이스) — 특히 ①(덮어쓰기 금지)과
+- 🔴 **`announceField`를 부르는 코드는 「그 컬럼이 빈 칸임을 이 함수가 보장하는가」를 답할 수
+  있어야 한다.** v0.49 fix49b(max 리뷰)가 잔여 2경로를 더 찾았다 — `goNextRow`의 마지막 행
+  경계와 `advance()`의 `returnStack` 소비다. 둘 다 **커서를 세우는 코드가 아니라 남이 세운
+  커서를 읽어 재안내하는 코드**였고, F-1 이전에는 기록자 전량이 빈 칸만 가리켰기 때문에 값
+  유무를 물을 이유가 없었다. 지금은 물어야 한다(사유는 `[NAV-FILLED-CELL-1]`).
+  판정 기준: `firstIncompleteColIdx` 등으로 **방금 계산한** 인덱스면 `announceField`가 맞고,
+  `activeColIdx`·`ret.colIdx`처럼 **저장돼 있던** 인덱스면 `announceOrCellWait`이다.
+- 🔴 **cellWait에서의 모든 탈출은 cellWait 재진입이다**(fix49b가 세운 통합 불변식). 음성
+  「수정 <값>」·bare 「수정」 후 재기록·키패드 재커밋·수동 보류 [확인] — 전부 「그 셀을 고치고
+  그 셀의 검토 대기로 돌아온다」. 정본은 `proceedAfterCommit`이며, 그 kind 분기를 우회해
+  직접 `advance()`를 부르지 마라. 사용자가 **의도적으로 이동해 들어온** 검토 문맥을 그 문맥이
+  초대한 정정이 파괴하면 안 된다. ⚠️ 같은 이유로 bare 「수정」의 캐스케이드는 이 상태에서
+  **그 셀 하나로 좁힌다**(캐스케이드는 행 전체 검토의 계약이다).
+- **오라클:** `tests/v049-fix49-cell-guard.spec.ts`(10케이스) — 특히 ①(덮어쓰기 금지)과
   ③(빈 셀은 종전대로 값 수신)이 짝이다. 한쪽만 보면 과잉 차단을 못 잡는다.
-- **출처:** `2ae8649`(처방) · 리뷰 `workspace_teamops/deliverables/2026-08-12-v049-review-claude.md` B-1
+  표면 계약은 `tests/v049-fix49b-cellwait-surface.spec.ts`(4)·`-cellwait-alert.spec.ts`.
+- **출처:** `2ae8649`(처방) · fix49b 커밋(잔여 2경로 + 표면) ·
+  리뷰 `…/2026-08-12-v049-review-claude.md` B-1 · `…/2026-08-12-v049-review-max-findings.json` #2·#3·#4·#7
 
 ### [PHASE-NAV-1] 답을 기다리는 국면에서 이동 명령을 통과시키지 마라 — **거부는 두 곳에서 성립한다**
 - **규칙:** 이상치 알람 응답 대기(`trendConfirm`)·수정 재청취(`modify`)·소수부 재질문
@@ -91,6 +106,11 @@
   소멸). `isManualHoldBlocked`가 터치 이동에 대해 막던 우회를 음성이 그대로 열어 둔 형태.
 - ⚠️ **행 이동(`prevRow`/`nextRow`)은 이 규칙 밖이다**(민구 결정 2026-08-12) — 종전 의미 유지.
   resolver 특성화의 대조군(nextRow/prevRow는 여전히 강등)이 그 경계를 지킨다.
+- 🔴 **그 「짝 처리」의 판정은 명령 선언부에 산다** — `CommandSpec.preservesAlert`
+  (`preservesAnomalyAlert()`). v0.49 fix49b 이전엔 resolver 안에 id 리터럴 두 개가 박혀 있어,
+  같은 성질의 명령을 추가하는 사람이 **그 줄의 존재를 알 방법이 없었다.** 새 명령이 알람을
+  소모하면 안 된다면 선언에 플래그를 달아라. `VOICE_UI_COMMAND_IDS`와는 다른 축이다 —
+  그쪽은 "값·행·세션을 아예 안 건드린다", 이쪽은 "건드리지만 그 전에 알람부터 답하게 한다".
 - **오라클:** `tests/v049-fix49-phase-guard.spec.ts`(4) + `tests/voiceFinalResolver.spec.ts`
 - **출처:** `b9714c1` · 리뷰 같은 문서 M-1·M-2
 
