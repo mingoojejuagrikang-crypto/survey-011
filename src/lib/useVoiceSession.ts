@@ -1662,7 +1662,13 @@ export function useVoiceSession() {
       cancelTts();
       epochRef.current++;
       logCell({ type: 'command', parsed, extra: `field_nav_blocked:${awaiting.kind}`, row });
-      const msg = '검토 중입니다. 수정이라고 말하세요.';
+      // 🔴 두 스코프는 **문구를 나눈다.** 이 앱은 안내 문구를 계약으로 다룬다(v0.47.0 V-FIX4) —
+      //   세션 끝(atEnd)에서 "검토 중입니다"라고 하면 사용자는 있지도 않은 검토 상태를 찾는다.
+      //   두 경우 모두 '수정'이 정본 진입로인 것은 같다(cmdModify가 atEnd 센티넬을 :1157-1163에서
+      //   받아 마지막 컬럼을 다시 연다).
+      const msg = awaiting.kind === 'atEnd'
+        ? '입력이 끝났습니다. 수정이라고 말하세요.'
+        : '검토 중입니다. 수정이라고 말하세요.';
       sess.setLastTts(msg);
       await say(msg);
       return;
