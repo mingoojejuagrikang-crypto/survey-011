@@ -224,6 +224,11 @@ test.describe('소수부 재질문 문맥(fractionWhole)', () => {
 
   test('문맥 중 합성 불가 alt는 전체값으로 커밋되지 않는다', () => {
     // `33.3`은 한 자리 소수부가 아니므로 합성 불가 → 건너뛴다(전체값 폴백 금지).
+    // ⚠️ v0.49 P-3(민구 확정 08-12)이 이 금지를 **좁혔다** — 그런데 이 케이스는 여전히 null이다:
+    //   primary `하악`의 사유가 `no_number`라 좁힘 3조건 ①(소수 의도 확인 = decimal_fraction_lost)
+    //   에서 탈락한다. 즉 07-13 회귀 방어선은 그대로 산다. 좁힘이 여는 경로는
+    //   `tests/v0490-p3-parse-reject-0812.spec.ts`(3조건 매트릭스)와
+    //   `tests/decimal-targeted-reask.spec.ts`([STT-15 좁힘])가 진다.
     expect(attempt('하악', { alts: ['하악', '33.3'], fractionWhole: '211' }).parsed).toBeNull();
   });
 });

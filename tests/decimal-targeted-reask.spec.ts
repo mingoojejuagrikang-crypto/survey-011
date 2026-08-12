@@ -292,6 +292,86 @@ test('[STT-15] B: 소수 재질문 → primary·alt 모두 해석 불가 → 재
   expect(anyFragmentCommit).toBe(false);
 });
 
+// ─── 🔴 v0.49 P-3 [STT-15 좁힘] — 소수부 문맥에서도 «전체 재발화 alt»는 받는다 (민구 확정 08-12) ───
+//
+// 08-12 실기기 #8827(09:54:27, row16 횡경): 소수부 재질문(fractionWhole=111) 중 사용자가 전체값을
+// 다시 말했고 primary는 `311 점 의`(decimal_fraction_lost, whole=311)로 또 유실됐는데, **alt
+// `311 .1`이 정답 311.1로 파싱되는데도** [STT-15]의 전체값 폴백 금지에 걸려 버려졌다 →
+// 3차 재질문(7.4초). 원 결정이 막으려던 것은 **조각** alt("하나"→전체값 1, 위 A/B가 지키는 축)라
+// 규칙이 근거보다 넓었다. 3조건(사유=decimal_fraction_lost · alt 파싱값에 소수점 · 정수부가
+// failWhole과 일치) 동시 충족일 때만 좁혀서 받는다.
+//
+// 🔴 **민구의 전제 조건이 이 스펙의 존재 이유다** — 원문:
+//   *"2번 좁혀서 받고, **인식된 값을 TTS 안내로 되돌려 주는것만 잘 유지해주면** 될 거 같아.
+//   사용자가 인식값을 귀로 듣고 잘못 되었다면 수정 명령을 진행할거니깐."*
+// 즉 **값 수용만 되고 echo가 무음이면 계약 위반이다.** 오커밋 방어선이 «귀로 듣고 수정»이므로
+// 아래는 커밋값과 **echo 발화 자체**를 같이 단언한다.
+
+test('[STT-15 좁힘] 소수 재질문 중 전체 재발화 alt "311 .1" → 311.1 즉시 커밋 + 🔴 인식값 echo 발화', async ({ page }) => {
+  await setupAndStart(page);
+
+  // 1차 유실 → 타깃 재질문(fractionWhole=111 무장). 정수부까지 오인식된 08-12 실제 상황이다.
+  await fireStt(page, '111 점 에', 400);
+  expect((await ttsLog(page)).find((t) => t.includes('소수점 아래') && t.includes('111'))).toBeTruthy();
+  await waitForActiveChip(page, '횡경'); // 미커밋
+
+  const before = (await ttsLog(page)).length;
+  // 2차: 사용자가 전체값을 다시 말함. primary는 또 유실(311 점 의), alt가 소수부를 살렸다.
+  await fireSttAlts(page, '311 점 의', ['311 .1', '311 점에'], 600);
+
+  // ① 재질문 없이 커밋되고 다음 셀로 진행한다(종전엔 3차 재질문이었다).
+  await waitForActiveChip(page, '종경');
+  const after = (await ttsLog(page)).slice(before);
+  expect(
+    after.filter((t) => t.includes('소수점 아래')),
+    `좁힘 후에는 3차 재질문이 없다. ttsLog=${JSON.stringify(after)}`,
+  ).toHaveLength(0);
+
+  // ② 🔴 민구 전제 — 수용된 값이 **귀로 되돌아온다**. 이 단언이 깨지면 좁힘은 철회 대상이다.
+  expect(
+    after.some((t) => t.includes('311.1')),
+    `인식값 echo 발화가 없다(민구 전제 위반). ttsLog=${JSON.stringify(after)}`,
+  ).toBe(true);
+
+  // ③ 시트에 서는 값은 311.1 하나다 — 111.x(오인식 정수부)도, 조각 1도 아니다.
+  await fireStt(page, '22.2', 400);
+  await page.waitForTimeout(1500);
+  const sessions = await getIdbSessions(page);
+  const session = sessions[sessions.length - 1];
+  const r1 = session.rows.find((r: any) => r.index === 1);
+  expect(r1?.values?.c8).toBe('311.1');
+  expect(
+    session.rows.some((r: any) => r?.values?.c8 === '111.1' || r?.values?.c8 === '1'),
+    '오인식 정수부(111.1)나 조각(1)이 선 흔적이 없다',
+  ).toBe(false);
+});
+
+test('[STT-15 좁힘] 3조건 미충족 alt는 여전히 거절 — 정수부 불일치("911.1")는 다른 값이다', async ({ page }) => {
+  await setupAndStart(page);
+
+  await fireStt(page, '111 점 에', 400);
+  await waitForActiveChip(page, '횡경');
+
+  // 소수점은 담았지만 정수부가 primary의 failWhole(311)과 다르다 → 두 가설이 합의하지 않았다.
+  await fireSttAlts(page, '311 점 의', ['911.1'], 600);
+  await waitForActiveChip(page, '횡경'); // 커밋 없음 — 재질문 유지
+  const reasks = (await ttsLog(page)).filter((t) => t.includes('소수점 아래'));
+  expect(reasks.length, '재질문이 유지된다').toBeGreaterThanOrEqual(2);
+
+  // 문맥은 보존됐다 — 조각 응답이 정수부(311)와 합성된다.
+  await fireStt(page, '하나', 600);
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '22.2', 400);
+  await page.waitForTimeout(1500);
+  const sessions = await getIdbSessions(page);
+  const r1 = sessions[sessions.length - 1].rows.find((r: any) => r.index === 1);
+  expect(r1?.values?.c8).toBe('311.1');
+  expect(
+    sessions.some((s: any) => s.rows.some((r: any) => r?.values?.c8 === '911.1')),
+    '불일치 alt가 커밋된 흔적 없음',
+  ).toBe(false);
+});
+
 // ─── v0.34.0 O3 — "점요" 소수 의도 + 정수 alt 폴백의 침묵 커밋 차단 (07-14 09:25:49 실사례) ───
 //
 // primary "266 점요"는 파서가 decimal_fraction_lost로 잡아 타깃 재질문 대상이지만, alts 루프가

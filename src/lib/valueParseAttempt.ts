@@ -135,6 +135,37 @@ export function attemptParseValue(input: {
             break;
           }
         }
+        // 🔴 v0.49 P-3(민구 확정 2026-08-12) — [STT-15] 「전체값 폴백 금지」를 **좁힌다.**
+        //   원 결정(07-13)이 막으려던 것은 **조각** alt다: primary "하악"(숫자 없음) + alt "하나"가
+        //   fractionWhole=211 문맥을 모른 채 **전체값 "1"로 커밋**된 사건. 그 방어는 그대로 산다
+        //   — 아래 3조건이 조각을 통과시키지 않는다.
+        //   좁히는 이유(08-12 실측 #8827, 09:54:27 row16 횡경): primary `311 점 의`
+        //   (decimal_fraction_lost, whole=311)인데 alt `311 .1`이 **정답 311.1로 파싱되는데도**
+        //   버려져 3차 재질문으로 갔다(재질문 1회 · 7.4초). 그건 조각이 아니라 **사용자가 전체값을
+        //   다시 말한 것**이고, primary 자신이 같은 정수부로 소수 의도를 확인해 준 경우다.
+        //   문맥 **밖**에서는 같은 alt를 O3 규칙(:아래 144-152)이 이미 수용한다 — 소수부 재질문
+        //   문맥에서만 O3가 꺼져 있던 비대칭을 닫는 것이다.
+        //   🔴 **3조건 동시 충족일 때만**이다(민구가 고른 선택지가 이 3조건 — 넓히지 마라):
+        //    ① primary 사유가 `decimal_fraction_lost` — 사용자가 '점'을 발음해 **소수 의도가 확인**됐다
+        //    ② alt의 **파싱값**이 소수점을 명시적으로 포함 — 조각(단자리·정수)은 여기서 탈락
+        //    ③ 그 정수부가 primary의 `failWhole`과 **일치** — 두 가설이 정수부에 합의했다는 뜻이라
+        //       alt는 "primary가 잃은 소수부를 복구한 후보"이지 다른 값이 아니다
+        //   🔴 **전제 조건(민구 08-12 원문): "인식된 값을 TTS 안내로 되돌려 주는것만 잘 유지해주면
+        //      될 거 같아. 사용자가 인식값을 귀로 듣고 잘못 되었다면 수정 명령을 진행할거니깐."**
+        //      이 경로의 값도 일반 커밋과 **같은 echo TTS**를 탄다(호출자 handleFinal 공통 경로 —
+        //      여기서 하는 일은 `parsed`를 채우는 것뿐이라 이후 흐름이 갈리지 않는다).
+        //      오라클: `tests/decimal-targeted-reask.spec.ts`의 [STT-15 좁힘] 케이스가 **echo 발화
+        //      자체를 단언**한다. 값 수용만 되고 echo가 없으면 그건 계약 위반이다.
+        //   로그: 일반 alt 수용과 **같은 형태**(`stt_alt_used`, extra 없음)로 남긴다 — SOP-003
+        //      바이트 계약에 새 패턴을 추가하지 않는다.
+        if (failReason === 'decimal_fraction_lost' && failWhole != null) {
+          const altFull = col ? parseValueForCol(col, alt) : null;
+          if (altFull !== null && altFull.includes('.') && altFull.split('.')[0] === failWhole) {
+            parsed = altFull;
+            events.push({ kind: 'alt_used', altIdx: ai, text: alt, originalText: text });
+            break;
+          }
+        }
         continue;
       }
       // v0.34.0 O3 — 소수 의도 보존: primary가 decimal_fraction_lost("266 점요" — 소수 의도인데
