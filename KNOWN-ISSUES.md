@@ -1900,3 +1900,44 @@ TTS 구간(`:2522-2523`)에 오버레이가 열리면 **모달 뒤에서 STT 인
   1회차 실행에서 각 1회 실패 후 같은 조건 재실행 2회 연속 green(5182 · workers=1).
 - **판정 절차(다음 사람):** red를 보면 [TEST-MANUAL-CHIP-1]과 같은 절차 — `--grep`으로
   그 2건만 좁혀 A/B부터. 전량에서만 보고 자기 변경의 회귀로 오인하지 마라.
+
+## 2026-08-12 v0.49 P-1 (회차 SSOT: `workspace_teamops/deliverables/2026-08-12-patchA-watchdog.md`)
+
+### [TTS-WATCHDOG-1] TTS 워치독이 `onstart` 이후에도 안 풀려 **정상 발화를 상시 절단** — 30자+ 발화 100%
+
+- **카테고리:** ③ iOS/TTS
+- **상태:** `MONITORING` (처방 `1f52295` 들어감 — **실기기 확인 전 RESOLVED 금지**)
+- **관측(08-12 실기기 iOS 26.6, 10.1분, tts 161건):** `tts_watchdog_fired:started=yes,ms=2500±6`
+  **15건**. 글자수별 워치독율이 **1-9자 0/95(0%) → 25-29자 6/9 → 30자+ 7/7(100%)** 로 단조
+  증가하고, 15건 **전원의 `startDelayMs`가 정상**(2~628ms · 전체 p50=106)이었다.
+  즉 **시작 실패가 아니라 재생이 안 끝난 것**이다. 잘린 것은 전부 안내·재질문 문구
+  ("입력이 끝났습니다. 종료하려면…" 42자 등).
+- **기전:** `TTS_WATCHDOG_MS`가 `enqueuedAt`에 걸린 채 `onstart` 이후에도 풀리지 않아
+  설계 의도(시작 감시)와 달리 **「발화 전체 시간 상한 2.5초」**로 동작했다.
+  `done()`이 `unmuteForTts()`를 부르므로 **TTS 재생 중 STT가 열리고**, 다음 발화의
+  `interrupt:true`가 재생 중인 문장을 `cancel()`로 끊는다.
+- ⚠️ **"종료사유 미수신"이 아니다.** `u.onerror`는 이미 듣고 있었고 Web Speech utterance에
+  `oncancel`은 **존재하지 않는다**(cancel은 onend/onerror로 나온다). 추가할 이벤트가 없다.
+- **대응(`1f52295`):** 값이 아니라 **앵커를 옮겼다** — 1단(enqueue 기준 2.5초 = `onstart`
+  미도착 감시, FB-3 방어선)은 그대로, `onstart`에서 2단(**onstart 기준** 길이비례 상한)으로
+  재무장. 워치독은 안전망으로 유지. 오라클 `tests/v049-p1-tts-watchdog.spec.ts` 4케이스.
+- 🔴 **UNCLEAR:** 「onend가 늦게 온다」와 「끝내 안 온다」는 이 로그로 **가릴 수 없다**
+  (워치독이 2.5초에 관측을 잘라 그 뒤 기록이 없다). → `tts_late_end` 계측을 신설했다.
+- **실기기 확인 절차(다음 회차):** ① `tts_watchdog_fired`의 `stage=end` 건수(0이 이상적)
+  ② `tts_late_end` 유무 → 위 UNCLEAR 판정 ③ 30자+ 안내가 **끝까지 재생되는지 민구 청취.**
+
+### [TEST-SPEECH-SYNTH-1] 모듈 상수 `synth`가 import 시점에 굳어 **speak() 경로에 오라클을 둘 수 없었다**
+
+- **카테고리:** ⑨ 테스트 함정
+- **상태:** `RESOLVED` (`1f52295` — 다만 **같은 형태의 모듈 상수는 어디서든 재발한다**)
+- **관측:** `speech.ts`의 `const synth = typeof window !== 'undefined' ? window.speechSynthesis : null`
+  는 **import 시점**에 고정된다. 테스트의 `window` shim은 구조적으로 그보다 늦다 —
+  **같은 워커에서 다른 spec이 `speech.ts`를 먼저 import하면 끝이다.**
+  그 탓에 TTS 발화 경로를 지키는 스펙이 **0개**였고, 그 눈먼 축에서 [TTS-WATCHDOG-1]이 살아남았다.
+- 🔴 **증상이 「flake」로 위장한다.** 신규 스펙 ①이 **단독 4.1s green** → `speech-lifecycle`과
+  같이 돌리자 **504ms fail**이었다. `synth`가 null이면 `speak()`가 **즉시 return**하므로
+  단언이 그냥 통과하거나 시간만 안 맞는다 — `[TEAMOPS-27]`의 역방향이고, 방치하면
+  전체 스위트에서 **green으로 보이는 무판정**(`[TEAMOPS-64]`)이 된다.
+- **대응:** `speak()` 안에서 engine을 **호출 시점에 재평가**(실브라우저 동작 무변화).
+- 👉 **다음 사람에게:** 모듈 스코프에서 `window.*`를 상수로 잡은 코드에 오라클을 붙일 때는
+  **스펙 순서를 양방향으로 돌려라**(정순·역순). 한 방향만 green인 것은 통과가 아니다.
