@@ -25,6 +25,7 @@ import {
   pastValue,
   sessionFixedKeyColumns,
   previousSurveyRound,
+  fixedKeyCellMatches,
   serializePastIndexEntry,
   deserializePastIndexEntry,
 } from '../src/lib/pastValues';
@@ -459,6 +460,40 @@ test.describe('previousSurveyRound — 세션 고정 키의 직전 조사일', (
     const headers = ['조사일자', '농가명', '라벨', '조사나무', '횡경', '종경'];
     const idx = buildPastIndex(headers, [], W3_COLS, resolveRoundCol(W3_COLS, null));
     expect(previousSurveyRound(idx, W3_COLS, null, '2026-06-12')).toEqual({ kind: 'none' });
+  });
+
+  // ─── 🔴 v0.49 r4 M9(claude r3 #4) — 수치 고정 키도 **표기**를 넘어야 한다. ──────────
+  // date만 정규화 2차를 받고 나머지는 바이트 정확 대조였다. USER_ENTERED 강제 변환('007'→7)과
+  // 소수 표기('1.0'↔'1')에서 영구 「기록 없음」이 난다 — date 축과 같은 거짓말이다.
+  // 대조군들이 「보수적으로 좁혔다」는 것을 고정한다: text/options 불변 · 엄격 십진만.
+  test('M9 — 수치 고정 키: USER_ENTERED 강제 변환(007 → 7)과 소수 표기(1.0 ↔ 1)를 넘어 일치', () => {
+    const intKey = col('k1', '라벨', { type: 'int' });
+    const floatKey = col('k2', '규격', { type: 'float' });
+    expect(fixedKeyCellMatches(intKey, '7', '007')).toBe(true);
+    expect(fixedKeyCellMatches(intKey, '007', '7')).toBe(true);
+    expect(fixedKeyCellMatches(floatKey, '1', '1.0')).toBe(true);
+    expect(fixedKeyCellMatches(floatKey, '1.50', '1.5')).toBe(true);
+    expect(fixedKeyCellMatches(intKey, '+7', '7')).toBe(true);
+  });
+
+  test('M9 대조군 — 다른 수는 여전히 불일치(2차 대조가 키를 뭉개지 않는다)', () => {
+    const intKey = col('k1', '라벨', { type: 'int' });
+    expect(fixedKeyCellMatches(intKey, '8', '7')).toBe(false);
+    expect(fixedKeyCellMatches(intKey, '', '7')).toBe(false);
+    expect(fixedKeyCellMatches(intKey, undefined, '7')).toBe(false);
+  });
+
+  test('M9 대조군 — text/options는 **값의 의미를 건드리지 않는다**(007이 고유 라벨일 수 있다)', () => {
+    expect(fixedKeyCellMatches(col('k1', '라벨', { type: 'text' }), '7', '007')).toBe(false);
+    expect(fixedKeyCellMatches(col('k2', '선택', { type: 'options' }), '7', '007')).toBe(false);
+  });
+
+  test('M9 대조군 — 넓은 수 표기(지수·16진·천단위·Infinity)는 일부러 제외한다', () => {
+    const intKey = col('k1', '라벨', { type: 'int' });
+    expect(fixedKeyCellMatches(intKey, '1e3', '1000')).toBe(false);
+    expect(fixedKeyCellMatches(intKey, '0x10', '16')).toBe(false);
+    expect(fixedKeyCellMatches(intKey, '1,000', '1000')).toBe(false);
+    expect(fixedKeyCellMatches(intKey, 'Infinity', 'Infinity'), '정확 일치는 종전대로 통과').toBe(true);
   });
 
   // ─── 🔴 v0.49 r3 #4 — 고정 키 대조는 **시트 서식**을 넘어야 한다. ────────────────

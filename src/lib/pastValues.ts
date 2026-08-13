@@ -285,12 +285,32 @@ export type PrevSurveyRound =
  * 컬럼에서 정확 일치가 실패했을 때의 2차 시도이고, 양쪽 다 파싱돼야 참이다(파싱 불가끼리
  * `null === null`로 통과하는 구멍을 막는다).
  */
+/** 🔴 v0.49 r4 M9 — 수치 2차 대조를 허용하는 **엄격한** 십진 형태. 지수(`1e3`)·16진(`0x10`)·
+ *  천단위 구분(`1,000`)·`Infinity`는 일부러 제외한다: 「같은 수의 다른 표기」를 넓히려는 것이지
+ *  파서를 넓히려는 것이 아니다. 넓힐수록 **다른 샘플이 같은 키로 붙는** 위험이 커진다. */
+const STRICT_DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
+
 export function fixedKeyCellMatches(col: Column, cell: string | undefined, want: string): boolean {
   const raw = (cell ?? '').trim();
   if (raw === want) return true;
-  if (col.type !== 'date') return false;
-  const got = normalizeDateCell(raw);
-  return got !== null && got === normalizeDateCell(want);
+  if (col.type === 'date') {
+    const got = normalizeDateCell(raw);
+    return got !== null && got === normalizeDateCell(want);
+  }
+  // 🔴 v0.49 r4 M9(claude r3 #4) — **수치 컬럼은 수로 대조한다.** date만 정규화 2차를 받고
+  //   나머지는 바이트 정확 대조라, 시트를 거치며 표기가 바뀌는 두 형태가 영구 불일치였다:
+  //     · `USER_ENTERED` 강제 변환 — 앱의 고정값 `'007'`이 시트에서 숫자 7이 되고
+  //       FORMATTED_VALUE로 `'7'`이 돌아온다.
+  //     · 소수 표기 — `'1.0'`이 `'1'`로 그려진다(반대도 마찬가지).
+  //   결과는 date 축과 **똑같다**: 영구 「기록 없음」(A5/#4가 닫으려던 그 거짓말).
+  //   ⚠️ **보수적으로 좁힌다**(Larry 지시 — 위험하면 등재로 강등):
+  //     ① `int`/`float`에만 — `text`/`options`는 값의 의미를 건드리지 않는다(`'007'`이
+  //        고유 라벨일 수 있다). ② 양쪽 다 엄격 십진 형태여야 한다(`STRICT_DECIMAL`).
+  //     ③ 정확 일치를 **먼저** 본다(위) — 2차는 실패했을 때만.
+  //   오라클: tests/pastValues.spec.ts 「M9 — 수치 고정 키」
+  if (col.type !== 'int' && col.type !== 'float') return false;
+  if (!STRICT_DECIMAL.test(raw) || !STRICT_DECIMAL.test(want)) return false;
+  return Number(raw) === Number(want);
 }
 
 export function previousSurveyRound(
