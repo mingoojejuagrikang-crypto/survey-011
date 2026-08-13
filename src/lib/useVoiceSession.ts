@@ -1310,6 +1310,21 @@ export function useVoiceSession() {
     const row = sess.activeRow;
     const total = computeTotalRows(getSessionColumns());
 
+    // 🔴 v0.49 r6 Y3(claude #3) — **종료 중에는 진행하지 않는다. 단 내구성 부기는 남긴다.**
+    //   이 함수는 Z2가 모은 착지 넷의 호출부이면서, 그 넷에 **속하지 않는 전이를 스스로 한다**:
+    //   아래 `sess.setPhase('complete')`(행 완료 표시)와 행 이동이 그것이다. 종료 중 커밋
+    //   continuation이 여기 도달하면 `stopping`이 `complete`로 덮여 종료 절차의 상태 판정이
+    //   무너지고, 완료 낭독이 종료 안내를 밀어낸다(R4-F2가 착지 축에서 닫은 그 형태).
+    //   ⚠️ **부기까지 건너뛰면 안 된다** — 그러면 방금 커밋된 값이 완료 마킹 없이 남아
+    //     `stop()`의 persist가 `complete:false`로 굳힌다(= sync가 영영 안 올린다). 종료 중에는
+    //     셀 배너로 고지할 표면이 없으므로(화면이 StoppingState) durable 실패는 `stop()`의
+    //     `persistError` 경로가 받는다 — 여기서는 `void`로 부기만 태운다.
+    if (sess.phase === 'stopping') {
+      if (isRowVoiceComplete(row, vc)) void finalizeRowCompletion(row);
+      logCell({ type: 'session', extra: 'advance_refused:stopping', row });
+      return;
+    }
+
     // Still voice cols in this row?
     // (v0.33.0 백로그 A — v0.4.5 I3 "이전" 재입력 모드(isReentry) 폐지: 채워진 필드 스킵이 유일 경로.)
     const nextIdx = sess.activeColIdx + 1;
@@ -2075,6 +2090,18 @@ export function useVoiceSession() {
       if (targetRow < 1 || targetRow > total) return;
       const cur = sess.activeRow;
       if (targetRow === cur) return;
+      // 🔴 v0.49 r6 Y3(claude #3) — **행 이동 공유 코어에도 종료 가드를 건다.** Z2가 착지 넷을
+      //   `armLanding`으로 모으며 stopping을 거절하게 했지만, 이 코어는 그 착지들의 **호출부**라
+      //   가드 밖에 있었다: 거절은 착지에서 일어나고 그 **앞**의 `setReturn`·`setActiveRow`·
+      //   `epoch` bump·`cancelTts`·행 낭독은 이미 다 실행된 뒤다. 종료 절차가 스냅샷을 뜨는
+      //   동안 활성 행이 옮겨지면 `persistSession`의 `activeHasData` 판정이 다른 행을 본다.
+      //   ⚠️ 형제 콜러 둘(`gotoAdjacentRow`:2117 · `goNextRow`)은 각자 이 가드를 갖고 있었고
+      //     **공유 코어만 없었다** — 새 콜러(자동입력 칩 편집 → `computeRowFromAutoChange`)가
+      //     그 사이로 들어온다. 가드를 콜러마다 복사하는 대신 코어에 둔다(Z2의 교훈).
+      if (sess.phase === 'stopping') {
+        logCell({ type: 'session', extra: `jump_refused:stopping:${cur}->${targetRow}` });
+        return;
+      }
       // v0.33.0 B-1 — 행 이동 attribution 오염 해소: 음성 '이전'/'다음' 경유 이동이 'touch:'로
       // 하드코딩되던 것을 source 파라미터화(pause/resume의 phase:<source> 패턴). extra 형태는
       // `<source>:<from>-><to>`로 유지해 기존 `touch:` 파서와 모양 호환.
@@ -2085,12 +2112,20 @@ export function useVoiceSession() {
       cancelTts();
       // v5.2: bump epoch so in-flight handleFinal's advance() guard aborts
       epochRef.current++;
+      // 🔴 v0.49 r6 Y3(claude #7) — bump **직후** 값을 잡아 둔다(`gotoAdjacentRow` 경계 :2146의
+      //   패턴). 아래 두 착지는 `await announceRowDiff(...)` **뒤**에 무장하는데, 그 안내 중
+      //   barge-in 명령이 들어오면 그 핸들러가 이미 커서와 대기 상태를 옮긴 뒤다 — 낡은 좌표로
+      //   재무장하면 사용자가 귀로 들은 대상과 실제 커밋 대상이 갈린다(무음도 오류도 아닌
+      //   **정상처럼 보이는 오귀속**). 경계 둘은 fix49b #6에서 이미 이 가드를 받았고 공유 코어만
+      //   빠져 있었다.
+      const startEpoch = epochRef.current;
       awaitingFieldRef.current = null;
       // v0.33.0 백로그 A(민구 결정 3) — 완료 행 착지: 첫 필드 재안내(값 수신) 대신 "값 읽어주기+대기".
       // (기존 함정: firstIncompleteColIdx 폴백 0 → 첫 필드 재안내 → bare 값이 첫 항목만 덮어쓴 뒤
       //  advance가 returnRow로 튕겨 복귀 — 2번째 이후 항목은 음성으로 접근 불가.)
       if (isRowVoiceComplete(targetRow, vc)) {
         await announceRowDiff(cur, targetRow);
+        if (epochRef.current !== startEpoch) return;
         await enterReviewWait(targetRow);
         return;
       }
@@ -2101,6 +2136,7 @@ export function useVoiceSession() {
       // ('paused' 등 다른 phase는 건드리지 않는다 — 일시정지 해제는 resume()만의 소관).
       if (sess.phase === 'complete') sess.setPhase('active');
       await announceRowDiff(cur, targetRow);
+      if (epochRef.current !== startEpoch) return;
       if (vc[targetCol]) await announceField(vc[targetCol]);
     },
     [announceField, announceRowDiff, enterReviewWait],
