@@ -29,7 +29,14 @@ export function ModifyIndicatorPill({ name, prevValue, newValue, reaskReason = n
   const visibleValue = committed ? newValue : interim;
   const valueFitRef = useRef<HTMLSpanElement>(null);
   const fitRef = useFitGroup<HTMLDivElement>(
-    [name, prevValue, newValue, interim, committed],
+    // 🔴 v0.49 r3 #5 — `reaskReason`이 deps에 있어야 한다. 아래 `ReaskCue`가 이 컨테이너의
+    //   **flex 자식**으로 붙었다 다시 빠지므로 내용 높이가 바뀌는데, deps에 없으면 재측정이
+    //   돌지 않는다. 형제 표면(`VoiceHero`)은 이미 그것을 fit 축으로 취급한다(:90) — 한쪽만
+    //   빠지면 같은 큐가 표면에 따라 다르게 잘린다.
+    //   실측(375×812, 이 픽스처): 넘침 0 · 큐는 카드 안(잘림 없음)이라 **현재는 재현되지 않는다.**
+    //   그래도 넣는다 — 부모가 `overflow:'hidden'`이고 컨테이너에 `ABSORB_CLAMP`가 걸려 있어,
+    //   항목명이 길거나 화면이 더 좁으면 낡은 fit이 정확히 그 큐를 자른다.
+    [name, prevValue, newValue, interim, committed, reaskReason],
     [{
       variable: '--fit-value',
       members: [valueFitRef],
