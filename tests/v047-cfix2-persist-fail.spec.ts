@@ -13,6 +13,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
@@ -141,6 +142,9 @@ const countBeeps = (events: Array<{ type: string; extra?: string }>, kind: strin
   events.filter((e) => e.type === 'app' && (e.extra ?? '').startsWith(`beep_play:kind=${kind}`)).length;
 
 async function setupAndStart(page: Page) {
+  // [TEST-GUM-1] — gUM 스텁이 없으면 `start()`의 마이크 획득이 로컬 헤드리스에서 응답하지 않아
+  //   세션 시작 자체가 막힌다(제품 회귀 아님). 이 spec들의 계약은 마이크 상태와 무관하다.
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(

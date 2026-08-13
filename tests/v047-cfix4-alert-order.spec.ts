@@ -13,6 +13,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 import { BASE } from './baseUrl';
 import { stubSheets, SETTINGS as AZ_SETTINGS, STORE_KEY, PHONE_402 } from './fixtures/activeZones';
 
@@ -100,6 +101,9 @@ async function loadLogEventsFromIDB(page: Page) {
 test('C-FIX4 — 비-awaiting 위반 수동 커밋: 알람 즉시(팝업·트릴·알람TTS) + 값 단독 에코 없음 + 화음·흐름 유지', async ({ page }) => {
   await page.setViewportSize(PHONE_402);
   await stubSheets(page); // 측정항목01 직전값 100.0 주입(추세 위반 재료)
+  // [TEST-GUM-1] — gUM 스텁이 없으면 `start()`의 마이크 획득이 로컬 헤드리스에서 응답하지 않아
+  //   세션 시작 자체가 막힌다(제품 회귀 아님). 이 spec들의 계약은 마이크 상태와 무관하다.
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(
