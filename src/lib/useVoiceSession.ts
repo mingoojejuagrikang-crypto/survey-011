@@ -2301,6 +2301,22 @@ export function useVoiceSession() {
       cancelTts();
       const curVal = useSessionStore.getState().getRowValues(a.row)[a.colId] ?? '';
       if (curVal !== '') {
+        // 🔴 v0.49 r3 #7(claude r2 MEDIUM) — **살아 있는 복귀 예약은 '유지'가 파기하지 않는다.**
+        //   가드레일 [NAV-FILLED-CELL-1]: *"정본은 `proceedAfterCommit`이며 그 kind 분기를 우회해
+        //   직접 `advance()`를 부르지 마라."* 도달 경로는 알람 강등이다: 이상치 알람(trendConfirm +
+        //   resumeCell)에서 '수정'이라고 답하면 `demoteTrendConfirm`이 **예약을 보존한 채** modify로
+        //   내리는데, 그 셀은 아직 값을 들고 있다(재청취 중일 뿐 지워지지 않았다). 거기서 마음을
+        //   바꿔 '유지'라고 하면 종전엔 곧장 `advance()`로 빠져 셀 검토 문맥이 증발했다.
+        //   같은 상태에서 '확인'은 `trendResolve`(:2475)가 `proceedAfterCommit`으로 착지시킨다 —
+        //   **같은 상태·같은 목적의 조작이 어휘에 따라 갈리면 안 된다**(fix49b가 세운 대칭).
+        //   ⚠️ 예약이 **없는** 상태(cellWait·reviewWait·atEnd 등)의 '유지'는 종전대로 전진한다.
+        //   가드레일이 열거한 네 경로는 전부 **정정**(그 셀을 고친다)이고, '유지'는 정정이 아니라
+        //   「그대로 두고 넘어간다」다 — 그 의미를 바꾸는 것은 민구 확정이 필요한 별개 결정이라
+        //   여기서 하지 않는다(산출물에 보고).
+        if (resumeCellOf(a) != null || resumeReviewOf(a) != null) {
+          await proceedAfterCommit(a);
+          return;
+        }
         await advance();
         return;
       }
