@@ -1498,6 +1498,36 @@ export function useVoiceSession() {
     await say(opts?.tail ?? REASK_TTS[reason]);
   }, [armRejectCue, say]);
 
+  /**
+   * 🔴 v0.49 r5 Z6(claude #6) — **재청취 안내의 소수 문맥 판정 한 곳.**
+   *
+   * `'수정'`(재수정)과 `'취소'`는 **거절이 아니다** — 접수된 명령이고 앱이 같은 칸을 다시 듣는다.
+   * 그래서 `rejectValue`(비프 + 거절 큐)를 타지 않는다. 하지만 「살아 있는 소수부 재질문 문맥에서는
+   * 문구도 클립도 그 문맥을 따른다」는 **같은 계약**을 진다. 두 곳이 그걸 각자 안 지키고 있었다:
+   *
+   *   ① **표면 모순** — 화면은 「111 점, 소수점 아래」인데(문맥이 살아 있으므로 큐가 그대로 떠
+   *      있다) 귀에는 `측정항목01 다시 말씀해 주세요.`가 들렸다. 사용자가 전체값을 말해야 하는지
+   *      소수부만 말해야 하는지 알 수 없다(PRINCIPLES §2 — R4-F3와 같은 형태). 그리고 전체값을
+   *      말하면 `awaiting.fractionWhole`이 살아 있어 합성 규칙과 충돌한다.
+   *   ② **[CLIP-DECIMAL-FRAG-1] 위반** — `armClipForCell`이 슬롯을 재시작하면 직전 원본 전체발화
+   *      버퍼가 폐기돼 커밋 클립에 조각만 남는다. 소수 재질문은 조각 발화만 유도하므로 그 슬롯은
+   *      **계속 녹음**해야 한다(그 계약의 본문).
+   *
+   * ⚠️ 소수 문맥이 아니면 종전 그대로다 — 슬롯 재무장은 [CLIP-VAL-1]①이 세운 계약이고
+   *   (`say()`는 `announceField`와 달리 클립을 시작하지 않는다), 문구는 §2 쌍 상수다.
+   * 오라클: tests/v049-r5-z6-relisten-context.spec.ts
+   */
+  const relistenInContext = useCallback(async (a: AwaitingField): Promise<void> => {
+    const whole = fractionWholeOf(a);
+    if (whole != null) {
+      // 화면 큐는 이미 이 문구를 그리고 있다(아무도 지우지 않았다) — 다시 세우지 않고 맞춘다.
+      await say(decimalReaskPrompt(whole));
+      return;
+    }
+    armClipForCell(a.row, a.colId);
+    await say(relistenPrompt(a.name));
+  }, [armClipForCell, say]);
+
   /** 방금 커밋된 값의 이상치 알람 검사(v0.8.0). 전역 마스터 토글 제거 — 컬럼에 방향 규칙
    *  (trendRule) 또는 변동률 % 임계값(pctThreshold)이 하나라도 있으면 활성. 규칙 없는 컬럼은
    *  검사 자체가 없고(로그 없음), 판정 불가(인덱스 없음·키 불완전·직전 회차/과거값 없음)는
@@ -2564,21 +2594,26 @@ export function useVoiceSession() {
       // before enterModifyMode starts a fresh clip. The SAVE is deferred: enterModifyMode resolves
       // the modify TARGET cell, and a direct "수정 <값>" re-keys the clip to that target so its
       // pointer isn't orphaned (CLIP-CMD). Background save — never blocks the voice flow.
-      const pendingCmd = preserveCommandClip(a.row, a.colId);
+      // 🔴 v0.49 r5 Z6(claude #6) — **소수 문맥에서는 활성 클립을 아예 건드리지 않는다.**
+      //   `preserveCommandClip`은 첫 줄에서 `stopClip()`을 부른다. 소수 재질문 중이라면 그 슬롯이
+      //   바로 [CLIP-DECIMAL-FRAG-1]이 「계속 녹음하라」고 못박은 원본 전체발화 버퍼다 — 여기서
+      //   끊으면 커밋 클립이 조각만 담는다. 명령 발화(`'수정'`) 자체는 그 연속 녹음 **안에**
+      //   남으므로 분석에서 사라지지 않는다(별도 `:cmd<n>` 키로 갈리지 않을 뿐이다).
+      //   ⚠️ 순서 주의 — 판정을 `preserveCommandClip` **앞**에서 해야 한다(그 호출이 곧 stop이다).
+      const relistenWhole = isModifyLike(a) ? fractionWholeOf(a) : undefined;
+      const pendingCmd = relistenWhole != null ? null : preserveCommandClip(a.row, a.colId);
       if (isModifyLike(a)) {
         // No target re-link here (we're already re-listening for the value) — save against the
         // awaiting cell so the utterance still survives for analysis.
         pendingCmd?.saveDefault();
-        // [CLIP-VAL-1]①: preserveCommandClip above STOPPED the active clip — restart the slot
-        // before the re-ask TTS so the re-spoken value IS recorded (it deterministically wasn't:
-        // say() never starts a clip, unlike announceField). Also the landing path for a B4
-        // trendConfirm dismissed by '수정' (trendConfirm은 수정 의미론을 겸장한다).
-        armClipForCell(a.row, a.colId);
-        // 🔴 v0.49 r4 M11 — 인라인 리터럴 → §2 쌍 상수(`relistenPrompt`). **거절이 아니다**:
-        //   '수정'은 접수됐고 앱이 같은 칸을 다시 듣는다(전제 재검증 — 산출물 보고).
-        //   그래서 `armRejectCue`(비프+거절 큐)를 붙이지 않는다 — 붙이면 접수된 입력을
-        //   거절됐다고 고지하고 `beep_play:kind=reject` 집계까지 오염된다.
-        await say(relistenPrompt(a.name));
+        // 🔴 v0.49 r4 M11 — 인라인 리터럴 → §2 쌍 상수. **거절이 아니다**: '수정'은 접수됐고 앱이
+        //   같은 칸을 다시 듣는다. 그래서 `armRejectCue`(비프+거절 큐)를 붙이지 않는다 — 붙이면
+        //   접수된 입력을 거절됐다고 고지하고 `beep_play:kind=reject` 집계까지 오염된다.
+        // 🔴 v0.49 r5 Z6 — 문구·클립 규율은 `relistenInContext`가 소유한다(그 헤더 참조).
+        //   소수 문맥이 **아닐 때만** 슬롯을 재무장한다([CLIP-VAL-1]①: `preserveCommandClip`이
+        //   활성 클립을 STOP했으므로 재발화가 결정적으로 녹음되지 않던 결함). B4 trendConfirm이
+        //   '수정'으로 해소된 착지도 이 경로다(trendConfirm은 수정 의미론을 겸장한다).
+        await relistenInContext(a);
         return;
       }
       // 상호배타 순서 주의 — extractModifyValue는 '수정' 뒤 **임의 텍스트**를 값 후보로 돌려주므로
@@ -2621,9 +2656,11 @@ export function useVoiceSession() {
         await say(msg);
         return;
       }
-      armClipForCell(a.row, a.colId);
       // M11 — 같은 상수. '취소'도 접수된 명령이지 거절이 아니다(위 `cmdModify`와 같은 근거).
-      await say(relistenPrompt(a.name));
+      // 🔴 v0.49 r5 Z6 — 문구·클립 규율은 `relistenInContext`가 소유한다. 여기는
+      //   `preserveCommandClip`을 거치지 않으므로 소수 문맥의 활성 슬롯이 **살아 있고**,
+      //   종전 무조건 `armClipForCell`이 그 원본 전체발화 버퍼를 폐기했다([CLIP-DECIMAL-FRAG-1]).
+      await relistenInContext(a);
     }
 
     // ── 경로 판정(순수 결정표 — voiceFinalResolver, 특성화 spec 고정) ──
@@ -3589,7 +3626,7 @@ export function useVoiceSession() {
     //   이유가 정확히 그 드리프트다. 같은 diff가 형제들(goNextRow·gotoAdjacentRow)은 등재했다.
     // v0.49 r5 Z5 — `armRejectCue`가 dep에서 빠졌다: 이 함수가 **직접 부르는 곳이 없어졌다**
     //   (전부 `rejectValue` 종단 경유). 그게 곧 「단일 종단」의 기계적 증거다.
-  }, [advance, enterModifyMode, enterReviewWait, proceedAfterCommit, rejectValue, say, goNextRow, gotoAdjacentField, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
+  }, [advance, enterModifyMode, enterReviewWait, proceedAfterCommit, rejectValue, relistenInContext, say, goNextRow, gotoAdjacentField, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
 
   // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
   const handleInterim = useCallback((text: string, confidence?: number) => {

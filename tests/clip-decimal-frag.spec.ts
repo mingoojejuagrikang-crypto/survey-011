@@ -297,6 +297,51 @@ test('소수 재질문 후 전체값 재발화("29.9")도 정상 — clip_decima
   expect(row1.values.c8).toBe('29.9');
 });
 
+/**
+ * 🔴 v0.49 r5 Z6(claude #6) — **`'취소'`도 이 계약의 소비자다.**
+ *
+ * 이 파일이 지키던 것은 *거절* 경로의 클립 규율이었는데, 소수 재질문 중에 들어오는 **접수된
+ * 명령**(`'취소'`)이 무조건 `armClipForCell`로 슬롯을 재시작해 같은 버퍼를 폐기하고 있었다.
+ * 「누가 슬롯을 만지는가」는 거절/명령의 구분과 무관하다 — 문맥이 정한다.
+ *
+ * 클립 축을 여기 두는 이유: `[CLIP-DECIMAL-FRAG-1]`의 계측 하네스(MediaRecorder 스텁)를
+ * 이 파일이 소유한다. 같은 수정의 **표면 축**(화면·TTS 일치)은 `v049-r5-z6-relisten-context`에 있다.
+ */
+test('Z6 — 소수 재질문 중 「취소」는 클립을 재시작하지 않는다(접수된 명령도 같은 계약)', async ({ page }) => {
+  await setupAndStart(page);
+
+  await fireStt(page, '29 점 부', 600); // decimal_fraction_lost → 정수부 29 보존 타깃 재질문
+  expect((await ttsLog(page)).find((t) => t.includes('소수점 아래')), '전제: 소수 문맥이 섰다').toBeTruthy();
+  const before = (await getClipLog(page)).filter((e) => e.extra?.startsWith('clip_started')).length;
+
+  await fireStt(page, '취소', 700);
+
+  expect(
+    (await getClipLog(page)).filter((e) => e.extra?.startsWith('clip_started')).length - before,
+    '소수 재질문 중 「취소」가 슬롯을 재시작했다 — 원본 전체발화 버퍼가 폐기돼 조각만 남는다',
+  ).toBe(0);
+  // 문맥은 살아 있다 — 이어지는 조각이 그대로 합성된다(취소가 문맥을 버리지 않았다).
+  await fireStt(page, '구', 700);
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '22.2', 800);
+  await page.waitForTimeout(1500);
+  const row1 = (await getIdbSessions(page)).at(-1)!.rows.find((r) => r.index === 1)!;
+  expect(row1.values.c8, '취소가 소수 문맥을 끊어 조각이 전체값이 됐다').toBe('29.9');
+});
+
+test('Z6 대조군 — 소수 문맥이 아닌 「취소」는 종전대로 슬롯을 재무장한다([CLIP-VAL-1]①)', async ({ page }) => {
+  await setupAndStart(page);
+  const before = (await getClipLog(page)).filter((e) => e.extra?.startsWith('clip_started')).length;
+
+  await fireStt(page, '취소', 700); // 일반 값 대기에서의 취소
+
+  expect(
+    (await getClipLog(page)).filter((e) => e.extra?.startsWith('clip_started')).length - before,
+    '일반 취소가 슬롯을 재무장하지 않으면 재발화가 **결정적으로** 녹음되지 않는다(say는 클립을 안 연다)',
+  ).toBeGreaterThanOrEqual(1);
+  expect(await ttsLog(page), '일반 재청취 문구가 아니다').toContain('횡경 다시 말씀해 주세요.');
+});
+
 test('비-소수 재질문(미파싱)은 여전히 클립을 재시작한다 — 전체 재발화 분기 무회귀', async ({ page }) => {
   await setupAndStart(page);
 
