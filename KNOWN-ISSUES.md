@@ -877,6 +877,29 @@
   EPERM으로 브라우저 회귀·수정 제거 반증은 실행 미확인([TEST-SANDBOX-1]).
 - **현재 상태:** **v0.38.0에 포함되어 배포됨**(현재 앱 v0.39.0). 2026-07-26 전체 스위트 858 passed.
 
+### [PAST-5] 키 컬럼이 **하나라도 빈** 시트 행은 과거값 인덱스에서 통째로 탈락한다 — 부분 키 조회가 그 행을 영영 못 본다
+
+- **무엇(2026-08-13 v0.49 r2 리뷰 합집합 C8 — 등재만, 수정은 v0.50):** `buildSampleKey`는 키
+  컬럼 값이 하나라도 비어 있으면 `null`을 돌려주고(`pastValues.ts`, 오라클
+  `tests/pastValues.spec.ts:76-78`), `buildPastIndex`는 그 행을 인덱스에 **넣지 않는다.**
+  키 조합이 `농가명+라벨+조사나무`인데 과거 시트의 어떤 행에 라벨만 비어 있으면, 그 행은
+  이상치 비교선에도·「이전 조사」 조회에도 존재하지 않는다.
+- **왜 지금 문제가 됐나:** v0.49 W3의 「이전 조사일」은 **세션 고정 키만으로**(예: 농가명+라벨)
+  대조하는 **부분 키 조회**다. 인덱스가 「전체 키가 온전한 행」만 담고 있으므로, 부분 키로는
+  일치할 수 있었을 행이 애초에 후보 집합에 없다. 사용자에게는 「기록 없음」으로 보이고
+  (v0.49 r2 A5 이후에도 이건 정직한 「기록 없음」이 아니라 **누락**이다), 시트를 열어 보면
+  그 회차 기록이 멀쩡히 있다.
+- **왜 이번에 안 고쳤나:** 고치려면 인덱스의 저장 단위를 「완전 키 → 행」에서 「컬럼 단위 레코드
+  집합」으로 바꿔야 한다(부분 키 매칭을 인덱스가 지원해야 한다). 스키마 변경 + 마이그레이션 +
+  IDB 백업 직렬화(`serializePastIndexEntry`) 호환이 딸려 오는 선행 구조 작업이라, r2의 수정
+  레인 범위 밖으로 명시 제외됐다(브리핑 A16 = 「이번엔 등재만」).
+- **지금 할 수 있는 회피:** 키 컬럼에 빈 칸이 생기지 않게 시트를 채운다(샘플키 토글을 줄이면
+  탈락 확률도 준다 — 키가 적을수록 「하나라도 빈」 조건에 걸리기 어렵다).
+- **다음 회차가 확인할 것:** ① 실기기 시트에서 실제 탈락 행 수(인덱스 `rowCount` vs 시트 행 수
+  대조 — 이미 로그에 `past_index_ready` 계측이 있다) ② 부분 키 인덱스로 바꿀 때의 마이그레이션
+  경로 ③ 이상치 비교선(`previousRound`)에도 같은 누락이 있는지(같은 인덱스를 공유한다).
+- **현재 상태:** ⚠️등재만(코드 변경 없음). v0.50 후보.
+
 ### [SETTINGS-1] 재로그인 자동 재연결이 사용자 컬럼 설정을 덮어써 과거값 인덱스까지 무효화
 
 - **무엇:** 재로그인은 이전 시트를 자동 재연결(v0.13.0 R1 `onGoogleClick` → `onUrlConfirmWithUrl`)하는데, `loadHeaders`가 `inferColumns`로 컬럼을 **처음부터 다시 유추해 통째로 교체**했다. `preserveInferredColumnIds`는 **`id`만** 보존한다(`sheets.ts:306-313`).
@@ -1138,13 +1161,40 @@
 - **회피:** `tests/fixtures/gum.ts`의 `GUM_GRANT_SCRIPT`를 `addInitScript`로 깐다(v0.44.1 공용
   픽스처). 🔴 **단, 마이크 «실패»를 재는 spec은 `GUM_DENY_SCRIPT`다** — grant를 깔면 재연결
   배너가 아예 안 뜬다(`v023-voice` B3가 그 사례). 거부는 즉시 reject라 시작은 그대로 진행된다.
-- **범위:** 08-13에 6개 spec(`v049-f1-field-nav`·`fix49-cell-guard`·`fix49-phase-guard`·
-  `fix49b-nav-race`·`fix49b-cellwait-surface`·`v023-voice`·`decimal-targeted-reask`)에 얹었다.
-  **배포 게이트의 나머지 세션 시작 spec은 아직 무방비다.**
-- **더 나은 해법(미적용):** `playwright.config.ts`의 `launchOptions.args`에
-  `--use-fake-device-for-media-stream`을 얹으면 구조적으로 닫힌다. 공유 파일이라 08-13엔 손대지
-  않았다 — 다음 라운드 후보.
-- **현재 상태:** ⚠️함정 등재 + 6 spec 회피 적용. config 레벨 해결은 미착수.
+- **범위(🔴 2026-08-13 r2 A15 정정 — 종전 등재문이 양방향으로 틀렸다):**
+  - **적용분은 7개다**(종전 "6개"는 수치 오류 — 열거된 이름은 처음부터 7개였다):
+    `v049-f1-field-nav`·`fix49-cell-guard`·`fix49-phase-guard`·`fix49b-nav-race`·
+    `fix49b-cellwait-surface`·`v023-voice`·`decimal-targeted-reask`. r2에서 신설 스펙
+    `v049-r2-a1-atend-row`가 여덟 번째다(`v049-r2-a2-cellwait-resume`은 `fixtures/activeZones`의
+    `boot`가 gUM을 담당한다).
+  - **배포 게이트 안은 현재 전량 보호된다** — 종전 문장 *"게이트의 나머지 세션 시작 spec은 아직
+    무방비다"* 는 **사실이 아니다.** 근거: 게이트의 세션 시작 스펙 33개 전부가 스텁(직접 또는
+    `activeZones.boot`)을 깔고 있고, 08-13 게이트 전량 실행이 507/507 green이었다(무방비였다면
+    `clickStart`에서 전멸한다).
+  - 🔴 **무방비는 게이트 *밖*이다 — 파일 24개**(2026-08-13 실측). 이게 종전 등재문에 통째로
+    빠져 있었다. 목록(파일 23 + 부분 1):
+    `anomaly-touch-buttons` · `correction-flow` · `diag-chip` · `feature-isolation` ·
+    `log-replay` · `manual-input` · `nav-unidirectional` · `past-index-fallback` ·
+    `trend-alert` · `v019-active-layout` · `v020-dials-layout` · `v027-voice-cards-fit` ·
+    `v033-feedback` · `v037-review-receipt` · `v037-suspend-latch` · `v038-portrait-guard` ·
+    `v038-session-sheet-gate` · `v038-session-target-sync` · `v0440-c7-cleanup` · `v5-ui` ·
+    `v54-30rows` · `v54-scenarios` · `v54-voice-data`,
+    그리고 **`v0440-c8-flow`의 앞 3개 테스트**(같은 파일 `:304`에 `GUM_GRANT_SCRIPT`가 있지만
+    **그 아래 테스트들에만** 깔린다 — 판정 단위가 파일이 아니라 **테스트**임을 보여주는 사례).
+  - **실측 red 36건**(2026-08-13, HEAD `5f6d67f` 워크트리에서도 동일 = 코드 회귀 아님):
+    `anomaly-touch-buttons` 11 · `correction-flow`+`nav-unidirectional` 17 · `past-index-fallback` 3 ·
+    `v0440-c8-flow` 3 · `log-replay` 2. 전부 같은 줄
+    (`[data-testid="voice-active-state"]` 대기)에서 실패한다.
+- **더 나은 해법(미적용 — r2 A15는 「검토만」이 지시였다):** `playwright.config.ts`의
+  `launchOptions.args`에 `--use-fake-device-for-media-stream`을 얹으면 24곳을 개별로 고치지 않고
+  구조적으로 닫힌다.
+  🔑 **deny 스펙과 충돌하지 않는다(검토 결과):** 마이크 «실패»를 재는 스펙(`v023-voice` B3 등)은
+  `GUM_DENY_SCRIPT`가 `navigator.mediaDevices.getUserMedia` **자체를 reject로 덮어쓴다** —
+  JS 오버라이드가 브라우저 플래그보다 뒤에 적용되므로 거부 시나리오는 그대로 성립한다.
+  ⚠️ 다만 공유 파일(모든 프로젝트 공통)이라 **적용 전에 게이트 전량 1회**가 필요하다 —
+  이번 라운드에서는 실행하지 않았다. Larry/민구 판단 대기.
+- **현재 상태:** ⚠️함정 등재 + 8 spec 회피 적용(게이트 안은 전량 보호). **게이트 밖 24곳 무방비 —
+  실측 red 36건.** config 레벨 해결은 제안만.
 
 ### [TEST-ANIMATION-ZERO-1] 전역 `animation-duration:0ms!important`가 실제 시각 결함을 false-green으로 가린다
 - **증상(C1에서 확정):** 기존 `v039-active-zones` 픽스처로는 꺼진 셀 computed opacity 테스트가 green이었고, 셀별 delay를 제거해도 계속 green이라 반증이 불가능했다. 전역 0ms를 끄자 제품 수정 전 코드에서 즉시 `0.62`가 관측돼 `[UI-DOT-GHOST-1]` 실제 결함이 드러났다.
