@@ -283,6 +283,31 @@ test.describe('sessionFixedKeyColumns — 세션 고정 샘플키 판정', () =>
     const cols = W3_COLS.map((c) => ({ ...c, sampleKey: false }));
     expect(sessionFixedKeyColumns(cols, null)).toEqual([]);
   });
+
+  // 🔴 v0.49 r2 A7(합집합 C7) — 판정 질문은 「순환 컬럼인가」가 아니라 「값이 변하는가」다.
+  test('seq from===to(나무 한 그루 세션)는 값이 불변이므로 고정 키다', () => {
+    const cols = W3_COLS.map((c) =>
+      c.id === 'c6' ? col('c6', '조사나무', { type: 'int', auto: { kind: 'seq', from: 1, to: 1 }, sampleKey: true }) : c,
+    );
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['c3', 'c4', 'c6']);
+  });
+
+  test('seq from<to는 종전대로 제외(행마다 값이 바뀐다)', () => {
+    // 대조군 — A7이 「순환 전체」를 열어버리지 않았음을 고정한다.
+    const cols = W3_COLS.map((c) =>
+      c.id === 'c6' ? col('c6', '조사나무', { type: 'int', auto: { kind: 'seq', from: 1, to: 2 }, sampleKey: true }) : c,
+    );
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['c3', 'c4']);
+  });
+
+  test('seq from===to가 유일한 샘플키여도 조회가 성립한다(고정 키 0개로 떨어지지 않는다)', () => {
+    const cols = W3_COLS.map((c) =>
+      c.id === 'c6'
+        ? col('c6', '조사나무', { type: 'int', auto: { kind: 'seq', from: 1, to: 1 }, sampleKey: true })
+        : { ...c, sampleKey: false },
+    );
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['c6']);
+  });
 });
 
 test.describe('previousSurveyRound — 세션 고정 키의 직전 조사일', () => {

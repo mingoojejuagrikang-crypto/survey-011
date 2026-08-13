@@ -23,7 +23,7 @@
  */
 import type { Column } from '../types';
 import { withTimeout } from './async';
-import { autoValue, isCycling } from './autoValue';
+import { autoValue, isRowInvariantAuto } from './autoValue';
 import { effectiveSampleKey } from './columnFlags';
 import { fetchAllRowsUnbounded, parseSpreadsheetId, readonlySheetsAuth } from './sheets';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -201,7 +201,11 @@ export function previousRound(index: PastIndex, key: string, beforeDate: string)
  *    측정 컬럼을 샘플키로 토글해 두어도(그리고 미사용 `auto.value` 잔재가 남아 있어도) 그 값으로
  *    과거 행을 대조하면 시트의 실제 기록과 어긋난다 — 여기서 먼저 잘라낸다.
  *  - `effectiveSampleKey` — 샘플 식별 키의 일부다(columnFlags가 SSOT: 사용자 토글 > 자동 유추).
- *  - `!isCycling` — 행마다 값이 바뀌지 않는다(autoValue가 SSOT: seq·다중선택 options가 순환).
+ *  - `isRowInvariantAuto` — 행마다 값이 바뀌지 않는다(autoValue의 `spanOf`가 SSOT).
+ *    🔴 v0.49 r2 A7(합집합 C7) — 종전엔 `!isCycling`이었다. 그러면 `seq from===to`(나무 한
+ *    그루짜리 세션 — 자릿수 1이라 **모든 행에서 값이 같다**)가 고정 키에서 빠져, 그 컬럼이
+ *    유일한 샘플키인 스키마는 고정 키 0개가 되어 조회 자체를 포기했다. 판정 질문은 「순환
+ *    컬럼인가」가 아니라 「값이 변하는가」다.
  *  - **조사시기 컬럼이 아니다** — 회차(시간축)이지 샘플 식별축이 아니다. 이 컬럼이 대조 키에
  *    섞이면 "직전 회차"는 정의상 오늘과 다른 날짜라 영영 일치하지 않는다.
  *  - `autoValue(col, 1)`이 비어 있지 않다 — 값이 없으면 대조 기준이 못 된다(빈 fixed 등).
@@ -214,7 +218,7 @@ export function sessionFixedKeyColumns(columns: Column[], roundDateColId: string
     (c) =>
       c.input === 'auto' &&
       effectiveSampleKey(c) &&
-      !isCycling(c) &&
+      isRowInvariantAuto(c) &&
       c.id !== roundCol?.id &&
       autoValue(c, 1).trim() !== '',
   );

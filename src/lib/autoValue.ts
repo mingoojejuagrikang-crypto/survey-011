@@ -33,6 +33,15 @@ function spanOf(col: Column): number {
   return 1;
 }
 
+/** 🔴 v0.49 r2 A7(합집합 C7) — **이 자동 컬럼의 값이 행마다 같은가.** `isCycling`의 부정이
+ *  아니다: `seq from===to`(예: 조사나무 1~1 — 나무 한 그루짜리 세션)는 순환 컬럼으로 분류되지만
+ *  자릿수가 1이라 모든 행에서 같은 값이다. 「순환 컬럼인가」와 「값이 변하는가」는 다른 질문이고,
+ *  세션 고정 키 판정이 필요한 것은 후자다(`pastValues.sessionFixedKeyColumns`).
+ *  자릿수 산출은 `spanOf` 하나가 SSOT — 여기서 from/to를 다시 계산하지 않는다. */
+export function isRowInvariantAuto(col: Column): boolean {
+  return !isUserInputColumn(col) && spanOf(col) === 1;
+}
+
 /**
  * Compute the auto-fill value for a given column on a given row index (1-based).
  * Returns '' for unset/empty fixed values so empty cells stay empty.
