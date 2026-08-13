@@ -1945,7 +1945,9 @@ export function useVoiceSession() {
       const msg = delta < 0 ? '첫 항목입니다.' : '마지막 항목입니다.';
       logCell({
         type: 'command', parsed,
-        extra: `field_nav_edge:${delta < 0 ? 'first' : 'last'}${reviewScope ? `:${reviewScope}` : ''}`,
+        // 스코프 꼬리는 PRINCIPLES §4 **승인된 예외 ②**다(v0.49 r2 A14 등재) — 접두·기존 필드
+      //   불변 + 스코프 출신에만 조건부 꼬리. 소비자는 `$` 앵커로 읽지 않는다.
+      extra: `field_nav_edge:${delta < 0 ? 'first' : 'last'}${reviewScope ? `:${reviewScope}` : ''}`,
         row,
       });
       sess.setLastTts(msg);
@@ -1967,6 +1969,7 @@ export function useVoiceSession() {
 
     logCell({
       type: 'command', parsed,
+      // 꼬리 계약은 위 `field_nav_edge`와 같다(PRINCIPLES §4 승인된 예외 ②).
       extra: `field_nav:${curIdx}->${target}${reviewScope ? `:${reviewScope}` : ''}`,
       row,
     });
