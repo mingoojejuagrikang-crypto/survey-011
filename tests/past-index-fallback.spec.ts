@@ -30,16 +30,15 @@ import {
 import { effectiveSampleKey } from '../src/lib/columnFlags';
 import type { Column } from '../src/types';
 import { BASE } from './baseUrl';
+// A11 — 「어제」는 달력 연산으로 만든다(DST 함정). 사유는 fixtures/localDate.ts 헤더.
+import { daysAgoLocal } from './fixtures/localDate';
 
 test.setTimeout(120_000);
 
 const STORE_KEY = 'survey-011-settings-v3';
 const SHEET_ID = 'SHEET_PASTIDX_1';
 
-function localISO(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-const PREV_ROUND = localISO(new Date(Date.now() - 86_400_000)); // 어제 — previousRound는 오늘 미만 strictly
+const PREV_ROUND = daysAgoLocal(1); // 어제 — previousRound는 오늘 미만 strictly
 
 // trend-alert.spec.ts와 동일 스키마 — 샘플키: 농가명 + 조사나무·조사과실(seq 2×5=10행).
 const COLUMNS = [

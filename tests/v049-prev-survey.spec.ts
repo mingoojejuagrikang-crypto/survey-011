@@ -30,17 +30,16 @@ import { effectiveSampleKey } from '../src/lib/columnFlags';
 import { stubSheets } from './fixtures/activeZones';
 import type { Column } from '../src/types';
 import { BASE } from './baseUrl';
+// A11 — 「어제」는 달력 연산으로 만든다(DST 함정). 사유는 fixtures/localDate.ts 헤더.
+import { daysAgoLocal } from './fixtures/localDate';
 
 const STORE_KEY = 'survey-011-settings-v3';
 const SHEET_ID = 'SHEET_PREVSURVEY_1';
 const PHONE_375 = { width: 375, height: 812 };
 
-function localISO(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 /** 어제 — previousSurveyRound는 오늘 미만 strictly이므로 오늘로 두면 제외된다. */
-const PREV_ROUND = localISO(new Date(Date.now() - 86_400_000));
-const OLDER_ROUND = localISO(new Date(Date.now() - 8 * 86_400_000));
+const PREV_ROUND = daysAgoLocal(1);
+const OLDER_ROUND = daysAgoLocal(8);
 
 /**
  * 현 스키마 근사. 세션 고정 샘플키 = 농가명(fixed) + 라벨(단일선택 options).
@@ -136,11 +135,22 @@ async function openSummary(
     }, buildRecord(opts.headers) as unknown as Record<string, unknown>);
   }
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(600); // hydratePastIndexFallback(부팅 1회, async)
   await page.locator('[data-testid="tab-settings"]').click();
-  await page.waitForTimeout(300);
-  await page.locator('[data-testid="settings-summary-shortcut"]').click();
-  await page.waitForTimeout(300);
+  const shortcut = page.locator('[data-testid="settings-summary-shortcut"]');
+  await expect(shortcut).toBeVisible({ timeout: 5000 });
+  // 🔴 v0.49 r2 A10(합집합 C5) — 종전엔 `waitForTimeout(600)`으로 `hydratePastIndexFallback`
+  //   (부팅 1회, async IDB 읽기)을 기다렸다. 고정 대기에는 근거가 없다: 느린 CI에서는 짧고
+  //   (그때 팝업은 인덱스 없이 「미확인」을 그린 상태로 단언에 들어간다), 평소엔 매 테스트가
+  //   그만큼 논다. **전제 자체**(폴백이 실제로 반영됐다)를 결정적으로 기다린다 — 3상태 배지의
+  //   stale(warn)이 그 신호다(전례 past-index-fallback.spec.ts:327).
+  //   ⚠️ 정직한 기록: 이 교체로 **red를 재현하지는 못했다**(Playwright 단언이 재시도하므로
+  //   600ms→0ms로 줄여도 7건 green). 그래도 남긴다 — 재시도가 못 구하는 형태(속성·부정 단언,
+  //   전제 미충족 상태의 조용한 통과)가 이 파일에 이미 있고, 스위트가 12.2s→5.6s로 줄었다.
+  if (opts.withRecord) {
+    await expect(page.locator('[data-testid="conn-past"]'))
+      .toHaveAttribute('data-tone', 'warn', { timeout: 6000 });
+  }
+  await shortcut.click();
   await expect(page.locator('[data-testid="settings-summary-modal"]')).toBeVisible({ timeout: 2000 });
 }
 
