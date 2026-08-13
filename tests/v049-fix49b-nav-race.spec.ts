@@ -22,6 +22,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { installVoiceMocks, fireStt, ttsLog, waitForTtsIdle } from './fixtures/stt';
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
@@ -114,6 +115,9 @@ async function speakWhenArmed(page: Page, text: string, waitMs = 500) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // v0.49 r2 — gUM 스텁(`fixtures/gum.ts`, v0.44.1). 없으면 `start()`의 `recorderRef.init()`가
+  //   로컬 헤드리스에서 응답하지 않아 「마이크 권한을 확인하는 중…」에서 멈춘다(제품 회귀 아님).
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await installVoiceMocks(page);
 });
 
