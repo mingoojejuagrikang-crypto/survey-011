@@ -28,6 +28,8 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
+// v0.49 r5 Z9 — 재질문 TTS 정본(W2가 꼬리를 삭제한 뒤의 문구). 리터럴 복제 금지.
+import { REASK_TTS } from '../src/lib/voicePrompts';
 
 test.setTimeout(120_000);
 
@@ -312,8 +314,13 @@ test('비-소수 재질문(미파싱)은 여전히 클립을 재시작한다 —
   ).toBeGreaterThanOrEqual(1);
   // 소수 분기 계측은 떠선 안 된다.
   expect(after.filter((e) => e.extra === 'clip_decimal_kept')).toHaveLength(0);
-  const reask = (await ttsLog(page)).find((t) => t.includes('다시 말씀'));
-  expect(reask).toBeTruthy();
+  // 🔴 v0.49 r5 Z9(codex R4-F4①) — **낡은 단언이었다.** v0.49 r2 W2(민구 08-13 확정)가 재질문
+  //   TTS의 꼬리("{항목} 다시 말씀해 주세요.")를 **삭제**했다 — 재질문 지시는 부정 비프 +
+  //   화면 `ReaskCue`가 전담하고 귀에는 사유만 간다(`voicePrompts.REASK_TTS`의 「꼬리를 되살리지
+  //   마라」 주석이 정본). 그런데 이 단언만 그 꼬리를 계속 찾아 `npm run test:e2e`(전체 suite)를
+  //   **red로 고정**하고 있었다. 여기서 재려는 것은 「일반 재질문이 났는가」이지 옛 문구가 아니므로,
+  //   정본 상수와 **전체 일치**로 바꾼다(부분일치는 다음 문구 변경에서 또 조용히 어긋난다).
+  expect(await ttsLog(page), '일반 재질문 사유 TTS가 나오지 않았다').toContain(REASK_TTS.parse_failed);
 
   // 재발화로 정상 커밋.
   await fireStt(page, '29.9', 800);
