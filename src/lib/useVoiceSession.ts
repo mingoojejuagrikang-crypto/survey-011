@@ -1209,6 +1209,39 @@ export function useVoiceSession() {
     // Otherwise find next incomplete row (아래 방향만 — wrap-around 없음)
     const next = findNextIncompleteRow(row + 1, total, vc);
     if (next === null) {
+      // 🔴 v0.49 r4 M2(claude r3 #1 — Larry 소스 확증) — **미완료 행에 선 채로 끝 도달을 선언하지
+      //   않는다.** 이 지점의 두 스캔은 **둘 다 아래만 본다**: 위 전진 스캔은 포인터 **뒤** 칸만
+      //   보고(:1160 자기 주석), `findNextIncompleteRow`는 `row + 1`부터 본다. 그래서 포인터
+      //   **앞**에 빈 칸이 남은 행(항목 이동으로 빈 칸을 지나쳐 뒤 칸을 채운 경우)에서 아래에
+      //   미완료 행이 없으면, 미완료 행에 선 채로 `announceEndReached`가 돌았다.
+      //
+      //   그 상태의 atEnd 센티넬은 `{row: activeRow(미완료), colId: 마지막 음성 컬럼}`이고,
+      //   #2가 커서까지 거기 주차하므로 화면·센티넬이 **일치한 채로 함께 틀린다.** 이어지는
+      //   bare '수정'은 `reviewTarget`이 서지 않아(:2382가 atEnd를 제외) 행 스코프로 지우는데,
+      //   그 타깃이 사용자가 채워야 할 **빈 칸**이 아니라 **확정된 마지막 셀**이다 — 남은 일을
+      //   가리키는 대신 끝낸 일을 지운다.
+      //
+      //   처방은 컬럼 축이 아니라 **도달 자체**를 막는 것이다(반대 방향은 [MODIFY-TARGET-1]
+      //   재발 — :955 경고 참조). 남은 빈 칸으로 커서를 되돌린다. 루프는 없다: 여기 도달은
+      //   값 커밋 뒤이고, 그 빈 칸이 채워지면 위 `isRowVoiceComplete` 가지가 행을 완료시킨다.
+      //   👉 이로써 **atEnd는 완료된 행에서만 무장한다**가 구조적 불변식이 된다
+      //   (`announceEndReached`의 유일한 호출부가 여기다).
+      //   오라클: tests/v049-r4-m2-atend-incomplete.spec.ts
+      if (!isRowVoiceComplete(row, vc)) {
+        const gapIdx = firstIncompleteColIdx(row, vc);
+        // 새 이름으로 계측한다(PRINCIPLES §4) — 이 전이는 `end_reached_waiting`을 **대체**하므로,
+        //   같은 이름에 얹으면 끝 도달 집계가 조용히 부풀고 두 상태를 로그에서 못 가른다.
+        logCell({
+          type: 'session', extra: `row_gap_return:col=${vc[gapIdx].id}`,
+          row, colId: vc[gapIdx].id,
+        });
+        sess.setActiveCol(gapIdx);
+        sess.setRecognized('');
+        sess.setPhase('active');
+        awaitingFieldRef.current = null;
+        await announceField(vc[gapIdx]);
+        return;
+      }
       // v0.23.0 입력탭#4 — 자동 종료 제거. 안내 후 '종료' 명령/버튼까지 세션 유지.
       await announceEndReached();
       return;
