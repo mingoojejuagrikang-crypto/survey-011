@@ -154,6 +154,66 @@ test('① 셀 검토 대기 출신 2단계 수정의 새 값이 **IDB에 남는�
     .toBe('66.6');
 });
 
+/**
+ * 🔴 ①b (v0.49 r4 M10 · codex r3 F9) — **직접 수정 경로의 착지·영속 계약**.
+ *
+ * codex F9는 세 번째 배선(`enterModifyMode`의 직접 `수정 <값>` 성공 경로의
+ * `finalizeRowCompletion`)에 「제거 시 red」 오라클이 없다고 지적했고, 처방으로
+ * *"완료 셀 cellWait → bare `수정` → 값 대신 `수정 66.6`"* 을 줬다.
+ *
+ * ⚠️ **그 처방은 도달하지 않는다(r4 M10 실측).** bare '수정' 뒤의 상태는 `kind:'modify'`이고,
+ * `cmdModify`의 `isModifyLike` 분기(:117 · 2436 부근)가 «이미 수정 의미론이면 같은 셀 재질문»으로
+ * **먼저 가로챈다** — 직접값은 그 자리에서 버려진다(실측: 칩이 `—` 그대로).
+ * 더 좁히면 그 배선은 **모든 음성 도달 상태에서 no-op**이다:
+ *   · 직접 수정의 타깃은 언제나 커서 **앞** 칸(`curIdx-1`)이거나 `cellWait`/센티넬이 가리키는
+ *     **이미 값이 있는** 칸이다 → 그 쓰기가 행의 완성 여부를 바꾸지 못한다.
+ *   · 정정 백업(`correctionBackupRef`)은 캐스케이드가 세우면서 `markRowIncomplete`도 함께 하므로,
+ *     백업이 서 있는 동안 `finalizeRowCompletion`은 `isRowVoiceComplete` 가드에서 즉시 return한다.
+ * 그래서 그 줄은 **방어적 배선**으로 유지하고(다음 착지가 추가될 때 열리는 형태다), 반증은
+ * 소스 계약으로 잠근다(아래 [node] ①c). 대신 이 테스트는 그 경로가 실제로 하는 일 —
+ * **직접값의 영속과 셀 검토 복귀** — 를 잰다(r3-01의 ①②③이 비워 둔 축이다).
+ */
+test('①b 셀 검토 대기의 **직접값** 수정도 IDB에 남고 셀 검토로 복귀한다', async ({ page }) => {
+  await bootMini(page);
+  await completeRow1(page);
+  await enterCellWaitOnRow1(page, '측정항목02', 1);
+
+  await fireStt(page, '수정 66.6', 1800); // 직접값 — advance/proceedAfterCommit 둘 다 우회
+  await waitForTtsIdle(page);
+
+  await expect(chip(page, '측정항목02')).toContainText('66.6');
+  expect(await activeChipName(page), '직접값 수정이 셀 검토 문맥을 파괴했다').toContain('측정항목02');
+  expect((await ttsLog(page)).join(' | '), '복귀 시 갱신값을 되읽는다').toContain('기록값');
+
+  await expect
+    .poll(async () => (await persistedRow(page, 1))?.values.m2, { timeout: 8000 })
+    .toBe('66.6');
+  expect((await persistedRow(page, 1))?.complete, '완료 행은 완료로 남는다').toBe(true);
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1200);
+  expect((await persistedRow(page, 1))?.values.m2, '리로드 후 옛값으로 되돌아갔다').toBe('66.6');
+});
+
+/**
+ * 🔴 ①c (r4 M10 · codex r3 F9) — **행 완료 부기의 세 배선이 모두 살아 있다**(소스 계약).
+ *
+ * 위 ①b 헤더가 적었듯 세 번째 배선은 현재 모든 음성 도달 상태에서 no-op이라 브라우저 red를
+ * 만들 수 없다. 그래도 지워지면 안 된다: `#1`의 근인이 「부기 소유자가 한 곳뿐이라 새 착지가
+ * 추가될 때 조용히 빠진다」였고, 이 배선은 그 재발을 막는 방어선이다.
+ * 소스 계약 테스트의 전례: `v049-prev-survey` W3-7·W3-10 · `v043-typo-contract`.
+ */
+test('[node] ①c 행 완료 부기 배선 3곳(advance · 커밋 종단 · 직접 수정 우회)이 모두 있다', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
+  const calls = src.match(/finalizeRowCompletion\((?!row: number)/g) ?? [];
+  // 선언부(`const finalizeRowCompletion = useCallback`)는 위 정규식에 안 걸린다.
+  expect(calls.length, '배선이 3곳이 아니다 — 어느 착지가 빠졌는지 확인해라(#1 근인)').toBe(3);
+  expect(src, 'advance()의 행 완료 부기').toContain('finalizeRowCompletion(row);');
+  expect(src, '커밋 종단(proceedAfterCommit) 진입점 부기').toContain('if (awaiting) finalizeRowCompletion(awaiting.row);');
+  expect(src, '직접 수정 우회 배선(F9)').toContain('finalizeRowCompletion(targetRow);');
+});
+
 test('② 정정된 행은 완료 카운트(X / N)에 그대로 남는다 — markRowComplete 누락', async ({ page }) => {
   await bootMini(page);
   await completeRow1(page);

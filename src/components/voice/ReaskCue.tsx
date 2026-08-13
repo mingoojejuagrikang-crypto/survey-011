@@ -9,6 +9,11 @@ import { decimalReaskPrompt, REASK_SCREEN } from '../../lib/voicePrompts';
  *  /이상치/수정/hero)와 경쟁하지 않는다 — hero가 보일 때만(=듣는 중) 함께 노출된다.
  *   - 'low_confidence' → "소리가 불확실"(소음·잡음으로 신뢰도 미달)
  *   - 'parse_failed'   → "숫자로 인식 실패"(인식은 됐으나 숫자로 파싱 불가)
+ *  🔴 v0.49 r4 M10(codex r3 F10) — **위 「listening hero에서만/경쟁하지 않는다」는 현행과 반대다.**
+ *  r3 #5가 `VoiceHero`의 모드 게이트를 걷어냈고(`VoiceHero.tsx:197`), `ModifyIndicatorPill`에도
+ *  같은 큐를 렌더한다(`:127`, 배선은 `CenterStage.tsx:219`). 6분기 상호배타 스테이지에서
+ *  hero가 아닌 modify 분기로 갈 때 큐가 **통째로 사라지던 것**이 그 결함이었다.
+ *  현행 계약: **사유가 있으면 hero 또는 modify 표면에 표시된다**(둘은 동시에 서지 않는다).
  *  v0.48.0 P3 — 문구 자체는 `voicePrompts.ts`로 옮겼다(SSOT).
  *  🔴 v0.49 r2 W2(민구 08-13) — TTS는 이제 **다른 문구**를 읽는다(`REASK_TTS` = 사유만, 축약).
  *  이 화면 문구는 **그대로 유지**한다 — 축약 압력은 귀에만 걸린다(§2 「의미 동등 + 구조적 분리」).
@@ -19,7 +24,10 @@ export type ReaskReason = 'low_confidence' | 'parse_failed' | null;
 export function ReaskCue({ reason }: { reason: ReaskReason }) {
   // v0.36.0 FB#4(Vance) — 소수점 유실 재질문이면 TTS와 **글자까지 일치**하는 프롬프트를 화면에도
   //   표시한다(voicePrompts SSOT 공유). 정수부(reaskDecimalWhole)가 실려 있을 때만 특화 문구,
-  //   그 외엔 기존 짧은 사유 큐. 소수 재질문은 항상 reason='parse_failed'와 함께 세워진다.
+  //   그 외엔 기존 짧은 사유 큐.
+  //   🔴 v0.49 r4 M3 — 종전 *"소수 재질문은 항상 reason='parse_failed'와 함께 세워진다"* 는
+  //   더 이상 사실이 아니다: 소수 문맥에서도 **저신뢰** 거절이 난다(`setDecimalReason(whole, reason)`).
+  //   **문구**는 어느 사유든 소수 프롬프트로 같고(확정표 #3), 사유는 `data-reason`에 그대로 실린다.
   const decimalWhole = useSessionStore((s) => s.reaskDecimalWhole);
   if (!reason) return null;
   const copy = decimalWhole != null ? decimalReaskPrompt(decimalWhole) : REASK_SCREEN[reason];
