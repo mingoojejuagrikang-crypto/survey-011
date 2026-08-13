@@ -952,6 +952,19 @@ export function useVoiceSession() {
     const total = computeTotalRows(getSessionColumns());
     const empties = listEmptyRows(total, vc);
     const lastCol = vc[vc.length - 1] ?? null;
+    // 🔴 v0.49 r3 #2(claude r2 HIGH) — **커서를 센티넬 컬럼에 주차한다 — 한 상태에 커서는 하나다.**
+    //   A1이 센티넬의 행 축을 `activeRow`로 고쳤지만 컬럼 축은 「마지막 음성 필드」로 고정돼 있고,
+    //   `advance()`의 전진 스캔은 **커서를 옮기지 않은 채** 끝 도달로 떨어질 수 있다(뒤 칸이 전부
+    //   차 있으면 while이 `vc.length`까지 가고 `activeColIdx`는 그대로다 — 셀 검토 중 '유지' 등).
+    //   그러면 화면 활성 칩은 앞 컬럼인데 센티넬 `colId`는 마지막 컬럼이라, bare '수정'이
+    //   **사용자가 만진 적 없는 확정 셀**을 비우고(소비자 전부가 `a.colId`를 읽는다: enterModifyMode ·
+    //   cmdModify · cmdKeep · 명령 클립 키) 항목 이동만 `activeColIdx`를 본다 — 한 상태 두 커서.
+    //   ⚠️ **반대 방향(센티넬을 `activeColIdx`로)은 안 된다.** atEnd의 bare '수정'은 `reviewTarget`이
+    //   서지 않아(:2335가 atEnd를 제외한다) `clearEnd = vc.length` **행 스코프**로 지운다 —
+    //   앞 컬럼을 타깃으로 삼으면 「첫 항목부터 행 끝까지 —」, 정확히 [MODIFY-TARGET-1]이 닫은
+    //   그 증상이 되살아난다. 그래서 화면을 센티넬에 맞춘다(센티넬 컬럼 계약은 불변).
+    //   오라클: tests/v049-r3-02-atend-cursor.spec.ts
+    if (lastCol) sess.setActiveCol(vc.length - 1);
     // 명령 컨텍스트 유지용 atEnd 센티넬(마지막 음성 필드). 값 커밋은 handleFinal의 atEnd 가드가 차단.
     // 🔴 v0.49 r2 A1(리뷰 합집합 C1) — **행은 `total`이 아니라 `activeRow`다.** 끝 도달은 「아래로
     //   미완료 행이 없다」는 뜻일 뿐 「마지막 행에 서 있다」는 뜻이 아니다(`findNextIncompleteRow`는
@@ -1944,7 +1957,11 @@ export function useVoiceSession() {
     // 🔴 W1 — 검토/끝 도달 스코프 출신 이동. 커서 기준은 **`activeColIdx`(화면 활성 칩)**이지
     //   센티넬의 colId가 아니다: 민구 기대가 칩 기준으로 서술돼 있고(*"칩 포커스가 횡경에서
     //   종경으로 이동"*), reviewWait은 진입 시 `setActiveCol(0)`으로 둘을 이미 일치시킨다(:962).
-    //   atEnd는 커서를 옮기지 않으므로 화면 칩 = 마지막 커밋 컬럼이고, 거기서 한 칸이 옳다.
+    //   🔴 v0.49 r3 #2 — atEnd도 이제 **진입 시 커서를 센티넬 컬럼(마지막 음성 필드)에 주차**한다
+    //   (`announceEndReached`). 종전 이 자리의 근거 *"atEnd는 커서를 옮기지 않으므로 화면 칩 =
+    //   마지막 커밋 컬럼이고, 거기서 한 칸이 옳다"* 는 더 이상 사실이 아니다 — 그 「안 옮김」이
+    //   두 커서를 만든 결함이었다. 결론(`activeColIdx` 기준)은 그대로다: 이제 두 축이 같은 값이라
+    //   **정의상** 일치한다.
     const reviewScope = awaiting?.kind === 'reviewWait' || awaiting?.kind === 'atEnd'
       ? awaiting.kind
       : null;
