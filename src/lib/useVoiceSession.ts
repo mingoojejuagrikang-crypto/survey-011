@@ -1084,6 +1084,36 @@ export function useVoiceSession() {
   }, [announceField, enterCellWait]);
 
   // ── progression ────────────────────────────────────────────
+  /** 🔴 v0.49 r3 #1(claude r2 크리티컬) — **행 완료 부기**(완료 마킹 · 정정 백업 해제 · 영속화).
+   *  종전엔 `advance()` 안에만 있었다. 그 자리에서 뽑아낸 이유가 곧 이 결함이다: A2가 커밋
+   *  종단에 「예약 복귀」 착지(cellWait/reviewWait 재무장)를 추가하면서 그 경로들이 `advance()`를
+   *  **타지 않고 return**하는데, 부기가 advance 안에만 있어 통째로 건너뛰어졌다.
+   *
+   *  피해는 **값 되돌림**이다. 캐스케이드 정정(`enterModifyMode`)은 정정 **이전**의 행 스냅샷을
+   *  `correctionBackupRef`에 세우고 `markRowIncomplete`한다. 부기가 안 돌면 그 백업이 살아남고,
+   *  다음 `persistSession`이 :636에서 그 낡은 행(complete:true·syncState:'synced')을 rows에
+   *  push한다 — completedRows에 없는 행이라 조건이 그대로 성립한다. 그 push는 :639의
+   *  `!rows.some(...)` 때문에 **신선한 buildRow(activeRow)를 밀어낸다.** 결과: 수정값은
+   *  메모리에만 살고 IDB에는 옛값이 남아 리로드 시 복원되고, 'synced'가 유지되므로 시트도
+   *  교정되지 않으며, 완료 마킹이 없어 X/N이 하나 줄어든 채 굳는다.
+   *
+   *  ⚠️ 낭독(`announceRowComplete`)과 phase 전이는 **여기 넣지 않는다** — 그건 착지마다 다르다.
+   *  셀 검토 복귀는 "N행 완료됨"이 아니라 "…기록값 …"을 말해야 한다(enterCellWait 헤더의 문구
+   *  계약). 이 함수가 다루는 것은 «내구성»뿐이고, «무엇을 말하는가»는 호출부가 정한다.
+   *  오라클: tests/v049-r3-01-resume-persist.spec.ts */
+  const finalizeRowCompletion = useCallback((row: number) => {
+    const sess = useSessionStore.getState();
+    if (!isRowVoiceComplete(row, voiceColsList())) return;
+    const hadBackup = correctionBackupRef.current?.index === row;
+    const wasComplete = sess.isRowComplete(row);
+    if (hadBackup) correctionBackupRef.current = null;
+    if (!wasComplete) sess.markRowComplete(row);
+    // 실제로 부기가 바뀐 경우에만 쓴다 — 한 커밋에서 두 번(proceedAfterCommit 진입 + advance)
+    // 불려도 IDB 쓰기는 1회다. 바뀐 게 없으면 직전 커밋의 persist가 이미 같은 스냅샷을
+    // 내구화했으므로 여기서 또 쓰는 것은 순수 낭비다(현장 배터리 — PRINCIPLES §6).
+    if (hadBackup || !wasComplete) void persistSession();
+  }, [persistSession]);
+
   /** Move to next voice col in current row, or finalize row + jump to next target. */
   const advance = useCallback(async () => {
     const startEpoch = epochRef.current;
@@ -1125,10 +1155,10 @@ export function useVoiceSession() {
     //   P1 알람 경로는 returnStack이 원 출발점을 들고 있으니 그 소비가 곧 복귀다.
     //   오라클: tests/v0470-r2-p1-direct-modify-trend.spec.ts 「P1-미완료대상」.
     if (isRowVoiceComplete(row, vc)) {
-      if (correctionBackupRef.current?.index === row) correctionBackupRef.current = null;
-      sess.markRowComplete(row);
+      // 🔴 v0.49 r3 #1 — 부기 3줄(백업 해제·완료 마킹·persist)은 `finalizeRowCompletion`으로
+      //   옮겼다. 여기가 유일한 소유자였던 것이 결함의 근인이다(그 헤더 참조).
+      finalizeRowCompletion(row);
       sess.setPhase('complete');
-      void persistSession();
       awaitingFieldRef.current = null;
       await announceRowComplete(row);
       if (epochRef.current !== startEpoch) return;
@@ -1180,7 +1210,7 @@ export function useVoiceSession() {
     await announceRowDiff(row, next);
     if (epochRef.current !== startEpoch) return;
     if (vc[targetCol]) await announceField(vc[targetCol]);
-  }, [announceField, announceOrCellWait, announceRowComplete, announceRowDiff, announceEndReached, persistSession, say]);
+  }, [announceField, announceOrCellWait, announceRowComplete, announceRowDiff, announceEndReached, finalizeRowCompletion, say]);
 
   /** v0.35.3 Stage 3-5 — 커밋 경로 진행 공용. 검토 대기(reviewWait) 출신 커밋은 검토 대기를
    *  재무장해 갱신값을 재낭독하고(advance로 검토를 강제 종료하지 않음 — v0.33.0 항목2 계약),
@@ -1191,6 +1221,14 @@ export function useVoiceSession() {
     awaiting: AwaitingField | null,
     opts?: { echoValue?: string },
   ) => {
+    // 🔴 v0.49 r3 #1(claude r2 크리티컬) — **행 완료 부기는 착지와 무관하다.** 아래 재무장/예약
+    //   복귀 분기는 전부 `advance()`를 타지 않고 return하므로, 부기가 advance 안에만 있으면
+    //   그 경로에서 통째로 빠진다(값 되돌림 — `finalizeRowCompletion` 헤더). 분기마다 배선하면
+    //   **다음 착지가 추가될 때 또 빠진다** — A2가 착지를 하나 늘리자마자 정확히 그렇게 됐다.
+    //   그래서 분기 앞 **진입점 한 곳**에서 한다. 좌표는 커밋된 셀의 행(`awaiting.row`)이지
+    //   호출 시점의 activeRow가 아니다(교차행 정정은 둘이 갈린다). 부기는 멱등이라 아래
+    //   폴스루가 advance로 가도 IDB 쓰기는 늘지 않는다.
+    if (awaiting) finalizeRowCompletion(awaiting.row);
     if (awaiting?.kind === 'reviewWait') {
       await enterReviewWait(awaiting.row);
       return;
@@ -1232,7 +1270,7 @@ export function useVoiceSession() {
     awaitingFieldRef.current = null;
     if (opts?.echoValue != null) await say(formatForTts(opts.echoValue));
     await advance();
-  }, [advance, enterCellWait, enterReviewWait, say]);
+  }, [advance, enterCellWait, enterReviewWait, finalizeRowCompletion, say]);
 
   // ── v0.7.0 B4: 추세 검증 ───────────────────────────────────
   /** trend_skip 텔레메트리 — 같은 원인은 세션당 1회만 기록(셀마다 반복돼 로그를 도배하지 않게).
@@ -1561,6 +1599,14 @@ export function useVoiceSession() {
           return;
         }
 
+        // 🔴 v0.49 r3 #1 — 이 경로의 세 착지(셀 검토 복귀 · 행 검토 복귀 · 원위치 재안내)도
+        //   `advance()`·`proceedAfterCommit` 어느 쪽도 타지 않는다. 평시엔 무해하다(직접 수정은
+        //   행을 미완료로 만들지 않으므로 부기가 no-op이다). 문제는 **캐스케이드 재기록 중에
+        //   들어온 직접 수정**이다("수정" → 값 대신 "수정 66.6"): 그때는 백업이 서 있고 행이
+        //   미완료라, 부기 없이 착지하면 위 :636 백업 push가 그대로 값을 되돌린다 — #1과 같은
+        //   기전, 다른 입구다. 알람 분기(위 `return`)는 여기 오지 않는다: 미확인 알람 중에
+        //   X/N을 올리면 화면이 확정을 먼저 말한다(해소 후 proceedAfterCommit이 부기한다).
+        finalizeRowCompletion(targetRow);
         // v0.47.0 W2 — 직접 수정("수정 88.9")도 성공 커밋이다: 화음 → 에코 순서 계약(WP-E).
         //   종전엔 이 경로만 무음이었다(재청취 경로의 성공음과 비대칭 — 값이 저장되는 모든
         //   커밋에 확인음이 난다는 WP-E 원칙에 합류).
@@ -1674,7 +1720,7 @@ export function useVoiceSession() {
     // v0.47.0-r2 P1 — evaluateTrend·getAnomalyAlertData·armClipForCell 추가. 세 콜백 모두 이
     //   useCallback보다 **위**에서 정의돼야 한다(dep 배열은 렌더 중 평가된다 — TDZ). 추세 헬퍼
     //   3종을 이 함수 위로 옮긴 선행 커밋이 그 전제를 만든다.
-  }, [announceField, armClipForCell, enterCellWait, enterReviewWait, evaluateTrend, getAnomalyAlertData, persistSession, say]);
+  }, [announceField, armClipForCell, enterCellWait, enterReviewWait, evaluateTrend, finalizeRowCompletion, getAnomalyAlertData, persistSession, say]);
 
   // ── public: jump to a specific row (auto-chip change / 행 이동 공용) ──────
   const jumpToRow = useCallback(
