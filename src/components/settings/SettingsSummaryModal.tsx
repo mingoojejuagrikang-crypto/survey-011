@@ -18,6 +18,10 @@ export type PrevSurveyState =
   | { kind: 'none' }                // 인덱스는 있으나 이 세션 고정 키와 일치하는 과거 기록 0건
   | { kind: 'date'; iso: string };  // 직전 조사일(오늘 미만 최신 회차)
 
+/** 🔴 v0.49 r2 A5(codex F4) — 「기록 없음」은 **조회 결과**일 때만 쓴다. 조회가 성립하지 않는
+ *  상태(고정 키 0개·헤더 미매핑)는 「미확인」이다 — 그걸 「기록 없음」이라고 말하면 사용자가
+ *  "과거 기록이 없구나"라는 **틀린 결론**을 내리고, 그 화면은 스키마를 고치기 전까지 영구 고정된다.
+ *  두 상태의 판정은 `pastValues.previousSurveyRound`가 소유한다(여기서 다시 추론하지 않는다). */
 function prevSurveyText(s: PrevSurveyState): string {
   if (s.kind === 'date') return s.iso;
   return s.kind === 'none' ? '기록 없음' : '미확인';
@@ -39,8 +43,11 @@ export function readPrevSurveyState(
 ): PrevSurveyState {
   const index = getCachedIndex() ?? getFallbackIndex();
   if (!index) return { kind: 'unknown' };
-  const iso = previousSurveyRound(index, columns, roundDateColId, localTodayIso());
-  return iso ? { kind: 'date', iso } : { kind: 'none' };
+  const round = previousSurveyRound(index, columns, roundDateColId, localTodayIso());
+  // 조회 불가(고정 키 0개·헤더 미매핑)는 인덱스 미로드와 **같은 계열**이다 — 둘 다 「이 화면은
+  // 답을 모른다」이지 「과거가 없다」가 아니다(A5). 사유 자체는 순수층이 들고 있다.
+  if (round.kind === 'unqueryable') return { kind: 'unknown' };
+  return round;
 }
 
 export function SettingsSummaryModal({

@@ -234,16 +234,30 @@ export function sessionFixedKeyColumns(columns: Column[], roundDateColId: string
  * strictly-< 는 `previousRound`(그리고 그것을 쓰는 `trendEvaluate`)와 같은 규칙 — 오늘 당일
  * 부분 업로드가 자기 자신의 기준선이 되지 않게 한다.
  */
+export type PrevSurveyRound =
+  | { kind: 'date'; iso: string }
+  /** 조회는 성립했고, 일치하는 과거 기록이 0건이다. */
+  | { kind: 'none' }
+  /** 조회 자체가 성립하지 않는다 — 「기록이 없다」가 **아니다**. */
+  | { kind: 'unqueryable'; reason: 'no_fixed_key' | 'headers_unmapped' };
+
 export function previousSurveyRound(
   index: PastIndex,
   columns: Column[],
   roundDateColId: string | null,
   beforeDate: string,
-): string | null {
+): PrevSurveyRound {
+  // 🔴 v0.49 r2 A5(codex F4 = 합집합 C6) — **세 가지 null을 갈랐다.** 종전엔 ⓐ고정 키 0개
+  //   ⓑ고정 키 컬럼이 시트에 미매핑 ⓒ실제 일치 기록 0건이 전부 `null`이었고, 호출부(설정요약)는
+  //   그 전부를 「기록 없음」으로 그렸다. ⓐ·ⓑ는 **조회를 포기한 상태**이지 조회 결과가 아니다 —
+  //   사용자가 "과거 기록이 없다"는 잘못된 결론을 내린다(샘플키를 다 꺼두거나 헤더를 개명한
+  //   스키마에서 영구 고정된다). 「추측 금지, 정직한 null」의 정직함은 **구분**에서 나온다.
   const fixedCols = sessionFixedKeyColumns(columns, roundDateColId);
-  if (fixedCols.length === 0) return null;
+  if (fixedCols.length === 0) return { kind: 'unqueryable', reason: 'no_fixed_key' };
   // 시트에 매핑되지 않은 컬럼은 레코드에 값이 없어 어떤 행과도 일치할 수 없다 — 전수 스캔 생략.
-  if (fixedCols.some((c) => !index.headersMapped.has(c.id))) return null;
+  if (fixedCols.some((c) => !index.headersMapped.has(c.id))) {
+    return { kind: 'unqueryable', reason: 'headers_unmapped' };
+  }
   const want = fixedCols.map((c) => [c.id, autoValue(c, 1).trim()] as const);
   let best: string | null = null;
   for (const byRound of index.samples.values()) {
@@ -253,7 +267,7 @@ export function previousSurveyRound(
       if (want.every(([id, v]) => (rec[id] ?? '').trim() === v)) best = round;
     }
   }
-  return best;
+  return best === null ? { kind: 'none' } : { kind: 'date', iso: best };
 }
 
 /**

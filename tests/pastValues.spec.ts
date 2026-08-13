@@ -288,41 +288,46 @@ test.describe('sessionFixedKeyColumns — 세션 고정 샘플키 판정', () =>
 test.describe('previousSurveyRound — 세션 고정 키의 직전 조사일', () => {
   test('현 스키마(농가명+라벨): 오늘 미만 최신 회차', () => {
     // 이원창/A 조합은 05-13(나무1) · 05-20(나무1,2) · 05-27(나무1)에 존재 → 최신 05-27
-    expect(previousSurveyRound(w3Index(), W3_COLS, null, '2026-06-12')).toBe('2026-05-27');
+    expect(previousSurveyRound(w3Index(), W3_COLS, null, '2026-06-12')).toEqual({ kind: 'date', iso: '2026-05-27' });
   });
 
   test('strictly < — 당일 회차는 자기 기준선이 되지 않는다', () => {
     const idx = w3Index();
-    expect(previousSurveyRound(idx, W3_COLS, null, '2026-05-27')).toBe('2026-05-20');
-    expect(previousSurveyRound(idx, W3_COLS, null, '2026-05-20')).toBe('2026-05-13');
-    expect(previousSurveyRound(idx, W3_COLS, null, '2026-05-13')).toBeNull();
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-05-27')).toEqual({ kind: 'date', iso: '2026-05-20' });
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-05-20')).toEqual({ kind: 'date', iso: '2026-05-13' });
+    // 더 과거가 없으면 「조회는 했는데 기록 0건」이다 — 조회 불가와 다른 상태다(A5).
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-05-13')).toEqual({ kind: 'none' });
   });
 
   test('세션 안의 여러 샘플(조사나무 1·2)을 가로질러 가장 늦은 회차를 고른다', () => {
     // 나무1은 05-27까지, 나무2는 05-20까지 — 세션 기준이므로 05-27이어야 한다(샘플별 조회가 아니다).
-    expect(previousSurveyRound(w3Index(), W3_COLS, null, '2026-05-28')).toBe('2026-05-27');
+    expect(previousSurveyRound(w3Index(), W3_COLS, null, '2026-05-28')).toEqual({ kind: 'date', iso: '2026-05-27' });
   });
 
-  test('일치 기록 0건 → null (다른 농가)', () => {
+  test("일치 기록 0건 → { kind: 'none' } (다른 농가)", () => {
     const cols = W3_COLS.map((c) => (c.id === 'c3' ? col('c3', '농가명', { auto: { kind: 'fixed', value: '없는농가' } }) : c));
-    expect(previousSurveyRound(w3Index(cols), cols, null, '2026-06-12')).toBeNull();
+    expect(previousSurveyRound(w3Index(cols), cols, null, '2026-06-12')).toEqual({ kind: 'none' });
   });
 
-  test('일치 기록 0건 → null (같은 농가, 다른 라벨)', () => {
+  test("일치 기록 0건 → { kind: 'none' } (같은 농가, 다른 라벨)", () => {
     const cols = W3_COLS.map((c) =>
       c.id === 'c4' ? col('c4', '라벨', { auto: { kind: 'options', available: ['A', 'B'], selected: ['B'] } }) : c,
     );
-    expect(previousSurveyRound(w3Index(cols), cols, null, '2026-06-12')).toBeNull();
+    expect(previousSurveyRound(w3Index(cols), cols, null, '2026-06-12')).toEqual({ kind: 'none' });
   });
 
-  test('고정 키 0개 → null (조회 포기)', () => {
+  // 🔴 v0.49 r2 A5(codex F4) — 아래 둘은 **조회 결과가 아니다.** 종전엔 위 「기록 0건」과 같은
+  //    `null`이라 호출부가 구분할 수 없었고, 설정요약이 셋 다 「기록 없음」으로 그렸다.
+  test("고정 키 0개 → { kind: 'unqueryable', reason: 'no_fixed_key' } (조회 포기)", () => {
     const cols = W3_COLS.map((c) => ({ ...c, sampleKey: false }));
-    expect(previousSurveyRound(w3Index(cols), cols, null, '2026-06-12')).toBeNull();
+    expect(previousSurveyRound(w3Index(cols), cols, null, '2026-06-12'))
+      .toEqual({ kind: 'unqueryable', reason: 'no_fixed_key' });
   });
 
-  test('고정 키 컬럼이 시트에 미매핑이면 null (헤더 개명)', () => {
+  test("고정 키 컬럼이 시트에 미매핑이면 { kind: 'unqueryable', reason: 'headers_unmapped' } (헤더 개명)", () => {
     const headers = ['조사일자', '농가명(구)', '라벨', '조사나무', '횡경', '종경'];
-    expect(previousSurveyRound(w3Index(W3_COLS, headers), W3_COLS, null, '2026-06-12')).toBeNull();
+    expect(previousSurveyRound(w3Index(W3_COLS, headers), W3_COLS, null, '2026-06-12'))
+      .toEqual({ kind: 'unqueryable', reason: 'headers_unmapped' });
   });
 });
 
@@ -344,7 +349,7 @@ test.describe('previousSurveyRound — 키 조각 위치 대조(문자열 prefix
     ];
     const idx = buildPastIndex(headers, rows, cols, resolveRoundCol(cols, null));
     expect(idx.samples.size).toBe(1); // 두 행이 같은 키로 합쳐진다 — 조각 대조가 아니면 구분 불가
-    expect(previousSurveyRound(idx, cols, null, '2026-06-12')).toBe('2026-05-20');
+    expect(previousSurveyRound(idx, cols, null, '2026-06-12')).toEqual({ kind: 'date', iso: '2026-05-20' });
   });
 
   test('가상 스키마: 고정 컬럼이 키의 앞이 아니어도(중간·끝) 규칙대로 동작', () => {
@@ -366,6 +371,6 @@ test.describe('previousSurveyRound — 키 조각 위치 대조(문자열 prefix
       ['2026-07-22', '1', '4동', '토마토', '45'], // 동 불일치 → 제외
     ];
     const idx = buildPastIndex(headers, rows, cols, resolveRoundCol(cols, null));
-    expect(previousSurveyRound(idx, cols, null, '2026-08-01')).toBe('2026-07-08');
+    expect(previousSurveyRound(idx, cols, null, '2026-08-01')).toEqual({ kind: 'date', iso: '2026-07-08' });
   });
 });

@@ -91,16 +91,16 @@ function computeFp(): string {
   ]);
 }
 
-function buildRecord(): PersistedPastIndexRecord {
+function buildRecord(headers: string[] = HEADERS): PersistedPastIndexRecord {
   const cols = COLUMNS as unknown as Column[];
-  const index = buildPastIndex(HEADERS, SHEET_ROWS, cols, resolveRoundCol(cols, null));
+  const index = buildPastIndex(headers, SHEET_ROWS, cols, resolveRoundCol(cols, null));
   return serializePastIndexEntry({ fp: computeFp(), builtAt: Date.now() - 2 * 3_600_000, index });
 }
 
 /** 설정 시드(+선택적 IDB 폴백 주입) → 설정탭 → 설정요약 팝업 오픈. */
 async function openSummary(
   page: Page,
-  opts: { farmName: string; withRecord: boolean },
+  opts: { farmName: string; withRecord: boolean; headers?: string[] },
 ): Promise<void> {
   await page.setViewportSize(PHONE_375);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
@@ -125,7 +125,7 @@ async function openSummary(
         tx.onerror = () => reject(tx.error);
       });
       db.close();
-    }, buildRecord() as unknown as Record<string, unknown>);
+    }, buildRecord(opts.headers) as unknown as Record<string, unknown>);
   }
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(600); // hydratePastIndexFallback(부팅 1회, async)
@@ -164,4 +164,24 @@ test('W3-3 — IDB 폴백 + 일치 기록 0건(다른 농가): 「이전 조사 
   await expect(modal).toContainText('기록 없음');
   await expect(modal).not.toContainText(PREV_ROUND);
   console.log('✓ 폴백 인덱스 + 고정 키 불일치 → 기록 없음(미확인과 구분된다)');
+});
+
+test("W3-4(r2 A5) — 인덱스는 있는데 **조회가 불가능**하면 「기록 없음」이 아니라 「미확인」이다", async ({ page }) => {
+  // 🔴 codex F4 = 합집합 C6. 고정 키 컬럼의 시트 헤더가 개명되면(농가명 → 농가명(구)) 그 컬럼은
+  //    인덱스에 매핑되지 않아 **어떤 과거 행과도 대조할 수 없다.** 종전엔 이 상태가 일치 0건과
+  //    같은 null이라 화면이 「기록 없음」으로 단정했고, 사용자는 "과거 기록이 없구나"라는 틀린
+  //    결론을 내린다 — 헤더를 되돌리기 전까지 영구 고정되는 거짓말이다.
+  //    지문(fp)은 컬럼만 보므로 폴백 인덱스는 그대로 로드된다(= 이 단언은 공허하지 않다).
+  const RENAMED = ['조사일자', '농가명(구)', '라벨', '조사나무', '횡경'];
+  await openSummary(page, { farmName: '이원창', withRecord: true, headers: RENAMED });
+
+  // ① 인덱스는 실제로 로드됐다(폴백 = stale = warn). 「미확인」이 미로드 때문이 아님을 고정한다.
+  await expect(page.locator('[data-testid="conn-past"]')).toHaveAttribute('data-tone', 'warn');
+
+  // ② 그런데도 「이전 조사」는 조회 불가 → 미확인.
+  const modal = page.locator('[data-testid="settings-summary-modal"]');
+  await expect(modal).toContainText('이전 조사');
+  await expect(modal).toContainText('미확인');
+  await expect(modal, '조회 불가를 「기록 없음」으로 단정하면 안 된다').not.toContainText('기록 없음');
+  await expect(modal).not.toContainText(PREV_ROUND);
 });
