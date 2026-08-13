@@ -247,8 +247,33 @@ export type PrevSurveyRound =
   | { kind: 'date'; iso: string }
   /** 조회는 성립했고, 일치하는 과거 기록이 0건이다. */
   | { kind: 'none' }
-  /** 조회 자체가 성립하지 않는다 — 「기록이 없다」가 **아니다**. */
-  | { kind: 'unqueryable'; reason: 'no_fixed_key' | 'headers_unmapped' };
+  /** 조회 자체가 성립하지 않는다 — 「기록이 없다」가 **아니다**.
+   *  🔴 v0.49 r3 #3 — 사유 3종(`round_*`)이 **시간축** 붕괴다. A5가 샘플 식별축만 갈라놓아
+   *  그 절반이 그대로 '기록 없음'으로 샜다(아래 `previousSurveyRound` 가드 주석). */
+  | {
+      kind: 'unqueryable';
+      reason: 'no_fixed_key' | 'headers_unmapped' | 'no_round_col' | 'round_unmapped' | 'round_unindexed';
+    };
+
+/**
+ * 🔴 v0.49 r3 #4 — 고정 키 한 칸의 대조. **날짜 컬럼은 정규화해서 본다.**
+ *
+ * `want`는 앱이 만든 원문(`autoValue`)이고 `cell`은 시트에서 온 **FORMATTED_VALUE**다. 구글은
+ * date 서식 셀을 로케일대로 다시 그리므로(`2026-03-01` → `2026. 3. 1`) 리터럴 고정일 키는
+ * **영영 일치하지 않는다** — 그 컬럼은 A8이 「정당한 식별 키」로 인정한 부류(정식일자 등)이고,
+ * 불일치의 결과는 영구 '기록 없음'이다. 회차 컬럼만 `normalizeDateCell`을 거치고 있었다.
+ *
+ * ⚠️ 정확 일치를 **먼저** 본다 — 날짜가 아닌 값의 의미는 건드리지 않는다. 정규화는 date 타입
+ * 컬럼에서 정확 일치가 실패했을 때의 2차 시도이고, 양쪽 다 파싱돼야 참이다(파싱 불가끼리
+ * `null === null`로 통과하는 구멍을 막는다).
+ */
+export function fixedKeyCellMatches(col: Column, cell: string | undefined, want: string): boolean {
+  const raw = (cell ?? '').trim();
+  if (raw === want) return true;
+  if (col.type !== 'date') return false;
+  const got = normalizeDateCell(raw);
+  return got !== null && got === normalizeDateCell(want);
+}
 
 export function previousSurveyRound(
   index: PastIndex,
@@ -267,13 +292,30 @@ export function previousSurveyRound(
   if (fixedCols.some((c) => !index.headersMapped.has(c.id))) {
     return { kind: 'unqueryable', reason: 'headers_unmapped' };
   }
-  const want = fixedCols.map((c) => [c.id, autoValue(c, 1).trim()] as const);
+  // 🔴 v0.49 r3 #3(claude r2 HIGH) — **시간축도 같은 가드를 받는다.** A5는 샘플 식별축(고정 키)만
+  //   갈라 놓았고, 회차 축이 무너진 경우는 그대로 '기록 없음'으로 샜다: `buildPastIndex`는
+  //   회차를 못 읽은 행을 `if (!round) continue`로 **전부 버리므로**, 회차 컬럼이 없거나 시트에
+  //   미매핑이면 `samples`가 통째로 빈다. 그러면 아래 이중 루프는 0건을 돌고 `{kind:'none'}`이
+  //   나간다 — 조회가 성립조차 안 했는데 화면은 "과거 기록이 없다"고 단정한다. A5가 막으려던
+  //   그 거짓의 **남은 절반**이다(사유만 다르고 사용자가 내리는 틀린 결론은 똑같다).
+  const roundCol = resolveRoundCol(columns, roundDateColId);
+  if (!roundCol) return { kind: 'unqueryable', reason: 'no_round_col' };
+  if (!index.headersMapped.has(roundCol.id)) {
+    return { kind: 'unqueryable', reason: 'round_unmapped' };
+  }
+  //   매핑은 됐는데 인덱싱된 회차가 0개 = **파싱 가능한 날짜 셀이 한 줄도 없었다**(서식 불일치·
+  //   빈 칸·불완전 샘플키로 전량 skip). 데이터 행 자체가 0줄이면 그건 정직한 '기록 없음'이다.
+  if (index.rowCount > 0 && index.rounds.length === 0) {
+    return { kind: 'unqueryable', reason: 'round_unindexed' };
+  }
+  const want = fixedCols.map((c) => [c, autoValue(c, 1).trim()] as const);
   let best: string | null = null;
   for (const byRound of index.samples.values()) {
     for (const [round, rec] of byRound) {
       if (round >= beforeDate) continue;
       if (best !== null && round <= best) continue;
-      if (want.every(([id, v]) => (rec[id] ?? '').trim() === v)) best = round;
+      // #4 — 날짜 컬럼은 서식 차이를 넘어서 대조한다(`fixedKeyCellMatches` 헤더).
+      if (want.every(([c, v]) => fixedKeyCellMatches(c, rec[c.id], v))) best = round;
     }
   }
   return best === null ? { kind: 'none' } : { kind: 'date', iso: best };

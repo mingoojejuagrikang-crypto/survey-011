@@ -373,6 +373,91 @@ test.describe('previousSurveyRound — 세션 고정 키의 직전 조사일', (
     expect(previousSurveyRound(w3Index(W3_COLS, headers), W3_COLS, null, '2026-06-12'))
       .toEqual({ kind: 'unqueryable', reason: 'headers_unmapped' });
   });
+
+  // ─── 🔴 v0.49 r3 #3 — **시간축 붕괴도 조회 불가다.** ─────────────────────────────
+  // A5는 샘플 식별축(고정 키)만 갈랐다. 회차 축이 무너지면 `buildPastIndex`가 `if (!round)
+  // continue`로 **모든 행을 버려** samples가 통째로 비고, 아래 이중 루프는 0건을 돌아 종전엔
+  // `{ kind: 'none' }`을 돌려줬다 — 조회가 성립조차 안 했는데 화면은 '기록 없음'이라고 단정한다.
+  // 사용자가 내리는 틀린 결론(「과거 기록이 없구나」)은 A5가 막으려던 것과 **같다**.
+  test("회차(date) 컬럼이 아예 없으면 { reason: 'no_round_col' } — '기록 없음'이 아니다", () => {
+    const cols = W3_COLS.filter((c) => c.id !== 'c1');
+    const headers = ['농가명', '라벨', '조사나무', '횡경', '종경'];
+    const rows = [['이원창', 'A', '1', '10', '20']];
+    const idx = buildPastIndex(headers, rows, cols, resolveRoundCol(cols, null));
+    expect(idx.samples.size, '전제: 회차를 못 읽어 인덱스가 비어 있다').toBe(0);
+    expect(previousSurveyRound(idx, cols, null, '2026-06-12'))
+      .toEqual({ kind: 'unqueryable', reason: 'no_round_col' });
+  });
+
+  test("회차 컬럼이 시트에 미매핑이면 { reason: 'round_unmapped' } (조사일자만 개명)", () => {
+    const headers = ['조사일자(구)', '농가명', '라벨', '조사나무', '횡경', '종경'];
+    const idx = w3Index(W3_COLS, headers);
+    expect(idx.samples.size, '전제: 회차 열을 못 찾아 전 행이 skip된다').toBe(0);
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-06-12'))
+      .toEqual({ kind: 'unqueryable', reason: 'round_unmapped' });
+  });
+
+  test("데이터 행은 있는데 파싱 가능한 회차가 0개면 { reason: 'round_unindexed' } (서식 불일치)", () => {
+    const headers = ['조사일자', '농가명', '라벨', '조사나무', '횡경', '종경'];
+    const rows = [
+      ['2026년 5월 13일', '이원창', 'A', '1', '10', '20'], // normalizeDateCell 미지원 서식
+      ['13.05.2026', '이원창', 'A', '2', '11', '21'],       // 일-월-연
+    ];
+    const idx = buildPastIndex(headers, rows, W3_COLS, resolveRoundCol(W3_COLS, null));
+    expect(idx.rowCount, '전제: 행은 읽혔다').toBe(2);
+    expect(idx.rounds.length, '전제: 회차는 하나도 인덱싱되지 않았다').toBe(0);
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-06-12'))
+      .toEqual({ kind: 'unqueryable', reason: 'round_unindexed' });
+  });
+
+  test('데이터 행 자체가 0줄이면 그건 정직한 「기록 없음」이다 — 위 가드가 삼키지 않는다', () => {
+    const headers = ['조사일자', '농가명', '라벨', '조사나무', '횡경', '종경'];
+    const idx = buildPastIndex(headers, [], W3_COLS, resolveRoundCol(W3_COLS, null));
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-06-12')).toEqual({ kind: 'none' });
+  });
+
+  // ─── 🔴 v0.49 r3 #4 — 고정 키 대조는 **시트 서식**을 넘어야 한다. ────────────────
+  test('리터럴 고정일 키가 구글 재포맷(2026. 3. 1)이어도 일치한다 — 영구 「기록 없음」 차단', () => {
+    // A8이 「정당한 식별 키」로 인정한 부류(정식일자). 앱은 `2026-03-01` 원문을 들고 있고,
+    // 시트는 date 서식 셀을 FORMATTED_VALUE로 로케일대로 그려 준다 — 종전엔 영영 불일치했다.
+    const cols = [
+      ...W3_COLS,
+      col('c9', '정식일자', { type: 'date', auto: { kind: 'fixed', value: '2026-03-01' }, sampleKey: true }),
+    ];
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id), '전제: 고정 키에 포함된다')
+      .toEqual(['c3', 'c4', 'c9']);
+
+    const headers = ['조사일자', '농가명', '라벨', '조사나무', '횡경', '종경', '정식일자'];
+    const rows = [
+      ['2026-05-13', '이원창', 'A', '1', '10', '20', '2026. 3. 1'],
+      ['2026-05-20', '이원창', 'A', '1', '11', '21', '2026. 3. 1'],
+    ];
+    const idx = buildPastIndex(headers, rows, cols, resolveRoundCol(cols, null));
+    expect(previousSurveyRound(idx, cols, null, '2026-06-12')).toEqual({ kind: 'date', iso: '2026-05-20' });
+  });
+
+  test('날짜 정규화는 **다른 날짜**를 같게 만들지 않는다(가드)', () => {
+    const cols = [
+      ...W3_COLS,
+      col('c9', '정식일자', { type: 'date', auto: { kind: 'fixed', value: '2026-03-01' }, sampleKey: true }),
+    ];
+    const headers = ['조사일자', '농가명', '라벨', '조사나무', '횡경', '종경', '정식일자'];
+    const rows = [['2026-05-13', '이원창', 'A', '1', '10', '20', '2026. 3. 2']];
+    const idx = buildPastIndex(headers, rows, cols, resolveRoundCol(cols, null));
+    expect(previousSurveyRound(idx, cols, null, '2026-06-12')).toEqual({ kind: 'none' });
+  });
+
+  test('파싱 불가 날짜끼리는 일치로 보지 않는다(null === null 구멍 차단)', () => {
+    const cols = [
+      ...W3_COLS,
+      col('c9', '정식일자', { type: 'date', auto: { kind: 'fixed', value: '심은날' }, sampleKey: true }),
+    ];
+    const headers = ['조사일자', '농가명', '라벨', '조사나무', '횡경', '종경', '정식일자'];
+    // 원문이 서로 다르고 둘 다 파싱 불가 — 정확 일치도 정규화 일치도 성립하면 안 된다.
+    const rows = [['2026-05-13', '이원창', 'A', '1', '10', '20', '옮긴날']];
+    const idx = buildPastIndex(headers, rows, cols, resolveRoundCol(cols, null));
+    expect(previousSurveyRound(idx, cols, null, '2026-06-12')).toEqual({ kind: 'none' });
+  });
 });
 
 test.describe('previousSurveyRound — 키 조각 위치 대조(문자열 prefix 매칭 금지)', () => {
