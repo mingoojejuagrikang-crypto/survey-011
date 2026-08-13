@@ -997,7 +997,9 @@ export function useVoiceSession() {
    *  phase는 `active` 그대로 둔다(reviewWait과 다른 점). 이 행은 아직 진행 중이라
    *  `complete`로 내리면 히어로 ✓·레이아웃이 「조사 완료」로 바뀐다. 대신 조기확정(early-commit)은
    *  `handleInterim`의 kind 게이트가 명시적으로 막는다 — phase에 기대지 않는다.
-   *  오라클: tests/v049-fix49-nav-guards.spec.ts ①②⑥ */
+   *  오라클: tests/v049-fix49-cell-guard.spec.ts ①②⑥
+   *  (v0.49 r2 — 종전 이 줄이 지목하던 `v049-fix49-nav-guards.spec.ts`는 **실재한 적이 없다**.
+   *   ①②⑥은 cell-guard의 항목 번호와 정확히 대응한다.) */
   const enterCellWait = useCallback(async (col: Column, value: string) => {
     const sess = useSessionStore.getState();
     const row = sess.activeRow;
@@ -1754,11 +1756,30 @@ export function useVoiceSession() {
   //   '이전행'/'다음행' 전용이다. 무음 금지(REVIEW-4)라 경계에서도 짧은 안내 + 현재 필드
   //   재안내를 한다 — `gotoAdjacentRow`의 '첫 행입니다' 패턴과 대칭.
   //
-  // 🔴 **검토 대기(reviewWait)·끝 도달(atEnd) 스코프에서는 이동하지 않는다.** `announceField`는
-  //   `awaitingFieldRef`에 `kind:'value'`를 열어 **bare 값 커밋을 허용**하는데(:846-856), 그건
-  //   v0.33.0 결정 3의 「완료 행 덮어쓰기 금지」 계약을 깬다 — `gotoAdjacentRow:1545-1550`이 첫 행
-  //   경계에서 정확히 같은 이유로 announceField를 피하고 enterReviewWait을 재무장한다.
-  //   그 스코프의 정본 진입로는 '수정'/'수정 <컬럼명>'이므로 그렇게 안내한다.
+  // 🔴 **검토 대기(reviewWait)·끝 도달(atEnd) 스코프에서도 이동한다**(v0.49 r2 W1 — 민구 08-13
+  //   FB-1·FB-4). fix49는 이 두 스코프에서 이동을 **거부**했다(리뷰 M-1+M-2·B-1). 거부의 근거는
+  //   「`announceField`가 `kind:'value'`를 열어 bare 값이 완료 셀을 덮는다」였는데, **그 근거는
+  //   같은 fix49의 `enterCellWait`(:1001)이 이미 해소했다** — 값이 든 셀 착지는 announceField가
+  //   아니라 cellWait(낭독 + bare 값 흡수 + 덮어쓰기 없음)으로 간다. 즉 거부는 **해소된 위험에
+  //   대한 잔존 방어**였고, 실기기에서 그 대가만 남았다:
+  //     실측 08-13 — `field_nav_blocked:reviewWait` ×6(09:36·09:38·09:54~55). '이전행'으로 완료 행에
+  //     착지한 사용자가 「다음」으로 항목을 넘기려 할 때마다 "검토 중입니다"가 나왔다. 민구 원문:
+  //     *"'다음' 선언 했으나 기대했던것과 다른 반응… 기대 반응은 칩 포커스가 횡경에서 종경으로
+  //     이동하고 값을 안내해줬어야 함."* / *"'이전행'(정상동작) >> '다음'(비정상 동작)"*
+  //   완료 행 셀은 값이 있으므로 실질 착지는 전량 `enterCellWait`이다 — 「종경 기록값 35.1.」.
+  //   **덮어쓰기 금지 계약(v0.33.0 결정 3)은 그대로 산다**: 지키는 주체가 「스코프 거부」에서
+  //   「착지 상태(cellWait)」로 바뀌었을 뿐이고, 후자가 셀 단위라 더 정확하다.
+  //
+  // 🔴 **스코프를 떠날 때 phase를 값 입력 국면으로 되돌린다**(`jumpToRow:1623`과 같은 패턴).
+  //   reviewWait/atEnd는 `phase='complete'`로 앉아 있다(정적 대기 라벨·UI-c 완료 화면). 그 상태로
+  //   cellWait에 착지하면 화면은 「조사 완료」인데 귀로는 셀을 검토하는 **시각·청각 불일치**가 된다
+  //   (PRINCIPLES §2). `setPhase`가 'complete' 이탈 시 `endReached`를 함께 내리고
+  //   (`sessionStore:264`), 종료 수단은 `endReachedOnce`가 세션 경계까지 붙잡는다(:177) —
+  //   그래서 atEnd를 떠나도 '종료'/종료 버튼은 살아 있다.
+  //
+  // 🔴 **경계에서는 센티넬을 건드리지 않는다.** 이동이 없으므로 reviewWait/atEnd가 **그대로 살아
+  //   있고**, 그게 곧 재무장이다. 여기서 `announceOrCellWait` 재안내를 부르면 그 센티넬을
+  //   cellWait으로 덮어 스코프가 조용히 증발한다(완료 행 검토 중인데 행 검토 문맥이 사라진다).
   //   ⚠️ 안내 문구를 늘리지 마라 — [TTS-WATCHDOG-1]에서 **긴 발화일수록 절단률이 단조 증가**한다.
   //
   // 🔴 **미해결 국면에서는 이동하지 않는다**(v0.49 fix49 — 리뷰 M-1+M-2, 민구 확정 08-12
@@ -1775,7 +1796,9 @@ export function useVoiceSession() {
   //   35.1 → 「이전」 → "99.9" → 셀이 99.9). 착지 셀 값 유무 판정은 `announceOrCellWait`이 SSOT다.
   //
   // **값은 건드리지 않는다** — 커서만 옮긴다(setRecognized('')는 화면의 인식 중 텍스트만 비운다).
-  // 오라클: tests/v049-f1-field-nav.spec.ts · tests/v049-fix49-nav-guards.spec.ts
+  // 오라클: tests/v049-f1-field-nav.spec.ts(①~④⑦ 이동·경계 · ⑩ 검토 대기 이동 = W1)
+  //   · tests/v049-fix49-phase-guard.spec.ts(미해결 국면 거부 — W1의 범위 밖, 불변)
+  //   · tests/v049-fix49-cell-guard.spec.ts(filled 셀 착지 = cellWait, B-1)
   const gotoAdjacentField = useCallback(async (delta: -1 | 1) => {
     const sess = useSessionStore.getState();
     if (sess.phase === 'stopping') return;
@@ -1785,22 +1808,13 @@ export function useVoiceSession() {
     const parsed = delta < 0 ? 'prevField' : 'nextField';
     const row = sess.activeRow;
     const awaiting = awaitingFieldRef.current;
-
-    if (awaiting?.kind === 'reviewWait' || awaiting?.kind === 'atEnd') {
-      cancelTts();
-      epochRef.current++;
-      logCell({ type: 'command', parsed, extra: `field_nav_blocked:${awaiting.kind}`, row });
-      // 🔴 두 스코프는 **문구를 나눈다.** 이 앱은 안내 문구를 계약으로 다룬다(v0.47.0 V-FIX4) —
-      //   세션 끝(atEnd)에서 "검토 중입니다"라고 하면 사용자는 있지도 않은 검토 상태를 찾는다.
-      //   두 경우 모두 '수정'이 정본 진입로인 것은 같다(cmdModify가 atEnd 센티넬을 :1157-1163에서
-      //   받아 마지막 컬럼을 다시 연다).
-      const msg = awaiting.kind === 'atEnd'
-        ? '입력이 끝났습니다. 수정이라고 말하세요.'
-        : '검토 중입니다. 수정이라고 말하세요.';
-      sess.setLastTts(msg);
-      await say(msg);
-      return;
-    }
+    // 🔴 W1 — 검토/끝 도달 스코프 출신 이동. 커서 기준은 **`activeColIdx`(화면 활성 칩)**이지
+    //   센티넬의 colId가 아니다: 민구 기대가 칩 기준으로 서술돼 있고(*"칩 포커스가 횡경에서
+    //   종경으로 이동"*), reviewWait은 진입 시 `setActiveCol(0)`으로 둘을 이미 일치시킨다(:962).
+    //   atEnd는 커서를 옮기지 않으므로 화면 칩 = 마지막 커밋 컬럼이고, 거기서 한 칸이 옳다.
+    const reviewScope = awaiting?.kind === 'reviewWait' || awaiting?.kind === 'atEnd'
+      ? awaiting.kind
+      : null;
 
     // 🔴 v0.49 fix49 — 미해결 국면 거부(위 헤더 주석). 국면을 로그에 남긴다.
     //   `trendConfirm`이 여기까지 **살아서** 도달하는 것은 `voiceFinalResolver`가 이 두 명령을
@@ -1844,7 +1858,7 @@ export function useVoiceSession() {
       const msg = delta < 0 ? '첫 항목입니다.' : '마지막 항목입니다.';
       logCell({
         type: 'command', parsed,
-        extra: `field_nav_edge:${delta < 0 ? 'first' : 'last'}`,
+        extra: `field_nav_edge:${delta < 0 ? 'first' : 'last'}${reviewScope ? `:${reviewScope}` : ''}`,
         row,
       });
       sess.setLastTts(msg);
@@ -1855,13 +1869,23 @@ export function useVoiceSession() {
       //   뒤늦게 드러난다. fix49의 H-2 드레인이 `cancelTts()` 시점에 이 `say()`를 즉시
       //   결말지어 주므로 낡은 체인은 **명령 처리 도중에** 깨어난다(창이 더 앞당겨졌다).
       if (epochRef.current !== startEpoch) return;
+      // 🔴 W1 — 검토/끝 도달 스코프는 **여기서 끝낸다.** 커서를 옮기지 않았으니 센티넬이 그대로
+      //   살아 있고(= 재무장), 재안내를 부르면 그 센티넬을 cellWait으로 덮어 스코프가 증발한다.
+      if (reviewScope) return;
       const cur = vc[curIdx];
       // 경계에서도 **재안내 대상이 filled 셀일 수 있다**(값 넣고 「이전」으로 되돌아온 뒤 「이전」).
       if (cur) await announceOrCellWait(cur);
       return;
     }
 
-    logCell({ type: 'command', parsed, extra: `field_nav:${curIdx}->${target}`, row });
+    logCell({
+      type: 'command', parsed,
+      extra: `field_nav:${curIdx}->${target}${reviewScope ? `:${reviewScope}` : ''}`,
+      row,
+    });
+    // 🔴 W1 — 스코프 이탈: 값 입력 국면으로 되돌린다(위 헤더 주석 · `jumpToRow:1623`과 같은 줄).
+    //   `setPhase`가 `endReached`를 함께 내리고, 종료 수단은 `endReachedOnce`가 지킨다.
+    if (reviewScope && sess.phase === 'complete') sess.setPhase('active');
     sess.setActiveCol(target);
     sess.setRecognized('');
     await announceOrCellWait(vc[target]);

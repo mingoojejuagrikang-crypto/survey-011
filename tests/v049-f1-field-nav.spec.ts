@@ -12,8 +12,16 @@
  *    짧은 안내만 한다(무음 금지 REVIEW-4 — gotoAdjacentRow의 '첫 행입니다'와 대칭).
  * ③ 「다음행」/「이전행」은 **종전 행 이동 계약을 그대로 승계**한다(로직 이전이지 변경이 아니다).
  * ④ 이동은 **값을 건드리지 않는다** — 되돌아온 항목의 기록값이 그대로 있다.
- * ⑤ 검토 대기(reviewWait)에서는 항목 이동을 하지 않는다 — announceField가 bare 값 커밋을 열어
- *    v0.33.0 결정 3(완료 행 덮어쓰기 금지)을 깨기 때문. 대신 '수정'으로 안내한다.
+ * ⑤ 🔴 **v0.49 r2 W1(민구 08-13 FB-1·FB-4) — 검토 대기(reviewWait)·끝 도달(atEnd)에서도 이동한다.**
+ *    fix49는 여기서 이동을 거부했다("검토 중입니다"). 근거는 「announceField가 bare 값 커밋을 열어
+ *    v0.33.0 결정 3(완료 행 덮어쓰기 금지)을 깬다」였는데, 같은 fix49의 `enterCellWait`이 그 위험을
+ *    이미 해소했다 — 값 있는 셀 착지는 낭독+흡수(덮어쓰기 없음)다. 실기기에서는 거부의 대가만
+ *    남았다(`field_nav_blocked:reviewWait` ×6, 08-13). 민구 원문: *"기대 반응은 칩 포커스가 횡경에서
+ *    종경으로 이동하고 값을 안내해줬어야 함."*
+ *    ⑩⑪이 「이동 + 기록값 낭독」을, ⑫가 「이동해도 덮이지 않는다」를, ⑬이 경계에서 스코프가
+ *    증발하지 않음을, ⑭가 atEnd 이탈 후에도 종료 수단이 사는 것을 잰다.
+ *    ⚠️ **미해결 국면 거부(trendConfirm/modify/fractionWhole)는 이 변경의 범위 밖**이고 그대로다 —
+ *    짝 오라클 `v049-fix49-phase-guard.spec.ts`가 잰다.
  *
  * 🔴 **최장 일치**가 이 spec의 숨은 전제다: '이전'⊂'이전행'이라, detectCommand가 선언 순서대로
  *    순회하면 「이전행」이 짧은 prevField에 가로채여 ③이 통째로 red가 된다.
@@ -24,6 +32,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { installVoiceMocks, fireStt, ttsLog, waitForTtsIdle } from './fixtures/stt';
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
@@ -109,6 +118,13 @@ async function speakWhenArmed(page: Page, text: string, waitMs = 500) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // 🔴 v0.49 r2 — gUM 스텁. 이 스펙은 종전 스텁 없이 `start()`의 `recorderRef.init()`(:3576)에
+  //   실기기 gUM을 그대로 태웠고, 로컬 헤드리스에서 그 호출이 **응답하지 않아**(권한 프롬프트)
+  //   "마이크 권한을 확인하는 중…"에서 멈춰 13개 전부 red가 됐다 — 제품 회귀가 아니라 시작 게이트다
+  //   (내가 만지지 않은 `v049-fix49-cell-guard.spec.ts`도 같은 줄에서 같은 이유로 red).
+  //   `fixtures/gum.ts`가 바로 이 용도의 공용 픽스처다(v0.44.1). 항목 이동 계약은 마이크 상태와
+  //   무관하므로 이 스텁이 무엇도 가리지 않는다.
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await installVoiceMocks(page);
 });
 
@@ -223,34 +239,118 @@ test('⑦ 항목 이동은 기록값을 건드리지 않는다', async ({ page }
   expect(chipText).toContain('35.1');
 });
 
-// ─── ⑤ 검토 대기에서는 이동하지 않는다 (완료 행 덮어쓰기 금지 계약 보존) ────────
-test('⑩ 검토 대기 중 「다음」은 이동을 거부한다 — 그리고 세션을 먹통으로 만들지 않는다', async ({ page }) => {
-  await seedAndOpenVoiceTab(page);
-  await clickStart(page);
-
-  // 1행 완주(voice 3칸) → 행 완료 자동 전진으로 2행.
+// ─── ⑤ 검토 대기·끝 도달에서도 이동한다 (v0.49 r2 W1 — 민구 08-13 FB-1·FB-4) ────────
+/** 1행을 완주시키고 「이전행」으로 되돌아와 **완료 행 검토 대기**(reviewWait)에 세운다.
+ *  이 상태가 08-13 실기기에서 「다음」이 6번 거부당한 바로 그 지점이다. */
+async function landOnCompletedRowReview(page: Page) {
   await speakWhenArmed(page, '35.1', 700);
   await speakWhenArmed(page, '22.2', 700);
   await speakWhenArmed(page, '12.3', 1100);
   expect(await activeRow(page)).toBe(2);
-
-  // 「이전행」으로 **완료된** 1행 착지 = enterReviewWait(값 낭독 + 명령 대기).
   await speakWhenArmed(page, '이전행', 1300);
   expect(await activeRow(page)).toBe(1);
+  // 검토 대기 진입은 커서를 **첫 음성 컬럼**에 세운다(v0.34.0 A3).
+  expect(await activeChipName(page)).toContain('횡경');
+}
 
-  const chipBefore = await activeChipName(page);
+test('⑩ 검토 대기 중 「다음」은 항목을 옮기고 기록값을 낭독한다 (W1 — FB-1)', async ({ page }) => {
+  await seedAndOpenVoiceTab(page);
+  await clickStart(page);
+  await landOnCompletedRowReview(page);
+
+  const before = (await ttsLog(page)).length;
   await speakWhenArmed(page, '다음', 1000);
 
-  // 🔴 이동하지 않는다. announceField가 kind:'value'를 열면 뒤이은 bare 숫자가 **완료된 셀을
-  //   덮어쓴다** — v0.33.0 결정 3(완료 행 덮어쓰기 금지)이 막으려던 바로 그 경로다.
-  expect(await activeRow(page), '검토 대기 중 항목 이동이 행을 옮기면 안 된다').toBe(1);
-  expect(await activeChipName(page), '커서도 그대로여야 한다').toBe(chipBefore);
-  expect((await ttsLog(page)).join(' | ')).toContain('검토 중입니다');
+  // 🔴 민구 기대 그대로 — 칩 포커스가 횡경 → 종경으로 이동하고 그 값을 안내한다.
+  expect(await activeChipName(page), '검토 대기에서도 항목 커서가 옮겨져야 한다').toContain('종경');
+  expect(await activeRow(page), '항목 이동은 행을 옮기지 않는다(F-1 «행 불변»)').toBe(1);
+  expect((await ttsLog(page)).slice(before).join(' | '), '착지 셀의 기록값을 낭독한다')
+    .toContain('종경 기록값 22.2');
+  // 정당 파손 — 거부 문구는 호출 경로 자체가 사라졌다.
+  expect((await ttsLog(page)).join(' | ')).not.toContain('검토 중입니다');
+});
 
-  // 🔴 거부가 **무음·먹통**이 되면 안 된다(REVIEW-4). 이 파일의 다른 no-op 경로들이 재안내로
-  //   무음을 피하는 것과 같은 이유 — 후속 「다음행」이 그대로 먹혀야 한다.
+test('⑪ 검토 대기에서 이동해도 완료 셀은 덮이지 않고, 「수정」이 그 셀을 연다 (덮어쓰기 금지 보존)', async ({ page }) => {
+  await seedAndOpenVoiceTab(page);
+  await clickStart(page);
+  await landOnCompletedRowReview(page);
+  await speakWhenArmed(page, '다음', 1000); // 종경(22.2)에 cellWait으로 착지
+
+  // 🔴 v0.33.0 결정 3 — bare 숫자는 완료된 셀을 덮지 않는다. 지키는 주체가 「스코프 거부」에서
+  //   「착지 상태(cellWait) 흡수」로 바뀌었을 뿐, 계약 자체는 그대로 살아 있어야 한다.
+  await speakWhenArmed(page, '99.9', 900);
+  const chipText = await page.evaluate(() => {
+    const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+    return chip?.innerText ?? '';
+  });
+  expect(chipText, 'bare 값이 완료 셀을 덮으면 안 된다').toContain('22.2');
+  expect(chipText).not.toContain('99.9');
+
+  // 정정 진입로는 '수정' 하나 — 그리고 그 대상은 **착지한 셀**이다(cmdModify `land:'cell'`).
+  //   ⚠️ 직접값("수정 <값>")으로 잰다. 2단계('수정' → 값)는 `resumeReview`를 싣지 않아 커밋 후
+  //   `advance()`로 빠져나가는데, 그건 **W1 이전부터의 갭**이고(예약 세팅 지점이 :1390 하나뿐)
+  //   fix49 오라클 ⑤도 직접값만 단언한다 — 여기서 범위를 넓히지 않는다(산출물에 보고).
+  await speakWhenArmed(page, '수정 44.4', 1200);
+  expect(await activeChipName(page), "'수정'은 **착지한 셀**(종경)을 연다 — 직전 컬럼이 아니다")
+    .toContain('종경');
+  expect(await activeRow(page), '정정이 검토 문맥을 떠나 행을 넘기면 안 된다').toBe(1);
+  const after = await page.evaluate(() => {
+    const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+    return chip?.innerText ?? '';
+  });
+  expect(after, '수정 커밋은 그 셀에 반영된다').toContain('44.4');
+});
+
+test('⑫ 검토 대기의 첫 항목 경계 — 안내만 하고 검토 스코프가 증발하지 않는다', async ({ page }) => {
+  await seedAndOpenVoiceTab(page);
+  await clickStart(page);
+  await landOnCompletedRowReview(page); // 커서 = 첫 항목(횡경)
+
+  const before = (await ttsLog(page)).length;
+  await speakWhenArmed(page, '이전', 1000);
+  expect((await ttsLog(page)).slice(before).join(' | ')).toContain('첫 항목입니다');
+  expect(await activeChipName(page), '경계에서는 커서가 그대로다').toContain('횡경');
+
+  // 🔴 경계에서 재안내(announceOrCellWait)를 부르면 reviewWait 센티넬이 cellWait으로 덮여
+  //   **행 검토 문맥이 조용히 사라진다.** 그 증발을 여기서 잡는다 — 완료 행 안내가 살아 있어야 한다.
+  await speakWhenArmed(page, '77.7', 900);
+  const chipText = await page.evaluate(() => {
+    const chip = document.querySelector('[data-testid="column-chip"][data-active="true"]') as HTMLElement | null;
+    return chip?.innerText ?? '';
+  });
+  expect(chipText, '경계 후에도 완료 행 덮어쓰기 금지가 살아 있어야 한다').toContain('35.1');
+  expect(chipText).not.toContain('77.7');
+
+  // 무음·먹통이 아니다(REVIEW-4) — 후속 행 이동이 그대로 먹힌다.
   await speakWhenArmed(page, '다음행', 1300);
-  expect(await activeRow(page), '거부 후에도 다른 명령이 살아 있어야 한다').toBe(2);
+  expect(await activeRow(page)).toBe(2);
+});
+
+test('⑬ 끝 도달(atEnd)에서 「이전」은 마지막 행 항목으로 진입하고, 그 뒤에도 「종료」가 산다 (FB-4)', async ({ page }) => {
+  await seedAndOpenVoiceTab(page);
+  await clickStart(page);
+
+  // 3행 × voice 3칸 전부 채워 끝 도달(atEnd)로 만든다.
+  const vals = ['35.1', '22.2', '12.3', '36.1', '23.2', '13.3', '37.1', '24.2', '14.3'];
+  for (const v of vals) await speakWhenArmed(page, v, 1000);
+  await waitForTtsIdle(page);
+  // 끝 도달은 **상태**로 잰다(문구 아님) — 끝 도달 안내 문구 자체는 W2 확정표 #5+6의 소관이라
+  // 여기서 바이트로 묶으면 이 스펙이 문구 변경마다 따라 깨진다.
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeVisible({ timeout: 6000 });
+
+  const before = (await ttsLog(page)).length;
+  await speakWhenArmed(page, '이전', 1200);
+
+  // 🔴 민구 확정 — atEnd의 「이전」은 마지막 행 필드로 진입하고, 진입 후엔 cellWait 규칙이다.
+  expect((await ttsLog(page)).slice(before).join(' | '), '착지 셀의 기록값을 낭독한다')
+    .toContain('기록값');
+  expect((await ttsLog(page)).join(' | ')).not.toContain('입력이 끝났습니다. 수정이라고 말하세요.');
+  // 완료 화면(UI-c)을 벗어난다 — 시각·청각 일치(§2). setPhase('active')가 endReached를 내린다.
+  await expect(page.locator('[data-testid="complete-summary"]')).toBeHidden({ timeout: 4000 });
+
+  // 🔴 endReachedOnce 계약(sessionStore:177) — 끝 도달을 **떠나도** 종료 수단은 세션 경계까지 산다.
+  await speakWhenArmed(page, '종료', 1200);
+  await expect(page.locator('text=음성 입력 시작').first()).toBeVisible({ timeout: 6000 });
 });
 
 // ─── ⑥ 가르치는 표면: 도움말·버튼 표기 (민구 요구 ④ + 버튼 정정 08-12) ──────────
