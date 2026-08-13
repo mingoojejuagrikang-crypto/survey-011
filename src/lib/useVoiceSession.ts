@@ -4628,16 +4628,26 @@ export function useVoiceSession() {
       //   같은 축). 여기서 아래 `announceField(cur)`로 떨어지면 커서가 서 있던 **값 있는 셀에
       //   `kind:'value'`가 다시 열려** B-1이 재개방된다 — 실측 확인: 35.1 주차 → 일시정지 →
       //   재시작 → "99.9" → 셀이 99.9. 이동 경로만 막고 여기를 두면 처방이 반만 닫힌다.
-      //   ⚠️ `reviewWait`/`atEnd`도 같은 형태로 새는 것을 실측했으나 **F-1 이전부터 있던
-      //   선행 파손**이라(기준 `18776ca`에서도 red) 이 라운드에서 건드리지 않는다 —
-      //   `_ASK-fix49` Q5 참조. 그쪽을 고칠 사람은 이 목록에 두 kind를 더 얹으면 된다.
+      //   ⚠️ v0.49 r6 Y2 — 종전 이 자리의 *"`reviewWait`/`atEnd`도 같은 형태로 새지만 선행
+      //   파손이라 건드리지 않는다(`_ASK-fix49` Q5). 고칠 사람은 이 목록에 두 kind를 더 얹으면
+      //   된다"* 를 **집행한다.** 실측(fixr6): 끝 도달에서 일시정지→재시작 뒤 「측정항목01.」이
+      //   나오고(=확정 셀에 `kind:'value'` 개방) 이어 말한 값이 **확정값 35.1을 99.9로 덮었다.**
+      //   검토 대기도 같다 — 완료 행 착지가 일시정지 중이면(착지는 `armLanding`이 국면만 보류하고
+      //   센티넬은 세운다) 재시작이 그 문맥을 버리고 값을 연다.
       if (awaiting?.kind === 'cellWait') {
         const target = getColById(awaiting.colId);
         if (target) { await enterCellWait(target, awaiting.previousValue); return; }
       }
+      // 🔴 Y2 — 두 착지는 **다시 착지시켜** 복원한다(문맥 재구성이 아니라 재실행). 그래야 국면이
+      //   일시정지에 보류됐던 경우까지 함께 낫는다: `armLanding`의 paused 분기는 `setPhase`와
+      //   `setEndReached`를 건너뛰므로(그 헤더) 보류된 착지의 **래치**는 아무도 복원하지 않는데,
+      //   여기서 착지를 다시 부르면 phase·endReached·센티넬·낭독이 한 벌로 다시 선다.
+      //   ⚠️ 이 시점 phase는 위에서 이미 `'active'`라 paused 가드에 걸리지 않는다.
+      if (awaiting?.kind === 'atEnd') { await announceEndReached(); return; }
+      if (awaiting?.kind === 'reviewWait') { await enterReviewWait(awaiting.row); return; }
       if (cur) await announceField(cur, fw != null ? { fractionWhole: fw } : undefined);
     }
-  }, [announceField, armClipForCell, enterCellWait, handleFinal, handleInterim, say, buildReturnBriefing]);
+  }, [announceEndReached, announceField, armClipForCell, enterCellWait, enterReviewWait, handleFinal, handleInterim, say, buildReturnBriefing]);
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
   useEffect(() => { resumeRef.current = resume; }, [resume]);
