@@ -921,8 +921,19 @@ export function useVoiceSession() {
     const empties = listEmptyRows(total, vc);
     const lastCol = vc[vc.length - 1] ?? null;
     // 명령 컨텍스트 유지용 atEnd 센티넬(마지막 음성 필드). 값 커밋은 handleFinal의 atEnd 가드가 차단.
+    // 🔴 v0.49 r2 A1(리뷰 합집합 C1) — **행은 `total`이 아니라 `activeRow`다.** 끝 도달은 「아래로
+    //   미완료 행이 없다」는 뜻일 뿐 「마지막 행에 서 있다」는 뜻이 아니다(`findNextIncompleteRow`는
+    //   아래 방향만 본다 — 위쪽 미완료 행은 `empties`로 남는다). 순서 밖으로 완주하면(3행 먼저 →
+    //   되돌아와 2행) 사용자는 2행에 서 있는데 센티넬만 3행을 가리켰고, 이 센티넬을 `a.row`로 읽는
+    //   소비자 전부가 **다른 행**을 만졌다: bare '수정'(enterModifyMode :1256)과 "수정 <컬럼명>"
+    //   (cmdModify :2204)이 3행의 칸을 지우고 `markRowIncomplete(3)`로 **완료 행을 미완료로 되돌렸고**,
+    //   '유지'(:2127)는 다른 행 값을 읽고, 명령 클립(preserveCommandClip :2172·armClipForCell :2181)은
+    //   틀린 셀 키로 저장됐다(D1/CLIP-CMD가 막으려던 orphan 형태). 순서대로 채운 경우엔
+    //   `activeRow === total`이라 로그 `row=` 바이트도 종전과 동일하다 — 갈리는 것은 순서 밖뿐이다.
+    //   ⚠️ 컬럼 축은 그대로다([MODIFY-TARGET-1] — 센티넬 컬럼 = 마지막 음성 필드).
+    //   오라클: tests/v049-r2-a1-atend-row.spec.ts
     awaitingFieldRef.current = lastCol
-      ? { kind: 'atEnd', row: total, colId: lastCol.id, name: lastCol.name }
+      ? { kind: 'atEnd', row: sess.activeRow, colId: lastCol.id, name: lastCol.name }
       : null;
     sess.setReaskReason(null);
     sess.setRecognized('');
