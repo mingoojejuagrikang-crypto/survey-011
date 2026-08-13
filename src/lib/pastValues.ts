@@ -551,6 +551,27 @@ export function getFallbackBuiltAt(): number | null {
 }
 
 /**
+ * 🔴 v0.49 r4 M6(claude r3 #10) — 표시용 인덱스 + **출처**.
+ *
+ * 소비자(설정 요약)가 `getCachedIndex() === null`을 「백업에서 왔다」로 읽고 있었다. 그 둘은
+ * **다른 질문**이다: 신선 캐시는 10분 TTL이 있고, 성공한 조회는 `cached`와 `fallback`에 **같은
+ * 엔트리**를 심는다(`loadPastIndex` :642-645). 그래서 조회 성공 10분 뒤부터, 방금 이 세션이
+ * 직접 읽어 온 인덱스가 「(백업)」으로 그려지고 `past_index_used_stale:…,age_h=0`이 기록됐다 —
+ * 「최대 14일 묵은 IDB 백업」이라는 강한 주장이 **0시간짜리 자기 조회**에 붙는다.
+ *
+ * 판별자는 TTL이 아니라 **동일 엔트리인가**다. `fallback === cached`면 이 세션의 자기 조회이고,
+ * TTL만 지났다(그 축은 준비 상태 배지 `getPastIndexStatus`가 따로 소유한다 — 이 함수는
+ * 「답이 어디서 왔는가」만 답한다).
+ */
+export function readIndexWithProvenance(): { index: PastIndex; stale: boolean; builtAt: number } | null {
+  const fresh = getCachedIndex();
+  if (fresh && cached) return { index: fresh, stale: false, builtAt: cached.builtAt };
+  const fb = getFallbackEntry();
+  if (!fb) return null;
+  return { index: fb.index, stale: fb !== cached, builtAt: fb.builtAt };
+}
+
+/**
  * 부팅/세션 시작 시 1회 — IDB `__past_index__` 레코드를 메모리 폴백으로 복원한다(idempotent).
  * 손상 레코드·14일 초과는 조용히 폐기. fp 검증은 여기서 하지 않는다(설정 하이드레이션 레이스
  * 방지 — 읽기 시점의 getFallbackEntry가 매번 검증). 실패해도 throw하지 않는다(best-effort).

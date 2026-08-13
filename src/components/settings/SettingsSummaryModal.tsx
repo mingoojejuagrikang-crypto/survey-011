@@ -6,10 +6,9 @@ import { SettingsSummary, SummaryStatusRow } from './SettingsSummary';
 import { ModalBase } from '../ModalBase';
 import {
   ensurePastIndex,
-  getCachedIndex,
   getFallbackBuiltAt,
-  getFallbackIndex,
   previousSurveyRound,
+  readIndexWithProvenance,
   subscribePastIndexStatus,
 } from '../../lib/pastValues';
 import { logger } from '../../lib/logger';
@@ -64,17 +63,20 @@ export function readPrevSurveyState(
   columns: Column[],
   roundDateColId: string | null,
 ): PrevSurveyState {
-  const fresh = getCachedIndex();
-  const index = fresh ?? getFallbackIndex();
-  if (!index) return { kind: 'unknown' };
-  const round = previousSurveyRound(index, columns, roundDateColId, localTodayIso());
+  // 🔴 v0.49 r4 M6(claude r3 #10) — 출처는 `readIndexWithProvenance`가 판정한다. 종전
+  //   `stale = getCachedIndex() === null`은 **다른 질문의 답**이었다: 성공한 조회는 `cached`와
+  //   `fallback`에 같은 엔트리를 심으므로, 조회 10분 뒤(TTL 경과)부터 **방금 이 세션이 직접
+  //   읽어 온 인덱스**가 「(백업)」으로 그려지고 아래 계측이 `age_h=0`을 남겼다 — 「최대 14일
+  //   묵은 백업」이라는 강한 주장이 0시간짜리 자기 조회에 붙는다(그 헤더 참조).
+  const src = readIndexWithProvenance();
+  if (!src) return { kind: 'unknown' };
+  const round = previousSurveyRound(src.index, columns, roundDateColId, localTodayIso());
   // 조회 불가(고정 키 0개·헤더 미매핑)는 인덱스 미로드와 **같은 계열**이다 — 둘 다 「이 화면은
   // 답을 모른다」이지 「과거가 없다」가 아니다(A5). 사유 자체는 순수층이 들고 있다.
   if (round.kind === 'unqueryable') return { kind: 'unknown' };
   // F7 — 신선도는 **답의 종류와 무관하게** 같은 출처에서 온다. 0건도 그대로 실어 보낸다.
-  const stale = fresh === null;
-  if (round.kind === 'none') return { kind: 'none', stale };
-  return { kind: 'date', iso: round.iso, stale };
+  if (round.kind === 'none') return { kind: 'none', stale: src.stale };
+  return { kind: 'date', iso: round.iso, stale: src.stale };
 }
 
 /**

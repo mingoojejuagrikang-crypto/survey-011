@@ -334,3 +334,42 @@ test('[node] W3-7(r2 A9) — 「이전 조사」 계산의 소유자는 팝업�
   ).toMatch(/useMemo\([\s\S]{0,200}\[columns, roundDateColId, version\]/);
   expect(modal.includes('subscribePastIndexStatus('), '준비 완료 신호를 구독하지 않는다').toBe(true);
 });
+
+/**
+ * 🔴 W3-8(r4 M6 · claude r3 #10) — **「(백업)」은 출처지 신선도가 아니다.**
+ *
+ * 종전 `stale = getCachedIndex() === null`은 다른 질문의 답이었다. 성공한 조회는 `cached`와
+ * `fallback`에 **같은 엔트리**를 심으므로(`loadPastIndex` :642-645), 조회 10분 뒤 TTL이 지나면
+ * **방금 이 세션이 직접 읽어 온 인덱스**가 「(백업)」으로 그려지고
+ * `past_index_used_stale:summary,age_h=0`이 기록됐다 — 「최대 14일 묵은 IDB 백업」이라는
+ * 강한 주장이 0시간짜리 자기 조회에 붙는다(A6가 세운 표기의 의미가 무너진다).
+ *
+ * 재현: 신선 조회 성공(W3-6과 같은 경로) → 이후 조회를 **막고** 시계를 11분 앞으로 → 팝업 재개봉.
+ * `ensurePastIndex()`가 재조회를 시도하지만 실패하므로 `cached`는 그대로 TTL 밖에 남는다.
+ *
+ * 반증(`readIndexWithProvenance` 제거 시): 「(백업)」이 붙고 stale 로그가 1건 난다.
+ */
+test('W3-8(r4 M6) — 신선 TTL만 지난 자기 조회는 「(백업)」이 아니다(age_h=0 오기록 차단)', async ({ page }) => {
+  await openSummary(page, { farmName: '이원창', withRecord: false, withSheet: true });
+  const modal = page.locator('[data-testid="settings-summary-modal"]');
+  await expect(modal, '전제: 신선 조회가 성공했다').toContainText(PREV_ROUND, { timeout: 8000 });
+  await expect(modal, '전제: 신선 조회에는 표식이 없다').not.toContainText('(백업)');
+
+  // 이후 조회는 막는다 — 재개봉의 `ensurePastIndex()`가 성공하면 TTL 경과 상태가 안 만들어진다.
+  await page.route('**://sheets.googleapis.com/**', (route) => route.abort());
+  // 시계를 11분 앞으로(캐시 TTL 10분). `builtAt`은 실제 시각으로 이미 박혀 있다.
+  await page.evaluate(() => {
+    const real = Date.now.bind(Date);
+    Date.now = () => real() + 11 * 60 * 1000;
+  });
+
+  await page.locator('[data-testid="settings-summary-modal"] button[aria-label="닫기"]').click();
+  await expect(modal).toHaveCount(0);
+  await page.locator('[data-testid="settings-summary-shortcut"]').click();
+  await expect(modal).toBeVisible({ timeout: 4000 });
+
+  await expect(modal, 'TTL 경과를 백업 출처로 오표시했다').not.toContainText('(백업)');
+  await expect(modal, '답 자체는 그대로다').toContainText(PREV_ROUND);
+  expect(await staleSummaryLogs(page), 'TTL 경과에 stale 사용 계측이 붙었다(age_h=0 오기록)')
+    .toHaveLength(0);
+});
