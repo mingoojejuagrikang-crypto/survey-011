@@ -214,16 +214,28 @@ test('[node] ①c 행 완료 부기 배선 4곳(advance · 커밋 종단 · 직�
   //   피해는 값 유실이다 — `persistSession`이 `completedRows`에 없는 행을 통째로 떨어뜨려
   //   키패드로 완성한 행이 IDB에서 사라졌다(실측). 오라클: v049-r5-z8-manual-complete.spec.ts.
   //   ⚠️ 숫자를 올릴 때는 **왜 늘었는지**를 여기 적어라 — 그게 이 계약의 값어치다.
+  //   🔴 v0.49 r6 Y1 — **숫자는 그대로 4, 형태가 바뀌었다.** 부기가 `void persistSession()`으로
+  //   durable 실패를 삼키던 것이 R5-F1(Critical)의 절반이었다. 이제 `finalizeRowCompletion`은
+  //   `Promise<boolean>`을 돌려주고, 배선 넷 중 **셋**이 그 결과를 받아 실패면 고지하고 멈춘다.
+  //   나머지 하나(직접 수정 우회)만 `void`인데, 그 자리는 현재 모든 음성 도달 상태에서 no-op이라
+  //   고지할 실패가 없다(그 콜사이트 주석). 그래서 이 계약은 **개수 + 실패를 받는가**를 함께 잰다 —
+  //   `void`로 되돌아가면 「성공 고지 뒤 값 유실」이 조용히 재개방되기 때문이다.
   expect(calls.length, '배선이 4곳이 아니다 — 어느 커밋 경로가 빠졌는지 확인해라(#1 근인)').toBe(4);
-  expect(src, 'advance()의 행 완료 부기').toContain('finalizeRowCompletion(row);');
-  expect(src, '커밋 종단(proceedAfterCommit) 진입점 부기').toContain('if (awaiting) finalizeRowCompletion(awaiting.row);');
-  expect(src, '직접 수정 우회 배선(F9)').toContain('finalizeRowCompletion(targetRow);');
+  expect(src, 'advance()의 행 완료 부기(durable 결과 수신)').toContain('if (!(await finalizeRowCompletion(row))) {');
+  expect(src, '커밋 종단(proceedAfterCommit) 진입점 부기(durable 결과 수신)')
+    .toContain('if (awaiting && !(await finalizeRowCompletion(awaiting.row))) {');
+  expect(src, '직접 수정 우회 배선(F9 — no-op 방어선이라 void)').toContain('void finalizeRowCompletion(targetRow);');
   // 수동(키패드) 커밋 — 소유권 분기 **앞**이어야 한다(비-awaiting 분기도 지나가야 하므로).
   const manual = src.slice(src.indexOf('const commitManualValue = useCallback('));
   expect(
     manual.slice(0, manual.indexOf("playBeep('commit')")),
     '수동 커밋 부기가 소유권 분기 앞에 없다 — 비-awaiting 커밋이 행을 완성하면 그 행이 사라진다',
-  ).toContain('finalizeRowCompletion(row);');
+  ).toContain('if (!(await finalizeRowCompletion(row))) {');
+  // Y1 — 부기 자체가 durable 결과를 돌려주는 형태인가(선언부 계약).
+  expect(
+    src,
+    '행 완료 부기가 durable 결과를 반환하지 않는다 — 호출부가 실패를 받을 방법이 사라진다(R5-F1)',
+  ).toContain('const finalizeRowCompletion = useCallback(async (row: number): Promise<boolean> => {');
 });
 
 test('② 정정된 행은 완료 카운트(X / N)에 그대로 남는다 — markRowComplete 누락', async ({ page }) => {

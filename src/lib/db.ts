@@ -79,6 +79,14 @@ export function resetDb(): void {
   dbPromise = null;
 }
 
+/** v0.49 r6 Y1 — `__survey011FailSessionPutAfter` 전용 카운터(성공한 세션 put 수). 테스트 seam이
+ *  꺼져 있으면 증가만 하고 아무도 읽지 않는다(운영 경로 영향 없음).
+ *  ⚠️ 기준점은 **seam 값이 바뀐 시점**이다(아래 리셋). 페이지 로드부터 세면 부팅·복원 경로의
+ *  put이 몇 건인지를 오라클이 알아야 하는데, 그건 테스트가 재는 대상이 아니라 전제일 뿐이라
+ *  조용히 어긋난다(실측으로 한 번 어긋났다 — ④가 「첫 put부터 실패」로 변질됐다). */
+let sessionPutCount = 0;
+let lastFailAfter: number | undefined;
+
 export async function saveSession(session: Session): Promise<void> {
   // Playwright 지연 경쟁 회귀 seam. 기본 undefined라 운영 경로 비용은 분기 1회뿐이며, 테스트가
   // ManualValueSheet의 fire-and-forget onCommit 동안 sync/confirm 우회를 재현할 때만 사용한다.
@@ -92,12 +100,25 @@ export async function saveSession(session: Session): Promise<void> {
   if ((globalThis as typeof globalThis & { __survey011FailSessionPut?: boolean }).__survey011FailSessionPut) {
     throw new Error('injected: session put failed (QuotaExceededError)');
   }
+  // v0.49 r6 Y1 — 위 boolean seam의 **순번 변형**: 성공한 put이 N건 쌓인 **뒤부터** 실패한다.
+  //   왜 필요한가: durable 실패의 실제 피해는 「첫 put이 실패」와 「값은 저장됐는데 뒤따르는
+  //   완료 부기 put이 실패」가 서로 다른 코드 경로다(전자=persistCellValue, 후자=
+  //   finalizeRowCompletion). boolean seam 하나로는 둘이 항상 함께 실패해서 **뒤쪽 경로를
+  //   단독으로 잴 수 없었고**, 그 사각이 R5-F1(fire-and-forget persist)이 오라클을 통과한 이유다.
+  //   운영 경로 비용은 위 둘과 같은 분기 1회(기본 undefined).
+  const failAfter = (globalThis as typeof globalThis & { __survey011FailSessionPutAfter?: number })
+    .__survey011FailSessionPutAfter;
+  if (failAfter !== lastFailAfter) { lastFailAfter = failAfter; sessionPutCount = 0; }
+  if (typeof failAfter === 'number' && sessionPutCount >= failAfter) {
+    throw new Error('injected: session put failed (QuotaExceededError)');
+  }
   const db = await getDb();
   // pendingValidationPersisting은 동시 UI 게이트용 메모리 플래그다. sync가 저장 중 Session을
   // 재저장해도 이 플래그가 IDB에 박혀 reload 후 [확인]을 영구 차단하지 않도록 DB 경계에서 제거한다.
   const durable = { ...session };
   delete durable.pendingValidationPersisting;
   await db.put('sessions', durable);
+  sessionPutCount += 1;
 }
 
 export async function loadAllSessions(): Promise<Session[]> {

@@ -1211,6 +1211,42 @@ export function useVoiceSession() {
     await announceField(col);
   }, [announceField, enterCellWait]);
 
+  /** v0.47.0 C-FIX2 — 셀 영속 실패 고지(수동·터치 공통 · manualHold 실패 처리와 대칭 목적).
+   *  경고 트릴 + 발화 — 현장은 폰을 2~3m 떨어뜨려 둬 화면을 못 본다(PRINCIPLES §2).
+   *  🟡 값은 화면에 남긴다(manualHold의 롤백과 다른 선택): 그쪽 롤백은 pending 태그 없는
+   *  후보가 reload에 확정처럼 보이는 반쪽 상태를 막는 장치고, 여기는 검증을 통과한 값의
+   *  내구화만 실패한 경우다 — 지우면 입력이 유실되고, 남기면 재시도가 그 값을 그대로 쓴다.
+   *  근거는 산출물 리뷰 대응 절에.
+   *  C-FIX2b(2차 재검증) — 소리·발화는 순간이라 놓칠 수 있다: **지속 배너 + 명시 재시도**를
+   *  함께 세운다(cellPersistError.arm → VoiceScreen이 CellPersistErrorBanner 렌더 · [다시 저장]
+   *  = commitManualValue 재실행 → 성공 시 원래 커밋 플로우 전체 재개). 기존 persistError는
+   *  stop 전용 의미론(성공 재시도 = 세션 종료)이라 셀 스코프 변형 — 근거는 cellPersistError.ts.
+   *  ⚠️ v0.49 r6 Y1 — 정의 위치만 옮겼다(종전 `commitTouchValue` 바로 위). 행 완료 부기의
+   *   durable 실패도 같은 배너로 고지해야 하는데(아래 `notifyRowPersistFailed`), 그 소비자가
+   *   `finalizeRowCompletion`/`advance`라 여기 있어야 참조된다. 본문 무변경. */
+  const notifyCellPersistFailed = useCallback((row: number, colId: string, value: string) => {
+    useCellPersistError.getState().arm({ row, colId, value });
+    playBeep('alert');
+    const msg = '저장하지 못했습니다. 다시 저장 버튼을 눌러 주세요.';
+    useSessionStore.getState().setLastTts(msg);
+    void say(msg);
+  }, [say]);
+
+  /** 🔴 v0.49 r6 Y1 — **행 완료 부기의 durable 실패 고지.** 셀 실패 배너를 그대로 재사용한다.
+   *
+   *  왜 셀 배너인가: 이 배너의 재시도는 `commitManualValue(row,colId,value)` 재실행이고, 그
+   *  경로가 `persistCellValue`(→ 세션이 아직 없으면 `persistSession`) → `finalizeRowCompletion`
+   *  **전체를 다시 태운다**. 즉 행 부기 실패도 같은 버튼 하나로 실제 회복된다 — 「실패는 화면에
+   *  남기고 재시도 경로를 제공한다」(PRINCIPLES §1)를 새 UI 없이 만족하는 유일한 기존 깔때기다.
+   *  좌표는 **그 행에서 값이 있는 마지막 음성 컬럼** = 방금 행을 완성시킨 칸이다(재커밋해도 값이
+   *  같아 부작용이 없고, 배너 문구가 사용자가 마지막으로 넣은 값을 가리킨다). */
+  const notifyRowPersistFailed = useCallback((row: number) => {
+    const values = useSessionStore.getState().getRowValues(row);
+    const target = [...voiceColsList()].reverse().find((c) => (values[c.id] ?? '') !== '');
+    if (!target) return;
+    notifyCellPersistFailed(row, target.id, values[target.id]!);
+  }, [notifyCellPersistFailed]);
+
   // ── progression ────────────────────────────────────────────
   /** 🔴 v0.49 r3 #1(claude r2 크리티컬) — **행 완료 부기**(완료 마킹 · 정정 백업 해제 · 영속화).
    *  종전엔 `advance()` 안에만 있었다. 그 자리에서 뽑아낸 이유가 곧 이 결함이다: A2가 커밋
@@ -1228,18 +1264,40 @@ export function useVoiceSession() {
    *  ⚠️ 낭독(`announceRowComplete`)과 phase 전이는 **여기 넣지 않는다** — 그건 착지마다 다르다.
    *  셀 검토 복귀는 "N행 완료됨"이 아니라 "…기록값 …"을 말해야 한다(enterCellWait 헤더의 문구
    *  계약). 이 함수가 다루는 것은 «내구성»뿐이고, «무엇을 말하는가»는 호출부가 정한다.
-   *  오라클: tests/v049-r3-01-resume-persist.spec.ts */
-  const finalizeRowCompletion = useCallback((row: number) => {
+   *
+   *  🔴🔴 v0.49 r6 Y1(codex R5-F1 Critical, 동적 재현 확증) — **`void persistSession()`이 실패를
+   *  삼켰다.** 이 부기가 세션의 **첫** IDB 쓰기가 되는 형상(= 아직 durable 세션이 없다)에서는
+   *  여기가 실패해도 호출부는 결과를 받지 못해 완료 낭독·다음 행 전진·✓·화음을 그대로 냈다.
+   *  실측(2026-08-14, fixr6): 실패 주입 뒤 음성으로 1행을 완주하면 **IDB 세션 0건**인데
+   *  「조사나무 1 완료」가 나오고 2행으로 넘어갔다 — 리로드하면 두 값이 전부 사라진다.
+   *  PRINCIPLES §1 「durable 실패를 삼키지 않는다」 정면 위반이고 피해는 **값 유실**이다.
+   *  👉 durable 결과를 **반환**한다. «무엇을 말하는가»가 호출부 몫인 것처럼 «실패를 어떻게
+   *     고지하는가»도 호출부 몫이다(`notifyRowPersistFailed` 참조).
+   *  ⚠️ **no-op은 `true`다.** 미완료 행(가드)·이미 내구화된 부기(둘 다 거짓)는 «쓸 것이 없음»이지
+   *     실패가 아니다 — `false`로 두면 `advance` 뒤 `proceedAfterCommit`의 멱등 재호출이
+   *     **가짜 실패 배너**를 띄운다(수정이 결함보다 나빠지는 지점).
+   *  ⚠️ 실패 시 **메모리 부기를 되돌린다.** 되돌리지 않으면 `wasComplete`가 참이 돼 재시도가
+   *     no-op `true`로 통과한다 = IDB엔 아무것도 없는데 배너만 사라지는 **거짓 회복**. 백업도
+   *     함께 복원한다 — 캐스케이드 원본 스냅샷을 지운 채 persist가 실패하면 원본이 영영 없다.
+   *  오라클: tests/v049-r3-01-resume-persist.spec.ts · tests/v049-r6-y1-durable-commit.spec.ts */
+  const finalizeRowCompletion = useCallback(async (row: number): Promise<boolean> => {
     const sess = useSessionStore.getState();
-    if (!isRowVoiceComplete(row, voiceColsList())) return;
-    const hadBackup = correctionBackupRef.current?.index === row;
+    if (!isRowVoiceComplete(row, voiceColsList())) return true;
+    const backup = correctionBackupRef.current;
+    const hadBackup = backup?.index === row;
     const wasComplete = sess.isRowComplete(row);
     if (hadBackup) correctionBackupRef.current = null;
     if (!wasComplete) sess.markRowComplete(row);
     // 실제로 부기가 바뀐 경우에만 쓴다 — 한 커밋에서 두 번(proceedAfterCommit 진입 + advance)
     // 불려도 IDB 쓰기는 1회다. 바뀐 게 없으면 직전 커밋의 persist가 이미 같은 스냅샷을
     // 내구화했으므로 여기서 또 쓰는 것은 순수 낭비다(현장 배터리 — PRINCIPLES §6).
-    if (hadBackup || !wasComplete) void persistSession();
+    if (!hadBackup && wasComplete) return true;
+    const durable = await persistSession();
+    if (!durable) {
+      if (!wasComplete) useSessionStore.getState().markRowIncomplete(row);
+      if (hadBackup) correctionBackupRef.current = backup;
+    }
+    return durable;
   }, [persistSession]);
 
   /** Move to next voice col in current row, or finalize row + jump to next target. */
@@ -1285,7 +1343,17 @@ export function useVoiceSession() {
     if (isRowVoiceComplete(row, vc)) {
       // 🔴 v0.49 r3 #1 — 부기 3줄(백업 해제·완료 마킹·persist)은 `finalizeRowCompletion`으로
       //   옮겼다. 여기가 유일한 소유자였던 것이 결함의 근인이다(그 헤더 참조).
-      finalizeRowCompletion(row);
+      // 🔴 v0.49 r6 Y1 — **완료 낭독보다 durable 판정이 먼저다.** 실패인 채로 아래를 진행하면
+      //   「N행 완료」 + 다음 행 전진이 **유실될 값을 성공 고지**한다(실측: IDB 0건 + 「조사나무 1
+      //   완료」). 낭독 뒤로 미루면 이미 귀에 들어간 뒤라 늦다.
+      //   ⚠️ 실측 정정: 음성 커밋 종단은 `proceedAfterCommit`을 먼저 지나므로 **그쪽 라우팅이
+      //     실제로 이 시나리오를 잡는다**(이 줄만 되돌리면 오라클 5건이 전부 green). 그럼에도
+      //     남기는 이유는 `advance()`를 **직접** 부르는 경로가 실재하기 때문이다 — 예약이 없는
+      //     상태의 '유지'(:2638)가 그것이고, 그 자리에서 행이 완성되면 여기가 유일한 방어다.
+      if (!(await finalizeRowCompletion(row))) {
+        notifyRowPersistFailed(row);
+        return;
+      }
       sess.setPhase('complete');
       awaitingFieldRef.current = null;
       await announceRowComplete(row);
@@ -1371,7 +1439,7 @@ export function useVoiceSession() {
     await announceRowDiff(row, next);
     if (epochRef.current !== startEpoch) return;
     if (vc[targetCol]) await announceField(vc[targetCol]);
-  }, [announceField, announceOrCellWait, announceRowComplete, announceRowDiff, announceEndReached, finalizeRowCompletion, say]);
+  }, [announceField, announceOrCellWait, announceRowComplete, announceRowDiff, announceEndReached, finalizeRowCompletion, notifyRowPersistFailed, say]);
 
   /** v0.35.3 Stage 3-5 — 커밋 경로 진행 공용. 검토 대기(reviewWait) 출신 커밋은 검토 대기를
    *  재무장해 갱신값을 재낭독하고(advance로 검토를 강제 종료하지 않음 — v0.33.0 항목2 계약),
@@ -1389,7 +1457,13 @@ export function useVoiceSession() {
     //   그래서 분기 앞 **진입점 한 곳**에서 한다. 좌표는 커밋된 셀의 행(`awaiting.row`)이지
     //   호출 시점의 activeRow가 아니다(교차행 정정은 둘이 갈린다). 부기는 멱등이라 아래
     //   폴스루가 advance로 가도 IDB 쓰기는 늘지 않는다.
-    if (awaiting) finalizeRowCompletion(awaiting.row);
+    // 🔴 v0.49 r6 Y1 — 여기도 durable 실패면 착지 전체를 멈춘다. 아래 착지들은 「저장됐다」를
+    //   전제로 갱신값을 재낭독하거나 다음 셀로 나가므로, 실패를 통과시키면 그 낭독이 곧
+    //   성공 고지가 된다(C-FIX2가 수동 커밋에서 세운 「실패면 영수증·에코·진행 전부 억제」와 동일).
+    if (awaiting && !(await finalizeRowCompletion(awaiting.row))) {
+      notifyRowPersistFailed(awaiting.row);
+      return;
+    }
     if (awaiting?.kind === 'reviewWait') {
       await enterReviewWait(awaiting.row);
       return;
@@ -1431,7 +1505,7 @@ export function useVoiceSession() {
     awaitingFieldRef.current = null;
     if (opts?.echoValue != null) await say(formatForTts(opts.echoValue));
     await advance();
-  }, [advance, enterCellWait, enterReviewWait, finalizeRowCompletion, say]);
+  }, [advance, enterCellWait, enterReviewWait, finalizeRowCompletion, notifyRowPersistFailed, say]);
 
   // ── v0.7.0 B4: 추세 검증 ───────────────────────────────────
   /** trend_skip 텔레메트리 — 같은 원인은 세션당 1회만 기록(셀마다 반복돼 로그를 도배하지 않게).
@@ -1872,7 +1946,11 @@ export function useVoiceSession() {
         //   반증은 소스 계약으로 잠갔다: tests/v049-r3-01-resume-persist.spec.ts [node] ①c.
         //   알람 분기(위 `return`)는 여기 오지 않는다: 미확인 알람 중에 X/N을 올리면 화면이
         //   확정을 먼저 말한다(해소 후 proceedAfterCommit이 부기한다).
-        finalizeRowCompletion(targetRow);
+        //   ⚠️ v0.49 r6 Y1 — 형제 셋과 달리 여기만 `void`다. 위 서술대로 이 줄은 **현재 모든 음성
+        //     도달 상태에서 no-op**(가드에서 즉시 `true`)이라 고지할 실패가 없고, 그럼에도 흐름을
+        //     끊는 라우팅을 걸면 「방어선」이 도달 불가 분기에서 사용자 흐름을 막는 위험만 남는다.
+        //     이 줄이 실제로 부기를 하게 되는 착지가 생기면 그때 형제와 같이 배선한다.
+        void finalizeRowCompletion(targetRow);
         // v0.47.0 W2 — 직접 수정("수정 88.9")도 성공 커밋이다: 화음 → 에코 순서 계약(WP-E).
         //   종전엔 이 경로만 무음이었다(재청취 경로의 성공음과 비대칭 — 값이 저장되는 모든
         //   커밋에 확인음이 난다는 WP-E 원칙에 합류).
@@ -4844,7 +4922,21 @@ export function useVoiceSession() {
   /** v0.33.0 항목6 — 셀 값 영속 공유 코어. 터치 인라인 편집(commitTouchValue)과 수동 입력 시트
    *  (commitManualValue)가 공유한다: sessionStore + dataStore(patchRowValues — F2: "값 변경 ⇒
    *  synced→dirty" 불변식으로 업로드된 행도 다음 sync가 시트 행을 UPDATE) + IDB 반영.
-   *  행이 아직 완료된 적이 없으면 sessionStore만 갱신되고, 다음 persistSession에서 자연 반영된다. */
+   *
+   *  🔴🔴 v0.49 r6 Y1(codex R5-F1 Critical) — 종전 이 헤더의 마지막 줄은 *"행이 아직 완료된 적이
+   *  없으면 sessionStore만 갱신되고, 다음 persistSession에서 자연 반영된다"* 였다. 그 문장은
+   *  **다음 persist가 실제로 일어나고 성공한다**는 보장 위에 서 있었는데, 그 보장이 없었다:
+   *    · 세션이 아직 IDB에 없으면(첫 커밋) `patchRowValues`는 붙일 대상이 없어 `null`을 돌려주고,
+   *      이 코어는 **IDB 쓰기를 한 번도 하지 않은 채** `true`(=성공)를 반환했다.
+   *    · 호출부는 그 `true`로 ✓·화음·에코·전진을 낸다. 실측(fixr6): 실패 주입 상태에서 첫
+   *      키패드 커밋 한 건만 해도 **IDB 0건 · 배너 0 · ✓ 1 · 값 에코 정상**이었다(행이 완성되지
+   *      않아 `finalizeRowCompletion`조차 no-op인 형상 — 즉 이 축은 Z8 배선과 무관하게 실재했다).
+   *  👉 처방: null 분기를 **지연이 아니라 아직 안 쓴 상태**로 보고 `persistSession()`을 직접
+   *     await한다. 그리고 그 persist가 이 행·이 값을 **실제로 실었는지**까지 확인한다 —
+   *     `persistSession`은 rows를 `completedRows`+백업+`activeRow`+`skippedRows`에서만 조립하고
+   *     (그 헤더) 아무것도 실을 게 없으면 **쓰지 않고 `true`** 를 돌려주므로, 반환값만 보면
+   *     같은 거짓 성공이 한 겹 안쪽에서 재현된다. `dataStore`는 durable 성공 뒤에만 갱신되므로
+   *     (persistSession 말미 `upsertSession`) 거기서 값을 되읽는 것이 곧 내구화 확인이다. */
   const persistCellValue = useCallback(async (row: number, colId: string, value: string): Promise<boolean> => {
     useSessionStore.getState().setRowValue(row, colId, value);
     const updatedSession = useDataStore
@@ -4865,39 +4957,40 @@ export function useVoiceSession() {
         });
         return false;
       }
+    } else {
+      // v0.49 r6 Y1 — 위 헤더의 null 분기. 실패 사유는 두 갈래이고 배너 문구는 같지만, 로그는
+      //   가른다(`session_not_durable`=IDB가 거절 · `row_unlanded`=persist는 성공했는데 이 행이
+      //   rows 조립에 안 실림). 기존 `cell_persist_failed:` 이벤트의 **메시지 슬롯**만 쓴다 —
+      //   접두·필드 구성은 바이트 불변이라 SOP-003 소비자와 기존 오라클이 그대로 읽는다.
+      const durable = await persistSession();
+      const landed = (useDataStore.getState().sessions
+        .find((s) => s.id === sessionIdRef.current)
+        ?.rows.find((r) => r.index === row)?.values[colId] ?? '') === value;
+      if (!durable || !landed) {
+        logCell({
+          type: 'error',
+          extra: `cell_persist_failed:${durable ? 'row_unlanded' : 'session_not_durable'}`,
+          row, colId,
+        });
+        return false;
+      }
     }
     // v0.47.0 W4(FB-E) — 수동/터치 확정 커밋의 ✓ 집합 등록. 이 코어는 manualHold 후보 경로를
     //   지나지 않으므로(그쪽은 patchRowValues 직행) 미확정 후보가 ✓를 받는 일이 없다.
     //   C-FIX2 — 등록은 durable 확정 **뒤**다: 실패 시 회수(remove)가 필요 없는 순서라
-    //   add 전용 집합 계약이 그대로 선다. (updatedSession null = 행이 아직 IDB에 없어 다음
-    //   persistSession이 자연 반영하는 기존 계약 — 실패가 아니라 지연이므로 true.)
+    //   add 전용 집합 계약이 그대로 선다.
+    //   (v0.49 r6 Y1 — 종전 이 자리의 괄호 주석은 *"updatedSession null = … 실패가 아니라 지연
+    //    이므로 true"* 였다. 그 전제가 R5-F1의 근인이라 위 else 분기로 대체됐다 — 이제 여기
+    //    도달은 **두 갈래 모두 durable 확정 뒤**다.)
     if (value !== '') useSessionCommitMarks.getState().add(row, colId);
     // C-FIX2b — 같은 셀의 durable 성공이 실패 배너를 해소한다(재시도 성공·수동 재입력 성공 공통).
     useCellPersistError.getState().clearIfMatches(row, colId);
     return true;
-  }, []);
+  }, [persistSession]);
 
   /** v0.11.0: touch 컬럼 값 commit 시 sessionStore + dataStore + IDB 모두에 즉시 반영.
    *  Codex MEDIUM: setRowValue만으로는 휘발성 상태만 변경 → sync/CSV가 누락하는 위험 해결.
    *  v0.33.0 항목6 — 영속 코어는 persistCellValue로 추출(수동 입력 시트와 공유). */
-  /** v0.47.0 C-FIX2 — 셀 영속 실패 고지(수동·터치 공통 · manualHold 실패 처리와 대칭 목적).
-   *  경고 트릴 + 발화 — 현장은 폰을 2~3m 떨어뜨려 둬 화면을 못 본다(PRINCIPLES §2).
-   *  🟡 값은 화면에 남긴다(manualHold의 롤백과 다른 선택): 그쪽 롤백은 pending 태그 없는
-   *  후보가 reload에 확정처럼 보이는 반쪽 상태를 막는 장치고, 여기는 검증을 통과한 값의
-   *  내구화만 실패한 경우다 — 지우면 입력이 유실되고, 남기면 재시도가 그 값을 그대로 쓴다.
-   *  근거는 산출물 리뷰 대응 절에.
-   *  C-FIX2b(2차 재검증) — 소리·발화는 순간이라 놓칠 수 있다: **지속 배너 + 명시 재시도**를
-   *  함께 세운다(cellPersistError.arm → VoiceScreen이 CellPersistErrorBanner 렌더 · [다시 저장]
-   *  = commitManualValue 재실행 → 성공 시 원래 커밋 플로우 전체 재개). 기존 persistError는
-   *  stop 전용 의미론(성공 재시도 = 세션 종료)이라 셀 스코프 변형 — 근거는 cellPersistError.ts. */
-  const notifyCellPersistFailed = useCallback((row: number, colId: string, value: string) => {
-    useCellPersistError.getState().arm({ row, colId, value });
-    playBeep('alert');
-    const msg = '저장하지 못했습니다. 다시 저장 버튼을 눌러 주세요.';
-    useSessionStore.getState().setLastTts(msg);
-    void say(msg);
-  }, [say]);
-
   const commitTouchValue = useCallback(async (row: number, colId: string, value: string) => {
     logCell({ type: 'command', parsed: 'touch_commit', extra: 'touch', text: value, row, colId });
     // C-FIX2 — durable 실패면 영수증(성공 표식)을 만들지 않고 고지한다.
@@ -5155,7 +5248,14 @@ export function useVoiceSession() {
     //   ⚠️ 미완료 행이면 `isRowVoiceComplete` 가드가 즉시 return한다(no-op) — 부분 입력은
     //     종전대로 `activeHasData` 경로가 내구화한다.
     //   오라클: tests/v049-r5-z8-manual-complete.spec.ts
-    finalizeRowCompletion(row);
+    // 🔴 v0.49 r6 Y1 — 위 `persistCellValue`와 **같은 계약**으로 실패를 받는다(C-FIX2 대칭).
+    //   Z8이 이 줄을 넣을 때는 `void persistSession()`이라 실패가 보이지 않았다: 값은 화면에
+    //   서고 ✓·화음·에코가 나가는데 IDB엔 아무것도 없는 상태(codex R5-F1의 재현 형상).
+    //   좌표가 정확히 있는 유일한 호출부라 셀 배너를 그대로 쓴다 — 재시도 = 이 커밋의 재실행.
+    if (!(await finalizeRowCompletion(row))) {
+      notifyCellPersistFailed(row, colId, value);
+      return;
+    }
 
     // 🔴 v0.47.0 W1(FB-A+B, 민구 08-08) — **수동 커밋 확인음은 awaiting 여부와 무관하다.**
     //   종전엔 커밋 화음이 음성 경로(:2373)에만 있었고 수동 경로는 awaiting 셀일 때 echo TTS만
