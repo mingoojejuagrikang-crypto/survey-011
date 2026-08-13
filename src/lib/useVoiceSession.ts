@@ -870,6 +870,20 @@ export function useVoiceSession() {
       const row = useSessionStore.getState().activeRow;
       // v0.9.0 — 다음 필드로 진입하면 이전 이상치 알람 팝업은 해제(해소된 것으로 간주).
       clearAnomalyAlert('announce_field');
+      // 🔴 v0.49 r4 M4(claude r3 #6) — **거절 큐도 여기서 내린다.** 재질문 사유는 **그 셀의 것**인데
+      //   이 함수만 정리를 안 해서, 거절당한 셀을 떠나도(항목 이동·다음 셀 진행·수정 진입) 큐가
+      //   새 셀 위에 그대로 얹혀 있었다 — 사용자는 **방금 말한 값이 거절된 줄 안다.** 형제 착지
+      //   셋(`announceEndReached` · `enterReviewWait` · `enterCellWait`)은 전부 이 줄을 갖고 있고
+      //   이 함수만 빠져 있었다(store 계약도 *"다음 필드 진입 시 null로 리셋"* 이라고 적혀 있다).
+      //   ⚠️ 소수부 재질문 문맥(`opts.fractionWhole`)은 **예외다.** 그건 지나간 거절이 아니라
+      //   지금 살아 있는 대기 상태고(C-FIX1b가 일시정지→재개에서 이 문맥을 복원한다), `awaiting`이
+      //   그 정수부를 그대로 들고 재개하므로 화면만 비우면 M3가 닫은 「무고지 합성」이 재개 경로로
+      //   되살아난다. 상태를 지우는 게 아니라 **그 상태를 다시 그린다.**
+      //   오라클: tests/v049-r4-m4-reask-cue-scope.spec.ts
+      useSessionStore.getState().setReaskReason(null);
+      if (opts?.fractionWhole != null) {
+        useSessionStore.getState().setDecimalReason(opts.fractionWhole);
+      }
       // v0.12.0 AREA2 V4 — 수정 재안내면 '수정 값' 인디케이터를 켜고, 일반 안내면 해제한다.
       useSessionStore.getState().setModifyIndicator(
         opts?.isModify ? { name: col.name, colId: col.id } : null,
