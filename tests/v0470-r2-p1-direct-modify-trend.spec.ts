@@ -24,6 +24,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { boot, PHONE_402, PREV_ROUND, SETTINGS as AZ_SETTINGS } from './fixtures/activeZones';
 import { fireStt, ttsLog } from './fixtures/stt';
+import { reviewWaitAbsorbTts } from '../src/lib/voicePrompts';
 
 test.setTimeout(120_000);
 
@@ -48,8 +49,14 @@ const MINI_ROWS = [
   [PREV_ROUND, '이원창', '2', '100.0', '5.0'],
 ];
 
-/** 「N행 완료됨 …」 검토 낭독만 추린다 — 검토 대기 진입/재진입의 유일한 관측 창이다. */
-const reviewSays = (log: string[]) => log.filter((t) => t.startsWith('1행 완료됨'));
+/** 🔴 v0.49 r3 #14(claude r2 LOW) — **접두가 겹친다.** 검토 대기 낭독(`enterReviewWait`)과 bare 값
+ *  흡수 안내(`reviewWaitAbsorbTts`, 확정표 #4)는 둘 다 `"{N}행 완료됨."` 으로 시작한다. 접두만 보는
+ *  관측창은 그 둘을 **한 사건으로 센다** — 흡수가 한 번 끼면 「진입 낭독 N회」 류의 정확 개수 단언이
+ *  조용히 갈린다(문구 자체는 민구 확정 바이트라 바꾸지 않는다 — 관측창을 옮기는 것이 처방이다).
+ *  판별자는 SSOT에서 가져온다(리터럴 사본을 두면 확정 바이트가 갈릴 때 여기가 먼저 썩는다). */
+/** 「N행 완료됨 …」 **검토 낭독만** 추린다 — 흡수 안내(같은 접두)는 제외한다. */
+const reviewSays = (log: string[]) =>
+  log.filter((t) => t.startsWith('1행 완료됨') && t !== reviewWaitAbsorbTts(1));
 
 const chip = (page: Page, name: string) =>
   page.locator(`[data-testid="column-chip"][data-col-name="${name}"]`);

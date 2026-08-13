@@ -22,6 +22,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { installVoiceMocks, fireStt, ttsLog, waitForTtsIdle } from './fixtures/stt';
 import { BASE } from './baseUrl';
+import { reviewWaitAbsorbTts } from '../src/lib/voicePrompts';
 
 test.setTimeout(120_000);
 
@@ -287,12 +288,15 @@ test('F13 — 마지막 행(완료)에서 "다음"은 검토 대기를 재무장
   expect(await getActiveRow(page, TOTAL)).toBe(3);
 
   // 🔑 마지막 행 경계(완료): 멈춤 + "마지막 행입니다" 안내 + 검토 대기 재무장(값 재낭독).
-  const reviewsBefore = (await ttsLog(page)).filter((t) => t.includes('3행 완료됨')).length;
+  // #14 — 접두가 겹치므로 흡수 안내를 뺀다(같은 파일 상단 주석 참조).
+  const reviewOnly = (log: string[]) =>
+    log.filter((t) => t.includes('3행 완료됨') && t !== reviewWaitAbsorbTts(3));
+  const reviewsBefore = reviewOnly(await ttsLog(page)).length;
   await speakWhenArmed(page, '다음행', 900);
   expect(await getActiveRow(page, TOTAL)).toBe(3);
   const tts = await ttsLog(page);
   expect(tts.some((t) => t.includes('마지막 행입니다'))).toBe(true);
-  expect(tts.filter((t) => t.includes('3행 완료됨')).length).toBeGreaterThan(reviewsBefore);
+  expect(reviewOnly(tts).length, '검토 대기 재무장 낭독이 늘지 않았다').toBeGreaterThan(reviewsBefore);
   // 끝도달 화면으로 넘어가지 않는다(구 EXIT-REACH-1 대비 — 중앙 종료 부활 금지 계약은 유지).
   await expect(page.locator('[data-testid="complete-summary"]')).toHaveCount(0);
 });

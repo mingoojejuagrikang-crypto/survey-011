@@ -18,6 +18,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
+import { reviewWaitAbsorbTts } from '../src/lib/voicePrompts';
 
 // ── 와이어프레임 §[2](2026-07-24 확정) 반영 ────────────────────────────────────────────────
 // 이상치 응답 대기의 [확인]/[수정]은 **카드 안이 아니라 하단 `<` `>` 자리**로 이동했다
@@ -395,7 +396,8 @@ test('검토 대기(항목2)와 상호작용 — 완료 행 검토 중 칩 수�
   // 검토 대기 재무장: 행 1 유지 + 갱신값 재낭독 TTS("1행 완료됨. … 30.7").
   await waitForRow(page, 1);
   const tts = await page.evaluate(() => (window as unknown as { __ttsLog: string[] }).__ttsLog ?? []);
-  const rereads = tts.filter((t) => t.includes('1행 완료됨'));
+  // #14 — 검토 낭독과 bare 값 흡수 안내는 접두가 같다. 재낭독만 세려면 흡수 바이트를 뺀다.
+  const rereads = tts.filter((t) => t.includes('1행 완료됨') && t !== reviewWaitAbsorbTts(1));
   expect(rereads.length, `검토 대기 재낭독 없음. tts=${JSON.stringify(tts.slice(-6))}`).toBeGreaterThanOrEqual(2);
   expect(rereads[rereads.length - 1]).toContain('30.7');
 
