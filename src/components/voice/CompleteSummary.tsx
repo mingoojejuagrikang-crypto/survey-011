@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { T } from '../../tokens';
 import { COMPLETE_RECEIPT_BASE_FONT_PX, COMPLETE_SUMMARY_BASE_FONT_PX, STATE_TYPE } from './heroLayout';
 import { useFitGroup } from './useFitGroup';
+import { ReaskCue, type ReaskReason } from './ReaskCue';
 
 /** 마지막 커밋 영수증을 완료 화면에 띄워 두는 시간(민구 확정 2026-07-25).
  *  이후에는 와이어프레임 §[4] 그대로(요약 + 종료 버튼)로 정착한다. */
@@ -23,10 +24,20 @@ export const COMPLETE_RECEIPT_MS = 3000;
  *  범위 밖(보고 대상): "데이터탭 업로드는 종료 버튼 활성 이후에만 가능"은 DataScreen의 업로드
  *  게이트라 입력화면 UI가 아니다 — 이번 라운드에서 구현하지 않았다. */
 export function CompleteSummary({
-  completedCount, totalRows, reviewCommit,
+  completedCount, totalRows, reviewCommit, reaskReason,
 }: {
   completedCount: number;
   totalRows: number;
+  /** 🔴 v0.49 r5 Z5(claude #5 · codex M11 잔여) — **끝 도달도 「명령 대기」다.**
+   *  이 화면에서 `reaskReason`이 설 수 있는 경로는 **저신뢰 명령 거절 하나뿐**이다:
+   *  일반 값 발화는 `resolveFinal`이 `absorbAtEnd`로 흡수해 거절 자체가 성립하지 않는다
+   *  (`voiceFinalResolver.ts:79`). 그런데 이 컴포넌트는 큐를 아예 안 그렸고 hero 분기도
+   *  `completing` 게이트로 눌러서, 「종료/수정이 안 들렸다」가 **비프만 남고 화면에서 사라졌다** —
+   *  화면을 자주 못 보는 사용자(PRINCIPLES §2)에게 눈을 들었을 때 남는 흔적이 0이었다.
+   *  ⚠️ r4가 그 게이트를 옳다고 적은 근거(*"완료 화면에 값 재질문 큐는 없어야 한다"*)는 여전히
+   *  참인데, 그걸 **흡수(structural)** 가 이미 보장한다 — 렌더 게이트는 남는 하나(명령 거절)만
+   *  눌렀다. 오라클: tests/v049-r5-z5-reject-surface.spec.ts */
+  reaskReason: ReaskReason;
   /** v0.37.0 리뷰#1(민구: 커밋 영수증) — 마지막으로 확정된 셀.
    *
    *  **왜 와이어프레임 §[4]에 없는 요소를 그리나:** 마지막 행의 마지막 셀을 채우는 순간이 곧 끝
@@ -133,6 +144,12 @@ export function CompleteSummary({
       >
         {completedCount} / {totalRows}
       </span>
+      {/* 🔴 v0.49 r5 Z5 — 거절 큐는 `X / N` **아래**에 둔다: 주 정보(§[4] 와이어프레임의 요약)가
+          먼저 자리를 갖고, 큐는 그 아래 보조선으로 붙는다(영수증이 위를 차지하는 것과 대칭).
+          `ReaskCue`는 `reason`이 없으면 `null`을 돌려주므로 평상시 DOM 비용이 0이고 레이아웃도
+          불변이다 — 기존 fit 그룹(요약·영수증)에 새 멤버를 넣지 않는 이유가 그것이다.
+          ⚠️ 이 컨테이너는 `overflowY:auto`라 큐가 붙어도 넘침이 잘리지 않는다(r3 #12 계약). */}
+      <ReaskCue reason={reaskReason} />
     </div>
   );
 }

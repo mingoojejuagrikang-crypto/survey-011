@@ -206,6 +206,9 @@ export function CenterStage({
         completedCount={completedCount}
         totalRows={totalRows}
         reviewCommit={reviewCommit}
+        // 🔴 v0.49 r5 Z5 — 끝 도달에서 설 수 있는 사유는 **저신뢰 명령 거절 하나뿐**이다
+        //   (값 발화는 `absorbAtEnd`가 흡수한다). 그 하나를 그리지 않아 거절이 비프만 남았다.
+        reaskReason={reaskReason}
       />
     );
   } else if (modifyIndicator) {
@@ -232,7 +235,15 @@ export function CenterStage({
         review={completing}
         row={row}
         tone={tone}
-        reaskReason={completing ? null : reaskReason}
+        // 🔴 v0.49 r5 Z5(claude #5 · codex M11 잔여) — 종전 `completing ? null : reaskReason`은
+        //   **행 검토 대기(reviewWait)의 명령 거절을 눌렀다.** 그 게이트의 근거였던 *"완료 화면에
+        //   값 재질문 큐는 없어야 한다"* 는 여전히 참이지만, 그것을 보장하는 것은 이 게이트가
+        //   아니라 **흡수**다: `phase==='complete'`인 두 국면(reviewWait·atEnd)에서 일반 값 발화는
+        //   `resolveFinal`이 `absorbReviewWait`/`absorbAtEnd`로 먹어 거절 자체가 성립하지 않는다
+        //   (`voiceFinalResolver.ts:79-80`). 즉 이 게이트가 실제로 누른 것은 **명령 거절 하나뿐**
+        //   이었고, 그건 이 국면이 곧 「명령 대기」이므로 가장 보여줘야 하는 신호다.
+        //   오라클: tests/v049-r5-z5-reject-surface.spec.ts
+        reaskReason={reaskReason}
         reviewCommit={reviewCommit}
         // 🔴 v0.46.1 FB-10 — 정정 완료가 여기로 흘러들어온 경우, 알람 카드가 접히며 hero가
         //  **새로 마운트되기 때문에** store burst로는 확정 플래시가 전달되지 않는다(그쪽 주석).

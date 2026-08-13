@@ -1476,10 +1476,17 @@ export function useVoiceSession() {
   const rejectValue = useCallback(async (
     reason: 'low_confidence' | 'parse_failed',
     awaiting?: AwaitingField | null,
-    opts?: { restartClip?: boolean },
+    // 🔴 v0.49 r5 Z5(codex R4-F3) — `tail`은 **소수 문맥이 아닐 때만** 쓰는 꼬리 문구다.
+    //   저신뢰 **명령** 거절은 값 거절과 꼬리가 달라야 한다("사유"가 아니라 "다시 말씀해 주세요") —
+    //   명령이 안 들린 것이지 값이 파싱 안 된 게 아니기 때문이다. 그 차이 때문에 그 분기가 이
+    //   종단을 통째로 우회했고, 우회한 김에 **소수 문맥 처리까지 손으로 다시 적어** 화면과 다른
+    //   TTS를 말했다(R4-F3). 꼬리만 인자로 받으면 문맥 처리는 종단이 계속 소유한다.
+    //   ⚠️ `whole`은 **새로 여는** 소수 문맥의 정수부다(`awaiting`엔 아직 안 실려 있다).
+    //     기존 문맥은 종전대로 `awaiting`에서 읽는다 — 두 입구가 같은 꼬리로 수렴한다.
+    opts?: { restartClip?: boolean; tail?: string; whole?: string },
   ) => {
     armRejectCue(reason);
-    const whole = awaiting ? fractionWholeOf(awaiting) : null;
+    const whole = opts?.whole ?? (awaiting ? fractionWholeOf(awaiting) : null);
     if (whole != null) {
       // [CLIP-DECIMAL-FRAG-1] — 클립 재시작 금지(호출부 요청 무시). 정수부를 다시 실어 화면 큐가
       //   TTS와 같은 문구를 유지한다(확정표 #3 「현행 유지」 — 문구는 사유와 무관하게 하나다).
@@ -1488,7 +1495,7 @@ export function useVoiceSession() {
       return;
     }
     if (opts?.restartClip) recorderRef.current?.startClip();
-    await say(REASK_TTS[reason]);
+    await say(opts?.tail ?? REASK_TTS[reason]);
   }, [armRejectCue, say]);
 
   /** 방금 커밋된 값의 이상치 알람 검사(v0.8.0). 전역 마스터 토글 제거 — 컬럼에 방향 규칙
@@ -2668,21 +2675,23 @@ export function useVoiceSession() {
       //   부정 비프도 화면 큐도 없고 `beep_play:kind=reject` 집계에도 안 잡힌다. 화면을 자주 못
       //   보는 사용자에게 「종료/수정/확인이 먹히지 않았다」를 알리는 채널이 통째로 없었다.
       //   ⚠️ 사유는 `low_confidence`다 — 명령이 안 들린 것이지 값이 파싱 안 된 게 아니다.
-      armRejectCue('low_confidence');
-      // 🔴 소수부 타깃 재질문 문맥은 **되살린다**(M3가 세운 불변식 — `armRejectCue`의
-      //   `setReaskReason`이 정수부를 함께 지운다). 여기서 빠뜨리면 M3가 닫은 「무고지 합성」이
-      //   명령 거절 입구로 되살아난다: `awaiting`은 정수부를 든 채이므로 다음 조각이 합성된다.
-      const cmdRejectWhole = fractionWholeOf(awaiting);
-      if (cmdRejectWhole != null) {
-        useSessionStore.getState().setDecimalReason(String(cmdRejectWhole), 'low_confidence');
-      }
-      // Do NOT replay the full field prompt (that is the ~10s cost T-2 reported). Stay on the
-      // current field with a short re-ask so the user can simply repeat the command/value.
-      // (#9 — 셀 검토 대기에서는 값을 요구하지 않는다: 위 cellWaitPrompt SSOT 주석.)
-      // M11 — 인라인 리터럴은 §2 쌍 상수(`relistenPrompt`)로. 문구 바이트는 불변이다.
-      await say(awaiting.kind === 'cellWait'
-        ? cellWaitPrompt(awaiting.name)
-        : relistenPrompt(awaiting.name));
+      // 🔴 v0.49 r5 Z5(codex R4-F3) — **공통 거절 종단으로 합류한다.** M11이 비프·큐는 복구했지만
+      //   이 분기는 `rejectValue`를 부르지 않고 소수 문맥을 **손으로 다시 복원한 뒤** 꼬리 문구를
+      //   말했다. 그래서 소수 재질문 중 저신뢰 명령이 들어오면 **화면과 귀가 갈렸다**:
+      //   화면·`awaiting`은 「111 점, 소수점 아래」를 유지하고 다음 '오'도 111.5로 합성되는데,
+      //   귀에는 `측정항목01 다시 말씀해 주세요.`가 들린다 — 사용자는 전체값을 말해야 하는지
+      //   소수부만 말해야 하는지 알 수 없다(PRINCIPLES §2 화면·청각 동일성 위반).
+      //   이제 문맥 판정은 종단이 소유하고 이 분기는 **꼬리만** 넘긴다.
+      //   ⚠️ 꼬리가 값 거절과 다른 것은 계약이다 — 명령이 안 들린 것이지 값이 파싱 안 된 게
+      //     아니다(#9 — 셀 검토 대기에서는 값을 요구하지 않는다: cellWaitPrompt SSOT).
+      //     그리고 필드 프롬프트 전체를 재생하지 않는다(T-2가 보고한 ~10초 비용).
+      //   ⚠️ 클립은 재시작하지 않는다(`restartClip` 미지정) — 명령 거절은 값 발화 슬롯의 주인이
+      //     아니다. 종전 동작과 같다.
+      await rejectValue('low_confidence', awaiting, {
+        tail: awaiting.kind === 'cellWait'
+          ? cellWaitPrompt(awaiting.name)
+          : relistenPrompt(awaiting.name),
+      });
       return;
     }
 
@@ -3090,7 +3099,13 @@ export function useVoiceSession() {
       //   분기가 추가될 때 조용히 빠진다(이 파일이 반복해 겪은 드리프트).
       //   🔴 v0.49 r3 #6 — 그 경고가 이 분기 **안에만** 적혀 있어서 형제 4분기가 통째로 빠져
       //   있었다. 표면 무장을 `armRejectCue`로 뽑아 여섯 분기가 같은 종단을 쓰게 했다.
-      armRejectCue('parse_failed');
+      // 🔴 v0.49 r5 Z5(codex R4-F3 둘째 축) — 표면 무장(`armRejectCue`)이 여기 홀로 서 있고 아래
+      //   세 분기가 소수 문맥을 **각자** 처리했다. 「모든 값 거절을 `rejectValue` 한 곳에서
+      //   종결」이 그래서 아직 성립하지 않았다. 이제 세 분기 전부 그 종단을 부른다 —
+      //   `armRejectCue`·`setDecimalReason`·`say`·클립 재시작이 전부 종단 소유다.
+      //   ⚠️ 분기가 여전히 남는 이유는 **소수 문맥의 출처가 다르기 때문**이다(새로 여는 것 /
+      //     유지하는 것 / 없는 것). 그 판정과 `awaiting` 변이·클립 계측은 여기 고유 계약이고,
+      //     화면·TTS·비프는 종단이 낸다. 각 분기가 종단에 넘기는 것은 그 차이뿐이다.
       // v0.10.0 A1: 소수 의도인데 소수부 유실("111 점 에") → 정수부를 유지하고 "소수점 아래만" 타깃
       // 재질문(전체 재발화 회피). 값 추측(에→1)은 하지 않는다 — 같은 STT 문자열이 111.1·111.5
       // 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정).
@@ -3107,9 +3122,9 @@ export function useVoiceSession() {
         // `:raw`도 재시작이 없어 1회만 보존됨.
         logCell({ type: 'clip', extra: 'clip_decimal_kept', row: awaiting.row, colId: awaiting.colId });
         awaitingFieldRef.current = { ...awaiting, fractionWhole: parseFailWhole };
-        // FB#4 — 화면 재질문 큐를 TTS와 글자 일치시키기 위해 정수부를 store에 싣는다(SSOT 공유).
-        useSessionStore.getState().setDecimalReason(String(parseFailWhole));
-        await say(decimalReaskPrompt(parseFailWhole));
+        // FB#4 — 화면 큐와 TTS의 글자 일치(정수부를 store에 싣는다)는 종단이 한다. 이 분기는
+        //   문맥을 **새로 여는** 쪽이라 `awaiting`엔 아직 없다 — 그래서 `whole`로 넘긴다.
+        await rejectValue('parse_failed', awaiting, { whole: String(parseFailWhole) });
       } else if (fractionWhole != null) {
         // v0.33.0 [STT-15] 재질문 유지 — 소수부 재질문 응답이 소수부(합성)로도 전체값(primary)로도
         // 해석되지 않으면 문맥(fractionWhole)을 버리지 않고 같은 타깃 재질문을 반복한다. 이전엔
@@ -3117,16 +3132,15 @@ export function useVoiceSession() {
         // 클립도 decimal_fraction_lost 분기와 동일하게 재시작하지 않는다(원본+조각 연속 보존).
         logCell({ type: 'clip', extra: 'clip_decimal_kept', row: awaiting.row, colId: awaiting.colId });
         awaitingFieldRef.current = { ...awaiting };
-        // FB#4 — 화면 재질문 큐를 TTS와 글자 일치(SSOT 공유).
-        useSessionStore.getState().setDecimalReason(String(fractionWhole));
-        await say(decimalReaskPrompt(fractionWhole));
+        // 기존 문맥 유지 — 종단이 `awaiting.fractionWhole`을 읽어 같은 꼬리로 수렴한다.
+        await rejectValue('parse_failed', awaiting);
       } else {
-        recorderRef.current?.startClip(); // restart clip (전체 재발화 유도 분기 — 새 클립이 옳다)
+        // 전체 재발화 유도 분기 — 새 클립이 옳다(종단의 `restartClip`).
         // v0.48.0 P3(NEW-2, 민구 제보 08-10) — 사유를 TTS로 읽는다.
         // 🔴 v0.49 r2 W2(확정표 #2) — **사유만 말한다.** 종전 꼬리("{항목} 다시 말씀해 주세요.")는
         //   삭제됐다(#1과 같은 근거). 이 꼬리를 부분일치로 검증하던
         //   `decimal-targeted-reask.spec.ts`의 [alt 의미보존] 케이스는 같은 커밋에서 갱신했다.
-        await say(REASK_TTS.parse_failed);
+        await rejectValue('parse_failed', awaiting, { restartClip: true });
       }
       return;
     }
@@ -3573,7 +3587,9 @@ export function useVoiceSession() {
     //   변하는 값을 갖는 순간(예: announceField가 설정 파생값을 참조) 이 명령만 **낡은 클로저로
     //   dispatch**되어 「이전」/「다음」이 옛 로직을 돈다 — 이 파일의 dep 배열을 유지보수하는
     //   이유가 정확히 그 드리프트다. 같은 diff가 형제들(goNextRow·gotoAdjacentRow)은 등재했다.
-  }, [advance, armRejectCue, enterModifyMode, enterReviewWait, proceedAfterCommit, rejectValue, say, goNextRow, gotoAdjacentField, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
+    // v0.49 r5 Z5 — `armRejectCue`가 dep에서 빠졌다: 이 함수가 **직접 부르는 곳이 없어졌다**
+    //   (전부 `rejectValue` 종단 경유). 그게 곧 「단일 종단」의 기계적 증거다.
+  }, [advance, enterModifyMode, enterReviewWait, proceedAfterCommit, rejectValue, say, goNextRow, gotoAdjacentField, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
 
   // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
   const handleInterim = useCallback((text: string, confidence?: number) => {
