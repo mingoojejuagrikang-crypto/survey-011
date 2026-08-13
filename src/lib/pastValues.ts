@@ -23,7 +23,7 @@
  */
 import type { Column } from '../types';
 import { withTimeout } from './async';
-import { autoValue, isRowInvariantAuto } from './autoValue';
+import { autoValue, isDynamicTodayColumn, isRowInvariantAuto } from './autoValue';
 import { effectiveSampleKey } from './columnFlags';
 import { fetchAllRowsUnbounded, parseSpreadsheetId, readonlySheetsAuth } from './sheets';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -208,6 +208,10 @@ export function previousRound(index: PastIndex, key: string, beforeDate: string)
  *    컬럼인가」가 아니라 「값이 변하는가」다.
  *  - **조사시기 컬럼이 아니다** — 회차(시간축)이지 샘플 식별축이 아니다. 이 컬럼이 대조 키에
  *    섞이면 "직전 회차"는 정의상 오늘과 다른 날짜라 영영 일치하지 않는다.
+ *  - `!isDynamicTodayColumn` — 🔴 v0.49 r2 A8(합집합 C12): 회차로 **뽑히지 못한** 두 번째 date
+ *    컬럼(스키마 변경의 유물)도 값이 「오늘」로 치환되므로 같은 이유로 영영 일치하지 않는다.
+ *    위 회차 배제는 컬럼 **하나**만 빼므로 유물이 남는다. 타입이 아니라 **값의 동적성**으로
+ *    가른다(리터럴 고정일 = 정식일자 같은 컬럼은 정당한 식별 키다 — `isDynamicTodayColumn` 주석).
  *  - `autoValue(col, 1)`이 비어 있지 않다 — 값이 없으면 대조 기준이 못 된다(빈 fixed 등).
  *
  * 빈 배열 = 세션을 특정할 고정 키가 없다 → 호출자는 조회를 포기한다.
@@ -220,6 +224,7 @@ export function sessionFixedKeyColumns(columns: Column[], roundDateColId: string
       effectiveSampleKey(c) &&
       isRowInvariantAuto(c) &&
       c.id !== roundCol?.id &&
+      !isDynamicTodayColumn(c) &&
       autoValue(c, 1).trim() !== '',
   );
 }

@@ -300,6 +300,25 @@ test.describe('sessionFixedKeyColumns — 세션 고정 샘플키 판정', () =>
     expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['c3', 'c4']);
   });
 
+  // 🔴 v0.49 r2 A8(합집합 C12) — 회차로 뽑히지 **못한** 두 번째 date 컬럼(유물)도 제외한다.
+  test('유물 date 컬럼(값=오늘)이 샘플키로 켜져 있어도 제외 — 세션마다 값이 달라 영영 불일치', () => {
+    const cols = [
+      ...W3_COLS,
+      col('c9', '수확일자', { type: 'date', auto: { kind: 'fixed', value: '오늘' }, sampleKey: true }),
+    ];
+    // 회차 컬럼은 c1(조사일자) 하나만 뽑힌다 — c9는 종전엔 그대로 고정 키로 섞여 들어갔다.
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['c3', 'c4']);
+  });
+
+  test('리터럴 고정일 date 컬럼은 정당한 식별 키다(타입이 아니라 값의 동적성으로 가른다)', () => {
+    // 대조군 — A8이 date 타입 전체를 배제하지 않았음을 고정한다(예: 정식일자).
+    const cols = [
+      ...W3_COLS,
+      col('c9', '정식일자', { type: 'date', auto: { kind: 'fixed', value: '2026-03-01' }, sampleKey: true }),
+    ];
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['c3', 'c4', 'c9']);
+  });
+
   test('seq from===to가 유일한 샘플키여도 조회가 성립한다(고정 키 0개로 떨어지지 않는다)', () => {
     const cols = W3_COLS.map((c) =>
       c.id === 'c6'

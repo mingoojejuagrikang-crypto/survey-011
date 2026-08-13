@@ -42,6 +42,21 @@ export function isRowInvariantAuto(col: Column): boolean {
   return !isUserInputColumn(col) && spanOf(col) === 1;
 }
 
+/** 🔴 v0.49 r2 A8(합집합 C12) — **값이 「오늘」로 치환되는 동적 date 컬럼인가.** 위 `autoValue`의
+ *  date 분기와 짝이다(그쪽이 이 술어를 부른다 — 규칙은 한 곳에만 산다).
+ *
+ *  왜 별도 술어가 필요한가: 이런 컬럼은 세션마다 값이 **달라진다**(오늘 날짜). 과거 회차 대조의
+ *  고정 키로 쓰면 과거 행의 그 칸에는 그때의 날짜가 들어 있어 **영영 일치하지 않는다** — 회차
+ *  컬럼(`resolveRoundCol`)으로 뽑히지 못한 **두 번째 date 컬럼**(스키마 변경의 유물)이 샘플키로
+ *  켜져 있으면 이전 조사일이 영구 「기록 없음」이 된다. `sheets.ts`의 컬럼 임포트가 date 컬럼에
+ *  `'오늘'`을 기본으로 넣으므로 유물은 대개 이 형태다.
+ *  ⚠️ **`type === 'date'` 전체를 배제하지는 않는다** — 리터럴 고정일(예: 정식일자 2026-03-01)은
+ *  세션마다 같은 값이라 정당한 식별 키다. 배제 기준은 타입이 아니라 **값의 동적성**이다. */
+export function isDynamicTodayColumn(col: Column): boolean {
+  if (col.type !== 'date') return false;
+  return !(col.auto.kind === 'fixed' && !!col.auto.value && col.auto.value !== '오늘');
+}
+
 /**
  * Compute the auto-fill value for a given column on a given row index (1-based).
  * Returns '' for unset/empty fixed values so empty cells stay empty.
@@ -58,7 +73,8 @@ export function autoValue(col: Column, row: number): string {
     return sel[(row - 1) % sel.length];
   }
   if (col.type === 'date') {
-    if (col.auto.kind === 'fixed' && col.auto.value && col.auto.value !== '오늘')
+    // 판정은 `isDynamicTodayColumn`이 SSOT다(아래) — 같은 규칙을 두 곳에서 적으면 갈린다.
+    if (col.auto.kind === 'fixed' && !isDynamicTodayColumn(col))
       return col.auto.value;
     const d = new Date();
     const m = String(d.getMonth() + 1).padStart(2, '0');
