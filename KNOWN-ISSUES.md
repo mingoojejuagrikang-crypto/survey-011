@@ -1124,6 +1124,28 @@
 
 ## ⑨ 테스트 / 릴리스 회귀 함정
 
+### [TEST-GUM-1] gUM 스텁 없는 음성 spec은 로컬 헤드리스에서 **세션 시작 자체가 막힌다** — 전부 `clickStart`에서 red
+- **증상(2026-08-13 v0.49 r2):** `v049-*` 음성 spec **13/13**이 `clickStart`의
+  `[data-testid="voice-active-state"]` 대기에서 실패. 화면은 「마이크 권한을 확인하는 중…」에
+  멈추고 시작 버튼이 disabled. 코드 변경과 **무관하게** 전멸하므로 회귀로 오독하기 쉽다.
+- **원인:** `start()`의 `recorderRef.current.init()`(`useVoiceSession.ts:3576`)이 실기기 gUM을
+  그대로 탄다. 로컬 헤드리스에서 그 호출이 **응답하지 않는다**(권한 프롬프트 대기).
+  `.catch(() => false)`는 *거부*는 받지만 ***무응답*은 못 받는다** — 그래서 hang이다.
+  (`fixtures/gum.ts` 헤더의 「헤드리스는 gUM을 기본 거부한다」는 **거부** 전제라 이 축과 다르다.)
+- **판정법(먼저 이걸 해라):** 내가 **손대지 않은** 음성 spec 하나를 같이 돌려라. 같은 줄에서
+  같이 red면 코드가 아니라 환경이다(AGENTS.md 30초 체크). 08-13엔 `v049-fix49-cell-guard`가 그
+  역할을 했다.
+- **회피:** `tests/fixtures/gum.ts`의 `GUM_GRANT_SCRIPT`를 `addInitScript`로 깐다(v0.44.1 공용
+  픽스처). 🔴 **단, 마이크 «실패»를 재는 spec은 `GUM_DENY_SCRIPT`다** — grant를 깔면 재연결
+  배너가 아예 안 뜬다(`v023-voice` B3가 그 사례). 거부는 즉시 reject라 시작은 그대로 진행된다.
+- **범위:** 08-13에 6개 spec(`v049-f1-field-nav`·`fix49-cell-guard`·`fix49-phase-guard`·
+  `fix49b-nav-race`·`fix49b-cellwait-surface`·`v023-voice`·`decimal-targeted-reask`)에 얹었다.
+  **배포 게이트의 나머지 세션 시작 spec은 아직 무방비다.**
+- **더 나은 해법(미적용):** `playwright.config.ts`의 `launchOptions.args`에
+  `--use-fake-device-for-media-stream`을 얹으면 구조적으로 닫힌다. 공유 파일이라 08-13엔 손대지
+  않았다 — 다음 라운드 후보.
+- **현재 상태:** ⚠️함정 등재 + 6 spec 회피 적용. config 레벨 해결은 미착수.
+
 ### [TEST-ANIMATION-ZERO-1] 전역 `animation-duration:0ms!important`가 실제 시각 결함을 false-green으로 가린다
 - **증상(C1에서 확정):** 기존 `v039-active-zones` 픽스처로는 꺼진 셀 computed opacity 테스트가 green이었고, 셀별 delay를 제거해도 계속 green이라 반증이 불가능했다. 전역 0ms를 끄자 제품 수정 전 코드에서 즉시 `0.62`가 관측돼 `[UI-DOT-GHOST-1]` 실제 결함이 드러났다.
 - **범위:** `tests/fixtures/stt.ts`가 `* { animation-duration:0ms!important; transition-duration:0ms!important }`를 주입하고, 같은 문자열 복제까지 합치면 **13개 주입 지점·19개 spec 파일**이 영향을 받는다(2026-07-28 직접 grep). 타이밍 flake를 줄이는 목적은 유효하지만, 이 상태에서 애니메이션 기반 시각 단언을 하면 제품이 아니라 정지된 별도 화면을 측정한다.
