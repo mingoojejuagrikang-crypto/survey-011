@@ -129,6 +129,46 @@ test('④ 소수 재질문 중 저신뢰 명령 거절 — 화면과 귀가 같�
   ).toContainText('111.5');
 });
 
+test('⑥ 끝 도달의 명령 거절은 받을 수 없는 값을 요구하지 않는다 (Y5 · codex R5-F3)', async ({ page }) => {
+  await bootZ5(page);
+  await fireStt(page, '삼십오 점 일', 1800);
+  await waitForTtsIdle(page);
+  await expect(page.locator('[data-testid="complete-summary"]'), '전제: 끝 도달이다').toBeVisible();
+
+  await fireLowConfCommand(page, '종료');
+  await waitForTtsIdle(page);
+
+  const last = (await ttsLog(page)).at(-1) ?? '';
+  // 이 국면은 일반 값을 전부 흡수한다(③이 그 전제를 별도로 증명한다). 그러니 값을 요구하면
+  // 시킨 대로 한 사용자가 흡수 안내로 되받히는 루프에 갇힌다.
+  expect(last, '끝 도달에서 필드 값 재입력을 지시했다 — 그 값은 받을 수 없다').not.toContain('다시 말씀해');
+  expect(last, '거절 사유가 귀에 남지 않는다').toBe('소리가 불확실.');
+});
+
+test('⑦ 검토 대기의 명령 거절 꼬리는 흡수 안내와 같은 조작 어휘다 (Y5)', async ({ page }) => {
+  await bootZ5(page);
+  await fireStt(page, '삼십오 점 일', 1800);
+  await waitForTtsIdle(page);
+  await fireStt(page, '이전행', 1800);
+  await waitForTtsIdle(page);
+  expect((await ttsLog(page)).at(-1), '전제: 행 검토 대기다').toContain('1행 완료됨.');
+
+  await fireLowConfCommand(page, '수정');
+  await waitForTtsIdle(page);
+
+  const last = (await ttsLog(page)).at(-1) ?? '';
+  expect(last, '검토 대기에서 필드 값 재입력을 지시했다 — 그 값은 흡수된다').not.toContain('다시 말씀해');
+  expect(last, '거절 꼬리가 이 상태의 조작 어휘와 다르다 — 같은 상태에 두 이름을 주면 안 된다').toBe('수정 또는 다음행.');
+
+  // 두 표면이 **같은 상수**를 쓰는지 실제로 대조한다: 값 발화를 던져 흡수 안내를 유발한다.
+  await fireStt(page, '구십구 점 구', 1800);
+  await waitForTtsIdle(page);
+  expect(
+    (await ttsLog(page)).at(-1) ?? '',
+    '흡수 안내와 거절 꼬리가 같은 어휘를 공유하지 않는다 — 같은 상태에 두 이름',
+  ).toContain(last);
+});
+
 test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 직접 부르지 않는다', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');

@@ -69,8 +69,16 @@ export function relistenPrompt(name: string): string {
  *  종전: `"{N}행은 완료된 행입니다. 수정하려면 '수정', 다음 행은 '다음행'이라고 말씀해 주세요."`
  *  두 진입로('수정'·'다음행')를 **어휘만** 남겨 절반 이하로 줄였다 — 그 두 단어가 실제로 먹히는
  *  명령이라는 점이 이 문구의 핵심이고(fix49b #8), 설명은 도움말이 맡는다. */
+/** 🔴 v0.49 r6 Y5(claude #4 · codex R5-F3) — 검토 대기에서 **실제로 먹히는 조작 어휘**.
+ *  흡수 안내와 저신뢰 **명령** 거절의 꼬리가 이 하나를 공유한다. 두 표면이 같은 상태를
+ *  가리키므로 문구도 하나여야 한다(cellWaitPrompt가 세운 *"같은 상태에 두 이름을 주지 않는다"*
+ *  와 같은 계약). 종전 거절 꼬리는 `relistenPrompt`(= "{항목} 다시 말씀해 주세요")여서
+ *  **이 상태에서 받을 수 없는 값**을 요구했다 — 시킨 대로 하면 흡수 안내가 되받는다.
+ *  ⚠️ 늘리지 마라([TTS-WATCHDOG-1] 긴 발화일수록 절단률이 단조 증가). */
+export const REVIEW_WAIT_COMMANDS_TTS = '수정 또는 다음행.';
+
 export function reviewWaitAbsorbTts(row: number): string {
-  return `${row}행 완료됨. 수정 또는 다음행.`;
+  return `${row}행 완료됨. ${REVIEW_WAIT_COMMANDS_TTS}`;
 }
 
 /** 끝 도달 안내 — **TTS본**(확정표 #5+6 통합). 종전엔 트리거 2개가 **서로 다른 문구**를 썼다:

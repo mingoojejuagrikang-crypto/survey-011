@@ -8,7 +8,7 @@ import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingle
 // [ENV-12] v0.43.0 #3 — 값 파싱 시도는 순수 모듈이 소유한다(부수효과 없음). 이 파일은 호출만.
 import { attemptParseValue, parseValueForCol } from './valueParseAttempt';
 import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiCommandSignal } from './voiceCommands';
-import { decimalReaskPrompt, REASK_TTS, relistenPrompt, reviewWaitAbsorbTts, endReachedTts } from './voicePrompts';
+import { decimalReaskPrompt, REASK_TTS, relistenPrompt, reviewWaitAbsorbTts, endReachedTts, REVIEW_WAIT_COMMANDS_TTS } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, setBargeInEnabled, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColumn } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
@@ -2847,10 +2847,26 @@ export function useVoiceSession() {
       //     그리고 필드 프롬프트 전체를 재생하지 않는다(T-2가 보고한 ~10초 비용).
       //   ⚠️ 클립은 재시작하지 않는다(`restartClip` 미지정) — 명령 거절은 값 발화 슬롯의 주인이
       //     아니다. 종전 동작과 같다.
+      // 🔴 v0.49 r6 Y5(claude #4 = codex R5-F3, 독립 일치) — **꼬리는 국면이 정한다.** Z5가 꼬리를
+      //   인자로 뺐지만 값은 `cellWait`/그 외 **두 갈래**뿐이었고, 그 「그 외」에 값을 **받을 수
+      //   없는** 두 국면이 들어 있었다. `atEnd`·`reviewWait`은 resolver가 일반 값을 전부 흡수하는
+      //   **명령 전용** 상태다(voiceFinalResolver:79-83). 거기서 「{항목} 다시 말씀해 주세요」는
+      //   실행 불가능한 지시다 — 실측(codex): 끝 도달에서 저신뢰 '종료' → 마지막 TTS가
+      //   「횡경 다시 말씀해 주세요.」. 시킨 대로 값을 말하면 흡수 안내가 되받는다. 화면을 못 보는
+      //   음성 전용 사용자는 그 사이에서 반복 실패 루프에 들어간다(cellWaitPrompt가 같은 이유로
+      //   먼저 닫은 형태 — 그 헤더).
+      //   · `reviewWait` → 흡수 안내와 **같은 조작 어휘**(`REVIEW_WAIT_COMMANDS_TTS` SSOT).
+      //   · `atEnd` → **사유 단독**. 그 국면의 흡수 안내(`endReachedTts`)에는 조작 어휘가 없다 —
+      //     W2가 「종료 수단은 상시 노출이라 매번 되풀이하지 않는다」로 꼬리를 삭제했기 때문이다.
+      //     없는 어휘를 여기서 새로 만들면 확정표 밖 문구가 하나 더 생긴다(§2 쌍 상수 규율).
       await rejectValue('low_confidence', awaiting, {
         tail: awaiting.kind === 'cellWait'
           ? cellWaitPrompt(awaiting.name)
-          : relistenPrompt(awaiting.name),
+          : awaiting.kind === 'reviewWait'
+            ? REVIEW_WAIT_COMMANDS_TTS
+            : awaiting.kind === 'atEnd'
+              ? undefined
+              : relistenPrompt(awaiting.name),
       });
       return;
     }
