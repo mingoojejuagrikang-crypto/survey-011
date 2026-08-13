@@ -86,8 +86,13 @@ export function VoiceHero({
   }, [showConfirm, confirmSeq]);
   const labelFitRef = useRef<HTMLSpanElement>(null);
   const valueFitRef = useRef<HTMLSpanElement>(null);
+  // 🔴 v0.49 r5 Z9(claude #13) — `reaskDecimalWhole`도 fit 축이다. `ReaskCue`는 정수부가
+  //   실려 있으면 **훨씬 긴 문구**(「111 점, 소수점 아래…」)를 그리는데, `reaskReason`은 그
+  //   전환에서 **값이 안 바뀐다**(`'parse_failed'` 그대로) — deps가 사유만 보면 재측정이 돌지
+  //   않아 낡은 배율로 긴 문구를 그린다. 소수 재질문은 현장에서 가장 자주 뜨는 큐다.
+  const decimalWhole = useSessionStore((st) => st.reaskDecimalWhole);
   const fitRef = useFitGroup<HTMLDivElement>(
-    [review, showConfirm, col.name, row, reaskReason, confirmed?.value, reviewCommit?.value, interim],
+    [review, showConfirm, col.name, row, reaskReason, decimalWhole, confirmed?.value, reviewCommit?.value, interim],
     [
       {
         variable: '--fit-value',

@@ -149,12 +149,24 @@ function usePrevSurvey(columns: Column[], roundDateColId: string | null): PrevSu
   //   다음 회차가 어느 축(샘플키·헤더·회차·인덱싱)에서 고쳐야 하는지 로그로 알 수 없었다.
   //   ⚠️ 이벤트 이름은 **새로 만든다**(PRINCIPLES §4) — `past_index_skip:*`은 로더의 진입 스킵
   //   (미설정·미로그인)이라 의미가 다르고, 얹으면 두 축의 집계가 섞인다. 화면 문구는 불변이다.
+  // 🔴 v0.49 r5 Z9(claude #12) — **dedupe 키가 사유 하나뿐이라 「새 사건」을 삼켰다.**
+  //   형제 `staleKey`는 `getFallbackBuiltAt()`를 키에 넣어 *"백업이 갱신되거나 답이 바뀌면
+  //   다시 기록돼야 한다 — 그건 새 사건이다"* 를 지킨다. 이쪽은 `reason`만 봐서, 스키마를
+  //   고쳤다가 **다른 스키마에서 같은 사유로 또 막히면** 앱 수명 내내 두 번째가 안 남는다.
+  //   그러면 이 계측의 목적(*"다음 회차가 어느 축에서 고쳐야 하는지"*)이 첫 스키마에 갇힌다.
+  //   키에 **스키마 축**을 얹는다 — 사유는 *어느 스키마가 조회 불가인가*에 대한 답이므로,
+  //   고정 키 컬럼 구성이나 회차 컬럼이 바뀌면 그건 다른 사건이다.
+  //   ⚠️ 모듈 스코프는 유지한다(팝업은 열 때마다 재마운트된다 — 그게 #9 결함의 절반이었다).
+  const unqueryableKey = state.kind === 'unknown' && state.reason
+    ? `${state.reason}:${roundDateColId ?? '-'}:${columns.filter((c) => c.sampleKey).map((c) => c.id).join(',')}`
+    : null;
   const unqueryableReason = state.kind === 'unknown' ? (state.reason ?? null) : null;
   useEffect(() => {
-    if (unqueryableReason === null || unqueryableLogged.has(unqueryableReason)) return;
-    unqueryableLogged.add(unqueryableReason);
+    if (unqueryableKey === null || unqueryableReason === null || unqueryableLogged.has(unqueryableKey)) return;
+    unqueryableLogged.add(unqueryableKey);
+    // 로그 바이트는 불변이다(사유 단독) — 갈린 것은 **얼마나 자주 남기는가**뿐이다(§4).
     logger.log({ type: 'app', extra: `past_index_unqueryable:summary,reason=${unqueryableReason}` });
-  }, [unqueryableReason]);
+  }, [unqueryableKey, unqueryableReason]);
   return state;
 }
 

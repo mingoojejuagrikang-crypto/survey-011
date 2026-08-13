@@ -952,8 +952,17 @@ export function useVoiceSession() {
       return false;
     }
     clearAnomalyAlert(opts.reason);
+    // 🔴 v0.49 r5 Z9(claude #10) — 소수 문맥을 **다시 그릴 때 사유를 잃지 않는다.**
+    //   `setReaskReason(null)`이 사유와 정수부를 함께 지우므로(store 계약) 재기록 시 사유를
+    //   안 넘기면 기본값 `'parse_failed'`로 굳는다 — 저신뢰로 거절된 소수 재질문이 재개
+    //   (일시정지→재시작)만 거치면 화면 `data-reason`이 **사실과 다른 사유**로 바뀐다.
+    //   M3가 `setDecimalReason(whole, reason)` 인자를 만든 이유가 그것인데 이 재기록만 안 쓰고
+    //   있었다. 문구는 어느 사유든 소수 프롬프트로 같으므로(확정표 #3) 바뀌는 것은 사유뿐이다.
+    const carriedReason = sess.reaskReason;
     sess.setReaskReason(null);
-    if (opts.decimalReason != null) sess.setDecimalReason(opts.decimalReason);
+    if (opts.decimalReason != null) {
+      sess.setDecimalReason(opts.decimalReason, carriedReason ?? undefined);
+    }
     sess.setModifyIndicator(opts.modifyIndicator ?? null);
     // v0.47.0 W2(FB-C) — committed=false는 「재청취 국면 시작(amber)」 선언이다. 일반 안내(국면
     //   종료)도 같은 값이라 네 착지 전부 무조건 내린다.

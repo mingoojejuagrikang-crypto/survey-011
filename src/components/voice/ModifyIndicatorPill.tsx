@@ -23,6 +23,7 @@ export function ModifyIndicatorPill({ name, prevValue, newValue, reaskReason = n
   // ② 새 값 도착(echo): 새 값을 가장 크게 두고 직전값은 작은 보조 정보로 남긴다.
   const committed = !!newValue && newValue !== prevValue;
   const interim = useSessionStore((s) => s.interimValue);
+  const decimalWhole = useSessionStore((s) => s.reaskDecimalWhole);
   // v0.47.0 W2(FB-C, 민구 08-08) — 성공 국면은 green이다(종전 amber). 재청취(비-committed)는
   //   §C4 amber 톤이 화면 전체(글로우·칩)를 이미 말하므로 여기선 blue(재입력 안내) 유지.
   const accent = committed ? T.green : T.blue;
@@ -36,7 +37,9 @@ export function ModifyIndicatorPill({ name, prevValue, newValue, reaskReason = n
     //   실측(375×812, 이 픽스처): 넘침 0 · 큐는 카드 안(잘림 없음)이라 **현재는 재현되지 않는다.**
     //   그래도 넣는다 — 부모가 `overflow:'hidden'`이고 컨테이너에 `ABSORB_CLAMP`가 걸려 있어,
     //   항목명이 길거나 화면이 더 좁으면 낡은 fit이 정확히 그 큐를 자른다.
-    [name, prevValue, newValue, interim, committed, reaskReason],
+    //   🔴 v0.49 r5 Z9(claude #13) — `reaskDecimalWhole`도 같은 축이다. 정수부가 실리면
+    //     `ReaskCue` 문구가 훨씬 길어지는데 `reaskReason`은 그 전환에서 값이 안 바뀐다.
+    [name, prevValue, newValue, interim, committed, reaskReason, decimalWhole],
     [{
       variable: '--fit-value',
       members: [valueFitRef],
