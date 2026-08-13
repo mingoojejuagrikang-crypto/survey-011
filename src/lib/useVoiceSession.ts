@@ -8,7 +8,7 @@ import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingle
 // [ENV-12] v0.43.0 #3 — 값 파싱 시도는 순수 모듈이 소유한다(부수효과 없음). 이 파일은 호출만.
 import { attemptParseValue, parseValueForCol } from './valueParseAttempt';
 import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiCommandSignal } from './voiceCommands';
-import { decimalReaskPrompt, REASK_TTS, reviewWaitAbsorbTts, endReachedTts } from './voicePrompts';
+import { decimalReaskPrompt, REASK_TTS, relistenPrompt, reviewWaitAbsorbTts, endReachedTts } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, setBargeInEnabled, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColumn } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
@@ -2472,7 +2472,11 @@ export function useVoiceSession() {
         // say() never starts a clip, unlike announceField). Also the landing path for a B4
         // trendConfirm dismissed by '수정' (trendConfirm은 수정 의미론을 겸장한다).
         armClipForCell(a.row, a.colId);
-        await say(`${a.name} 다시 말씀해 주세요.`);
+        // 🔴 v0.49 r4 M11 — 인라인 리터럴 → §2 쌍 상수(`relistenPrompt`). **거절이 아니다**:
+        //   '수정'은 접수됐고 앱이 같은 칸을 다시 듣는다(전제 재검증 — 산출물 보고).
+        //   그래서 `armRejectCue`(비프+거절 큐)를 붙이지 않는다 — 붙이면 접수된 입력을
+        //   거절됐다고 고지하고 `beep_play:kind=reject` 집계까지 오염된다.
+        await say(relistenPrompt(a.name));
         return;
       }
       // 상호배타 순서 주의 — extractModifyValue는 '수정' 뒤 **임의 텍스트**를 값 후보로 돌려주므로
@@ -2516,7 +2520,8 @@ export function useVoiceSession() {
         return;
       }
       armClipForCell(a.row, a.colId);
-      await say(`${a.name} 다시 말씀해 주세요.`);
+      // M11 — 같은 상수. '취소'도 접수된 명령이지 거절이 아니다(위 `cmdModify`와 같은 근거).
+      await say(relistenPrompt(a.name));
     }
 
     // ── 경로 판정(순수 결정표 — voiceFinalResolver, 특성화 spec 고정) ──
@@ -2563,12 +2568,26 @@ export function useVoiceSession() {
         extra: 'rejected_low_confidence',
       });
       useSessionStore.getState().setRecognized('');
+      // 🔴 v0.49 r4 M11(민구 D2 08-13 · codex r3 F8) — **이건 거절이다.** r3 #6이 값 거절 여섯
+      //   분기를 하나의 종단으로 모았는데, 그 인접 형제인 **저신뢰 명령 거절**만 남아 있었다:
+      //   부정 비프도 화면 큐도 없고 `beep_play:kind=reject` 집계에도 안 잡힌다. 화면을 자주 못
+      //   보는 사용자에게 「종료/수정/확인이 먹히지 않았다」를 알리는 채널이 통째로 없었다.
+      //   ⚠️ 사유는 `low_confidence`다 — 명령이 안 들린 것이지 값이 파싱 안 된 게 아니다.
+      armRejectCue('low_confidence');
+      // 🔴 소수부 타깃 재질문 문맥은 **되살린다**(M3가 세운 불변식 — `armRejectCue`의
+      //   `setReaskReason`이 정수부를 함께 지운다). 여기서 빠뜨리면 M3가 닫은 「무고지 합성」이
+      //   명령 거절 입구로 되살아난다: `awaiting`은 정수부를 든 채이므로 다음 조각이 합성된다.
+      const cmdRejectWhole = fractionWholeOf(awaiting);
+      if (cmdRejectWhole != null) {
+        useSessionStore.getState().setDecimalReason(String(cmdRejectWhole), 'low_confidence');
+      }
       // Do NOT replay the full field prompt (that is the ~10s cost T-2 reported). Stay on the
       // current field with a short re-ask so the user can simply repeat the command/value.
       // (#9 — 셀 검토 대기에서는 값을 요구하지 않는다: 위 cellWaitPrompt SSOT 주석.)
+      // M11 — 인라인 리터럴은 §2 쌍 상수(`relistenPrompt`)로. 문구 바이트는 불변이다.
       await say(awaiting.kind === 'cellWait'
         ? cellWaitPrompt(awaiting.name)
-        : `${awaiting.name} 다시 말씀해 주세요.`);
+        : relistenPrompt(awaiting.name));
       return;
     }
 
@@ -5065,7 +5084,8 @@ export function useVoiceSession() {
     // 음성 경로의 trendConfirm 해제('modify' 강등 후 재질문)와 동일 상태(fractionWhole 보존).
     awaitingFieldRef.current = demoteTrendConfirm(awaiting);
     armClipForCell(awaiting.row, awaiting.colId);
-    await say(`${awaiting.name} 다시 말씀해 주세요.`);
+    // M11 — 같은 상수. [수정] **터치**는 정의상 접수된 조작이라 거절 신호를 붙이지 않는다.
+    await say(relistenPrompt(awaiting.name));
   }, [armClipForCell, clearAnomalyAlert, say]);
 
   // ── v0.34.0 A1 — 수동 입력 이상치 **보류**(manualHold) 팝업의 터치 버튼 ──
