@@ -218,3 +218,58 @@ test('F5 — value 이벤트가 아예 없으면 stt로 폴백한다(기존 동�
   );
   expect(manifest.clips[0].sttText, 'value가 없으면 stt가 그대로 쓰인다').toBe('이십오 점 영');
 });
+
+/** ── v0.49 r2 A3(codex F3) — W4 섀도 계측이 원 STT의 confidence를 가리지 않는다 ────────── */
+
+test('A3 — would_salvage 합성 stt가 원 final STT의 confidence를 가리지 않는다', () => {
+  // 🔴 실측(codex F3): `상식 3.3`처럼 extraneous_token으로 거절된 뒤 재발화 전에 세션이 끝나면
+  //    그 셀은 **미커밋**이라 stt 폴백이 쓰인다. W4가 그 뒤에 쓰는 합성 라인
+  //    (`type:'stt'` + `extra:'would_salvage:…'`)은 confidence를 싣지 않으므로, 역순 폴백이
+  //    그 줄을 먼저 만나 원 final의 0.95가 **null로 떨어졌다**. 값·거절 동작은 안전했지만
+  //    기존 클립 감사 메타데이터가 깨진다(W4의 「기존 집계 비파괴」 축 위반).
+  const events = [
+    { type: 'stt', sessionId: 'S1', row: 2, colId: 'c1', text: '상식 3.3', confidence: 0.95 },
+    { type: 'stt_parse_failed', sessionId: 'S1', row: 2, colId: 'c1', text: '상식 3.3', extra: 'extraneous_token' },
+    { type: 'stt', sessionId: 'S1', row: 2, colId: 'c1', text: '상식 3.3', extra: 'would_salvage:3.3' },
+  ] as unknown as ManifestSourceEvent[];
+  const manifest = buildClipsManifest(
+    [{ file: 'clips/S1:2:c1.webm', key: 'S1:2:c1' }],
+    [{ id: 'S1', rows: [{ index: 2, values: { c1: '' } }] }] as unknown as Session[],
+    events,
+    '0.49.0',
+  );
+  const entry = manifest.clips[0];
+  expect(entry.sttText, '원 발화 텍스트는 그대로다').toBe('상식 3.3');
+  expect(entry.confidence, '합성 라인이 원 STT의 confidence를 가렸다').toBe(0.95);
+});
+
+test('A3 — 합성 라인이 그 셀의 유일한 stt면 정직하게 null이다(합성값을 관측인 척 싣지 않는다)', () => {
+  // 실사용에선 원 final stt가 항상 선행하므로 도달하지 않는 경계다. 그래도 고정한다 —
+  // 「건너뛴다」의 의미가 「무시하고 그 앞을 쓴다」이지 「합성값으로 대체한다」가 아님을
+  // 못박아 두지 않으면, 다음 감사 도구 변경이 이 null을 새 회귀로 보고한다.
+  const events = [
+    { type: 'stt', sessionId: 'S1', row: 3, colId: 'c1', text: '상식 3.3', extra: 'would_salvage:3.3' },
+  ] as unknown as ManifestSourceEvent[];
+  const manifest = buildClipsManifest(
+    [{ file: 'clips/S1:3:c1.webm', key: 'S1:3:c1' }],
+    [{ id: 'S1', rows: [{ index: 3, values: { c1: '' } }] }] as unknown as Session[],
+    events,
+    '0.49.0',
+  );
+  expect(manifest.clips[0].sttText).toBeNull();
+  expect(manifest.clips[0].confidence).toBeNull();
+});
+
+test('A3 — 접두가 같아도 `value` 이벤트는 건너뛰지 않는다(스킵 대상은 합성 stt뿐)', () => {
+  const events = [
+    { type: 'stt', sessionId: 'S1', row: 4, colId: 'c1', text: '삼십삼 점 삼', confidence: 0.71 },
+    { type: 'value', sessionId: 'S1', row: 4, colId: 'c1', text: '삼십삼 점 삼', parsed: '33.3', confidence: 0.71, extra: 'would_salvage:3.3' },
+  ] as unknown as ManifestSourceEvent[];
+  const manifest = buildClipsManifest(
+    [{ file: 'clips/S1:4:c1.webm', key: 'S1:4:c1' }],
+    [{ id: 'S1', rows: [{ index: 4, values: { c1: '33.3' } }] }] as unknown as Session[],
+    events,
+    '0.49.0',
+  );
+  expect(manifest.clips[0].confidence, '커밋 이벤트는 extra와 무관하게 감사 신호다').toBe(0.71);
+});

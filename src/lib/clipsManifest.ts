@@ -22,6 +22,7 @@
  */
 import type JSZip from 'jszip';
 import type { Session } from '../types';
+import { WOULD_SALVAGE_PREFIX } from './logEvents';
 
 export const CLIPS_MANIFEST_SCHEMA = 1;
 export const CLIPS_MANIFEST_FILENAME = 'clips-manifest.json';
@@ -35,6 +36,8 @@ export interface ManifestSourceEvent {
   text?: unknown;
   parsed?: unknown;
   confidence?: unknown;
+  /** v0.49 r2 A3 — 합성 `stt` 라인 판별용(아래 findLastCellEvent). */
+  extra?: unknown;
 }
 
 export interface ClipManifestEntry {
@@ -114,11 +117,21 @@ function findLastCellEvent(
   //
   //    events.json은 append 순서(시간순)이므로 뒤에서부터 훑되, `value`를 만나면 즉시 채택하고
   //    `stt`는 **가장 마지막 것만 기억**했다가 `value`가 하나도 없을 때 쓴다.
+  //
+  // 🔴 v0.49 r2 A3(codex F3 실측) — **합성 `stt` 라인은 관측이 아니다.** W4의 섀도 계측
+  //    (`would_salvage:<후보>`)은 원 final과 **같은 셀·같은 text**로 한 줄 더 쓰지만 confidence를
+  //    싣지 않는다(직접값과 같은 이유 — 파서가 만든 값이지 엔진이 들은 값이 아니다). 역순 폴백이
+  //    그 줄을 먼저 만나면 미커밋 셀의 감사 메타데이터에서 원 STT의 confidence가 사라진다
+  //    (실측: 0.95 → null). 클립 감사가 못 믿을 신호를 내면 진짜 오염을 찾는 능력이 같이 죽는다 —
+  //    이 함수가 F5에서 이미 한 번 배운 교훈이다. 판별 접두의 선언은 `logEvents.ts` 하나다.
+  //    ⚠️ 「그 셀의 stt가 합성 라인뿐」이면 `sttText`도 null이다 — 합성값을 관측인 척 싣지 않는
+  //    것이 이 계약이다(원 final stt는 :2505에서 무조건 선행하므로 실사용에선 도달하지 않는다).
   let sttFallback: { sttText: string | null; confidence: number | null } | null = null;
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (!e || (e.type !== 'value' && e.type !== 'stt')) continue;
     if (e.sessionId !== sessionId || e.row !== row || e.colId !== colId) continue;
+    if (e.type === 'stt' && typeof e.extra === 'string' && e.extra.startsWith(WOULD_SALVAGE_PREFIX)) continue;
     const picked = {
       sttText: typeof e.text === 'string' ? e.text : null,
       confidence: typeof e.confidence === 'number' ? e.confidence : null,

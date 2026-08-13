@@ -33,6 +33,7 @@ import {
   micInitFailed,
   notifyPerm,
   rowMarked,
+  wouldSalvage,
 } from './logEvents';
 import { shouldKeepInBackground, LONG_BACKGROUND_OFF_MS } from './backgroundSessionPolicy';
 import { requestNotifyPermissionOnce, showBackgroundOffNotification } from './backgroundNotify';
@@ -2732,7 +2733,7 @@ export function useVoiceSession() {
       //   — `enterReviewWait`이 `command`를 재사용한 것과 같은 판단이다.
       if (attempt.salvageCandidate != null) {
         logCell({
-          type: 'stt', extra: `would_salvage:${attempt.salvageCandidate}`, text,
+          type: 'stt', extra: wouldSalvage(attempt.salvageCandidate), text,
           row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
         });
       }

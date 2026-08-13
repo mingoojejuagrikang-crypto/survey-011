@@ -271,6 +271,11 @@ export function lowConfidenceParsed(fields: {
   return `low_conf_parsed:${kv(fields)}`;
 }
 
+/** v0.49 r2 W4 섀도 계측(보조 `type:'stt'` 라인) — **관측이 아니라 합성값**이다. 접두를 상수로
+ *  올린 이유는 소비자(`clipsManifest.findLastCellEvent`)가 그걸 판별해야 하기 때문 — 사유는 그쪽 A3 주석. */
+export const WOULD_SALVAGE_PREFIX = 'would_salvage:';
+export const wouldSalvage = (candidate: string): string => `${WOULD_SALVAGE_PREFIX}${candidate}`;
+
 /** [CLIP-WINDOW-2] UI suspend 래치가 신규 셀 녹음창 개시를 차단한 요청. */
 export function clipArmBlocked(fields: {
   reason: string;
