@@ -199,8 +199,22 @@ export function SettingsSummaryModal({
         </div>
 
         {/* v0.49.0 W3 — 「이전 조사」 행이 늘면서 375×812 무스크롤 예산(카드 maxHeight 84vh)을
-            5px 초과했다. 세로 gap을 조여 회수한다(10→8 · 6→4). 무스크롤은 팝업의 계약이다. */}
-        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            5px 초과했다. 세로 gap을 조여 회수한다(10→8 · 6→4). 무스크롤은 팝업의 계약이다.
+            🔴 v0.49 r3 #12(claude r2 LOW) — **본문에 넘침 출구를 준다**(`minHeight:0` + `overflowY:auto`).
+            카드는 `maxHeight:84vh`인데 넘침 처리가 **없어서**, 컬럼이 많은 스키마에서는 내용이
+            그냥 잘렸다(375×812 실측: 측정 컬럼 12개 → 카드 682px = 예산 상한, `scrollHeight -
+            clientHeight = 4px`). 잘린 부분은 사용자가 볼 방법이 없다. 스크롤 컨테이너를 **본문에만**
+            두면 헤더(×)와 하단 [닫기]는 항상 고정으로 남는다 — 넘쳐도 출구를 잃지 않는다.
+            ⚠️ 「무스크롤」 계약은 그대로다: 기본 스키마에서는 넘치지 않아 스크롤바가 서지 않는다
+            (같은 실측: 카드 502px · 예산 682px · 넘침 0 — 여유 180px). 이건 계약의 완화가 아니라
+            **계약이 깨졌을 때의 출구**다. `minHeight:0`이 없으면 flex 자식이 안 줄어 `overflowY`가
+            무효다(그래서 둘은 한 쌍이다). */}
+        <div
+          style={{
+            padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8,
+            minHeight: 0, overflowY: 'auto',
+          }}
+        >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <SummaryStatusRow
               label="Google"
