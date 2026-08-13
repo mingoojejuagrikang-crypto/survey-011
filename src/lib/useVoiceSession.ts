@@ -5120,6 +5120,34 @@ export function useVoiceSession() {
     sess.setRecognized(value);
     sess.setReaskReason(null);
 
+    // 🔴🔴 v0.49 r5 Z8(claude #8) — **행 완료 부기는 흐름 소유권과 무관하다. 값 유실이었다.**
+    //
+    //   완료의 진실이 둘이었다:
+    //     · `dataStore.patchRowValues`(C4)는 값에서 `complete`를 **다시 계산**하고
+    //       `completedRows`도 맞춘다 — 그래서 키패드 커밋 직후 IDB는 옳아 보인다.
+    //     · `sessionStore.completedRows`는 `markRowComplete`(=`finalizeRowCompletion`)로만 는다.
+    //       그런데 아래 **비-awaiting 커밋 분기**(v0.47.0 W1)는 *"진행 상태를 건드리지 않는다"*
+    //       는 계약을 지키며 그 부기까지 함께 건너뛰었다.
+    //   `persistSession`은 후자만 본다: `rows`를 `completedRows` + `activeRow` + `skippedRows`
+    //   **셋에서만** 만든다. 그래서 다음 persist가 그 행을 **어느 목록에도 못 넣고 통째로
+    //   떨어뜨린다** — IDB에서 사라지고, 시트에도 영영 안 올라간다.
+    //   실측(2026-08-14): 1행 m1을 음성으로, 커서를 그 셀에 둔 채(cellWait) m2를 **키패드**로
+    //   채워 행을 완성 → IDB에 `{m1:35.1, m2:42.3, complete:true}`. 그 뒤 2행에서 값 하나를
+    //   커밋하자 **1행이 IDB에서 통째로 사라졌다.** 끝 도달 안내도 「완료된 행은 1행」이라
+    //   말했다(실제 2행) — 두 진실이 화면·시트·귀에서 동시에 갈린 형태다.
+    //
+    //   🔑 처방이 **여기**인 이유: `finalizeRowCompletion`의 계약이 *"이 함수가 다루는 것은
+    //   «내구성»뿐이고, «무엇을 말하는가»는 호출부가 정한다"*(그 헤더)다. 부기는 흐름 소유권이
+    //   아니라 **커밋 사실**에 붙는다. 그래서 소유권 분기 **앞**에서 한 번 부른다 — 아래
+    //   `proceedAfterCommit`도 같은 함수를 부르지만 멱등이라 IDB 쓰기가 늘지 않는다(그 헤더).
+    //   ⚠️ 좌표는 **커밋된 셀의 행**(`row`)이지 `awaiting.row`가 아니다. M1이 세운 것은
+    //     「어느 awaiting을 소유하는가」의 행 가드이고, 내구성 부기는 **값이 들어간 행**을 따른다 —
+    //     둘을 같은 축으로 읽으면 교차행 수동 커밋에서 남의 행 부기를 건드리게 된다.
+    //   ⚠️ 미완료 행이면 `isRowVoiceComplete` 가드가 즉시 return한다(no-op) — 부분 입력은
+    //     종전대로 `activeHasData` 경로가 내구화한다.
+    //   오라클: tests/v049-r5-z8-manual-complete.spec.ts
+    finalizeRowCompletion(row);
+
     // 🔴 v0.47.0 W1(FB-A+B, 민구 08-08) — **수동 커밋 확인음은 awaiting 여부와 무관하다.**
     //   종전엔 커밋 화음이 음성 경로(:2373)에만 있었고 수동 경로는 awaiting 셀일 때 echo TTS만
     //   났다 — 비-awaiting 덮어쓰기 커밋(08-08 새벽 실측 manual_commit 8건 중 4건)은 **완전 무음**.
@@ -5213,7 +5241,7 @@ export function useVoiceSession() {
     }
 
     if (violation) fireManualAlert(violation, false);
-  }, [archiveCellClip, clearAnomalyAlert, evaluateTrend, getAnomalyAlertData, notifyCellPersistFailed, persistCellValue, persistSession, proceedAfterCommit, say]);
+  }, [archiveCellClip, clearAnomalyAlert, evaluateTrend, finalizeRowCompletion, getAnomalyAlertData, notifyCellPersistFailed, persistCellValue, persistSession, proceedAfterCommit, say]);
 
   // ── v0.33.0 항목7 — 이상치 응답 대기(trendConfirm) 중 터치 버튼: 음성 명령과 동일 동작·동일 로그 ──
   /** [확인] 버튼 — 음성 '확인'과 동일: 커밋된 값 확정 + 팝업 해제 + advance 1회. attribution은

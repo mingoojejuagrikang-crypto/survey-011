@@ -203,15 +203,27 @@ test('①b 셀 검토 대기의 **직접값** 수정도 IDB에 남고 셀 검토
  * 추가될 때 조용히 빠진다」였고, 이 배선은 그 재발을 막는 방어선이다.
  * 소스 계약 테스트의 전례: `v049-prev-survey` W3-7·W3-10 · `v043-typo-contract`.
  */
-test('[node] ①c 행 완료 부기 배선 3곳(advance · 커밋 종단 · 직접 수정 우회)이 모두 있다', async () => {
+test('[node] ①c 행 완료 부기 배선 4곳(advance · 커밋 종단 · 직접 수정 우회 · 수동 커밋)이 모두 있다', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
   const calls = src.match(/finalizeRowCompletion\((?!row: number)/g) ?? [];
   // 선언부(`const finalizeRowCompletion = useCallback`)는 위 정규식에 안 걸린다.
-  expect(calls.length, '배선이 3곳이 아니다 — 어느 착지가 빠졌는지 확인해라(#1 근인)').toBe(3);
+  // 🔴 v0.49 r5 Z8 — **3 → 4.** 이 계약이 예언한 그대로 「새 커밋 경로가 추가될 때 조용히
+  //   빠지는」 네 번째가 실재했다: `commitManualValue`의 **비-awaiting 분기**가
+  //   *"진행 상태를 건드리지 않는다"*(v0.47.0 W1)를 지키며 **내구성 부기까지** 건너뛰었다.
+  //   피해는 값 유실이다 — `persistSession`이 `completedRows`에 없는 행을 통째로 떨어뜨려
+  //   키패드로 완성한 행이 IDB에서 사라졌다(실측). 오라클: v049-r5-z8-manual-complete.spec.ts.
+  //   ⚠️ 숫자를 올릴 때는 **왜 늘었는지**를 여기 적어라 — 그게 이 계약의 값어치다.
+  expect(calls.length, '배선이 4곳이 아니다 — 어느 커밋 경로가 빠졌는지 확인해라(#1 근인)').toBe(4);
   expect(src, 'advance()의 행 완료 부기').toContain('finalizeRowCompletion(row);');
   expect(src, '커밋 종단(proceedAfterCommit) 진입점 부기').toContain('if (awaiting) finalizeRowCompletion(awaiting.row);');
   expect(src, '직접 수정 우회 배선(F9)').toContain('finalizeRowCompletion(targetRow);');
+  // 수동(키패드) 커밋 — 소유권 분기 **앞**이어야 한다(비-awaiting 분기도 지나가야 하므로).
+  const manual = src.slice(src.indexOf('const commitManualValue = useCallback('));
+  expect(
+    manual.slice(0, manual.indexOf("playBeep('commit')")),
+    '수동 커밋 부기가 소유권 분기 앞에 없다 — 비-awaiting 커밋이 행을 완성하면 그 행이 사라진다',
+  ).toContain('finalizeRowCompletion(row);');
 });
 
 test('② 정정된 행은 완료 카운트(X / N)에 그대로 남는다 — markRowComplete 누락', async ({ page }) => {
