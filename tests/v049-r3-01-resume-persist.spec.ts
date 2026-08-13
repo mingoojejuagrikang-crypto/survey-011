@@ -140,12 +140,18 @@ test('① 셀 검토 대기 출신 2단계 수정의 새 값이 **IDB에 남는�
   await waitForTtsIdle(page);
   await fireStt(page, '11.1', 1500);
   await waitForTtsIdle(page);
-  expect((await persistedRow(page, 1))?.values.m2, '후속 persist가 낡은 백업을 되살렸다').toBe('66.6');
+  await expect
+    .poll(async () => (await persistedRow(page, 1))?.values.m2,
+      { timeout: 6000, message: '후속 persist가 낡은 백업을 되살렸다' })
+    .toBe('66.6');
 
   // 리로드 생존 — 사용자가 실제로 겪는 형태(앱 재시작 후 옛값 복원)를 그대로 잰다.
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1200);
-  expect((await persistedRow(page, 1))?.values.m2, '리로드 후 옛값이 복원됐다').toBe('66.6');
+  await expect
+    .poll(async () => (await persistedRow(page, 1))?.values.m2,
+      { timeout: 6000, message: '리로드 후 옛값이 복원됐다' })
+    .toBe('66.6');
 });
 
 test('② 정정된 행은 완료 카운트(X / N)에 그대로 남는다 — markRowComplete 누락', async ({ page }) => {
@@ -198,5 +204,8 @@ test('③ 알람 경유(재기록 값이 이상치 → 「확인」)도 새 값�
   await expect
     .poll(async () => (await persistedRow(page, 1))?.values.m1, { timeout: 8000 })
     .toBe('120.5');
-  expect((await persistedRow(page, 1))?.complete, '재완료된 행은 complete:true로 영속된다').toBe(true);
+  await expect
+    .poll(async () => (await persistedRow(page, 1))?.complete,
+      { timeout: 6000, message: '재완료된 행은 complete:true로 영속된다' })
+    .toBe(true);
 });

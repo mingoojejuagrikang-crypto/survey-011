@@ -78,9 +78,12 @@ async function bootMini(page: Page) {
 async function expectRejectTerminal(page: Page, utterance: string, before: number) {
   await fireStt(page, utterance, 1500);
   await waitForTtsIdle(page);
-  expect(await rejectBeeps(page), `「${utterance}」 거절에 부정 비프가 없다`).toBe(before + 1);
+  // #13 계약 — IDB 로그 쓰기는 fire-and-forget이라 도달은 **기다린다**(비재시도 읽기 금지).
+  await expect
+    .poll(() => rejectBeeps(page), { timeout: 5000, message: `「${utterance}」 거절에 부정 비프가 없다` })
+    .toBe(before + 1);
   await expect(cue(page), `「${utterance}」 거절에 화면 큐가 없다`).toBeVisible({ timeout: 3000 });
-  expect(await cue(page).getAttribute('data-reason')).toBe('parse_failed');
+  await expect(cue(page)).toHaveAttribute('data-reason', 'parse_failed');
   expect((await ttsLog(page)).at(-1), `「${utterance}」 거절이 W2 이전 문구를 읽는다`)
     .toBe('숫자로 인식 실패.');
 }
@@ -117,7 +120,12 @@ test('⑤ 네 분기를 연속으로 겪으면 reject 비프가 정확히 4회 �
     await fireStt(page, u, 1200);
     await waitForTtsIdle(page);
   }
-  expect(await rejectBeeps(page), '거절 4건인데 비프 집계가 다르다').toBe(before + 4);
+  await expect
+    .poll(() => rejectBeeps(page), { timeout: 6000, message: '거절 4건인데 비프가 모자란다' })
+    .toBe(before + 4);
+  // 과다 재생은 안정화 창으로 — 늘려도 red가 안 되는 방향이다(#13의 flake 방향과 반대).
+  await page.waitForTimeout(300);
+  expect(await rejectBeeps(page), '거절 1건당 비프 1회를 넘었다').toBe(before + 4);
   // 값은 하나도 서지 않았다 — 거절 경로가 커밋을 열어 주면 안 된다(가드).
   const events = await loadLogEvents(page);
   expect(events.some((e) => e.type === 'value'), '거절 경로에서 값이 커밋됐다').toBe(false);

@@ -69,7 +69,7 @@ test('① 수정 재기록 중의 거절에도 재질문 큐가 뜬다 (modifyIn
   await fireStt(page, '바나나 사과 포도', 1200);
   await expect(cue(page), '수정 재기록 중 거절에 재시도 표면이 없다 — 비프뿐이다')
     .toBeVisible({ timeout: 4000 });
-  expect(await cue(page).getAttribute('data-reason')).toBe('parse_failed');
+  await expect(cue(page)).toHaveAttribute('data-reason', 'parse_failed');
 });
 
 test('② 수정 재기록 중 저신뢰 거절도 같은 표면을 얻는다 — 사유가 달라도 계약은 하나다', async ({ page }) => {
@@ -85,5 +85,5 @@ test('② 수정 재기록 중 저신뢰 거절도 같은 표면을 얻는다 �
   await fireStt(page, '담백', 1200, 0.3);
   await expect(cue(page), '저신뢰 거절만 표면을 못 받으면 사유별로 화면이 갈린다')
     .toBeVisible({ timeout: 4000 });
-  expect(await cue(page).getAttribute('data-reason')).toBe('low_confidence');
+  await expect(cue(page)).toHaveAttribute('data-reason', 'low_confidence');
 });

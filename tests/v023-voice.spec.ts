@@ -627,30 +627,53 @@ async function beepCount(page: Page, kind: string): Promise<number> {
 }
 
 test('B2-r2 — 거절(저신뢰·파싱실패) 두 분기가 부정 비프를 낸다 + ReaskCue 병행 (민구 결정 ⓐ)', async ({ page }) => {
+  // 🔴 v0.49 r3 #13(claude r2 LOW) — **고정 대기 + 비재시도 호출을 걷어냈다.** 종전엔
+  //    `fireStt(…, 700)`의 고정 대기 뒤에 `expect(await beepCount(…)).toBe(n)`(IDB 읽기)과
+  //    `await cue.getAttribute(…)`를 썼다 — 둘 다 Playwright의 재시도를 못 받는 형태라, 느린
+  //    러너에서 IDB 쓰기나 속성 반영이 그 창을 넘기면 red가 난다(신규 게이트 스펙의 flake 예약).
+  //    ⓐ **도달**은 `expect.poll`/`toHaveAttribute`로 기다리고 ⓑ **과다 재생 없음**은 짧은
+  //    안정화 창 뒤의 단언으로 잰다. 두 축을 갈라야 한다: poll만 쓰면 n+1이 나도 n에 닿는
+  //    순간 통과해 ③의 목적이 죽고, 고정 대기만 쓰면 느린 러너에서 도착이 늦어 red가 난다.
+  //    (이 파일의 TTS 목은 onend가 **동기**라 공용 `waitForTtsIdle`의 in-flight 카운터가 없다 —
+  //     그래서 정지 신호로 못 쓴다. 안정화 창은 늘려도 red가 안 되는 방향이라 안전하다.)
   await setupAndStart(page);
 
   // ① 저신뢰 거절.
-  await fireSttConf(page, '담백', 0.3, 700);
+  await fireSttConf(page, '담백', 0.3, 300);
   const cue = page.locator('[data-testid="reask-cue"]');
   await expect(cue).toBeVisible({ timeout: 2500 });
-  expect(await cue.getAttribute('data-reason')).toBe('low_confidence');
+  await expect(cue).toHaveAttribute('data-reason', 'low_confidence');
   // 🔴 W2가 재질문 TTS를 두 어절로 줄이며 "재시도 신호는 화면 큐와 **부정 비프**가 전담한다"고
   //    적었지만 그 비프는 배선된 적이 없었다(합집합 C2). 화면을 끄고 2~3m 떨어져 쓰는
   //    사용자에게는 그 두 어절이 유일한 신호였다.
-  expect(await beepCount(page, 'reject'), '저신뢰 거절에 부정 비프가 없다').toBe(1);
+  await expect
+    .poll(() => beepCount(page, 'reject'), { timeout: 5000, message: '저신뢰 거절에 부정 비프가 없다' })
+    .toBe(1);
   // 화면 큐는 그대로 병행한다(비프가 화면 신호를 대체하는 것이 아니다).
-  expect(await ttsLog(page), '사유 TTS도 그대로다').toContain('소리가 불확실.');
+  await expect
+    .poll(() => ttsLog(page), { timeout: 5000, message: '사유 TTS도 그대로다' })
+    .toContain('소리가 불확실.');
 
   // ② 파싱 실패 거절 — 같은 신호.
-  await fireStt(page, '바나나 사과 포도', 800);
-  expect(await cue.getAttribute('data-reason')).toBe('parse_failed');
-  expect(await beepCount(page, 'reject'), '파싱 실패 거절에 부정 비프가 없다').toBe(2);
+  await fireStt(page, '바나나 사과 포도', 300);
+  await expect(cue).toHaveAttribute('data-reason', 'parse_failed');
+  await expect
+    .poll(() => beepCount(page, 'reject'), { timeout: 5000, message: '파싱 실패 거절에 부정 비프가 없다' })
+    .toBe(2);
 
   // ③ 🔴 실측: **거절당 정확히 1회**다(브리핑 「연타 시 과다 재생은 실측 후 판단」).
   //    3회 더 거절시켜 3회만 느는지 본다 — 재질문 TTS/화면 큐 갱신마다 덧나면 여기서 잡힌다.
-  await fireStt(page, '바나나 사과 포도', 700);
-  await fireStt(page, '바나나 사과 포도', 700);
-  await fireStt(page, '바나나 사과 포도', 700);
+  await fireStt(page, '바나나 사과 포도', 300);
+  await fireStt(page, '바나나 사과 포도', 300);
+  await fireStt(page, '바나나 사과 포도', 300);
+  // 도달은 poll로 **기다리고**(느린 러너에서 IDB 쓰기가 늦어도 red가 아니다),
+  await expect
+    .poll(() => beepCount(page, 'reject'), { timeout: 6000, message: '거절 5건인데 비프가 모자란다' })
+    .toBe(5);
+  // 과다 재생은 **안정화 창**으로 잰다. 이 대기는 「도착을 기다리는」 고정 대기가 아니라
+  // 「더 늘지 않는다」를 재는 창이라, 늘려도 red가 되지 않고 줄여야만 false-green이 된다
+  // (#13이 지목한 flake 방향과 반대 — 도착 대기만 poll로 옮기면 ③의 목적이 죽는다).
+  await page.waitForTimeout(300);
   expect(await beepCount(page, 'reject'), '거절 1건당 비프 1회를 넘었다(연타 과다 재생)').toBe(5);
 
   // ④ 알람 비프와 **섞이지 않는다** — 거절 경로는 값을 커밋하지 않으므로 이상치 알람 자체가

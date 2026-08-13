@@ -28,6 +28,7 @@ import {
 } from '../src/lib/pastValues';
 import { effectiveSampleKey } from '../src/lib/columnFlags';
 import { stubSheets } from './fixtures/activeZones';
+import { IDB, APPLY_APP_SCHEMA_SOURCE } from './fixtures/idb';
 import type { Column } from '../src/types';
 import { BASE } from './baseUrl';
 // A11 — 「어제」는 달력 연산으로 만든다(DST 함정). 사유는 fixtures/localDate.ts 헤더.
@@ -119,9 +120,18 @@ async function openSummary(
     { key: STORE_KEY, payload: settingsFor(opts.farmName, !!opts.withSheet), signedIn: !!opts.withSheet },
   );
   if (opts.withRecord) {
-    await page.evaluate(async (rec) => {
+    // 🔴 v0.49 r3 #15(claude r2 LOW) — **버전 무지정 open은 여기서 레이스다.** 바로 위 `goto`는
+    //   `domcontentloaded`에서 끊으므로 앱의 versioned open(`getDb()`)이 아직 안 끝났을 수 있다.
+    //   그 상태에서 무버전 open이 이기면 브라우저는 **스토어 0개짜리 v1**을 만들고, 이어지는
+    //   `transaction('kv')`가 NotFoundError로 터진다 — 이 파일의 시드 의존 케이스가 통째로 red다
+    //   (무버전 open은 「이미 부팅된 앱 DB에 시딩」 규약이지, 부팅 **중**에 쓰는 형태가 아니다).
+    //   fixtures/idb.ts의 **부팅 전 시딩** 규약으로 바꾼다: 버전+스키마를 주입해 누가 먼저 열든
+    //   같은 스키마가 선다(앱이 이미 만들었으면 같은 버전이라 upgrade 없이 그대로 열린다).
+    await page.evaluate(async ({ rec, idb, schemaSrc }) => {
+      const applySchema = (0, eval)(`(${schemaSrc})`) as (db: IDBDatabase) => void;
       const db: IDBDatabase = await new Promise((resolve, reject) => {
-        const req = indexedDB.open('survey-011');
+        const req = indexedDB.open(idb.name, idb.version);
+        req.onupgradeneeded = () => applySchema(req.result);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
@@ -132,7 +142,11 @@ async function openSummary(
         tx.onerror = () => reject(tx.error);
       });
       db.close();
-    }, buildRecord(opts.headers) as unknown as Record<string, unknown>);
+    }, {
+      rec: buildRecord(opts.headers) as unknown as Record<string, unknown>,
+      idb: IDB,
+      schemaSrc: APPLY_APP_SCHEMA_SOURCE,
+    });
   }
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.locator('[data-testid="tab-settings"]').click();
