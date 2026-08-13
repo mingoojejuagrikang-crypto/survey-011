@@ -4736,8 +4736,31 @@ export function useVoiceSession() {
     };
 
     const awaiting = awaitingFieldRef.current;
-    const ownsFlow = !!awaiting
-      && (awaiting.kind === 'reviewWait' || (awaiting.kind !== 'atEnd' && awaiting.row === row && awaiting.colId === colId));
+    // 🔴 v0.49 r4 M1(claude r3 #2 — Larry 소스 확증) — **행 검토 대기 분기에도 행 가드를 건다.**
+    //   종전 `awaiting.kind === 'reviewWait'`는 **좌표를 아예 보지 않았다.** 형제 분기가
+    //   `row === row && colId === colId`를 요구하는데 이 하나만 무조건 참이라, **다른 행**에 대한
+    //   수동 커밋이 검토 대기의 흐름을 소유했다. 도달로는 셀 저장 실패 배너의 [다시 저장]이다
+    //   (`VoiceScreen.tsx`가 `cellPersistPending`에 **떠날 때의 좌표**를 들고 있다가
+    //   `commitManualValue(p.row, …)`를 재실행한다 — 그 사이 사용자가 '이전'으로 완료 행에
+    //   들어가 있으면 두 좌표가 갈린다).
+    //
+    //   피해는 **값 소실**이다. 이 분기의 보류 경로는 공유 코어(`persistCellValue`)를 쓰지 않고
+    //   `persistSession(pendingValidation, true)`로 세션을 **통째로 다시 조립**하는데, 그 조립은
+    //   `completedRows`(+백업·activeRow·skipped)만 rows에 싣는다(:633~644). 재시도 대상 행이
+    //   그 어느 집합에도 없으면 **이미 영속돼 있던 그 행이 rows에서 통째로 빠진다** — 값뿐 아니라
+    //   `sheetRow`/`syncState`까지 사라져 다음 sync가 같은 행을 **중복 append**한다.
+    //   이어서 [확인]은 `proceedAfterCommit(awaiting)`을 부르므로 `finalizeRowCompletion`도
+    //   **남의 행**(검토 중인 행)에 걸리고, 실제 커밋 행은 완료 부기를 영영 못 받는다.
+    //
+    //   ⚠️ **컬럼은 가드하지 않는다**(리뷰 표기 「행·컬럼 가드 없음」과 갈리는 지점 — 산출물 보고).
+    //   `reviewWait`은 **행 스코프** 문맥이다: 센티넬 `colId`는 포인터(첫 음성 컬럼)일 뿐이고,
+    //   사용자는 그 행의 **아무 칩이나** 눌러 고친다(v0.34.0 A3). 컬럼까지 요구하면 첫 컬럼 외
+    //   전부가 흐름 밖으로 떨어져 「검토 중 정정」 계약([NAV-FILLED-CELL-1] 계열)이 깨진다.
+    //   오라클: tests/v049-r4-m1-crossrow-ownsflow.spec.ts
+    const ownsReviewWait = awaiting?.kind === 'reviewWait' && awaiting.row === row;
+    const ownsCell = !!awaiting && awaiting.kind !== 'reviewWait' && awaiting.kind !== 'atEnd'
+      && awaiting.row === row && awaiting.colId === colId;
+    const ownsFlow = ownsReviewWait || ownsCell;
     if (violation && ownsFlow) {
       epochRef.current++;
       cancelTts();
@@ -4859,11 +4882,14 @@ export function useVoiceSession() {
       }
     }
 
-    if (awaiting?.kind === 'reviewWait') {
+    // M1 — 착지도 **같은 술어**를 쓴다(위 `ownsReviewWait`/`ownsCell`). 종전엔 여기서 같은 조건을
+    //   다시 손으로 적었고, 그 사본에도 행 가드가 없어 다른 행 커밋이 남의 검토 대기를 재무장했다
+    //   (값은 공유 코어가 이미 옳게 저장했으므로 이쪽 피해는 오착지·오낭독이지만, 같은 결함이다).
+    if (ownsReviewWait) {
       epochRef.current++;
       cancelTts();
       await proceedAfterCommit(awaiting); // 검토 대기 재무장(갱신값 재낭독)
-    } else if (awaiting && awaiting.kind !== 'atEnd' && awaiting.row === row && awaiting.colId === colId) {
+    } else if (ownsCell) {
       epochRef.current++;
       cancelTts();
       // v0.47.0 W2 — 수정 재청취 중 수동 재커밋도 「수정 성공」이다(amber→green 전환 신호).
