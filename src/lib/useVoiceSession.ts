@@ -892,6 +892,17 @@ export function useVoiceSession() {
       //   종전엔 호출부가 각자 세웠고(`jumpToRow` :1876 · `gotoAdjacentField` :2069) **행 경계
       //   착지 두 곳**(goNextRow 마지막 행 · gotoAdjacentRow 첫 행)이 빠져 있었다 —
       //   분기마다 배선하면 다음 착지에서 또 빠진다(M3와 같은 형태). 여기서 소유한다.
+      //
+      //   ⚠️ **`setPhase`는 'complete'를 벗어날 때 `endReached`를 함께 내린다**(sessionStore 계약).
+      //   호출부를 조건부로 고치는 대신 여기서 무조건 세우는 것이 그 부수효과를 넓히는지
+      //   **전수 확인했다** — 넓히지 않는다:
+      //     · `advance`·`jumpToRow`·`gotoAdjacentField`·`enterModifyMode`는 이 함수 **앞에서**
+      //       이미 'active'를 세운다(같은 값 재기록 = no-op).
+      //     · `resume`은 :4332에서 **무조건** `setPhase('active')`를 먼저 부른다 —
+      //       `atEnd`/`reviewWait` 폴스루(_ASK-fix49 Q5가 「선행 파손」으로 남겨 둔 그 경로)의
+      //       `endReached` 해제는 **이 변경 이전부터** 그 줄이 하고 있었다. 여기서 새로 생기지 않는다.
+      //     · 남는 것은 목표인 행 경계 착지 두 곳뿐이고, 거기서 `endReached`가 참일 수 있으려면
+      //       **미완료 행의 atEnd**여야 하는데 그 상태는 같은 라운드의 M2가 구조적으로 닫았다.
       useSessionStore.getState().setPhase('active');
       // v0.12.0 AREA2 V4 — 수정 재안내면 '수정 값' 인디케이터를 켜고, 일반 안내면 해제한다.
       useSessionStore.getState().setModifyIndicator(
