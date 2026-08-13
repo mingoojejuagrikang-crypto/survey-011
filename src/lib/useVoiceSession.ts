@@ -610,7 +610,33 @@ export function useVoiceSession() {
       for (const k of Object.keys(mergedClips)) {
         if (brokenClipKeysRef.current.has(mergedClips[k])) delete mergedClips[k];
       }
-      const values = composeRowValues(columns, r);
+      // 🔴 v0.49 r5 Z3(claude #1) — **이미 기록된 행의 파생값은 다시 파생하지 않는다.**
+      //   `composeRowValues`는 자동 컬럼을 **매 persist마다 재계산**한다. 사람이 넣은 값이 아니라
+      //   스키마·시계에서 나오는 값이라, 재계산 결과가 기록 시점과 달라질 수 있다:
+      //     · 날짜 컬럼 `'오늘'` — `autoValue`가 **호출 시각의 로컬 날짜**를 돌려준다. 자정을
+      //       넘긴 세션(현장 새벽 작업·긴 세션)의 **모든 기존 행**이 다음 날짜로 다시 쓰인다.
+      //     · 순환 컬럼 자릿수(`spanOf`) — 세션 중 스키마가 갈리면 전 행의 값이 밀린다.
+      //       (실측: `sessionColumnsRef`가 세션 시작에 컬럼을 동결하고 VoiceScreen이 keep-alive라
+      //        **현행 UI에서는 이 축이 도달 불가**다. 아래 방어는 두 축 공통의 기전을 막는다.)
+      //   피해는 「기록 안 됨」이 아니라 **능동 덮어씀**이다: 아래 diff가 `synced`를 `dirty`로
+      //   강등하면 다음 동기화가 그 행을 시트에서 **in-place UPDATE**한다 — 농가 의사결정에 쓰이는
+      //   프로덕션 시트의 확정 행이, 사용자가 아무것도 안 했는데 조용히 다른 날짜로 바뀐다.
+      //   👉 처방: 기존 행에 이미 있는 **자동(비-사용자입력) 컬럼 값은 그대로 승계**한다. 사람이
+      //      넣는 컬럼(voice/touch)은 종전대로 라이브 스토어가 이긴다 — 강등 diff의 **본래 목적**
+      //      (사용자 정정을 시트에 밀어넣기)은 손대지 않는다.
+      //   ⚠️ 정상 경우엔 **완전 무해**다: seq·options 값은 행 인덱스에서 나오므로 재계산 결과가
+      //      기존 값과 같다. 갈리는 것은 위 두 드리프트뿐이고, 그때 옳은 것은 **기록 시점 값**이다.
+      //   ⚠️ 기존 행에 **없는** 키(스키마에 컬럼이 새로 생긴 경우)는 승계 대상이 아니다 — 새로
+      //      계산한 값이 그대로 들어간다(빈 칸으로 굳지 않는다).
+      //   오라클: tests/v049-r5-z3-auto-drift.spec.ts
+      const fresh = composeRowValues(columns, r);
+      const values = existingRow
+        ? Object.fromEntries(Object.entries(fresh).map(([id, v]) => {
+          const col = columns.find((c) => c.id === id);
+          const kept = existingRow.values[id];
+          return [id, col && !isUserInputColumn(col) && kept !== undefined ? kept : v];
+        }))
+        : fresh;
       // F1: preserve the row's sheetRow/syncState across re-persists. If a previously-synced row's
       // value changed in this persist, demote synced→dirty so the next sync UPDATEs it in place
       // (no duplicate append). Unchanged synced rows keep 'synced'.
