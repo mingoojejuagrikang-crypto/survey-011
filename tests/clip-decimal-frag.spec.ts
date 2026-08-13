@@ -140,11 +140,13 @@ const MOCK_INIT_SCRIPT = `
 
 // ─── Helpers ────────────────────────────────────────────────────
 
-async function fireStt(page: Page, transcript: string, waitMs = 400) {
-  await page.evaluate((t) => {
+/** v0.49 r4 M3 — `confidence` 인자 추가(기본 0.95 = 종전 동작 불변). 저신뢰 거절 분기도
+ *  [CLIP-DECIMAL-FRAG-1]의 대상이라 이 하네스에서 유도할 수 있어야 한다. */
+async function fireStt(page: Page, transcript: string, waitMs = 400, confidence = 0.95) {
+  await page.evaluate(({ t, c }) => {
     (window as unknown as { __mockSTT?: { fireResult: (t: string, c: number) => void } })
-      .__mockSTT?.fireResult(t, 0.95);
-  }, transcript);
+      .__mockSTT?.fireResult(t, c);
+  }, { t: transcript, c: confidence });
   await page.waitForTimeout(waitMs);
 }
 
@@ -322,4 +324,55 @@ test('비-소수 재질문(미파싱)은 여전히 클립을 재시작한다 —
   const sessions = await getIdbSessions(page);
   const row1 = sessions[sessions.length - 1].rows.find((r) => r.index === 1)!;
   expect(row1.values.c8).toBe('29.9');
+});
+
+// ─── 🔴 v0.49 r4 M3 — 거절 분기도 [CLIP-DECIMAL-FRAG-1]의 대상이다 ──────────────────
+//
+// r3 #6이 거절 종단을 단일화하며 편입한 분기들 중 KNOWN_NOISE는 `startClip()`을 **무조건**
+// 불렀고, 저신뢰 거절도 마찬가지였다. 소수부 타깃 재질문 중 그 두 발화가 들어오면 위 세 스펙이
+// 지키는 「원본 전체발화 버퍼 보존」이 그대로 깨진다 — 파싱 실패 분기만 보호받고 있었다.
+// M3는 클립 재시작 판정을 종단(`rejectValue`)으로 옮겨, 소수 문맥에서는 호출부 요청을 무시한다.
+
+test('M3 — 소수 재질문 중 KNOWN_NOISE 거절도 클립을 재시작하지 않는다', async ({ page }) => {
+  await setupAndStart(page);
+  await fireStt(page, '29 점 부', 600);
+  await waitForActiveChip(page, '횡경'); // 재질문 중(정수부 29 보존)
+
+  const before = (await getClipLog(page)).filter((e) => e.extra?.startsWith('clip_started')).length;
+  await fireStt(page, '변경', 600); // KNOWN_NOISE 동음이의 거절
+  await waitForActiveChip(page, '횡경');
+
+  const after = (await getClipLog(page)).filter((e) => e.extra?.startsWith('clip_started')).length;
+  expect(after - before, '소수 재질문 중 거절이 원본 슬롯을 폐기했다').toBe(0);
+  // 문맥이 살아 있고 그 사실을 말한다(무고지 합성 방지 — v049-r4-m3-reject-fraction이 본가).
+  expect((await ttsLog(page)).at(-1)).toContain('소수점 아래');
+
+  // 조각 합성이 그대로 성립한다.
+  await fireStt(page, '구', 600);
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '22.2', 800);
+  await page.waitForTimeout(1500);
+  const sessions = await getIdbSessions(page);
+  expect(sessions[sessions.length - 1].rows.find((r) => r.index === 1)!.values.c8).toBe('29.9');
+});
+
+test('M3 — 소수 재질문 중 **저신뢰** 거절도 클립을 재시작하지 않는다(리뷰 미지목 분기)', async ({ page }) => {
+  await setupAndStart(page);
+  await fireStt(page, '29 점 부', 600);
+  await waitForActiveChip(page, '횡경');
+
+  const before = (await getClipLog(page)).filter((e) => e.extra?.startsWith('clip_started')).length;
+  await fireStt(page, '콜록', 600, 0.2); // 파싱 실패 + 저신뢰 → stt_rejected_low_confidence
+  await waitForActiveChip(page, '횡경');
+
+  const after = (await getClipLog(page)).filter((e) => e.extra?.startsWith('clip_started')).length;
+  expect(after - before, '저신뢰 거절이 원본 슬롯을 폐기했다').toBe(0);
+  expect((await ttsLog(page)).at(-1)).toContain('소수점 아래');
+
+  await fireStt(page, '구', 600);
+  await waitForActiveChip(page, '종경');
+  await fireStt(page, '22.2', 800);
+  await page.waitForTimeout(1500);
+  const sessions = await getIdbSessions(page);
+  expect(sessions[sessions.length - 1].rows.find((r) => r.index === 1)!.values.c8).toBe('29.9');
 });

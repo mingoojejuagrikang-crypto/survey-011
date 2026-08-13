@@ -1348,10 +1348,40 @@ export function useVoiceSession() {
     playBeep('reject');
   }, []);
 
-  /** 거절 종단 — 표면 + 사유 TTS. 소수부 타깃 재질문만 전용 문구(확정표 #3 「현행 유지」)라
-   *  표면(`armRejectCue`)만 쓰고 TTS는 호출부가 말한다. */
-  const rejectValue = useCallback(async (reason: 'low_confidence' | 'parse_failed') => {
+  /** 거절 종단 — 표면 + 사유 TTS.
+   *
+   *  🔴 v0.49 r4 M3(claude r3 #3) — **소수부 타깃 재질문 문맥을 이 종단이 직접 안다.**
+   *  종전엔 「소수 문맥이면 전용 문구」를 각 분기가 알아서 처리했고, r3 #6이 신규 편입한 두 분기
+   *  (컬럼명 일치 · KNOWN_NOISE)가 그 처리를 빠뜨렸다. 그러면 이렇게 된다:
+   *    ① `armRejectCue`의 `setReaskReason`이 `reaskDecimalWhole`을 **함께 지운다**(store 계약) →
+   *       화면 큐가 「111 점, 소수점 아래…」에서 일반 사유로 바뀐다.
+   *    ② TTS도 일반 사유만 읽는다.
+   *    ③ 그런데 `awaiting.fractionWhole`은 **살아 있다**(분기가 awaiting을 안 건드리고 return).
+   *    👉 사용자는 소수 문맥이 끝난 줄 아는데 다음 '오'는 `111.5`로 합성된다 — **무고지 커밋**.
+   *  게다가 KNOWN_NOISE는 `startClip()`을 무조건 불러 [CLIP-DECIMAL-FRAG-1](소수 재질문 중
+   *  클립 재시작 금지 — 원본 전체발화 버퍼 폐기)까지 어겼다.
+   *
+   *  ⚠️ **분기마다 배선하지 않는다** — #6이 세운 그 교훈이 정확히 여기서 또 깨졌다. 재검증 중
+   *  리뷰가 지목하지 않은 **세 번째 구멍**을 찾았다: 저신뢰 거절(`stt_rejected_low_confidence`)도
+   *  소수 문맥에서 도달 가능하고 같은 두 결함을 그대로 갖고 있었다. 그래서 문맥 판정을 종단이
+   *  소유하고, 분기는 「클립을 다시 시작할 것인가」만 옵션으로 넘긴다(그건 분기 고유 계약이다 —
+   *  단, 소수 문맥에서는 종단이 그 요청을 **무시**한다. 그게 [CLIP-DECIMAL-FRAG-1]이다).
+   *  오라클: tests/v049-r4-m3-reject-fraction.spec.ts */
+  const rejectValue = useCallback(async (
+    reason: 'low_confidence' | 'parse_failed',
+    awaiting?: AwaitingField | null,
+    opts?: { restartClip?: boolean },
+  ) => {
     armRejectCue(reason);
+    const whole = awaiting ? fractionWholeOf(awaiting) : null;
+    if (whole != null) {
+      // [CLIP-DECIMAL-FRAG-1] — 클립 재시작 금지(호출부 요청 무시). 정수부를 다시 실어 화면 큐가
+      //   TTS와 같은 문구를 유지한다(확정표 #3 「현행 유지」 — 문구는 사유와 무관하게 하나다).
+      useSessionStore.getState().setDecimalReason(String(whole), reason);
+      await say(decimalReaskPrompt(whole));
+      return;
+    }
+    if (opts?.restartClip) recorderRef.current?.startClip();
     await say(REASK_TTS[reason]);
   }, [armRejectCue, say]);
 
@@ -2719,15 +2749,18 @@ export function useVoiceSession() {
         logCell({ type: 'stt_rejected_col_name', text, row: awaiting.row, colId: awaiting.colId });
         useSessionStore.getState().setRecognized('');
         // #6 — 거절 종단 단일화(비프 + §2 쌍 TTS). 종전엔 무비프 + W2 이전 인라인 리터럴이었다.
-        await rejectValue('parse_failed');
+        // M3 — `awaiting`을 넘긴다: 소수 문맥이면 종단이 그 문맥의 문구·큐로 간다(그 헤더).
+        await rejectValue('parse_failed', awaiting);
         return;
       }
       const KNOWN_NOISE = /^(변경|성경|광경|구정|혜정|당장|경정)$/;
       if (KNOWN_NOISE.test(text.trim())) {
         logCell({ type: 'stt_rejected_col_name', text, row: awaiting.row, colId: awaiting.colId, extra: 'known_noise' });
-        recorderRef.current?.startClip();
         useSessionStore.getState().setRecognized('');
-        await rejectValue('parse_failed');
+        // M3 — 클립 재시작 **요청**은 여기 남지만(전체 재발화 유도 분기), 소수 문맥에서는 종단이
+        //   그 요청을 무시한다([CLIP-DECIMAL-FRAG-1]). 종전엔 여기서 무조건 재시작해 원본
+        //   전체발화 버퍼를 폐기했다.
+        await rejectValue('parse_failed', awaiting, { restartClip: true });
         return;
       }
       // v0.34.0 O2 [STT-17] — 값 대기 중 단독 응답어("예/네/응/어" 등)는 수사로 커밋하지 않는다.
@@ -2742,17 +2775,9 @@ export function useVoiceSession() {
         // #6 — 표면(큐+비프)은 두 갈래 **앞에서** 한 번 무장한다. 소수부 타깃 재질문도 「값을
         //   안 받았다」는 점에서 같은 거절이고, 갈린 뒤에 배선하면 다음 갈래가 조용히 빠진다
         //   (파싱 실패 분기가 같은 이유로 이미 그렇게 한다).
-        armRejectCue('parse_failed');
-        const respFracWhole = fractionWholeOf(awaiting);
-        if (respFracWhole != null) {
-          // FB#4 — 화면 재질문 큐도 TTS와 같은 문구를 표시(SSOT 상수 공유). 정수부를 store에 실어
-          //   ReaskCue가 decimalReaskPrompt로 렌더한다(글자까지 일치). 확정표 #3 「현행 유지」.
-          useSessionStore.getState().setDecimalReason(String(respFracWhole));
-          await say(decimalReaskPrompt(respFracWhole));
-        } else {
-          recorderRef.current?.startClip();
-          await say(REASK_TTS.parse_failed);
-        }
+        // M3 — 그 두 갈래가 이제 **종단 안**에 있다. 여기 인라인으로 두면 형제 분기가 같은 갈래를
+        //   또 손으로 적어야 하고, 그게 이 결함의 형태였다(FB#4 문구 계약은 종단이 그대로 승계).
+        await rejectValue('parse_failed', awaiting, { restartClip: true });
         return;
       }
     }
@@ -2783,9 +2808,11 @@ export function useVoiceSession() {
     if (currentCol && (currentCol.type === 'int' || currentCol.type === 'float') && fractionWholeOf(awaiting) == null) {
       if (alts.length <= 1 && isAmbiguousSingleSyllable(text)) {
         logCell({ type: 'stt_rejected_ambiguous_syllable', text, confidence, row: awaiting.row, colId: awaiting.colId });
-        recorderRef.current?.startClip();
         useSessionStore.getState().setRecognized('');
-        await rejectValue('parse_failed');
+        // M3 — 이 분기의 가드(`fractionWholeOf(awaiting) == null`)가 소수 문맥을 이미 배제하므로
+        //   종단의 문맥 판정은 여기서 no-op이다. 그래도 **같은 종단**을 쓴다(형태 통일 —
+        //   가드가 언젠가 완화되면 조용히 새는 것이 정확히 이 결함의 형태였다).
+        await rejectValue('parse_failed', awaiting, { restartClip: true });
         return;
       }
     }
@@ -2824,8 +2851,10 @@ export function useVoiceSession() {
         row: awaiting.row, colId: awaiting.colId,
         colName: awaiting.name, extra: `tolerance:${recognitionTolerance},minConf:${minConfidence}`,
       });
-      recorderRef.current?.startClip(); // restart clip
       useSessionStore.getState().setRecognized('');
+      // 🔴 v0.49 r4 M3 — 클립 재시작이 **종단으로 옮겨졌다**(요청만 넘긴다). 여기가 리뷰가
+      //   지목하지 않은 세 번째 구멍이었다: 소수부 타깃 재질문 중 저신뢰 파싱 실패도 이 분기로
+      //   오는데, 무조건 재시작이 [CLIP-DECIMAL-FRAG-1]을 어기고 소수 큐까지 지웠다(그 헤더).
       // 🔴 v0.49 r2 B2(민구 결정 08-13 ⓐ) — **거절 비프.** 아래 주석이 "부정 비프가 전담한다"고
       //   적어 온 그 비프다(합집합 C2: 배선된 적이 없어 전제가 허구였다). TTS **이전에** 낸다 —
       //   커밋 확인음이 세운 「신호음 → 말」 순서 계약과 같다(민구 지정 순서).
@@ -2835,7 +2864,7 @@ export function useVoiceSession() {
       //   (`ReaskCue`, 상세본 유지)와 부정 비프가 전담한다.
       // 🔴 v0.49 r3 #6 — 큐·비프·TTS 세 신호를 `rejectValue` 한 곳으로 모았다(형제 4분기가
       //   그 셋 중 둘을 빠뜨린 채 살아 있던 것이 결함이다 — 그 헤더 참조).
-      await rejectValue('low_confidence');
+      await rejectValue('low_confidence', awaiting, { restartClip: true });
       return;
     }
 

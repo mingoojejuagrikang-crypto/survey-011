@@ -211,7 +211,10 @@ interface SessionState {
   setModifyIndicator: (m: SessionState['modifyIndicator']) => void;
   setReaskReason: (r: SessionState['reaskReason']) => void;
   /** v0.36.0 FB#4 — 소수 재질문 진입: reason='parse_failed' + 정수부를 함께 세운다(원자적). */
-  setDecimalReason: (whole: string) => void;
+  /** 🔴 v0.49 r4 M3 — `reason`이 붙었다. 소수부 타깃 재질문 문맥에서 거절되는 사유는 파싱 실패만이
+   *  아니다(저신뢰 거절도 같은 문맥에서 난다) — 사유를 'parse_failed'로 못박으면 `data-reason`이
+   *  실제와 갈린다. 화면 **문구**는 정수부가 실려 있으면 어느 사유든 소수 프롬프트로 같다. */
+  setDecimalReason: (whole: string, reason?: 'low_confidence' | 'parse_failed') => void;
   setActiveCol: (i: number) => void;
   setActiveRow: (r: number) => void;
   setRowValue: (row: number, colId: string, v: string) => void;
@@ -288,7 +291,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // reaskReason의 모든 일반 갱신은 소수 정수부를 함께 정리한다(스테일 방지). 소수 재질문만
   //   setDecimalReason이 이 뒤에 정수부를 다시 세운다(호출 순서: 일반 setReaskReason → setDecimalReason).
   setReaskReason: (reaskReason) => set({ reaskReason, reaskDecimalWhole: null }),
-  setDecimalReason: (whole) => set({ reaskReason: 'parse_failed', reaskDecimalWhole: whole }),
+  setDecimalReason: (whole, reason = 'parse_failed') => set({ reaskReason: reason, reaskDecimalWhole: whole }),
   setActiveCol: (activeColIdx) => set({ activeColIdx }),
   setActiveRow: (activeRow) => set({ activeRow }),
 
