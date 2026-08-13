@@ -168,6 +168,7 @@ async function jumpDeltas(page: Page): Promise<Array<{ from: number; to: number 
 
 test('F13 — "다음"은 완료 행을 건너뛰지 않는다: jump delta 전 구간 ±1', async ({ page }) => {
   const TOTAL = 5;
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT }); // M7 [TEST-GUM-1]
   await installVoiceMocks(page);
   await seedAndOpenVoiceTab(page, settingsRows(TOTAL, 'c8-f13-delta'));
   await clickStart(page);
@@ -231,6 +232,7 @@ test('F13 — "다음"은 완료 행을 건너뛰지 않는다: jump delta 전 �
 
 test('F13 — 마지막 행(미완료)에서 "다음"은 멈춘다: 이동·끝도달 전환 없음 + "마지막 행입니다" 안내', async ({ page }) => {
   const TOTAL = 5;
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT }); // M7 [TEST-GUM-1]
   await installVoiceMocks(page);
   await seedAndOpenVoiceTab(page, settingsRows(TOTAL, 'c8-f13-last-stop'));
   await clickStart(page);
@@ -266,6 +268,7 @@ test('F13 — 마지막 행(미완료)에서 "다음"은 멈춘다: 이동·끝�
 
 test('F13 — 마지막 행(완료)에서 "다음"은 검토 대기를 재무장하며 멈춘다', async ({ page }) => {
   const TOTAL = 3;
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT }); // M7 [TEST-GUM-1]
   await installVoiceMocks(page);
   await seedAndOpenVoiceTab(page, settingsRows(TOTAL, 'c8-f13-last-review'));
   await clickStart(page);

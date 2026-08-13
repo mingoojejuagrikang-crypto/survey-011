@@ -18,6 +18,9 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { BASE } from './baseUrl';
+// 🔴 v0.49 r4 M7(claude r3 #13) — [TEST-GUM-1] 최소 스텁. 이 스펙은 이번 diff가 단언을 고쳤는데
+//   게이트 밖이고 gUM 스텁이 없어 `clickStart`에서 전멸했다 = **검증자가 없는 수정**이었다.
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 import { reviewWaitAbsorbTts } from '../src/lib/voicePrompts';
 
 // ── 와이어프레임 §[2](2026-07-24 확정) 반영 ────────────────────────────────────────────────
@@ -220,6 +223,7 @@ async function getIdbSessions(page: Page) {
 }
 
 async function setupAndStart(page: Page, settings: unknown = BASE_SETTINGS) {
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT }); // M7 [TEST-GUM-1]
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(
@@ -487,6 +491,7 @@ async function setupTrendAndStart(page: Page) {
     }
     await route.fulfill({ status: 404, body: 'unexpected' });
   });
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT }); // M7 [TEST-GUM-1]
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(

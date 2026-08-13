@@ -30,6 +30,8 @@ import {
 import { effectiveSampleKey } from '../src/lib/columnFlags';
 import type { Column } from '../src/types';
 import { BASE } from './baseUrl';
+// 🔴 v0.49 r4 M7(claude r3 #13) — [TEST-GUM-1] 최소 스텁(위 manual-input과 같은 사유).
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 // A11 — 「어제」는 달력 연산으로 만든다(DST 함정). 사유는 fixtures/localDate.ts 헤더.
 import { daysAgoLocal } from './fixtures/localDate';
 
@@ -207,6 +209,7 @@ async function seedAndBoot(
   opts: { withToken: boolean; record?: PersistedPastIndexRecord; sheetsFail?: boolean },
 ) {
   await stubSheets(page, { fail: opts.sheetsFail });
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT }); // M7 [TEST-GUM-1]
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(

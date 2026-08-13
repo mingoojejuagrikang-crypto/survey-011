@@ -1181,10 +1181,21 @@
     `v54-30rows` · `v54-scenarios` · `v54-voice-data`,
     그리고 **`v0440-c8-flow`의 앞 3개 테스트**(같은 파일 `:304`에 `GUM_GRANT_SCRIPT`가 있지만
     **그 아래 테스트들에만** 깔린다 — 판정 단위가 파일이 아니라 **테스트**임을 보여주는 사례).
+  - 🔴 **2026-08-13 v0.49 r4 M7 진행분 — 3개가 목록에서 빠진다(24 → 21).** r3가 단언을 고친
+    3스펙이 「검증자 없는 수정」이라 최소 스텁을 깔았다:
+    `manual-input`(14 red → 14 green) · `past-index-fallback`(3 red → 5 green, 전량) ·
+    `v0440-c8-flow`의 앞 3개 테스트(F13, red → green). 앞 둘은 배포 게이트에 편입했다.
+    ⚠️ **`v0440-c8-flow`는 게이트 밖에 남는다** — F18 2건(`:364` 승인 후 준비 확인 ·
+    `:415` 우회 심)이 스텁을 깔고도 red다. 사유가 gUM 스텁 축이 아니다: 화면 전환 지연이
+    20~21초로 측정된다(= 준비 확인이 끝나지 않는다). fake 트랙이 진짜 MediaStream이 아니라
+    레코더 준비 판정이 완주하지 못하는 축으로 보이며, 이는 **준비 심(readiness seam)** 문제라
+    r4 범위(M7 = "최소 gUM 스텁") 밖이다 → [TEST-GUM-2]로 분리 등재.
   - **실측 red 36건**(2026-08-13, HEAD `5f6d67f` 워크트리에서도 동일 = 코드 회귀 아님):
     `anomaly-touch-buttons` 11 · `correction-flow`+`nav-unidirectional` 17 · `past-index-fallback` 3 ·
     `v0440-c8-flow` 3 · `log-replay` 2. 전부 같은 줄
     (`[data-testid="voice-active-state"]` 대기)에서 실패한다.
+    (r4 M7 이후 실측: `manual-input` 0 · `past-index-fallback` 0 · `v0440-c8-flow` 2 —
+    남은 2건은 위 [TEST-GUM-2] 축이다.)
 - **더 나은 해법(미적용 — r2 A15는 「검토만」이 지시였다):** `playwright.config.ts`의
   `launchOptions.args`에 `--use-fake-device-for-media-stream`을 얹으면 24곳을 개별로 고치지 않고
   구조적으로 닫힌다.
@@ -1193,8 +1204,26 @@
   JS 오버라이드가 브라우저 플래그보다 뒤에 적용되므로 거부 시나리오는 그대로 성립한다.
   ⚠️ 다만 공유 파일(모든 프로젝트 공통)이라 **적용 전에 게이트 전량 1회**가 필요하다 —
   이번 라운드에서는 실행하지 않았다. Larry/민구 판단 대기.
-- **현재 상태:** ⚠️함정 등재 + 8 spec 회피 적용(게이트 안은 전량 보호). **게이트 밖 24곳 무방비 —
-  실측 red 36건.** config 레벨 해결은 제안만.
+- **현재 상태:** ⚠️함정 등재 + 8 spec 회피 적용(게이트 안은 전량 보호). **게이트 밖 21곳 무방비**
+  (r4 M7이 3곳 해소 — `manual-input`·`past-index-fallback`은 게이트 편입, `v0440-c8-flow` F13 3건).
+  config 레벨 해결은 제안만.
+
+### [TEST-GUM-2] gUM 스텁을 깔아도 **준비 확인이 완주하지 않는** 스펙이 있다 — `v0440-c8-flow` F18 2건
+- **증상(2026-08-13 v0.49 r4 M7):** `GUM_GRANT_SCRIPT`가 이미 깔린 `tests/v0440-c8-flow.spec.ts`
+  `:364`(*승인 후 준비 확인이 끝나야 전환된다*)·`:415`(*우회 심 `__micSettleSkipForTest`는 지연만
+  생략한다*) 2건이 여전히 red다. 실패 메시지가 축을 그대로 말한다:
+  「승인→화면 전환 지연 **21095ms** — 준비 확인이 안 끝난다」·「우회 경로인데 지연 **20080ms** —
+  심이 죽었다」. 같은 파일의 F13 3건은 스텁만으로 green이 됐다(= [TEST-GUM-1] 축은 해소됐다).
+- **가설(미확정):** `fixtures/gum.ts` 헤더가 명시하듯 fake 트랙은 **진짜 MediaStream이 아니다** —
+  `createMediaStreamSource`·`MediaRecorder`가 던지고 제품이 catch한다. 그 폴백 경로에서
+  「준비 완료」 판정이 완주하지 못하는 것으로 보인다(F18은 정확히 그 판정의 오라클이다).
+  gUM 승인/거부 축이 아니라 **준비 심(readiness seam)** 축이다.
+- **범위:** `v0440-c8-flow`의 F18 2건. 이 파일은 그래서 **배포 게이트 밖에 남는다** —
+  나머지 F13 3건 + WP-1c 등은 green이다.
+- **다음 수순 제안:** [TEST-GUM-1]이 이미 제안한 `--use-fake-device-for-media-stream`
+  (config `launchOptions.args`)이 이 축까지 한 번에 닫을 가능성이 높다(진짜 스트림이 서므로
+  레코더 준비가 실제로 완주한다). 공유 파일이라 적용 전 게이트 전량 1회가 필요하다.
+- **현재 상태:** ⚠️함정 등재(v0.49 r4 M7에서 분리). 미해결 — `v0440-c8-flow` 게이트 밖 유지.
 
 ### [TEST-ANIMATION-ZERO-1] 전역 `animation-duration:0ms!important`가 실제 시각 결함을 false-green으로 가린다
 - **증상(C1에서 확정):** 기존 `v039-active-zones` 픽스처로는 꺼진 셀 computed opacity 테스트가 green이었고, 셀별 delay를 제거해도 계속 green이라 반증이 불가능했다. 전역 0ms를 끄자 제품 수정 전 코드에서 즉시 `0.62`가 관측돼 `[UI-DOT-GHOST-1]` 실제 결함이 드러났다.
