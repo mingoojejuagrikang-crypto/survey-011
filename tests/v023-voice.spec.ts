@@ -12,6 +12,7 @@
  *  STT/TTS 주입 + 설정 시드는 trend-alert.spec.ts 패턴 재사용. 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27]).
  */
 import { test, expect, type Page } from '@playwright/test';
+import { GUM_GRANT_SCRIPT, GUM_DENY_SCRIPT } from './fixtures/gum';
 import { BASE } from './baseUrl';
 
 // ── 와이어프레임 §[2](2026-07-24 확정) 반영 ────────────────────────────────────────────────
@@ -109,9 +110,15 @@ async function stubSheets(page: Page) {
   });
 }
 
-async function setupAndStart(page: Page) {
+/** @param gum 마이크 획득 스텁(v0.49 r2). 로컬 헤드리스에서 `start()`의 gUM이 **응답하지 않아**
+ *    세션 시작 자체가 막히므로 어느 쪽이든 하나는 깔아야 한다(제품 회귀 아님).
+ *    · `'grant'`(기본) — 정상 마이크. `fixtures/gum.ts` 계약상 **재연결 배너가 뜨지 않는다**.
+ *    · `'deny'` — 즉시 `NotAllowedError`. `init()`이 false로 **즉시** 끝나 시작은 그대로 진행되고,
+ *      micLost 래치 → 재연결 배너가 선다. **배너를 재는 B3가 이걸 쓴다**(실기기 BT 끊김과 동형). */
+async function setupAndStart(page: Page, gum: 'grant' | 'deny' = 'grant') {
   await page.setViewportSize(PHONE_375);
   await stubSheets(page);
+  await page.addInitScript({ content: gum === 'deny' ? GUM_DENY_SCRIPT : GUM_GRANT_SCRIPT });
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate(
@@ -318,7 +325,9 @@ test('B2 — 재질문 사유 큐: 머지 전(reaskReason 미존재)엔 안전�
 
 // ─── B3 ─────────────────────────────────────────────────────────
 test('B3 — 마이크 재연결 버튼 탭 → 쿨다운 동안 "재연결 중…"·비활성 → ~3s 후 재활성', async ({ page }) => {
-  await setupAndStart(page);
+  // 🔴 이 테스트만 **거부** 스텁이다 — 재는 것이 「마이크가 죽었을 때의 재연결 UI」라서,
+  //    정상 마이크(grant)를 깔면 배너 자체가 뜨지 않는다(fixtures/gum.ts 계약).
+  await setupAndStart(page, 'deny');
 
   // mock STT 환경엔 실제 클립 오디오 스트림이 없어, STT 활동이 시작되면 클립 레코더가 스트림 소실로
   //   판정 → micLost 래치 → 재연결 배너가 뜬다(실기기의 블루투스 끊김과 같은 경로). 한 번 STT를
@@ -390,15 +399,19 @@ test('B4 — 마지막 행 완료 후 자동 종료 안 함(대기) · 값 발�
   expect(startMeta?.meta?.autoScreenCapture).toBe(true);
   expect(startMeta?.meta?.anomalyRuleCount).toBe(1);
 
-  // ③ 종료 안내 TTS가 나갔다.
+  // ③ 끝 도달 안내 TTS가 나갔다.
+  // 🔴 v0.49 r2 W2(확정표 #5+6, 민구 08-13) — 정당 파손. 두 트리거의 문구가 **하나로 통합**됐고
+  //   ("마지막행 입력. 이번 세션에 완료된 행은 N행.") '종료하려면…' 꼬리는 삭제됐다.
+  //   종료 수단은 하단 ⏹과 '종료' 명령으로 상시 노출되므로 안내가 매번 되풀이할 이유가 없다.
   const tts1 = await ttsLog(page);
-  expect(tts1.some((t) => t.includes('종료하려면'))).toBe(true);
+  expect(tts1.some((t) => t.includes('마지막행 입력'))).toBe(true);
 
   // ④ 종료 대기 중 값 발화 → 새 행 커밋 안 하고 재안내만(자동 종료 제거의 핵심).
+  //    통합 이후 ③과 ④는 **같은 문구**다 — 같은 상태를 두 이름으로 부르지 않는다.
   const before = tts1.length;
   await fireStt(page, '99.9', 700);
   const tts2 = await ttsLog(page);
-  expect(tts2.slice(before).some((t) => t.includes('입력이 끝났습니다') || t.includes('종료하려면'))).toBe(true);
+  expect(tts2.slice(before).some((t) => t.includes('마지막행 입력'))).toBe(true);
   // 여전히 세션 유지(ready 아님).
   const stillActive = await page.locator('text=음성 입력 시작').first()
     .isVisible({ timeout: 600 }).catch(() => false);
@@ -504,11 +517,15 @@ test('B2 — 저신뢰도(conf<허용범위) 발화 → 사유 큐 low_confidenc
 
   // v0.48.1 U3(리뷰 codex medium) — 화면 사유(data-reason)와 로그만 검사하고 TTS 문자열 자체를
   // 아무도 안 재고 있었다("green이 P3 요구를 보장 안 함"). 여기서 **화면과 같은 사유 어휘가
-  // 실제로 스피커에서 나갔는지**를 전체 문자열 리터럴로 잠근다 — 제품 상수(REASK_COPY)를
-  // expected로 import하지 않고 손으로 그대로 옮겨 적는다(REASK_COPY만 바뀌어도 이 줄은 안 따라
-  // 바뀐다 — prefix가 통째로 삭제돼야만 검출되는 진짜 회귀 오라클). 반증 확인: useVoiceSession.ts
-  // 저신뢰 분기의 `REASK_COPY.low_confidence`. prefix만 지우면 이 줄이 red다(수동 확인 완료).
-  expect(await ttsLog(page)).toContain(`소리가 불확실. 잘 못 들었습니다. ${LONG_NAME} 다시 말씀해 주세요.`);
+  // 실제로 스피커에서 나갔는지**를 전체 문자열 리터럴로 잠근다 — 제품 상수(REASK_TTS)를
+  // expected로 import하지 않고 손으로 그대로 옮겨 적는다(상수만 바뀌어도 이 줄은 안 따라
+  // 바뀐다 — 통째로 삭제돼야만 검출되는 진짜 회귀 오라클).
+  // 🔴 v0.49 r2 W2(확정표 #1, 민구 08-13) — 정당 파손. 꼬리("잘 못 들었습니다. {항목} 다시 말씀해
+  //   주세요.")가 **삭제**됐고 TTS는 사유만 말한다. 화면(`ReaskCue`)은 상세본을 유지하므로
+  //   위 `data-reason` 단언과 함께 「TTS는 축약 · 화면은 상세」 계약을 이 테스트가 양쪽에서 잠근다.
+  expect(await ttsLog(page)).toContain('소리가 불확실.');
+  expect(await ttsLog(page), 'TTS 꼬리는 삭제됐다 — 되살아나면 red')
+    .not.toContain(`소리가 불확실. 잘 못 들었습니다. ${LONG_NAME} 다시 말씀해 주세요.`);
 
   // 성공 커밋 → 사유 큐 해제.
   await fireSttConf(page, '105.0', 0.95, 700);
@@ -530,7 +547,9 @@ test('B2 — 고신뢰지만 파싱 실패 → 사유 큐 parse_failed + stt_par
   expect(events.some((e) => e.type === 'stt_rejected_low_confidence')).toBe(false);
 
   // v0.48.1 U3(리뷰 codex medium) — 위 low_confidence 짝과 동일 근거: 화면·로그만이 아니라
-  // 실제 TTS 문자열을 리터럴로 잠근다. 민구 원문 예시("숫자로 인식 실패"+"횡경 다시 말씀해
-  // 주세요")와 정확히 같은 형태. 반증 확인: REASK_COPY.parse_failed prefix 제거 시 red(수동 확인).
-  expect(await ttsLog(page)).toContain(`숫자로 인식 실패. ${LONG_NAME} 다시 말씀해 주세요.`);
+  // 실제 TTS 문자열을 리터럴로 잠근다.
+  // 🔴 v0.49 r2 W2(확정표 #2, 민구 08-13) — 정당 파손. 꼬리 삭제, 사유만 말한다(#1과 같은 근거).
+  expect(await ttsLog(page)).toContain('숫자로 인식 실패.');
+  expect(await ttsLog(page), 'TTS 꼬리는 삭제됐다 — 되살아나면 red')
+    .not.toContain(`숫자로 인식 실패. ${LONG_NAME} 다시 말씀해 주세요.`);
 });

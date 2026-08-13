@@ -8,7 +8,7 @@ import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingle
 // [ENV-12] v0.43.0 #3 — 값 파싱 시도는 순수 모듈이 소유한다(부수효과 없음). 이 파일은 호출만.
 import { attemptParseValue, parseValueForCol } from './valueParseAttempt';
 import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiCommandSignal } from './voiceCommands';
-import { decimalReaskPrompt, REASK_COPY } from './voicePrompts';
+import { decimalReaskPrompt, REASK_TTS, reviewWaitAbsorbTts, endReachedTts } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, setBargeInEnabled, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColumn } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
@@ -894,6 +894,15 @@ export function useVoiceSession() {
     return out;
   };
 
+  /** 끝 도달 안내(확정표 #5+6 통합) — **트리거 두 곳이 이 한 줄을 공유한다**(`announceEndReached`
+   *  진입 · atEnd 값 흡수). 종전엔 두 곳이 서로 다른 문구를 인라인으로 들고 있었다.
+   *  🔴 완료 행 수는 **화면 `X / N`의 X와 같은 출처**(`completedRows.length`)를 쓴다 —
+   *  `total - empties.length`로 새로 세면 부분 입력·스킵 처리에서 화면과 갈린다(§2 의미 동등). */
+  const buildEndReachedTts = (empties: number[]): string => endReachedTts(
+    useSessionStore.getState().completedRows.length,
+    empties.length > 0 ? formatRowList(empties) : null,
+  );
+
   /** v0.23.0 입력탭#4(민구 결정 — "안내 후 대기"): 마지막 행 너머에 더 갈 곳이 없어도 **자동 종료하지
    *  않는다**. 빈 행이 있으면 함께 안내하고, 어느 경우든 "종료하려면 '종료' 또는 종료 버튼" 안내 후
    *  세션을 active로 유지한다. awaiting을 마지막 음성 필드에 atEnd 센티넬로 둬서 '종료'/'수정' 등 명령은
@@ -925,10 +934,7 @@ export function useVoiceSession() {
     // 조사 완료 화면(UI-c: 시각 상태어 없는 `X / N` + 종료 버튼)의 유일한 진입점이다.
     // 완료 행 검토 대기(enterReviewWait)는 같은 phase지만 [1] active 레이아웃을 쓴다.
     sess.setEndReached(true);
-    const tail = "종료하려면 '종료'라고 말씀하거나 종료 버튼을 누르세요.";
-    const msg = empties.length > 0
-      ? `마지막 행까지 입력했습니다. ${formatRowList(empties)}이 비어 있습니다. ${tail}`
-      : `마지막 행까지 입력했습니다. ${tail}`;
+    const msg = buildEndReachedTts(empties);
     sess.setLastTts(msg);
     logCell({
       type: 'session',
@@ -2436,7 +2442,11 @@ export function useVoiceSession() {
     // 여기 도달한 것은 일반 값 발화이므로 새 행으로 커밋하지 않고 종료 안내만 재생한다(자동 종료 제거).
     if (awaiting.kind === 'atEnd') {
       useSessionStore.getState().setRecognized('');
-      await say("입력이 끝났습니다. 종료하려면 '종료'라고 말씀하거나 종료 버튼을 누르세요.");
+      // 🔴 v0.49 r2 W2(확정표 #5+6) — 진입 안내와 **같은 문구**다. 종전엔 여기가 "입력이
+      //   끝났습니다…", 진입이 "마지막 행까지 입력했습니다…"로 갈려 있어 같은 상태를 두 이름으로
+      //   불렀다. 빈 행 목록은 **이 시점에 다시 센다** — 흡수 시점엔 값이 더 채워졌을 수 있다.
+      const vcEnd = voiceColsList();
+      await say(buildEndReachedTts(listEmptyRows(computeTotalRows(getSessionColumns()), vcEnd)));
       return;
     }
 
@@ -2449,7 +2459,7 @@ export function useVoiceSession() {
       //   항목 이동이고, 항목 이동은 이 상태(reviewWait)에서 거부된다 — 즉 이 안내는 앱이 곧
       //   거절할 단어를 가르쳤다. 행을 넘기는 말은 '다음행'이고, 그 말은 **어떤 안내에도**
       //   등장하지 않아 음성 전용 사용자가 완료 행에 갇혔다(V-FIX4급 안내계약 위반).
-      await say(`${awaiting.row}행은 완료된 행입니다. 수정하려면 '수정', 다음 행은 '다음행'이라고 말씀해 주세요.`);
+      await say(reviewWaitAbsorbTts(awaiting.row));
       return;
     }
 
@@ -2587,9 +2597,11 @@ export function useVoiceSession() {
       recorderRef.current?.startClip(); // restart clip
       useSessionStore.getState().setRecognized('');
       useSessionStore.getState().setReaskReason('low_confidence');
-      // v0.48.0 P3(NEW-2, 민구 제보 08-10) — 재질문 사유를 TTS 맨 앞에 붙인다. 화면(ReaskCue)이
-      // 이미 REASK_COPY로 같은 문구를 보여주고 있었는데 TTS만 사유를 안 읽었다(scout-v048 조사).
-      await say(`${REASK_COPY.low_confidence}. 잘 못 들었습니다. ${awaiting.name} 다시 말씀해 주세요.`);
+      // v0.48.0 P3(NEW-2, 민구 제보 08-10) — 재질문 사유를 TTS로 읽는다(종전엔 화면만 알았다).
+      // 🔴 v0.49 r2 W2(확정표 #1) — **사유만 말한다.** 꼬리("잘 못 들었습니다. {항목} 다시 말씀해
+      //   주세요.")는 삭제됐다: 사용자는 이미 그 셀에 답하는 중이고, 재시도 신호는 바로 위
+      //   `setReaskReason`이 띄우는 화면 큐(`ReaskCue`, 상세본 유지)와 부정 비프가 전담한다.
+      await say(REASK_TTS.low_confidence);
       return;
     }
 
@@ -2668,11 +2680,11 @@ export function useVoiceSession() {
         await say(decimalReaskPrompt(fractionWhole));
       } else {
         recorderRef.current?.startClip(); // restart clip (전체 재발화 유도 분기 — 새 클립이 옳다)
-        // v0.48.0 P3(NEW-2, 민구 제보 08-10) — 사유(REASK_COPY.parse_failed="숫자로 인식 실패")를
-        // 맨 앞에 붙인다. 민구 원문 예시("숫자로 인식 실패"+"횡경 다시 말씀해 주세요")와 일치.
-        // 꼬리("{name} 다시 말씀해 주세요.")는 바이트 불변 — decimal-targeted-reask.spec.ts:351이
-        // 부분일치(.includes)로 이 꼬리를 검증한다.
-        await say(`${REASK_COPY.parse_failed}. ${awaiting.name} 다시 말씀해 주세요.`);
+        // v0.48.0 P3(NEW-2, 민구 제보 08-10) — 사유를 TTS로 읽는다.
+        // 🔴 v0.49 r2 W2(확정표 #2) — **사유만 말한다.** 종전 꼬리("{항목} 다시 말씀해 주세요.")는
+        //   삭제됐다(#1과 같은 근거). 이 꼬리를 부분일치로 검증하던
+        //   `decimal-targeted-reask.spec.ts`의 [alt 의미보존] 케이스는 같은 커밋에서 갱신했다.
+        await say(REASK_TTS.parse_failed);
       }
       return;
     }

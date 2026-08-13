@@ -227,7 +227,8 @@ test('W2-③ 🔴 FB-G① — 마지막 행을 수정으로 마감해도 완료 
   // 마지막(유일) 행 커밋 → 끝 도달 안내.
   await fireStt(page, '33.3', 800);
   await page.waitForFunction(
-    () => document.body.innerText.includes('마지막 행까지') || !!document.querySelector('[data-testid="complete-summary"]'),
+    // v0.49 r2 W2 — 끝 도달 안내 문구가 "마지막행 입력…"으로 통합됐다(확정표 #5+6).
+    () => document.body.innerText.includes('마지막행 입력') || !!document.querySelector('[data-testid="complete-summary"]'),
     { timeout: 5000 },
   ).catch(() => { /* 안내 문구 비의존 — 아래 상태 단언이 본축 */ });
 

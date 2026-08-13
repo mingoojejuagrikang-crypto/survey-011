@@ -207,7 +207,10 @@ test('③ 완료 행 흡수 안내는 실제로 먹히는 어휘를 가르친다
   await speakWhenArmed(page, '99.9', 900);
   await waitForTtsIdle(page);
   const guide = (await ttsLog(page)).slice(before).join(' | ');
-  expect(guide).toContain('완료된 행');
+  // 🔴 v0.49 r2 W2(확정표 #4, 민구 08-13) — 정당 파손. 흡수 안내가
+  //   "{N}행은 완료된 행입니다. 수정하려면 '수정', 다음 행은 '다음행'이라고…" → **"{N}행 완료됨.
+  //   수정 또는 다음행."**으로 축약됐다. 이 테스트의 계약(「먹히는 어휘를 가르친다」)은 그대로다.
+  expect(guide).toContain('완료됨');
 
   // 🔴 F-1(08-12) 어휘 재배정으로 「다음」은 **항목 이동**이 됐고, 항목 이동은 reviewWait에서
   //    거부된다. 즉 이 안내는 앱이 곧 거절할 단어를 가르친다 — 화면을 끄고 2~3m 떨어져

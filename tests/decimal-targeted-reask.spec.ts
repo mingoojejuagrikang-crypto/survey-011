@@ -12,6 +12,7 @@
  * MockSTT/mockSynth 주입·헬퍼는 correction-flow.spec.ts 패턴을 그대로 따른다.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { GUM_GRANT_SCRIPT } from './fixtures/gum';
 import { BASE } from './baseUrl';
 
 test.setTimeout(120_000);
@@ -132,7 +133,11 @@ async function ttsLog(page: Page): Promise<string[]> {
   return page.evaluate(() => (window as any).__ttsLog || []);
 }
 
-/** voicePrompts SSOT 계약: 화면 재질문 문구는 방금 발화한 TTS와 글자까지 같아야 한다. */
+/** voicePrompts SSOT 계약: 화면 재질문 문구는 방금 발화한 TTS와 글자까지 같아야 한다.
+ *  🔴 v0.49 r2 W2(민구 08-13) — 「글자까지 일치」는 이제 **전역 계약이 아니라 이 문구의 성질**이다.
+ *  PRINCIPLES §2가 「의미 동등 + 구조적 분리」로 개정되면서 재질문 사유(#1·#2)는 TTS만 축약됐다.
+ *  소수부 타깃 재질문(`decimalReaskPrompt`, 확정표 #3 「현행 유지」)은 **분리하지 않은 쌍**이라
+ *  양쪽이 여전히 같다 — 이 헬퍼를 쓰는 5곳은 전부 그 경로다. 다른 경로에 재사용하지 마라. */
 async function expectReaskMatchesLastTts(page: Page) {
   const cue = page.locator('[data-testid="reask-cue"]');
   await expect(cue).toBeVisible();
@@ -160,6 +165,9 @@ async function getIdbSessions(page: Page) {
 }
 
 async function setupAndStart(page: Page) {
+  // v0.49 r2 — gUM 스텁(`fixtures/gum.ts`). 로컬 헤드리스에서 `start()`의 마이크 획득이
+  //   응답하지 않아 세션 시작 자체가 막힌다(제품 회귀 아님 — 같은 라운드 4스펙과 동일 처방).
+  await page.addInitScript({ content: GUM_GRANT_SCRIPT });
   await page.addInitScript(MOCK_INIT_SCRIPT);
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.evaluate((s) => { localStorage.setItem('survey-011-settings-v3', JSON.stringify(s)); }, SETTINGS);
@@ -428,7 +436,10 @@ for (const tc of [
     await setupAndStart(page);
     await fireSttAlts(page, tc.primary, [tc.alt], 500);
     await waitForActiveChip(page, '횡경');
-    expect((await ttsLog(page)).some((t) => t.includes('횡경 다시 말씀해 주세요'))).toBe(true);
+    // 🔴 v0.49 r2 W2(확정표 #2, 민구 08-13) — 정당 파손. 파싱 실패 재질문 TTS가 사유만 말하도록
+    //   축약됐다("숫자로 인식 실패."). 이 케이스가 재는 계약은 **alt 오커밋 없이 재질문으로
+    //   갔는가**이므로, 그 재질문의 새 표면으로 바꾼다(꼬리 문구가 아니라 재질문 발생이 본질).
+    expect((await ttsLog(page)).some((t) => t.includes('숫자로 인식 실패'))).toBe(true);
 
     // 정상 재발화만 커밋된다. 위험 primary의 숫자-only alt가 중간값으로 선 흔적은 없어야 한다.
     await fireStt(page, '44.4', 500);
