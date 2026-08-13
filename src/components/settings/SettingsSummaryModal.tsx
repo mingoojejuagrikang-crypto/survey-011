@@ -24,7 +24,13 @@ import { localTodayIso } from '../../lib/weekTuesday';
  */
 export type PrevSurveyState =
   | { kind: 'unknown' }             // 과거값 인덱스 미로드 — 오프라인·미로그인·시트 미설정
-  | { kind: 'none' }                // 인덱스는 있으나 이 세션 고정 키와 일치하는 과거 기록 0건
+  /** 인덱스는 있으나 이 세션 고정 키와 일치하는 과거 기록 0건.
+   *  🔴 v0.49 r3 F7(codex r2) — **`stale`을 여기도 싣는다.** 종전엔 `date`에만 있어서, 최대 14일
+   *  묵은 IDB 백업으로 계산한 0건을 **방금 시트를 조회해 0건인 것처럼** 그렸다. 백업 이후 시트에
+   *  새 일치 행이 추가됐는데 지금 fetch가 실패한 경우가 정확히 그 상황이다 — 값 손실은 없지만
+   *  조사 **전에** 보는 화면이라 판단을 오도한다. 날짜에만 출처를 밝히고 0건에는 안 밝히면
+   *  「화면은 아는 만큼만 말한다」가 반쪽이 된다(A6와 같은 근거·같은 표기). */
+  | { kind: 'none'; stale: boolean }
   /** 직전 조사일(오늘 미만 최신 회차). `stale` = 신선 캐시가 아니라 **IDB 영속 백업**에서 왔다. */
   | { kind: 'date'; iso: string; stale: boolean };
 
@@ -38,7 +44,10 @@ function prevSurveyText(s: PrevSurveyState): string {
   //   확인"하는 용도이므로, 최대 2주 묵은 인덱스에서 온 날짜를 방금 시트에서 읽은 값처럼 보이게
   //   하면 사용자가 검증할 방법이 없다(§2 — 화면은 아는 만큼만 말한다).
   if (s.kind === 'date') return s.stale ? `${s.iso} (백업)` : s.iso;
-  return s.kind === 'none' ? '기록 없음' : '미확인';
+  // F7 — 0건도 출처를 밝힌다(위 타입 주석). 표기는 날짜와 **같은 꼬리**를 쓴다: 사용자가 배워야
+  //   하는 규칙이 하나여야 하고, 두 상태에 다른 표기를 쓰면 그 자체가 새 어휘가 된다.
+  if (s.kind === 'none') return s.stale ? '기록 없음 (백업)' : '기록 없음';
+  return '미확인';
 }
 
 /**
@@ -62,8 +71,10 @@ export function readPrevSurveyState(
   // 조회 불가(고정 키 0개·헤더 미매핑)는 인덱스 미로드와 **같은 계열**이다 — 둘 다 「이 화면은
   // 답을 모른다」이지 「과거가 없다」가 아니다(A5). 사유 자체는 순수층이 들고 있다.
   if (round.kind === 'unqueryable') return { kind: 'unknown' };
-  if (round.kind === 'none') return round;
-  return { kind: 'date', iso: round.iso, stale: fresh === null };
+  // F7 — 신선도는 **답의 종류와 무관하게** 같은 출처에서 온다. 0건도 그대로 실어 보낸다.
+  const stale = fresh === null;
+  if (round.kind === 'none') return { kind: 'none', stale };
+  return { kind: 'date', iso: round.iso, stale };
 }
 
 /**
@@ -87,6 +98,11 @@ export function readPrevSurveyState(
  *    ⚠️ 이벤트 **이름을 새로 만든다** — `trend_used_stale_index`에 얹으면 이상치 알람의
  *    stale 사용 집계가 설정 팝업 열람으로 오염된다(PRINCIPLES §4: 늘릴 땐 새 이름).
  */
+/** #9 — stale 계측의 세션 스코프 dedupe 집합(의미 키). `trendSkipLoggedRef`와 같은 컨벤션이고,
+ *  차이는 소유자가 훅 ref가 아니라 모듈이라는 점뿐이다 — 이 팝업은 열 때마다 **새로 마운트**되므로
+ *  ref로 들면 열람 횟수만큼 다시 기록된다(그게 이 결함의 절반이다). */
+const staleLogged = new Set<string>();
+
 function usePrevSurvey(columns: Column[], roundDateColId: string | null): PrevSurveyState {
   const [version, setVersion] = useState(0);
   useEffect(() => subscribePastIndexStatus(() => setVersion((v) => v + 1)), []);
@@ -96,12 +112,25 @@ function usePrevSurvey(columns: Column[], roundDateColId: string | null): PrevSu
     () => readPrevSurveyState(columns, roundDateColId),
     [columns, roundDateColId, version],
   );
+  // 🔴 v0.49 r3 #9(= codex F9) — **의미 키로 dedupe한다.** 종전 dep은 `[state]`였는데, 위
+  //   `useMemo`의 키에 `version`이 들어 있고 로더가 시작·종료 **양쪽에서** `notifyStatusChanged()`를
+  //   부르므로, 같은 답이어도 매 통지마다 **새 객체**가 나와 effect가 다시 돈다. 오프라인 1회
+  //   열람에서 같은 `past_index_used_stale:summary`가 여러 번 기록됐다(A6 지표가 팝업 열람 수보다
+  //   부풀고, 그 로그를 세는 A9 단언도 함께 무의미해진다). 계약은 「한 번의 상태에 한 번」이다.
+  //   키는 `stale + iso + builtAt` — 백업이 갱신되거나 답이 바뀌면 **다시** 기록돼야 한다
+  //   (그건 새 사건이다). 모듈 스코프라 팝업 재열람에도 살아 있다(= 앱 세션 1회, A6 의도).
+  //   F7 — 0건(`none`)도 stale이면 같은 계측을 낸다. 날짜에만 계측하면 「백업으로 답했다」는
+  //   집계가 답의 종류에 따라 갈려, stale 사용률 자체가 절반만 보인다.
+  const staleKey = state.kind === 'unknown' || !state.stale
+    ? null
+    : `${state.kind}:${state.kind === 'date' ? state.iso : 'none'}:${getFallbackBuiltAt() ?? -1}`;
   useEffect(() => {
-    if (state.kind !== 'date' || !state.stale) return;
+    if (staleKey === null || staleLogged.has(staleKey)) return;
+    staleLogged.add(staleKey);
     const builtAt = getFallbackBuiltAt();
     const ageH = builtAt == null ? -1 : Math.round((Date.now() - builtAt) / 3_600_000);
     logger.log({ type: 'app', extra: `past_index_used_stale:summary,age_h=${ageH}` });
-  }, [state]);
+  }, [staleKey]);
   return state;
 }
 

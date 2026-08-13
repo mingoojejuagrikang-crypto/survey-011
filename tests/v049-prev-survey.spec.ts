@@ -174,14 +174,47 @@ test('W3-2 — IDB 폴백 + 세션 고정 키 일치: 직전 조사일 표시', 
   console.log(`✓ 폴백 인덱스 + 고정 키(농가명+라벨) 일치 → ${PREV_ROUND}`);
 });
 
-test('W3-3 — IDB 폴백 + 일치 기록 0건(다른 농가): 「이전 조사 · 기록 없음」', async ({ page }) => {
+
+/** `past_index_used_stale:summary` 로그 전량(순서 보존). W3-5/W3-3b/W3-5b가 공유한다. */
+async function staleSummaryLogs(page: Page): Promise<string[]> {
+  const extras = await page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((resolve) => {
+      const req = indexedDB.open('survey-011');
+      req.onsuccess = () => resolve(req.result);
+    });
+    const rows: { type?: string; extra?: string }[] = await new Promise((resolve) => {
+      const tx = db.transaction('logEvents', 'readonly');
+      const r = tx.objectStore('logEvents').getAll();
+      r.onsuccess = () => resolve(r.result as { type?: string; extra?: string }[]);
+      r.onerror = () => resolve([]);
+    });
+    db.close();
+    return rows.map((e) => String(e.extra ?? ''));
+  });
+  return extras.filter((x) => x.startsWith('past_index_used_stale:summary'));
+}
+
+test('W3-3 — IDB 폴백 + 일치 기록 0건(다른 농가): 「이전 조사 · 기록 없음 (백업)」', async ({ page }) => {
   // 시트에는 '이원창'만 있고 세션은 '없는농가' — 지문(fp)은 같아 폴백은 쓰이되 매칭이 0건이다.
   await openSummary(page, { farmName: '없는농가', withRecord: true });
   const modal = page.locator('[data-testid="settings-summary-modal"]');
   await expect(modal).toContainText('이전 조사');
-  await expect(modal).toContainText('기록 없음');
+  // 🔴 v0.49 r3 F7(codex r2) — **0건도 출처를 밝힌다.** 종전 이 단언은 `'기록 없음'`만 봤고
+  //    화면도 그렇게 그렸다: 최대 14일 묵은 백업으로 계산한 0건이 **방금 시트를 조회해 0건인
+  //    것처럼** 보였다. 백업 이후 시트에 새 일치 행이 추가됐는데 지금 fetch가 실패한 경우가
+  //    정확히 그 상황이고, 이 화면은 조사를 **시작하기 전에** 보는 화면이라 판단을 오도한다.
+  //    날짜에만 (백업)을 붙이고 0건에는 안 붙이면 「화면은 아는 만큼만 말한다」가 반쪽이 된다.
+  await expect(modal).toContainText('기록 없음 (백업)');
   await expect(modal).not.toContainText(PREV_ROUND);
-  console.log('✓ 폴백 인덱스 + 고정 키 불일치 → 기록 없음(미확인과 구분된다)');
+  console.log('✓ 폴백 인덱스 + 고정 키 불일치 → 기록 없음 (백업)');
+});
+
+test('W3-3b(r3 F7) — 백업으로 답한 0건도 stale 계측을 낸다 — 집계가 답의 종류로 갈리지 않는다', async ({ page }) => {
+  await openSummary(page, { farmName: '없는농가', withRecord: true });
+  await expect(page.locator('[data-testid="settings-summary-modal"]')).toContainText('기록 없음 (백업)');
+  const stale = (await staleSummaryLogs(page));
+  expect(stale.length, '0건을 백업으로 답했는데 stale 사용 집계에 안 잡힌다').toBe(1);
+  expect(stale[0]).toMatch(/age_h=\d+/);
 });
 
 test("W3-4(r2 A5) — 인덱스는 있는데 **조회가 불가능**하면 「기록 없음」이 아니라 「미확인」이다", async ({ page }) => {
@@ -228,7 +261,12 @@ test('W3-5(r2 A6) — 백업 인덱스에서 온 날짜는 「(백업)」으로 
     return rows.map((e) => String(e.extra ?? ''));
   });
   const stale = extras.filter((x) => x.startsWith('past_index_used_stale:summary'));
-  expect(stale.length, '백업으로 답했는데 stale 로그가 없다(§477 폴백 계약)').toBeGreaterThan(0);
+  // 🔴 v0.49 r3 #9(= codex F9) — **정확히 1회다.** 종전 단언은 `> 0`이라 중복 기록을 통과시켰고,
+  //    실제로 중복이 났다: 이 훅의 effect dep이 `[state]`였는데 `useMemo` 키에 `version`이 들어
+  //    있고 로더가 시작·종료 **양쪽에서** 통지하므로, 같은 답이어도 매 통지마다 새 객체가 나와
+  //    effect가 다시 돌았다. A6 지표가 팝업 열람 수보다 부풀고 그 로그를 세는 A9 단언도 함께
+  //    무의미해진다. 이제 `stale+iso+builtAt` 의미 키로 dedupe한다.
+  expect(stale.length, '백업으로 답했는데 stale 로그가 없다/중복이다(§477 폴백 계약 + #9 dedupe)').toBe(1);
   expect(stale[0], 'age가 없으면 얼마나 묵은 답인지 사후 판별이 안 된다').toMatch(/age_h=\d+/);
   // ⚠️ 이벤트 이름은 `trend_used_stale_index`와 **다르다** — 얹으면 이상치 알람의 stale 집계가
   //    설정 팝업 열람으로 오염된다(PRINCIPLES §4: 늘릴 땐 새 이름).
