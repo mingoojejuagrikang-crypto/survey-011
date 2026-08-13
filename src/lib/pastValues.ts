@@ -23,6 +23,7 @@
  */
 import type { Column } from '../types';
 import { withTimeout } from './async';
+import { autoValue, isCycling } from './autoValue';
 import { effectiveSampleKey } from './columnFlags';
 import { fetchAllRowsUnbounded, parseSpreadsheetId, readonlySheetsAuth } from './sheets';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -182,6 +183,75 @@ export function previousRound(index: PastIndex, key: string, beforeDate: string)
   let best: string | null = null;
   for (const r of byRound.keys()) {
     if (r < beforeDate && (best === null || r > best)) best = r;
+  }
+  return best;
+}
+
+/**
+ * v0.49.0 W3 — 「세션 고정 샘플키 컬럼」: 이 세션의 **모든 행에서 값이 같은** 샘플키 컬럼들.
+ *
+ * 민구 확정(08-13, FB-3): 조사 전에 알아야 하는 "이전 조사일"의 기준은 세션 전체에 공통 고정된
+ * 샘플키 항목 조합이다 — *"해당 세션의 모든 데이터에서 공통적으로 사용되는 항목들의 조합.
+ * 지금의 경우는 '농가명'+'라벨'."* 🔴 **컬럼 이름을 하드코딩하지 않는다**(시트 스키마 불특정이
+ * 계약, 민구 08-05) — 「농가명」「라벨」은 현 스키마의 예시일 뿐이고 여기엔 규칙만 남긴다.
+ *
+ * 판정(전부 만족해야 고정 키):
+ *  - `input === 'auto'` — **테이블 골격을 만드는 주체는 자동 입력 컬럼뿐이다**(민구 확정 08-06,
+ *    autoValue.ts 주석). voice·touch 컬럼은 사람이 행마다 채우므로 세션 상수가 아니다. 사용자가
+ *    측정 컬럼을 샘플키로 토글해 두어도(그리고 미사용 `auto.value` 잔재가 남아 있어도) 그 값으로
+ *    과거 행을 대조하면 시트의 실제 기록과 어긋난다 — 여기서 먼저 잘라낸다.
+ *  - `effectiveSampleKey` — 샘플 식별 키의 일부다(columnFlags가 SSOT: 사용자 토글 > 자동 유추).
+ *  - `!isCycling` — 행마다 값이 바뀌지 않는다(autoValue가 SSOT: seq·다중선택 options가 순환).
+ *  - **조사시기 컬럼이 아니다** — 회차(시간축)이지 샘플 식별축이 아니다. 이 컬럼이 대조 키에
+ *    섞이면 "직전 회차"는 정의상 오늘과 다른 날짜라 영영 일치하지 않는다.
+ *  - `autoValue(col, 1)`이 비어 있지 않다 — 값이 없으면 대조 기준이 못 된다(빈 fixed 등).
+ *
+ * 빈 배열 = 세션을 특정할 고정 키가 없다 → 호출자는 조회를 포기한다.
+ */
+export function sessionFixedKeyColumns(columns: Column[], roundDateColId: string | null): Column[] {
+  const roundCol = resolveRoundCol(columns, roundDateColId);
+  return columns.filter(
+    (c) =>
+      c.input === 'auto' &&
+      effectiveSampleKey(c) &&
+      !isCycling(c) &&
+      c.id !== roundCol?.id &&
+      autoValue(c, 1).trim() !== '',
+  );
+}
+
+/**
+ * v0.49.0 W3 — 세션 고정 키와 일치하는 과거 행들 중 **기준일 미만(strictly <)** 최신 회차.
+ *
+ * `previousRound`가 "샘플 한 개"의 직전 회차라면, 이쪽은 "이 세션이 다룰 샘플들 전체"의 직전
+ * 조사일이다 — 설정요약은 조사를 **시작하기 전에** 보는 화면이라 아직 행(샘플)이 특정되지 않았다.
+ *
+ * 🔴 대조는 **컬럼(colId) 단위**다 — 샘플키 join 문자열의 prefix 매칭이 아니다. 키 컬럼 순서는
+ * 스키마마다 다르고, `KEY_SEP`이 공백이라 값 자체에 공백이 있으면(예: 농가명 `강 남호`)
+ * join 문자열을 split하는 순간 조각 경계가 어긋난다. `buildPastIndex`가 각 (키,회차)에
+ * colId→값 레코드를 그대로 보관하므로 그 레코드를 직접 본다.
+ *
+ * strictly-< 는 `previousRound`(그리고 그것을 쓰는 `trendEvaluate`)와 같은 규칙 — 오늘 당일
+ * 부분 업로드가 자기 자신의 기준선이 되지 않게 한다.
+ */
+export function previousSurveyRound(
+  index: PastIndex,
+  columns: Column[],
+  roundDateColId: string | null,
+  beforeDate: string,
+): string | null {
+  const fixedCols = sessionFixedKeyColumns(columns, roundDateColId);
+  if (fixedCols.length === 0) return null;
+  // 시트에 매핑되지 않은 컬럼은 레코드에 값이 없어 어떤 행과도 일치할 수 없다 — 전수 스캔 생략.
+  if (fixedCols.some((c) => !index.headersMapped.has(c.id))) return null;
+  const want = fixedCols.map((c) => [c.id, autoValue(c, 1).trim()] as const);
+  let best: string | null = null;
+  for (const byRound of index.samples.values()) {
+    for (const [round, rec] of byRound) {
+      if (round >= beforeDate) continue;
+      if (best !== null && round <= best) continue;
+      if (want.every(([id, v]) => (rec[id] ?? '').trim() === v)) best = round;
+    }
   }
   return best;
 }

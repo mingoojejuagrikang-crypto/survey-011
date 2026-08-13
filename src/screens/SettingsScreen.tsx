@@ -16,7 +16,9 @@ import { SheetConnectSection } from '../components/settings/SheetConnectSection'
 import { SessionOptionsSection } from '../components/settings/SessionOptionsSection';
 import { TypeReviewModal } from '../components/settings/TypeReviewModal';
 import { TablePreviewModal } from '../components/settings/TablePreviewModal';
-import { SettingsSummaryModal } from '../components/settings/SettingsSummaryModal';
+import {
+  SettingsSummaryModal, readPrevSurveyState,
+} from '../components/settings/SettingsSummaryModal';
 import { SettingsResetModal } from '../components/settings/SettingsResetModal';
 
 // ─── screen root ───────────────────────────────────────────────
@@ -435,7 +437,9 @@ export function SettingsScreen() {
       )}
 
       {/* v0.32.0 설정탭 UX(Vance) B2 — 설정 요약 팝업(닫기 전용, 무스크롤). 로그인·시트 연결·컬럼
-          요약(SettingsSummary 공용)·다이얼/토글·생성 상태를 한 화면에 모은다. 설정탭 전용. */}
+          요약(SettingsSummary 공용)·다이얼/토글·생성 상태를 한 화면에 모은다. 설정탭 전용.
+          v0.49.0 W3(FB-3) — 「이전 조사」 행 추가. readPrevSurveyState는 캐시·IDB 폴백만 동기로
+          읽는다(fetch 없음) — 팝업 열림을 인덱스 로드가 막지 않는다. */}
       {summaryOpen && (() => {
         const activeSheetId = parseSpreadsheetId(s.sheetUrl);
         const sheetName = s.savedSheets.find((x) => x.sheetId === activeSheetId)?.name ?? null;
@@ -455,6 +459,7 @@ export function SettingsScreen() {
             fastRecognition={s.fastRecognition}
             tableGenerated={s.tableGenerated}
             generatedRows={s.totalRows}
+            prevSurvey={readPrevSurveyState(s.columns, s.roundDateColId)}
             onClose={() => setSummaryOpen(false)}
           />
         );

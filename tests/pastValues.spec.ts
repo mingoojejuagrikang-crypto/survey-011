@@ -23,6 +23,8 @@ import {
   previousRound,
   latestTwoRounds,
   pastValue,
+  sessionFixedKeyColumns,
+  previousSurveyRound,
 } from '../src/lib/pastValues';
 import type { Column } from '../src/types';
 
@@ -219,5 +221,151 @@ test.describe('previousRound — strictly before', () => {
   test('미지의 키 → null', () => {
     const idx = makeIndex();
     expect(previousRound(idx, '없는 키', '2026-06-12')).toBeNull();
+  });
+});
+
+// ─── v0.49.0 W3(FB-3) — 세션 고정 샘플키 · 이전 조사일 ──────────────────────
+//
+// 민구 확정(08-13): 설정요약의 「이전 조사」 기준은 **세션 전체에 공통 고정된 샘플키 항목 조합**
+// (*"해당 세션의 모든 데이터에서 공통적으로 사용되는 항목들의 조합. 지금의 경우는 '농가명'+'라벨'."*).
+// 컬럼 이름은 규칙에 등장하지 않는다(시트 스키마 불특정이 계약) — 아래 두 번째 describe가
+// **완전히 다른 스키마**로 같은 규칙이 성립함을 증명한다.
+
+/** 현 스키마 근사: 조사일자(회차) · 농가명(fixed) · 라벨(단일선택) · 조사나무(seq) · 측정 2개. */
+const W3_COLS: Column[] = [
+  col('c1', '조사일자', { type: 'date', auto: { kind: 'fixed', value: '오늘' } }),
+  col('c3', '농가명', { auto: { kind: 'fixed', value: '이원창' } }),
+  col('c4', '라벨', { auto: { kind: 'options', available: ['A', 'B'], selected: ['A'] } }),
+  col('c6', '조사나무', { type: 'int', auto: { kind: 'seq', from: 1, to: 2 } }),
+  col('c8', '횡경', { type: 'float', input: 'voice', trendRule: 'increase' }),
+  col('c10', '비고', { input: 'touch' }),
+];
+
+const w3Index = (columns = W3_COLS, headers = HEADERS, rows = ROWS) =>
+  buildPastIndex(headers, rows, columns, resolveRoundCol(columns, null));
+
+test.describe('sessionFixedKeyColumns — 세션 고정 샘플키 판정', () => {
+  test('현 스키마: 고정값(fixed) + 단일선택(options)만 — 순환·회차·측정 컬럼 제외', () => {
+    expect(sessionFixedKeyColumns(W3_COLS, null).map((c) => c.id)).toEqual(['c3', 'c4']);
+  });
+
+  test('다중선택 options는 행마다 바뀌므로 제외(단일선택일 때만 고정)', () => {
+    const multi = W3_COLS.map((c) =>
+      c.id === 'c4' ? col('c4', '라벨', { auto: { kind: 'options', available: ['A', 'B'], selected: ['A', 'B'] } }) : c,
+    );
+    expect(sessionFixedKeyColumns(multi, null).map((c) => c.id)).toEqual(['c3']);
+  });
+
+  test('조사시기 컬럼은 샘플키로 토글돼도 제외 — 시간축이지 식별축이 아니다', () => {
+    const cols = W3_COLS.map((c) =>
+      c.id === 'c1' ? col('c1', '조사일자', { type: 'date', auto: { kind: 'fixed', value: '2026-05-20' }, sampleKey: true }) : c,
+    );
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['c3', 'c4']);
+    // 명시 roundDateColId로 지정한 다른 date 컬럼도 같은 규칙
+    expect(sessionFixedKeyColumns(cols, 'c1').map((c) => c.id)).toEqual(['c3', 'c4']);
+  });
+
+  test('사용자 입력(voice·touch) 컬럼은 샘플키 토글 + auto 값 잔재가 있어도 제외', () => {
+    const cols = W3_COLS.map((c) =>
+      c.id === 'c8'
+        ? col('c8', '횡경', { type: 'float', input: 'voice', sampleKey: true, auto: { kind: 'fixed', value: '111.1' } })
+        : c,
+    );
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['c3', 'c4']);
+  });
+
+  test('값이 빈 고정 컬럼은 대조 기준이 못 되므로 제외', () => {
+    const cols = W3_COLS.map((c) => (c.id === 'c3' ? col('c3', '농가명', { auto: { kind: 'fixed', value: '  ' } }) : c));
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['c4']);
+  });
+
+  test('사용자가 샘플키를 전부 끄면 빈 배열(기능 비활성)', () => {
+    const cols = W3_COLS.map((c) => ({ ...c, sampleKey: false }));
+    expect(sessionFixedKeyColumns(cols, null)).toEqual([]);
+  });
+});
+
+test.describe('previousSurveyRound — 세션 고정 키의 직전 조사일', () => {
+  test('현 스키마(농가명+라벨): 오늘 미만 최신 회차', () => {
+    // 이원창/A 조합은 05-13(나무1) · 05-20(나무1,2) · 05-27(나무1)에 존재 → 최신 05-27
+    expect(previousSurveyRound(w3Index(), W3_COLS, null, '2026-06-12')).toBe('2026-05-27');
+  });
+
+  test('strictly < — 당일 회차는 자기 기준선이 되지 않는다', () => {
+    const idx = w3Index();
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-05-27')).toBe('2026-05-20');
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-05-20')).toBe('2026-05-13');
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-05-13')).toBeNull();
+  });
+
+  test('세션 안의 여러 샘플(조사나무 1·2)을 가로질러 가장 늦은 회차를 고른다', () => {
+    // 나무1은 05-27까지, 나무2는 05-20까지 — 세션 기준이므로 05-27이어야 한다(샘플별 조회가 아니다).
+    expect(previousSurveyRound(w3Index(), W3_COLS, null, '2026-05-28')).toBe('2026-05-27');
+  });
+
+  test('일치 기록 0건 → null (다른 농가)', () => {
+    const cols = W3_COLS.map((c) => (c.id === 'c3' ? col('c3', '농가명', { auto: { kind: 'fixed', value: '없는농가' } }) : c));
+    expect(previousSurveyRound(w3Index(cols), cols, null, '2026-06-12')).toBeNull();
+  });
+
+  test('일치 기록 0건 → null (같은 농가, 다른 라벨)', () => {
+    const cols = W3_COLS.map((c) =>
+      c.id === 'c4' ? col('c4', '라벨', { auto: { kind: 'options', available: ['A', 'B'], selected: ['B'] } }) : c,
+    );
+    expect(previousSurveyRound(w3Index(cols), cols, null, '2026-06-12')).toBeNull();
+  });
+
+  test('고정 키 0개 → null (조회 포기)', () => {
+    const cols = W3_COLS.map((c) => ({ ...c, sampleKey: false }));
+    expect(previousSurveyRound(w3Index(cols), cols, null, '2026-06-12')).toBeNull();
+  });
+
+  test('고정 키 컬럼이 시트에 미매핑이면 null (헤더 개명)', () => {
+    const headers = ['조사일자', '농가명(구)', '라벨', '조사나무', '횡경', '종경'];
+    expect(previousSurveyRound(w3Index(W3_COLS, headers), W3_COLS, null, '2026-06-12')).toBeNull();
+  });
+});
+
+test.describe('previousSurveyRound — 키 조각 위치 대조(문자열 prefix 매칭 금지)', () => {
+  test('키 값에 공백이 있어도 조각 경계를 잘못 읽지 않는다', () => {
+    // 두 행의 샘플키 join 문자열은 '강 남호 A 1'로 **완전히 동일**하지만(KEY_SEP=' '),
+    // 컬럼 단위로 보면 농가명·라벨이 서로 다르다. join 문자열을 split해 대조하면 05-27을
+    // 잘못 집는다 — colId 대조라야 05-20이 나온다.
+    const cols = [
+      col('c1', '조사일자', { type: 'date', auto: { kind: 'fixed', value: '오늘' } }),
+      col('c3', '농가명', { auto: { kind: 'fixed', value: '강 남호' } }),
+      col('c4', '라벨', { auto: { kind: 'options', available: ['A'], selected: ['A'] } }),
+      col('c6', '조사나무', { type: 'int', auto: { kind: 'seq', from: 1, to: 1 } }),
+    ];
+    const headers = ['조사일자', '농가명', '라벨', '조사나무'];
+    const rows = [
+      ['2026-05-20', '강 남호', 'A', '1'], // 진짜 일치
+      ['2026-05-27', '강', '남호 A', '1'], // 키 문자열은 같지만 컬럼 값이 다름 → 불일치
+    ];
+    const idx = buildPastIndex(headers, rows, cols, resolveRoundCol(cols, null));
+    expect(idx.samples.size).toBe(1); // 두 행이 같은 키로 합쳐진다 — 조각 대조가 아니면 구분 불가
+    expect(previousSurveyRound(idx, cols, null, '2026-06-12')).toBe('2026-05-20');
+  });
+
+  test('가상 스키마: 고정 컬럼이 키의 앞이 아니어도(중간·끝) 규칙대로 동작', () => {
+    // 샘플키 = [구역(seq) · 동(fixed) · 작물(단일선택)] — 고정 컬럼이 **prefix가 아니다**.
+    const cols = [
+      col('a1', '조사일', { type: 'date', auto: { kind: 'fixed', value: '오늘' } }),
+      col('a2', '구역', { type: 'int', auto: { kind: 'seq', from: 1, to: 2 } }),
+      col('a3', '동', { auto: { kind: 'fixed', value: '3동' } }),
+      col('a4', '작물', { auto: { kind: 'options', available: ['토마토', '오이'], selected: ['토마토'] } }),
+      col('a5', '초장', { type: 'float', input: 'voice' }),
+    ];
+    expect(sessionFixedKeyColumns(cols, null).map((c) => c.id)).toEqual(['a3', 'a4']);
+
+    const headers = ['조사일', '구역', '동', '작물', '초장'];
+    const rows = [
+      ['2026-07-01', '1', '3동', '토마토', '30'],
+      ['2026-07-08', '2', '3동', '토마토', '35'],
+      ['2026-07-15', '1', '3동', '오이', '40'],   // 작물 불일치 → 제외
+      ['2026-07-22', '1', '4동', '토마토', '45'], // 동 불일치 → 제외
+    ];
+    const idx = buildPastIndex(headers, rows, cols, resolveRoundCol(cols, null));
+    expect(previousSurveyRound(idx, cols, null, '2026-08-01')).toBe('2026-07-08');
   });
 });
