@@ -169,6 +169,42 @@ test('⑦ 검토 대기의 명령 거절 꼬리는 흡수 안내와 같은 조�
   ).toContain(last);
 });
 
+test('⑧ 흡수가 거절 큐를 내린다 — 화면이 처리된 사건을 계속 띄우지 않는다 (Y6)', async ({ page }) => {
+  await bootZ5(page);
+  await fireStt(page, '삼십오 점 일', 1800); // 1행 = 마지막 행 → 끝 도달
+  await waitForTtsIdle(page);
+
+  await fireLowConfCommand(page, '종료');
+  await waitForTtsIdle(page);
+  await expect(cue(page), '전제: 명령 거절 큐가 섰다(①)').toBeVisible({ timeout: 4000 });
+
+  // 값 발화 → 이 국면은 흡수한다(③). 흡수는 **사건을 처리한 것**이므로 큐는 내려가야 한다.
+  await fireStt(page, '구십구 점 구', 1800);
+  await waitForTtsIdle(page);
+  expect((await ttsLog(page)).at(-1), '전제: 흡수 안내가 나왔다').toContain('마지막행 입력');
+  await expect(
+    cue(page),
+    '흡수 뒤에도 거절 큐가 남았다 — 화면은 「소리가 불확실」, 귀는 끝 도달 안내(§2 표면 모순)',
+  ).toHaveCount(0);
+});
+
+test('⑨ 검토 대기의 흡수도 같은 계약 (Y6)', async ({ page }) => {
+  await bootZ5(page);
+  await fireStt(page, '삼십오 점 일', 1800);
+  await waitForTtsIdle(page);
+  await fireStt(page, '이전행', 1800);
+  await waitForTtsIdle(page);
+
+  await fireLowConfCommand(page, '수정');
+  await waitForTtsIdle(page);
+  await expect(cue(page), '전제: 명령 거절 큐가 섰다(②)').toBeVisible({ timeout: 4000 });
+
+  await fireStt(page, '구십구 점 구', 1800);
+  await waitForTtsIdle(page);
+  expect((await ttsLog(page)).at(-1), '전제: 흡수 안내가 나왔다').toContain('완료됨');
+  await expect(cue(page), '흡수 뒤에도 거절 큐가 남았다').toHaveCount(0);
+});
+
 test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 직접 부르지 않는다', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');

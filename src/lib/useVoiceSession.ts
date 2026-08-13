@@ -2408,7 +2408,12 @@ export function useVoiceSession() {
       if (epochRef.current !== startEpoch) return;
       // 🔴 W1 — 검토/끝 도달 스코프는 **여기서 끝낸다.** 커서를 옮기지 않았으니 센티넬이 그대로
       //   살아 있고(= 재무장), 재안내를 부르면 그 센티넬을 cellWait으로 덮어 스코프가 증발한다.
-      if (reviewScope) return;
+      if (reviewScope) {
+        // Y6 — 이 분기는 재안내를 부르지 않고 끝내므로 `armLanding`의 큐 해제도 타지 않는다.
+        //   거절 직후 항목 이동을 시도한 경계에서 사유 큐가 화면에 남는다(위 흡수 셋과 같은 축).
+        sess.setReaskReason(null);
+        return;
+      }
       const cur = vc[curIdx];
       // 경계에서도 **재안내 대상이 filled 셀일 수 있다**(값 넣고 「이전」으로 되돌아온 뒤 「이전」).
       if (cur) await announceOrCellWait(cur);
@@ -3035,6 +3040,12 @@ export function useVoiceSession() {
     // 여기 도달한 것은 일반 값 발화이므로 새 행으로 커밋하지 않고 종료 안내만 재생한다(자동 종료 제거).
     if (awaiting.kind === 'atEnd') {
       useSessionStore.getState().setRecognized('');
+      // 🔴 v0.49 r6 Y6(claude #5) — **흡수는 사건을 처리한 것이다 → 거절 큐를 내린다.** 착지의
+      //   큐 해제는 `armLanding`이 소유하는데(Z5) 흡수는 착지가 아니라 그 깔때기를 안 탄다.
+      //   그래서 직전 거절로 선 큐가 화면에 남은 채 흡수 안내만 귀로 나갔다 — 화면은 「소리가
+      //   불확실」을 계속 띄우고 귀는 끝 도달을 말하는 §2 표면 모순(M4가 `announceField`에서
+      //   닫은 그 형태). 형제 셋 + 스코프 경계가 같은 지점이다.
+      useSessionStore.getState().setReaskReason(null);
       // 🔴 v0.49 r2 W2(확정표 #5+6) — 진입 안내와 **같은 문구**다. 종전엔 여기가 "입력이
       //   끝났습니다…", 진입이 "마지막 행까지 입력했습니다…"로 갈려 있어 같은 상태를 두 이름으로
       //   불렀다. 빈 행 목록은 **이 시점에 다시 센다** — 흡수 시점엔 값이 더 채워졌을 수 있다.
@@ -3048,6 +3059,7 @@ export function useVoiceSession() {
     // '수정' 명령으로만). atEnd 가드와 동일한 흡수 패턴.
     if (awaiting.kind === 'reviewWait') {
       useSessionStore.getState().setRecognized('');
+      useSessionStore.getState().setReaskReason(null); // Y6 — 위 atEnd 흡수와 같은 계약.
       // 🔴 v0.49 fix49b(max 리뷰 #8) — **어휘 재배정(F-1, 08-12) 미이관.** 「다음」이 항목 이동으로
       //   재배정되면서 이 안내가 가르치던 단어가 행을 넘기지 못하게 됐고, 행을 넘기는 말
       //   ('다음행')은 **어떤 안내에도** 등장하지 않아 음성 전용 사용자가 완료 행에 갇혔다
@@ -3067,6 +3079,7 @@ export function useVoiceSession() {
     //   행이 끝난 줄 안다. 정정 진입로('수정')를 한 마디로 가르친다(H-2 — 길이 압력).
     if (awaiting.kind === 'cellWait') {
       useSessionStore.getState().setRecognized('');
+      useSessionStore.getState().setReaskReason(null); // Y6 — 위 atEnd 흡수와 같은 계약.
       logCell({
         type: 'command', parsed: 'cell_wait_absorb',
         extra: `cell_wait_absorb:${awaiting.colId}`, text,
