@@ -1294,6 +1294,34 @@ export function useVoiceSession() {
     logCell({ type: 'trend', extra: `trend_skip:${cause}`, row, colId });
   }, []);
 
+  /** 🔴 v0.49 r3 #6(claude r2 MEDIUM) — **값 거절의 단일 종단.**
+   *
+   *  거절은 한 벌의 신호다: 화면 큐(`ReaskCue` 사유) + 부정 비프 + 사유 TTS(§2 쌍 상수).
+   *  그런데 거절 분기는 **6개**이고(컬럼명 일치 · KNOWN_NOISE · bare 응답어 · 단음절 동음이의 ·
+   *  저신뢰 · 파싱 실패) B2는 그중 **뒤 2개만** 배선했다. 앞 4개는 무비프에다 W2 개정 **이전의**
+   *  인라인 리터럴("{항목} 다시 말씀해 주세요.")을 그대로 읽고 있었다 — 같은 사건이 어느 분기로
+   *  들어오느냐에 따라 소리도 문구도 갈렸고(§2 「구조적 분리는 쌍 상수로만」 위반), `beep_play:
+   *  kind=reject` 집계는 실제 거절의 1/3만 셌다.
+   *
+   *  ⚠️ **분기마다 배선하지 않는다.** 파싱 실패 분기의 자기 주석이 이미 *"분기마다 배선하면 다음
+   *  분기가 추가될 때 조용히 빠진다(이 파일이 반복해 겪은 드리프트)"* 라고 적어 놨는데, 그 경고가
+   *  **분기 안**에만 적혀 있어서 형제 4개가 그대로 빠져 있었다. 종단을 하나로 만든다.
+   *
+   *  분기별로 다른 것(로그 타입 · 클립 재시작 여부 · `recognized` 정리)은 **호출부에 남긴다** —
+   *  그건 거절 표면이 아니라 각 분기의 고유 계약이다. */
+  const armRejectCue = useCallback((reason: 'low_confidence' | 'parse_failed') => {
+    useSessionStore.getState().setReaskReason(reason);
+    // TTS **이전에** 낸다 — 커밋 확인음이 세운 「신호음 → 말」 순서 계약과 같다(민구 지정).
+    playBeep('reject');
+  }, []);
+
+  /** 거절 종단 — 표면 + 사유 TTS. 소수부 타깃 재질문만 전용 문구(확정표 #3 「현행 유지」)라
+   *  표면(`armRejectCue`)만 쓰고 TTS는 호출부가 말한다. */
+  const rejectValue = useCallback(async (reason: 'low_confidence' | 'parse_failed') => {
+    armRejectCue(reason);
+    await say(REASK_TTS[reason]);
+  }, [armRejectCue, say]);
+
   /** 방금 커밋된 값의 이상치 알람 검사(v0.8.0). 전역 마스터 토글 제거 — 컬럼에 방향 규칙
    *  (trendRule) 또는 변동률 % 임계값(pctThreshold)이 하나라도 있으면 활성. 규칙 없는 컬럼은
    *  검사 자체가 없고(로그 없음), 판정 불가(인덱스 없음·키 불완전·직전 회차/과거값 없음)는
@@ -2641,8 +2669,8 @@ export function useVoiceSession() {
       if (colNames.includes(text.trim())) {
         logCell({ type: 'stt_rejected_col_name', text, row: awaiting.row, colId: awaiting.colId });
         useSessionStore.getState().setRecognized('');
-        useSessionStore.getState().setReaskReason('parse_failed');
-        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+        // #6 — 거절 종단 단일화(비프 + §2 쌍 TTS). 종전엔 무비프 + W2 이전 인라인 리터럴이었다.
+        await rejectValue('parse_failed');
         return;
       }
       const KNOWN_NOISE = /^(변경|성경|광경|구정|혜정|당장|경정)$/;
@@ -2650,8 +2678,7 @@ export function useVoiceSession() {
         logCell({ type: 'stt_rejected_col_name', text, row: awaiting.row, colId: awaiting.colId, extra: 'known_noise' });
         recorderRef.current?.startClip();
         useSessionStore.getState().setRecognized('');
-        useSessionStore.getState().setReaskReason('parse_failed');
-        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+        await rejectValue('parse_failed');
         return;
       }
       // v0.34.0 O2 [STT-17] — 값 대기 중 단독 응답어("예/네/응/어" 등)는 수사로 커밋하지 않는다.
@@ -2663,16 +2690,19 @@ export function useVoiceSession() {
       if (isBareResponseWord(text)) {
         logCell({ type: 'stt_rejected_ambiguous_syllable', text, confidence, row: awaiting.row, colId: awaiting.colId, extra: 'response_word' });
         useSessionStore.getState().setRecognized('');
-        useSessionStore.getState().setReaskReason('parse_failed');
+        // #6 — 표면(큐+비프)은 두 갈래 **앞에서** 한 번 무장한다. 소수부 타깃 재질문도 「값을
+        //   안 받았다」는 점에서 같은 거절이고, 갈린 뒤에 배선하면 다음 갈래가 조용히 빠진다
+        //   (파싱 실패 분기가 같은 이유로 이미 그렇게 한다).
+        armRejectCue('parse_failed');
         const respFracWhole = fractionWholeOf(awaiting);
         if (respFracWhole != null) {
           // FB#4 — 화면 재질문 큐도 TTS와 같은 문구를 표시(SSOT 상수 공유). 정수부를 store에 실어
-          //   ReaskCue가 decimalReaskPrompt로 렌더한다(글자까지 일치).
+          //   ReaskCue가 decimalReaskPrompt로 렌더한다(글자까지 일치). 확정표 #3 「현행 유지」.
           useSessionStore.getState().setDecimalReason(String(respFracWhole));
           await say(decimalReaskPrompt(respFracWhole));
         } else {
           recorderRef.current?.startClip();
-          await say(`${awaiting.name} 다시 말씀해 주세요.`);
+          await say(REASK_TTS.parse_failed);
         }
         return;
       }
@@ -2706,8 +2736,7 @@ export function useVoiceSession() {
         logCell({ type: 'stt_rejected_ambiguous_syllable', text, confidence, row: awaiting.row, colId: awaiting.colId });
         recorderRef.current?.startClip();
         useSessionStore.getState().setRecognized('');
-        useSessionStore.getState().setReaskReason('parse_failed');
-        await say(`${awaiting.name} 다시 말씀해 주세요.`);
+        await rejectValue('parse_failed');
         return;
       }
     }
@@ -2748,16 +2777,16 @@ export function useVoiceSession() {
       });
       recorderRef.current?.startClip(); // restart clip
       useSessionStore.getState().setRecognized('');
-      useSessionStore.getState().setReaskReason('low_confidence');
       // 🔴 v0.49 r2 B2(민구 결정 08-13 ⓐ) — **거절 비프.** 아래 주석이 "부정 비프가 전담한다"고
       //   적어 온 그 비프다(합집합 C2: 배선된 적이 없어 전제가 허구였다). TTS **이전에** 낸다 —
       //   커밋 확인음이 세운 「신호음 → 말」 순서 계약과 같다(민구 지정 순서).
-      playBeep('reject');
       // v0.48.0 P3(NEW-2, 민구 제보 08-10) — 재질문 사유를 TTS로 읽는다(종전엔 화면만 알았다).
       // 🔴 v0.49 r2 W2(확정표 #1) — **사유만 말한다.** 꼬리("잘 못 들었습니다. {항목} 다시 말씀해
-      //   주세요.")는 삭제됐다: 사용자는 이미 그 셀에 답하는 중이고, 재시도 신호는 바로 위
-      //   `setReaskReason`이 띄우는 화면 큐(`ReaskCue`, 상세본 유지)와 부정 비프가 전담한다.
-      await say(REASK_TTS.low_confidence);
+      //   주세요.")는 삭제됐다: 사용자는 이미 그 셀에 답하는 중이고, 재시도 신호는 화면 큐
+      //   (`ReaskCue`, 상세본 유지)와 부정 비프가 전담한다.
+      // 🔴 v0.49 r3 #6 — 큐·비프·TTS 세 신호를 `rejectValue` 한 곳으로 모았다(형제 4분기가
+      //   그 셋 중 둘을 빠뜨린 채 살아 있던 것이 결함이다 — 그 헤더 참조).
+      await rejectValue('low_confidence');
       return;
     }
 
@@ -2825,11 +2854,12 @@ export function useVoiceSession() {
         });
       }
       // v0.23.0 입력탭#2 — 파싱 실패도 재질문 사유로 표면화(높은 신뢰도인데 재질문되는 혼동 해소).
-      useSessionStore.getState().setReaskReason('parse_failed');
-      // 🔴 v0.49 r2 B2 — 거절 비프(위 저신뢰 분기와 같은 신호·같은 순서). **아래 3분기가 갈리기
-      //   전에** 한 번 낸다: 소수부 타깃 재질문도 「값을 안 받았다」는 점에서 같은 거절이고,
-      //   분기마다 배선하면 다음 분기가 추가될 때 조용히 빠진다(이 파일이 반복해 겪은 드리프트).
-      playBeep('reject');
+      // 🔴 v0.49 r2 B2 — 거절 표면(화면 큐 + 비프). **아래 3분기가 갈리기 전에** 한 번 무장한다:
+      //   소수부 타깃 재질문도 「값을 안 받았다」는 점에서 같은 거절이고, 분기마다 배선하면 다음
+      //   분기가 추가될 때 조용히 빠진다(이 파일이 반복해 겪은 드리프트).
+      //   🔴 v0.49 r3 #6 — 그 경고가 이 분기 **안에만** 적혀 있어서 형제 4분기가 통째로 빠져
+      //   있었다. 표면 무장을 `armRejectCue`로 뽑아 여섯 분기가 같은 종단을 쓰게 했다.
+      armRejectCue('parse_failed');
       // v0.10.0 A1: 소수 의도인데 소수부 유실("111 점 에") → 정수부를 유지하고 "소수점 아래만" 타깃
       // 재질문(전체 재발화 회피). 값 추측(에→1)은 하지 않는다 — 같은 STT 문자열이 111.1·111.5
       // 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정).
@@ -3312,7 +3342,7 @@ export function useVoiceSession() {
     //   변하는 값을 갖는 순간(예: announceField가 설정 파생값을 참조) 이 명령만 **낡은 클로저로
     //   dispatch**되어 「이전」/「다음」이 옛 로직을 돈다 — 이 파일의 dep 배열을 유지보수하는
     //   이유가 정확히 그 드리프트다. 같은 diff가 형제들(goNextRow·gotoAdjacentRow)은 등재했다.
-  }, [advance, enterModifyMode, enterReviewWait, proceedAfterCommit, say, goNextRow, gotoAdjacentField, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
+  }, [advance, armRejectCue, enterModifyMode, enterReviewWait, proceedAfterCommit, rejectValue, say, goNextRow, gotoAdjacentField, gotoAdjacentRow, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell, clearAnomalyAlert]);
 
   // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
   const handleInterim = useCallback((text: string, confidence?: number) => {
