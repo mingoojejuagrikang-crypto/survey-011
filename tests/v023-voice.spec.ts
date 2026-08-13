@@ -403,15 +403,27 @@ test('B4 — 마지막 행 완료 후 자동 종료 안 함(대기) · 값 발�
   // 🔴 v0.49 r2 W2(확정표 #5+6, 민구 08-13) — 정당 파손. 두 트리거의 문구가 **하나로 통합**됐고
   //   ("마지막행 입력. 이번 세션에 완료된 행은 N행.") '종료하려면…' 꼬리는 삭제됐다.
   //   종료 수단은 하단 ⏹과 '종료' 명령으로 상시 노출되므로 안내가 매번 되풀이할 이유가 없다.
+  // 🔴 v0.49 r2 A12(codex F5) — **부분 문자열이 아니라 전체 바이트**로 잠근다. 종전엔
+  //   `includes('마지막행 입력')`뿐이라 완료 행 수·나머지 어절·문장부호가 무엇으로 바뀌어도
+  //   green이었다(다음 문구 회귀가 게이트를 통과하는 구멍). 2행 전부 완주했고 빈 행이 없으므로
+  //   꼬리도 붙지 않는다.
+  const EXPECTED_END = '마지막행 입력. 이번 세션에 완료된 행은 2행.';
   const tts1 = await ttsLog(page);
-  expect(tts1.some((t) => t.includes('마지막행 입력'))).toBe(true);
+  const entry = tts1.filter((t) => t.startsWith('마지막행 입력'));
+  expect(entry.length, '끝 도달 안내가 나가지 않았다').toBeGreaterThan(0);
+  expect(entry[0]).toBe(EXPECTED_END);
+  // 종료 꼬리는 **삭제됐다**(W2 확정표 #5+6) — 되살아나면 red.
+  expect(entry[0]).not.toContain('종료');
 
   // ④ 종료 대기 중 값 발화 → 새 행 커밋 안 하고 재안내만(자동 종료 제거의 핵심).
   //    통합 이후 ③과 ④는 **같은 문구**다 — 같은 상태를 두 이름으로 부르지 않는다.
   const before = tts1.length;
   await fireStt(page, '99.9', 700);
   const tts2 = await ttsLog(page);
-  expect(tts2.slice(before).some((t) => t.includes('마지막행 입력'))).toBe(true);
+  const absorbed = tts2.slice(before).filter((t) => t.startsWith('마지막행 입력'));
+  expect(absorbed.length, '흡수 재안내가 나가지 않았다').toBeGreaterThan(0);
+  // 🔑 두 트리거 **동등**을 글자로 단언한다 — 「한 SSOT를 공유한다」가 이 계약의 내용이다.
+  expect(absorbed[0]).toBe(entry[0]);
   // 여전히 세션 유지(ready 아님).
   const stillActive = await page.locator('text=음성 입력 시작').first()
     .isVisible({ timeout: 600 }).catch(() => false);

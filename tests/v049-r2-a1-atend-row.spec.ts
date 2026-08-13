@@ -127,7 +127,11 @@ test('① 순서 밖 완주 후의 bare 「수정」은 서 있는 행을 고친
   await speakWhenArmed(page, '11.1');
   await speakWhenArmed(page, '22.2');
   await speakWhenArmed(page, '33.3', 1800);
-  expect((await ttsLog(page)).join(' | '), '3행 완주로 끝 도달에 들어가야 한다').toContain('마지막행 입력');
+  // 🔴 v0.49 r2 A12(codex F5) — **빈 행 꼬리의 바이트**를 여기서 잠근다(꼬리가 붙는 유일한
+  //   분기라 다른 스펙에는 관측점이 없다). 이 시점: 1·3행 완료 · 2행 비어 있음.
+  const firstEnd = (await ttsLog(page)).filter((t) => t.startsWith('마지막행 입력'));
+  expect(firstEnd.length, '3행 완주로 끝 도달에 들어가야 한다').toBeGreaterThan(0);
+  expect(firstEnd[0]).toBe('마지막행 입력. 이번 세션에 완료된 행은 2행. 2행이 비어 있습니다.');
 
   // 되돌아와 2행을 마저 채운다 → 끝 도달 **재진입**. 이때 사용자는 2행에 서 있다.
   await speakWhenArmed(page, '이전행', 1500);
@@ -138,9 +142,10 @@ test('① 순서 밖 완주 후의 bare 「수정」은 서 있는 행을 고친
   const beforeEnd = (await ttsLog(page)).length;
   await speakWhenArmed(page, '63.3', 1800);
   await waitForTtsIdle(page);
-  const endMsg = (await ttsLog(page)).slice(beforeEnd).join(' | ');
-  expect(endMsg, '2행 완주로 끝 도달에 재진입해야 한다').toContain('마지막행 입력');
-  expect(endMsg, '세 행 모두 완료 — 빈 행 꼬리가 붙으면 안 된다').not.toContain('비어 있');
+  const endLines = (await ttsLog(page)).slice(beforeEnd).filter((t) => t.startsWith('마지막행 입력'));
+  expect(endLines.length, '2행 완주로 끝 도달에 재진입해야 한다').toBeGreaterThan(0);
+  // 🔴 v0.49 r2 A12(codex F5) — 전체 바이트로 잠근다. 세 행 모두 완료라 **빈 행 꼬리가 없다**.
+  expect(endLines[0]).toBe('마지막행 입력. 이번 세션에 완료된 행은 3행.');
 
   // 마지막으로 말한 값(2행 당도 63.3)이 틀렸다 → '수정'.
   await speakWhenArmed(page, '수정', 1200);
