@@ -88,9 +88,15 @@ test('[node] ③ unqueryable dedupe 키가 스키마 축을 포함한다 (#12)',
   const src = fs.readFileSync('src/components/settings/SettingsSummaryModal.tsx', 'utf-8');
   const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
-  const keyLine = code.slice(code.indexOf('const unqueryableKey'), code.indexOf('const unqueryableReason'));
+  // 🔴 v0.49 r6 Y11 — 키 표현식 **줄**을 직접 집는다. 종전의 `const unqueryableKey`~
+  //   `const unqueryableReason` 슬라이스는 그 사이에 주석이 늘어나면(정확히 Y11이 그랬다)
+  //   필터 후 표현식 줄을 놓쳐 조용히 빈 문자열을 검사했다.
+  const keyLine = code.split('\n').find((l) => l.includes('${state.reason}:${roundDateColId')) ?? '';
+  expect(keyLine, 'dedupe 키 표현식을 못 찾았다').not.toBe('');
   expect(keyLine, 'dedupe 키가 사유 단독이다 — 다른 스키마의 같은 사유가 영영 안 남는다').toContain('roundDateColId');
-  expect(keyLine, '고정 키 컬럼 구성이 키에 없다').toContain('sampleKey');
+  // Y11 — 스키마 축은 **판정과 같은 술어**(effectiveSampleKey)로 센다. 원시 플래그면 자동 유추로만
+  //   갈린 스키마 변경이 같은 키로 묶인다(그 정정은 v049-r6-y9-small의 Y11 계약이 정본).
+  expect(keyLine, '고정 키 컬럼 구성이 키에 없다').toContain('effectiveSampleKey(c)');
   expect(code, 'dedupe 집합이 키가 아니라 사유로 채워진다').toContain('unqueryableLogged.add(unqueryableKey)');
   // 로그 바이트는 불변이어야 한다(§4) — 사유 단독.
   expect(code, '로그 extra 바이트가 바뀌었다(SOP-003 파서 계약)')

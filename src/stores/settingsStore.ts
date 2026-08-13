@@ -4,7 +4,7 @@ import { persist, createJSONStorage, type StateStorage } from 'zustand/middlewar
 import type { Column, SheetConfig, SavedSheet, LegacyInputMode } from '../types';
 import { inferSampleKey, reconcileColumnFlags } from '../lib/columnFlags';
 import { isFolderCache, type FolderCache } from '../lib/driveFolders';
-import { isCycling } from '../lib/autoValue';
+import { isCycling, computeTotalRows } from '../lib/autoValue';
 import { defaultDesignatedDate, localTodayIso } from '../lib/weekTuesday';
 import {
   DEFAULT_POSITIVE_BEEP_ID,
@@ -406,8 +406,19 @@ export const useSettingsStore = create<SettingsState>()(
           }
           // v0.7.0 — input/type 변경 시 sampleKey 재유추 + 부적격 trendRule 제거(columnFlags 규칙).
           // F28 — 컬럼 손질도 입력값 설정 스탬프 갱신(내부 set은 공개 set 래퍼를 안 거친다).
+          const columns = state.columns.map((c) => (c.id === id ? reconcileColumnFlags(prev, merged) : c));
           return {
-            columns: state.columns.map((c) => (c.id === id ? reconcileColumnFlags(prev, merged) : c)),
+            columns,
+            // 🔴 v0.49 r6 Y10(claude #11) — **행 수가 달라지면 생성 상태를 무효화한다.**
+            //   `totalRows`는 「생성」 시점의 `computeTotalRows(columns)` 스냅샷이고(그 액션),
+            //   그 뒤 순환 컬럼의 범위(`spanOf`)를 편집해도 종전에는 아무도 다시 세지 않았다.
+            //   그러면 `tableGenerated:true`인 채로 화면·세션이 **옛 행 수**를 쓰고 자동값 조합은
+            //   **새 span**을 따라 — 끝 도달 판정("아래로 미완료 행 없음")과 실제 조사 대상이 갈린다.
+            //   처방은 보수적으로: 행 수가 **실제로 바뀐 경우에만** 생성을 되돌려 사용자가 다시
+            //   확인하게 한다(이름·표시 옵션 편집은 종전대로 생성 상태를 유지한다).
+            ...(state.tableGenerated && computeTotalRows(columns) !== state.totalRows
+              ? { tableGenerated: false }
+              : {}),
             inputSettingsDate: localTodayIso(),
           };
         }),
@@ -423,13 +434,28 @@ export const useSettingsStore = create<SettingsState>()(
           };
           // v0.7.0 — 신규 컬럼도 샘플키 유추 기본값을 받는다(auto+text → true).
           col.sampleKey = inferSampleKey(col);
-          return { columns: [...state.columns, col], inputSettingsDate: localTodayIso() };
+          const columns = [...state.columns, col];
+          // Y10 — 위 `updateColumn`과 같은 계약(신규 컬럼이 순환이면 행 수가 곱해진다).
+          return {
+            columns,
+            ...(state.tableGenerated && computeTotalRows(columns) !== state.totalRows
+              ? { tableGenerated: false }
+              : {}),
+            inputSettingsDate: localTodayIso(),
+          };
         }),
       removeColumn: (id) =>
-        set((state) => ({
-          columns: state.columns.filter((c) => c.id !== id),
-          inputSettingsDate: localTodayIso(),
-        })),
+        set((state) => {
+          const columns = state.columns.filter((c) => c.id !== id);
+          // Y10 — 순환 컬럼을 지우면 행 수가 나뉜다(같은 계약).
+          return {
+            columns,
+            ...(state.tableGenerated && computeTotalRows(columns) !== state.totalRows
+              ? { tableGenerated: false }
+              : {}),
+            inputSettingsDate: localTodayIso(),
+          };
+        }),
       reorderColumns: (fromIdx, toIdx) =>
         set((state) => {
           if (fromIdx === toIdx) return state;

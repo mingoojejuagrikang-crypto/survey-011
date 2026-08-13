@@ -14,6 +14,7 @@ import {
 } from '../../lib/pastValues';
 import { logger } from '../../lib/logger';
 import { localTodayIso } from '../../lib/weekTuesday';
+import { effectiveSampleKey } from '../../lib/columnFlags';
 
 /**
  * v0.49.0 W3(FB-3) — 「이전 조사」 행의 3상태. 민구 원문(08-13): *"'설정요약' 팝업시 이전 조사일
@@ -158,7 +159,12 @@ function usePrevSurvey(columns: Column[], roundDateColId: string | null): PrevSu
   //   고정 키 컬럼 구성이나 회차 컬럼이 바뀌면 그건 다른 사건이다.
   //   ⚠️ 모듈 스코프는 유지한다(팝업은 열 때마다 재마운트된다 — 그게 #9 결함의 절반이었다).
   const unqueryableKey = state.kind === 'unknown' && state.reason
-    ? `${state.reason}:${roundDateColId ?? '-'}:${columns.filter((c) => c.sampleKey).map((c) => c.id).join(',')}`
+    // 🔴 v0.49 r6 Y11(claude #12) — 키의 스키마 축은 **`effectiveSampleKey`**로 센다. 판정을
+    //   실제로 하는 `pastValues.fixedKeyColumns`가 그 술어를 쓰는데(columnFlags SSOT: 사용자
+    //   토글 > 자동 유추), 여기만 원시 플래그 `c.sampleKey`를 읽었다. 그래서 **자동 유추로만
+    //   키가 갈린 스키마 변경**은 dedupe 키가 그대로라 「새 사건」이 또 삼켜진다 — Z9 #12가
+    //   고치려던 그 형태가 한 겹 안쪽에 남아 있었다.
+    ? `${state.reason}:${roundDateColId ?? '-'}:${columns.filter((c) => effectiveSampleKey(c)).map((c) => c.id).join(',')}`
     : null;
   const unqueryableReason = state.kind === 'unknown' ? (state.reason ?? null) : null;
   useEffect(() => {

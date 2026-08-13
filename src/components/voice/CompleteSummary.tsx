@@ -68,7 +68,11 @@ export function CompleteSummary({
   // 🔴 v0.46.0 WP-B — 영수증도 같은 계약으로 끌어온다(민구 확정 08-05, 안 (a)).
   //  그룹 배열 **순서가 우선순위**다: `X / N`(주 정보)이 먼저 공간을 가져가고 영수증이 뒤를 받는다.
   const fitRef = useFitGroup<HTMLDivElement>(
-    [completedCount, totalRows, reviewCommit?.value, showReceipt],
+    // 🔴 v0.49 r6 Y9(claude #10) — `reaskReason`도 **의존**이다. 아래 주석이 말하는 「멤버가
+    //   아니다」와 「의존이 아니다」는 다른 축인데 Z5가 큐를 붙일 때 둘을 같이 봤다: 큐는 fit
+    //   **대상**은 아니지만 붙는 순간 이 컨테이너에서 **높이를 가져간다**. 그때 재계산이 안 돌면
+    //   `X / N`이 직전 배율 그대로 남아 넘친다(overflowY:auto라 잘리지는 않지만 요약이 밀린다).
+    [completedCount, totalRows, reviewCommit?.value, showReceipt, reaskReason],
     [
       {
         variable: '--fit-summary',
@@ -146,8 +150,12 @@ export function CompleteSummary({
       </span>
       {/* 🔴 v0.49 r5 Z5 — 거절 큐는 `X / N` **아래**에 둔다: 주 정보(§[4] 와이어프레임의 요약)가
           먼저 자리를 갖고, 큐는 그 아래 보조선으로 붙는다(영수증이 위를 차지하는 것과 대칭).
-          `ReaskCue`는 `reason`이 없으면 `null`을 돌려주므로 평상시 DOM 비용이 0이고 레이아웃도
-          불변이다 — 기존 fit 그룹(요약·영수증)에 새 멤버를 넣지 않는 이유가 그것이다.
+          `ReaskCue`는 `reason`이 없으면 `null`을 돌려주므로 평상시 DOM 비용이 0이고, 그래서
+          기존 fit 그룹(요약·영수증)에 **새 멤버로 넣지 않는다**(큐 자체는 축소 대상이 아니다).
+          ⚠️ v0.49 r6 Y9 — 다만 **평상시 레이아웃 불변 ≠ 큐가 섰을 때도 불변**이다. 큐가 붙으면
+          이 컨테이너의 사용 가능 높이가 줄어드는데 종전 fit deps에 `reaskReason`이 없어
+          재계산이 돌지 않았다. 위 deps 주석 참조 — 「멤버가 아니다」와 「의존이 아니다」는
+          다른 축이다.
           ⚠️ 이 컨테이너는 `overflowY:auto`라 큐가 붙어도 넘침이 잘리지 않는다(r3 #12 계약). */}
       <ReaskCue reason={reaskReason} />
     </div>

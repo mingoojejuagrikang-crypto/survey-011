@@ -771,7 +771,19 @@ export function useVoiceSession() {
     // v0.24.0 데이터-3 단조 가드 — await(saveSession) 뒤 시점. 이 사이 더 나중에 시작된(=새 값) persist가
     // 이미 dataStore에 반영됐다면(persistAppliedSeqRef가 더 큼), 옛 스냅샷으로 덮어쓰지 않는다.
     if (mySeq < persistAppliedSeqRef.current) {
-      if (publishPendingStage) useDataStore.getState().upsertSession(session);
+      // 🔴 v0.49 r6 Y12(claude #9) — **여기서 세션을 통째로 다시 올리지 않는다.** 이 분기는
+      //   「내 스냅샷은 낡았다」는 판정이고, 그런 스냅샷으로 `upsertSession`을 하면 더 나중
+      //   persist가 이미 반영한 값을 **옛 값으로 되돌린다**(단조 가드가 막으려던 바로 그 일).
+      //   그럼에도 뭔가 해야 하는 이유는 `publishPendingStage`가 첫 await 전에 올려 둔
+      //   `pendingValidationPersisting` 게이트 플래그 때문이다 — 그건 [확인]을 막는 UI 잠금이라
+      //   누군가 걷지 않으면 사용자가 영영 확인할 수 없다. 그래서 **그 플래그만 벗긴다.**
+      if (publishPendingStage) {
+        const cur = useDataStore.getState().sessions.find((x) => x.id === session.id);
+        if (cur?.pendingValidationPersisting) {
+          const { pendingValidationPersisting: _drop, ...rest } = cur;
+          useDataStore.getState().upsertSession(rest);
+        }
+      }
       return true;
     }
     persistAppliedSeqRef.current = mySeq;
