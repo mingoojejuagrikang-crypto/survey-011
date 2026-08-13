@@ -4988,8 +4988,37 @@ export function useVoiceSession() {
       //   「값 있음」이 항상 참 · `previousValue`는 캐스케이드가 IDB를 안 지우므로 modify와
       //   구별 불가). 스키마 확장은 마이그레이션 동반 계약이라 이 라운드 범위 밖 —
       //   [CELLWAIT-HOLD-RELOAD-1]에 기록했다.
+      // 🔴 v0.49 r5 Z4(claude #3) — **재무장은 문맥을 들고 간다.** 종전 이 한 줄은 새 `modify`
+      //   객체를 **맨손으로** 만들어, 들어올 때의 `awaiting`이 갖고 있던 세 문맥을 통째로
+      //   떨어뜨렸다. 형제 재무장 둘은 전부 보존한다 — `demoteTrendConfirm`(:158)과 음성
+      //   재위반 재무장(:3329 부근). 이 세 번째만 빠져 **수동(키패드) 커밋에서만** 새는
+      //   비대칭이었다(같은 상태에서 같은 값을 말로 넣으면 보존되고 손으로 넣으면 유실된다).
+      //     · `resumeReview`/`resumeCell` — 착지 예약. 보류가 [확인]으로 풀리면
+      //       `proceedAfterCommit`이 이걸 보고 검토 대기로 복귀한다. 떨어뜨리면 `advance()`로
+      //       빠져 사용자가 의도적으로 이동해 들어온 검토 문맥이 증발한다
+      //       ([NAV-FILLED-CELL-1]의 「모든 탈출은 재진입」 불변식 위반).
+      //   ⚠️ 승계원은 **직전 `awaiting`**이지 새 값이 아니다. `previousValue`만 방금 커밋된
+      //     후보값으로 갈아 끼운다(재발화가 이 값을 대체 대상으로 삼는다 — 종전 의미 유지).
+      //
+      //   🔴 **`fractionWhole`은 일부러 승계하지 않는다**(브리핑 원문에서 갈린 지점 — 레인 실측).
+      //     승계 규칙은 「예약이냐 값 문맥이냐」가 아니라 **「새 완결값이 들어왔는가」**다:
+      //       · `demoteTrendConfirm`은 승계한다 — 강등은 **같은 값**에 대한 모드 전환일 뿐이다.
+      //       · 이 자리와 :3329(음성 재위반 재무장)는 승계하지 **않는다** — 둘 다 사용자가
+      //         **완결된 새 값**을 넣은 뒤다. 브리핑이 대칭 대상으로 지목한 :3329가 정확히
+      //         `resumeReview`/`resumeCell`만 승계하고 `fractionWhole`은 두고 간다.
+      //     승계하면 오히려 결함이 된다: 바로 아래 `setReaskReason(null)`이 화면의 소수 문맥을
+      //     지우는데(`reaskDecimalWhole`도 함께 — sessionStore 계약) `awaiting`만 정수부를 들고
+      //     남으면 **화면과 합성이 갈린다**(R4-F3와 같은 형태). 「111 점 에」 뒤 키패드로 120.5를
+      //     넣었는데 다음 '오'가 111.5로 합성돼 방금 넣은 값을 덮는 것이 그 귀결이다 —
+      //     M3가 닫은 「무고지 합성」 그 자체다.
+      //   오라클: tests/v049-r5-z4-hold-context.spec.ts
       if (awaiting!.kind !== 'reviewWait' && awaiting!.kind !== 'cellWait') {
-        awaitingFieldRef.current = { kind: 'modify', row, colId, name: col.name, previousValue: value };
+        const prev = awaiting!;
+        awaitingFieldRef.current = {
+          kind: 'modify', row, colId, name: col.name, previousValue: value,
+          ...(resumeReviewOf(prev) != null ? { resumeReview: resumeReviewOf(prev) } : {}),
+          ...(resumeCellOf(prev) != null ? { resumeCell: resumeCellOf(prev) } : {}),
+        };
       }
       sess.setRowValue(row, colId, value);
       sess.setRecognized(value);
