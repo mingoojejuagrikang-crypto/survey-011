@@ -104,10 +104,20 @@ export const MOCK_INIT_SCRIPT = `
       getSettings: function(){ return { deviceId: 'fake-mic' }; },
       addEventListener: function(){}, removeEventListener: function(){}, stop: function(){},
     };
+    // 🔴 v0.49 r3 #11 — 마지막 fake 트랙을 노출한다(fixtures/gum.ts의 GUM_GRANT_SCRIPT와 같은
+    //   한 줄). 세션 **중** 스트림 사망(블루투스 낙하)을 e2e로 재현하려면 밖에서 readyState를
+    //   'ended'로 뒤집을 수 있어야 하고, 제품 판정(isStreamLost)이 정확히 그 필드를 본다.
+    //   ⚠️ 이 스크립트는 gum.ts의 **사본**이다(원본 주석의 계보 참조) — 한쪽만 고치면 갈린다.
+    window.__lastFakeTrack = fakeTrack;
     return { getAudioTracks: function(){ return [fakeTrack]; }, getTracks: function(){ return [fakeTrack]; } };
   }
   if (navigator.mediaDevices) {
-    try { navigator.mediaDevices.getUserMedia = function(){ return Promise.resolve(nextStream()); }; } catch(e){}
+    // #11 — window.__gumDeny로 **재획득 실패**를 만들 수 있다(트랙 사망 + 재획득 거부 = 헤드셋이
+    //   아예 사라진 형태). 기본값은 종전대로 항상 승인이다.
+    try { navigator.mediaDevices.getUserMedia = function(){
+      if (window.__gumDeny) return Promise.reject(new DOMException('Permission denied', 'NotAllowedError'));
+      return Promise.resolve(nextStream());
+    }; } catch(e){}
   }
 })();
 `;

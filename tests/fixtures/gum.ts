@@ -17,18 +17,30 @@
 export const GUM_GRANT_SCRIPT = `
 (function() {
   window.__gumCalls = [];
+  // 🔴 v0.49 r3 #11 — 마지막으로 만든 fake 트랙을 **노출한다**(\`window.__lastFakeTrack\`).
+  //   세션 **중** 스트림이 죽는 경로(블루투스 낙하)를 e2e로 재현하려면 트랙의 readyState를
+  //   밖에서 'ended'로 뒤집을 수 있어야 한다 — 제품의 판정(\`isStreamLost\`)이 정확히 그 필드를
+  //   본다(audioRecorder :290). 종전 스텁은 트랙을 클로저에 가둬 그 경로가 e2e로 도달 불가였고,
+  //   B3가 deny 스텁으로 옮겨 가면서 「세션 중 소실 → 재연결」 커버리지가 통째로 비었다.
+  //   ⚠️ 노출만 한다 — grant 스텁의 기본 동작(항상 live 스트림)은 종전과 완전히 같다.
   function nextStream() {
     var fakeTrack = {
       kind: 'audio', label: 'Fake Mic', readyState: 'live', muted: false,
       getSettings: function(){ return { deviceId: 'fake-mic' }; },
       addEventListener: function(){}, removeEventListener: function(){}, stop: function(){},
     };
+    window.__lastFakeTrack = fakeTrack;
     return { getAudioTracks: function(){ return [fakeTrack]; }, getTracks: function(){ return [fakeTrack]; } };
   }
   if (!navigator.mediaDevices) { try { navigator.mediaDevices = {}; } catch(e){} }
   try {
     Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
-      value: function(){ window.__gumCalls.push(Date.now()); return Promise.resolve(nextStream()); },
+      value: function(){
+        window.__gumCalls.push(Date.now());
+        // #11 — 재획득 실패 스위치(기본 off). activeZones의 사본과 같은 계약.
+        if (window.__gumDeny) return Promise.reject(new DOMException('Permission denied', 'NotAllowedError'));
+        return Promise.resolve(nextStream());
+      },
       writable: true, configurable: true,
     });
   } catch(e){}
