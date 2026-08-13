@@ -28,6 +28,7 @@ import {
   isBareResponseWord,
   getLastParseFailReason,
   getLastParseFailWhole,
+  getLastSalvageCandidate,
 } from './koreanNum';
 import type { Column } from '../types';
 
@@ -38,6 +39,10 @@ export interface ColParseResult {
   failReason: string | null;
   /** decimal_fraction_lost의 정수부. 그 외엔 null. */
   failWhole: string | null;
+  /** 🔴 v0.49 r2 W4 **섀도 계측** — `extraneous_token`에서 「자동 채택했더라면」의 값.
+   *  그 외 사유엔 null. **커밋에 쓰지 마라** — 08-13 실측에서 이 값은 4/4 오답이었다
+   *  (`koreanNum.ts`의 `getLastSalvageCandidate` 주석에 대조표). 로그 전용이다. */
+  salvageCandidate: string | null;
 }
 
 /** 호출자가 **파싱 성공 시에만** 방출하는 지연 로그. 순서 그대로 방출한다(바이트 계약 보존). */
@@ -54,6 +59,8 @@ export interface ParseAttemptResult {
   failReason: string | null;
   /** decimal_fraction_lost 시 파싱된 정수부. 성공이면 null. */
   failWhole: string | null;
+  /** W4 섀도 계측 — 위 `ColParseResult.salvageCandidate`와 같은 값(로그 전용). */
+  salvageCandidate: string | null;
   /** 성공 시 호출자가 방출할 로그(순서 보존). 실패면 빈 배열. */
   events: ParseAttemptEvent[];
 }
@@ -92,12 +99,16 @@ export function attemptParseValue(input: {
   //   반환값은 alts 루프가 덮어쓸 수 없으므로 "PRIMARY 직후에 캡처" 규약이 구조로 보장된다.
   let failReason: string | null = null;
   let failWhole: string | null = null;
+  // W4 섀도 계측도 **primary 직후에** 굳힌다 — 사유와 같은 수명이어야 짝이 맞는다(alts 루프가
+  //   `parseKoreanNumber`를 다시 부르면 모듈 상태는 덮이지만 이 지역 변수는 안 덮인다).
+  let salvageCandidate: string | null = null;
   if (parsed === null) {
     const primary = parseValueForColWithReason(col, text);
     parsed = primary.value;
     if (parsed === null) {
       failReason = primary.failReason;
       failWhole = primary.failWhole;
+      salvageCandidate = primary.salvageCandidate;
     }
   }
   if (parsed === null && alts.length > 1) {
@@ -191,7 +202,14 @@ export function attemptParseValue(input: {
     }
   }
 
-  return { parsed, failReason, failWhole, events: parsed === null ? [] : events };
+  // 🔴 계측은 **거절된 경우에만** 의미가 있다 — 커밋된 발화에 「채택했더라면」은 없다.
+  return {
+    parsed,
+    failReason,
+    failWhole,
+    salvageCandidate: parsed === null ? salvageCandidate : null,
+    events: parsed === null ? [] : events,
+  };
 }
 
 /**
@@ -218,28 +236,28 @@ export function attemptParseValue(input: {
  *  - 'int_decimal_rejected' — int 컬럼에 소수를 말했다. 🔴 **alts를 전부 건너뛴다**
  */
 export function parseValueForColWithReason(col: Column | null, raw: string): ColParseResult {
-  if (!col) return { value: null, failReason: 'no_column', failWhole: null };
+  if (!col) return { value: null, failReason: 'no_column', failWhole: null, salvageCandidate: null };
   if (col.type === 'options' && col.auto.kind === 'options') {
     const v = matchOption(raw, col.auto.selected.length ? col.auto.selected : col.auto.available);
-    return { value: v, failReason: v === null ? 'option_no_match' : null, failWhole: null };
+    return { value: v, failReason: v === null ? 'option_no_match' : null, failWhole: null, salvageCandidate: null };
   }
   if (col.type === 'text' || col.type === 'name') {
     const t = raw.trim();
-    return { value: t || null, failReason: t ? null : 'empty_text', failWhole: null };
+    return { value: t || null, failReason: t ? null : 'empty_text', failWhole: null, salvageCandidate: null };
   }
   if (col.type === 'date') {
     const m = raw.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
     if (m) {
       const [, y, mo, d] = m;
-      return { value: `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`, failReason: null, failWhole: null };
+      return { value: `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`, failReason: null, failWhole: null, salvageCandidate: null };
     }
     const t = raw.trim();
-    return { value: t || null, failReason: t ? null : 'empty_text', failWhole: null };
+    return { value: t || null, failReason: t ? null : 'empty_text', failWhole: null, salvageCandidate: null };
   }
   // int: strict — reject if the user pronounced a decimal
   if (col.type === 'int') {
     // 🔑 파서를 부르지 않는 유일한 숫자 경로다 — 사유를 여기서 직접 만들지 않으면 잔류값이 실린다.
-    if (/[점쩜.]/.test(raw)) return { value: null, failReason: 'int_decimal_rejected', failWhole: null };
+    if (/[점쩜.]/.test(raw)) return { value: null, failReason: 'int_decimal_rejected', failWhole: null, salvageCandidate: null };
     return colParseFromParser(parseKoreanNumber(raw, 0));
   }
   // float
@@ -249,8 +267,13 @@ export function parseValueForColWithReason(col: Column | null, raw: string): Col
 
 /** 파서 호출 **직후** 모듈 상태를 읽어 반환값으로 굳힌다 — 잔류 창(window)을 없앤다. */
 function colParseFromParser(value: string | null): ColParseResult {
-  if (value !== null) return { value, failReason: null, failWhole: null };
-  return { value: null, failReason: getLastParseFailReason(), failWhole: getLastParseFailWhole() };
+  if (value !== null) return { value, failReason: null, failWhole: null, salvageCandidate: null };
+  return {
+    value: null,
+    failReason: getLastParseFailReason(),
+    failWhole: getLastParseFailWhole(),
+    salvageCandidate: getLastSalvageCandidate(),
+  };
 }
 
 /** 값만 필요한 호출자를 위한 얇은 래퍼(계약 불변). 사유가 필요하면 위 WithReason을 써라. */

@@ -171,12 +171,20 @@ export function getLastParseFailReason(): string | null {
   return _lastParseFailReason;
 }
 
-/** 실패 사유를 기록하고 null을 돌려준다. `return fail('no_number')` 형태로만 실패한다(#3-2). */
-function fail(reason: string, whole?: number): null {
+/** 실패 사유를 기록하고 null을 돌려준다(#3-2). `salvage`는 W4 계측 전용(`extraneous_token`만). */
+function fail(reason: string, whole?: number, salvage?: string): null {
   _lastParseFailReason = reason;
   if (whole !== undefined) _lastParseFailWhole = String(whole);
+  if (salvage !== undefined) _lastSalvageCandidate = salvage;
   return null;
 }
+
+/** 🔴 v0.49 r2 W4 **섀도 계측**(민구 08-13) — 「자동 채택했더라면」의 값. 채택은 **하지 않는다**:
+ *  08-13·08-12 로그에서 재발화 정답과 대조하면 6/6이 틀렸고(299 vs 299.9 · 95.5 vs 325.5 …),
+ *  잡토큰이 곧 유실된 앞자리의 오인식이라(`상식`←삼십) 이 가드의 원사례를 재생산한다.
+ *  🔴 커밋 경로로 새면 안 된다. 대조표 `_ASK-voice.md` · 오라클 `koreanNum.spec.ts` W4. */
+let _lastSalvageCandidate: string | null = null;
+export function getLastSalvageCandidate(): string | null { return _lastSalvageCandidate; }
 
 /** v0.10.0 A1: decimal_fraction_lost일 때(소수 의도인데 소수부 유실) 파싱된 정수부 문자열.
  *  호출자가 "<정수부>점, 소수점 아래만 다시 말씀해 주세요" 타깃 재질문에 쓴다. 다른 실패 사유엔 null. */
@@ -215,6 +223,7 @@ function isHarmlessResidual(tok: string): boolean {
 export function parseKoreanNumber(raw: string, maxDecimals?: number): string | null {
   _lastParseFailReason = null;
   _lastParseFailWhole = null;
+  _lastSalvageCandidate = null; // W4 — 잔류 창 금지(사유와 같은 수명이어야 한다)
   if (!raw) return fail('empty');
   const s = raw.replace(/[, 　]/g, ' ').trim();
   if (!s) return fail('empty');
@@ -344,7 +353,8 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
     // digit lost. Unless EVERY residual token is a known-harmless unit/particle ("33.3 밀리",
     // "35 입니다" still commit), treat as ambiguous → re-ask, tagged 'extraneous_token'.
     if (lastValid !== null && residuals.length > 0 && !residuals.every(isHarmlessResidual)) {
-      return fail('extraneous_token');
+      // W4 계측 — 여기 도달 = 유효 숫자 **정확히 1개**(≥2는 위 `multi_numeric`이 걷어냈다).
+      return fail('extraneous_token', undefined, formatNum(lastValid, maxDecimals) ?? undefined);
     }
     if (lastValid !== null) return formatNum(lastValid, maxDecimals);
   }
@@ -381,7 +391,8 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       const pre = s.slice(0, idx);
       const post = s.slice(idx + chunk.length);
       if (!isHarmlessResidual(pre) || !isHarmlessResidual(post)) {
-        return fail('extraneous_token');
+        // W4 계측(무공백 형제 "제17.7"). 덩어리 2개↑는 위 `multi_arabic_chunk`가 걷어냈다.
+        return fail('extraneous_token', undefined, formatNum(parseFloat(chunk), maxDecimals) ?? undefined);
       }
       const n = parseFloat(chunk);
       if (Number.isFinite(n)) return formatNum(n, maxDecimals);

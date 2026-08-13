@@ -20,6 +20,7 @@ import {
   isAmbiguousSingleSyllable,
   isBareResponseWord,
   getLastParseFailReason,
+  getLastSalvageCandidate,
   getLastParseFailWhole,
 } from '../src/lib/koreanNum';
 
@@ -273,6 +274,56 @@ test.describe('v0.7.0 STT-C — 단일 숫자 + 무관 비숫자 토큰은 침�
   });
   test('"개 95.5" → null ([STT-6] 백→개 mishear — 개는 화이트리스트에 없다)', () => {
     expect(parseKoreanNumber('개 95.5')).toBeNull();
+  });
+
+  // ── 🔴 v0.49 r2 W4 — 섀도 계측(민구 재결정 2026-08-13) ────────────────────────────────
+  // 브리핑 원안은 「유효 숫자 1개면 자동 채택」이었다. 08-13 로그를 실측해 반증했다: 재질문
+  // 직후 사용자가 다시 말해 커밋된 값(=정답)과 대조하면 **동일 셀에서 정답이 확정되는 4건
+  // 전부 채택값이 틀렸다**(299→299.9 · 300→311.1 · 3.3→33.3 · 133.3→333.3). 결정적인 건 개수가
+  // 아니라 방향이다 — 잡토큰이 곧 유실된 앞자리의 오인식이라(`상식`←삼십, `단`←삼백), 자동
+  // 채택은 위 STT-C 원사례(`현백 33.3`)를 그대로 재생산한다.
+  // → **거절·재질문은 현행 그대로**, 「채택했더라면」의 값만 관측한다.
+  //   집계 명령(다음 회차용): `type='stt'` & `extra^='would_salvage:'` 를 재발화 커밋값과 대조.
+  test.describe('W4 섀도 계측 — 거절은 그대로, 구제 후보만 관측한다', () => {
+    // 08-13 실측 extraneous_token **6건 전량**(브리핑 목록엔 `300 기를 떠네`가 빠져 있었다).
+    const salvageObserved: Array<[string, string]> = [
+      ['그냥 351.5', '351.5'],
+      ['단 133.3', '133.3'],
+      ['299 정도', '299'],
+      ['상식 3.3', '3.3'],
+      ['희정 355 제곱', '355'],
+      ['300 기를 떠네', '300'],
+    ];
+    for (const [utterance, candidate] of salvageObserved) {
+      test(`"${utterance}" → 여전히 null(재질문 유지) + would_salvage=${candidate}`, () => {
+        expect(parseKoreanNumber(utterance, 1), '🔴 구제값이 커밋 경로로 새면 안 된다').toBeNull();
+        expect(getLastParseFailReason()).toBe('extraneous_token');
+        expect(getLastSalvageCandidate()).toBe(candidate);
+      });
+    }
+
+    // 🔴 불변 유지 — 다른 사유는 구제 후보 자체가 없다(계측이 사유 경계를 넘지 않는다).
+    const noCandidate: Array<[string, string]> = [
+      ['100 122.2', 'multi_numeric'],
+      ['삼배', 'no_number'],
+      ['음식점', 'decimal_whole_invalid'],
+      ['300일 전 일', 'digit_token_unparsed'],
+      ['33 점 선', 'decimal_fraction_lost'],
+    ];
+    for (const [utterance, reason] of noCandidate) {
+      test(`"${utterance}" → ${reason}, 구제 후보 없음`, () => {
+        expect(parseKoreanNumber(utterance, 1)).toBeNull();
+        expect(getLastParseFailReason()).toBe(reason);
+        expect(getLastSalvageCandidate(), '거절 사유가 다르면 후보를 만들지 않는다').toBeNull();
+      });
+    }
+
+    test('성공 파싱은 직전 발화의 구제 후보를 물려받지 않는다 (잔류 창 금지)', () => {
+      expect(parseKoreanNumber('상식 3.3', 1)).toBeNull();
+      expect(getLastSalvageCandidate()).toBe('3.3');
+      expect(parseKoreanNumber('44.4', 1)).toBe('44.4');
+      expect(getLastSalvageCandidate(), '성공 발화가 앞 발화의 후보를 끌고 오면 안 된다').toBeNull();
+    });
   });
 
   // Whitelisted units / particles still commit (no false-positive re-asks).

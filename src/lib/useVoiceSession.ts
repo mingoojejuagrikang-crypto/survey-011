@@ -2647,6 +2647,20 @@ export function useVoiceSession() {
         colName: awaiting.name,
         ...(fractionWhole != null ? { originalText: `frac_ctx:${fractionWhole}` } : {}),
       });
+      // 🔴 v0.49 r2 W4 — **섀도 계측**(민구 재결정 08-13, `_ASK-voice.md` BLOCKING #1 → ⓐ).
+      //   거절·재질문은 **현행 그대로**이고, 「자동 채택했더라면 무엇이었을지」만 남긴다. 다음
+      //   회차가 이 값과 **재발화 후 실제 커밋값**을 대조해 오채택률을 시트 위험 0으로 잰다
+      //   (08-13 실측으로는 4/4 오답 — `koreanNum.ts`의 `getLastSalvageCandidate` 주석에 대조표).
+      //   🔴 별도 라인으로 남기는 이유: 위 `stt_parse_failed`의 `extra`는 사유 **단독**이 바이트
+      //   계약이다(PRINCIPLES §4 — 꼬리 확장은 이벤트별 개별 승인). 꼬리를 붙이면 사유를
+      //   정확일치로 세는 기존 집계가 조용히 갈린다. 신규 type도 만들지 않는다(log-replay 호환)
+      //   — `enterReviewWait`이 `command`를 재사용한 것과 같은 판단이다.
+      if (attempt.salvageCandidate != null) {
+        logCell({
+          type: 'stt', extra: `would_salvage:${attempt.salvageCandidate}`, text,
+          row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
+        });
+      }
       // v0.23.0 입력탭#2 — 파싱 실패도 재질문 사유로 표면화(높은 신뢰도인데 재질문되는 혼동 해소).
       useSessionStore.getState().setReaskReason('parse_failed');
       // v0.10.0 A1: 소수 의도인데 소수부 유실("111 점 에") → 정수부를 유지하고 "소수점 아래만" 타깃

@@ -106,6 +106,11 @@ test.describe('P-3 — 08-12 stt_parse_failed 6건: 정상 거절 5 · 처방(�
     // 🔴 반증 짝 — 어떤 alt로도 95.5/15.5가 새어 나오면 안 된다.
     expect(r.parsed).not.toBe('95.5');
     expect(r.parsed).not.toBe('15.5');
+    // 🔴 v0.49 r2 W4 섀도 계측 — 「자동 채택했더라면」의 값이 관측으로만 나온다.
+    //   이 케이스가 그 정책의 **반례 그 자체**다: 후보는 95.5인데 정답은 325.5다(백단위 유실).
+    //   08-13 라운드의 4/4 오답과 **독립적으로 같은 방향**을 가리킨다.
+    expect(r.salvageCandidate, '후보는 관측되지만 커밋되지 않는다').toBe('95.5');
+    expect(r.salvageCandidate).not.toBe('325.5'); // 정답과 다르다 — 자동 채택이 위험한 이유
   });
 
   test('#8987 09:55:57 extraneous_token — 같은 클래스 두 번째(당 백기)', () => {
@@ -114,6 +119,8 @@ test.describe('P-3 — 08-12 stt_parse_failed 6건: 정상 거절 5 · 처방(�
     expect(r.parsed).toBeNull();
     expect(r.failReason).toBe('extraneous_token');
     expect(r.parsed).not.toBe('16.6');
+    // W4 섀도 계측 — 후보 16.6 vs 정답 366.6. 위 #8933과 같은 반례(08-12 라운드 2/2).
+    expect(r.salvageCandidate).toBe('16.6');
   });
 
   test('결산 5/6: 정상 거절분은 파싱 실패이므로 지연 로그(events)를 하나도 방출하지 않는다', () => {
