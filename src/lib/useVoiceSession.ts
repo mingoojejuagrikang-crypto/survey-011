@@ -333,6 +333,8 @@ export function useVoiceSession() {
   // 세션 시작 시점의 로컬 오늘 ISO — evaluateTrend가 값 커밋마다 Date를 새로 만들지 않게
   // start()에서 1회 계산(현장 세션은 자정을 의미 있게 넘기지 않는다).
   const sessionTodayRef = useRef<string>('');
+  /** Y7 — 아직 메모리 store에 게시되지 않은(=IDB write in-flight) 직전 persist 스냅샷. */
+  const inFlightSessionRef = useRef<Session | null>(null);
   // Ref to resume() — breaks the circular dependency between handleFinal and resume.
   // v0.20.0 Phase 5 #3 — resume이 해제 방식(source)을 받도록 시그니처 확장.
   const resumeRef = useRef<(source?: 'voice' | 'touch') => Promise<void>>(async () => {});
@@ -595,9 +597,17 @@ export function useVoiceSession() {
     // F1: read the existing persisted session once so each row can preserve its sheetRow/syncState
     // (the same source we merge audioClips from). Without this, every persist after a sync wiped
     // row-level tracking → the next sync re-appended already-uploaded rows (duplicates).
+    // 🔴 v0.49 r6 Y7(codex R5-F2) — **아직 게시되지 않은 직전 스냅샷도 승계원이다.**
+    //   메모리 store 게시(:이 함수 말미 `upsertSession`)는 `await saveSession` **뒤**다. 첫 put이
+    //   느리면(기기 IDB 지연·대용량 클립) 그 사이에 시작된 두 번째 persist가 `existingSession=null`을
+    //   잡고 **모든 행을 `composeRowValues`로 다시 만든다** — Z3의 자동값 동결이 통째로 무력화된다.
+    //   codex 재현: 첫 put을 8초 늦추고 1행 커밋 → 자정 넘김 → 2행 커밋 → **1행의 조사일자가
+    //   다음 날로 덮였다**(Z3 오라클은 첫 persist가 IDB에 정착한 뒤에만 자정을 넘겨 이 창을 못 봤다).
+    //   👉 조립 직후(첫 await 전) 스냅샷을 ref에 남기고, store가 아직 비어 있으면 그걸 승계원으로
+    //     쓴다. durable 실패로 그 put이 버려지더라도 승계 대상은 **기록 시점 자동값**이라 옳다.
     const existingSession = useDataStore.getState().sessions.find(
       (s) => s.id === sessionIdRef.current,
-    );
+    ) ?? (inFlightSessionRef.current?.id === sessionIdRef.current ? inFlightSessionRef.current : undefined);
     const buildRow = (r: number, complete: boolean): SessionRow => {
       const existingRow = existingSession?.rows.find((row) => row.index === r);
       // Merge stored clips (from previous persists) with newly recorded clips
@@ -681,7 +691,15 @@ export function useVoiceSession() {
       // v0.7.0: LOCAL date, not UTC — toISOString() stamped KST 00:00~08:59 sessions with
       // yesterday's date, so localTodayISO() 오늘-세션 매칭에서 그날 아침 세션이 사라졌다.
       // 코드베이스 지배 규약도 로컬(autoValue.ts 날짜 컬럼).
-      date: localTodayISO(),
+      // 🔴 v0.49 r6 Y7(claude #6) — **세션의 날짜는 세션이 시작된 날이다. 매 persist마다 다시
+      //   스탬프하지 않는다.** 종전 `localTodayISO()`는 호출 **시각**을 찍었다 — 자정을 넘긴 세션
+      //   (현장 새벽 작업·긴 세션)은 persist 한 번에 세션 전체의 `date`가 다음 날로 바뀌고,
+      //   그 필드는 「오늘 세션」 매칭·목록·시트 라벨의 기준이라 **그날 아침 세션이 사라지는**
+      //   v0.7.0 결함과 같은 증상이 시각 축에서 되살아난다. 행의 조사일자는 Z3가 이미 동결했고,
+      //   세션 헤더만 남아 있던 자리다.
+      //   승계 순서: 이미 기록된 값(`existingSession.date`) → 세션 고정 시계(`sessionTodayRef`,
+      //   start()에서 1회 계산) → 최후에만 현재 로컬 날짜.
+      date: existingSession?.date ?? sessionTodayRef.current ?? localTodayISO(),
       label: sessionLabelRef.current || sess.sessionLabel,
       columns,
       ...(target ? { target } : {}),
@@ -698,6 +716,9 @@ export function useVoiceSession() {
         ? { pendingValidation: (pendingOverride === undefined ? existingSession?.pendingValidation : pendingOverride)! }
         : {}),
     };
+    // Y7 — 첫 await 전에 남긴다(위 `existingSession` 폴백의 짝). 이 시점의 `session`이 곧
+    //   「이번 persist가 내구화하려는 형상」이고, 게시 전 창에서 시작된 persist는 이것을 봐야 한다.
+    inFlightSessionRef.current = session;
     if (publishPendingStage && session.pendingValidation) {
       // ManualValueSheet는 async onCommit을 await하지 않는다. 첫 await(IDB put) 전에 후보와 pending
       // 태그를 같은 메모리 스냅샷으로 공개해야 그 짧은 동안 Data sync/export가 후보를 확정값으로

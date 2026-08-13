@@ -220,7 +220,12 @@ test('[node] ①c 행 완료 부기 배선 4곳(advance · 커밋 종단 · 직�
   //   나머지 하나(직접 수정 우회)만 `void`인데, 그 자리는 현재 모든 음성 도달 상태에서 no-op이라
   //   고지할 실패가 없다(그 콜사이트 주석). 그래서 이 계약은 **개수 + 실패를 받는가**를 함께 잰다 —
   //   `void`로 되돌아가면 「성공 고지 뒤 값 유실」이 조용히 재개방되기 때문이다.
-  expect(calls.length, '배선이 4곳이 아니다 — 어느 커밋 경로가 빠졌는지 확인해라(#1 근인)').toBe(4);
+  //   🔴 v0.49 r6 Y3 — **4 → 5.** 다섯 번째는 `advance()`의 **종료 가드**다: 종료 중에는 국면
+  //   전이·낭독·전진을 하지 않되 부기는 남겨야 한다(건너뛰면 커밋된 값이 완료 마킹 없이
+  //   `stop()`의 persist에 `complete:false`로 굳어 sync가 영영 안 올린다). 그 자리는 실패를
+  //   고지할 표면이 없어(StoppingState) `void`다 — durable 실패는 `stop()`의 `persistError`가 받는다.
+  expect(calls.length, '배선이 5곳이 아니다 — 어느 커밋 경로가 빠졌는지 확인해라(#1 근인)').toBe(5);
+  expect(src, 'advance() 종료 가드의 부기(Y3)').toContain('if (isRowVoiceComplete(row, vc)) void finalizeRowCompletion(row);');
   expect(src, 'advance()의 행 완료 부기(durable 결과 수신)').toContain('if (!(await finalizeRowCompletion(row))) {');
   expect(src, '커밋 종단(proceedAfterCommit) 진입점 부기(durable 결과 수신)')
     .toContain('if (awaiting && !(await finalizeRowCompletion(awaiting.row))) {');

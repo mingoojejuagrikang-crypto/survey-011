@@ -133,3 +133,79 @@ test('② 과잉 방어 반증 — 승계는 자동 컬럼만이다. 기존 행�
     '승계가 사람이 넣는 컬럼까지 얼렸다 — 정정이 내구화되지 않으면 시트가 옛값으로 남는다',
   ).toBe('99.9');
 });
+
+// ── v0.49 r6 Y7 — 첫 persist가 **in-flight**인 창(codex R5-F2 · claude #6) ─────────────────
+/** IDB에 내구화된 세션 헤더(날짜) — 행이 아니라 **세션 자체**의 `date`를 잰다. */
+async function persistedSessionDate(page: Page): Promise<string | undefined> {
+  return page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((r) => {
+      const q = indexedDB.open('survey-011');
+      q.onsuccess = () => r(q.result);
+    });
+    const all: { date?: string }[] = await new Promise((r) => {
+      const tx = db.transaction('sessions', 'readonly');
+      const g = tx.objectStore('sessions').getAll();
+      g.onsuccess = () => r(g.result as never);
+      g.onerror = () => r([]);
+    });
+    db.close();
+    return all.at(-1)?.date;
+  });
+}
+
+/**
+ * ③ ⚠️ **반증 red가 없는 테스트다**(정직한 표기 — fixr6 실측).
+ *
+ * codex R5-F2는 첫 put을 8초 늦춘 상태에서 두 persist가 겹치면 `existingSession=null`이라
+ * 1행 날짜가 덮인다고 보고했다. 같은 형상을 여기서 재현하려 했으나 **현행 코드에서는 창이
+ * 열리지 않는다**: 같은 라운드의 Y1이 `finalizeRowCompletion`을 `await`로 바꿔 행 완료 persist가
+ * **직렬화**됐기 때문에, 두 번째 커밋이 시작될 때 첫 put은 이미 정착해 있다. `persistSession`의
+ * in-flight 스냅샷 폴백(Y7)을 제거해도 이 테스트는 green이다 — 즉 이 테스트가 지키는 것은
+ * **「창이 닫혀 있다」는 현행 상태**이지 폴백 코드가 아니다.
+ * 그래도 남긴다: Y1의 await가 언젠가 풀리면(성능 사유 등) 그 순간 이 형상이 다시 열리고,
+ * 그때 이 테스트가 먼저 운다. 폴백 코드 자체는 그 재개방에 대한 방어로 유지한다.
+ */
+test('③ 두 persist가 겹쳐도 기존 행의 조사일자가 덮이지 않는다 (R5-F2 — 반증 red 없음)', async ({ page }) => {
+  await bootZ3(page);
+  // ①과 갈리는 지점: ①은 1행 persist가 **IDB에 정착한 뒤** 자정을 넘긴다. 여기서는 첫 put을
+  //   늦춰 두 persist를 겹치게 한다.
+  await page.evaluate(() => {
+    (window as unknown as { __survey011DelaySessionPutMs?: number }).__survey011DelaySessionPutMs = 4000;
+  });
+  await fireStt(page, '삼십오 점 일', 300); // 1행 완료 → persist 시작(4초 지연)
+  await page.waitForTimeout(400);
+  await crossMidnight(page);
+  // 두 put이 **겹친 채로** 끝나야 한다 — 지연을 여기서 풀면 두 번째가 먼저 정착해 창이 닫힌다.
+  await fireStt(page, '사십이 점 삼', 300); // 첫 put이 끝나기 전에 2행 커밋 → 두 번째 persist
+  await page.waitForTimeout(9000); // 두 put이 모두 끝나기를 기다린다(각 4초 지연)
+  await page.evaluate(() => {
+    (window as unknown as { __survey011DelaySessionPutMs?: number }).__survey011DelaySessionPutMs = 0;
+  });
+
+  const rows = await persistedRows(page);
+  const row1 = rows.find((r) => r.i === 1);
+  const row2 = rows.find((r) => r.i === 2);
+  expect(row1?.v.m1, '전제: 1행이 내구화됐다').toBe('35.1');
+  expect(row2?.v.cd, '전제: 자정 이동이 실제로 먹혔다').not.toBe(row1?.v.cd);
+  expect(
+    row1?.v.cd,
+    '게시 전 창에서 승계원이 안 보여 1행의 조사일자가 다음 날로 덮였다 — 다음 sync가 시트를 UPDATE한다',
+  ).not.toBe(row2?.v.cd);
+});
+
+test('④ 세션의 date는 세션이 시작된 날이다 — persist마다 다시 스탬프하지 않는다 (claude #6)', async ({ page }) => {
+  await bootZ3(page);
+  await fireStt(page, '삼십오 점 일', 1500);
+  await waitForTtsIdle(page);
+  const first = await persistedSessionDate(page);
+  expect(first, '전제: 세션 날짜가 기록됐다').toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+  await crossMidnight(page);
+  await fireStt(page, '사십이 점 삼', 1800);
+  await waitForTtsIdle(page);
+
+  expect(
+    await persistedSessionDate(page),
+    '자정을 넘긴 persist가 세션 헤더의 날짜를 다시 스탬프했다 — 「오늘 세션」 매칭에서 그날 세션이 사라진다',
+  ).toBe(first);
+});
