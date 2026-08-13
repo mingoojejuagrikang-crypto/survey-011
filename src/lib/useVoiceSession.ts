@@ -2673,6 +2673,10 @@ export function useVoiceSession() {
       recorderRef.current?.startClip(); // restart clip
       useSessionStore.getState().setRecognized('');
       useSessionStore.getState().setReaskReason('low_confidence');
+      // 🔴 v0.49 r2 B2(민구 결정 08-13 ⓐ) — **거절 비프.** 아래 주석이 "부정 비프가 전담한다"고
+      //   적어 온 그 비프다(합집합 C2: 배선된 적이 없어 전제가 허구였다). TTS **이전에** 낸다 —
+      //   커밋 확인음이 세운 「신호음 → 말」 순서 계약과 같다(민구 지정 순서).
+      playBeep('reject');
       // v0.48.0 P3(NEW-2, 민구 제보 08-10) — 재질문 사유를 TTS로 읽는다(종전엔 화면만 알았다).
       // 🔴 v0.49 r2 W2(확정표 #1) — **사유만 말한다.** 꼬리("잘 못 들었습니다. {항목} 다시 말씀해
       //   주세요.")는 삭제됐다: 사용자는 이미 그 셀에 답하는 중이고, 재시도 신호는 바로 위
@@ -2746,6 +2750,10 @@ export function useVoiceSession() {
       }
       // v0.23.0 입력탭#2 — 파싱 실패도 재질문 사유로 표면화(높은 신뢰도인데 재질문되는 혼동 해소).
       useSessionStore.getState().setReaskReason('parse_failed');
+      // 🔴 v0.49 r2 B2 — 거절 비프(위 저신뢰 분기와 같은 신호·같은 순서). **아래 3분기가 갈리기
+      //   전에** 한 번 낸다: 소수부 타깃 재질문도 「값을 안 받았다」는 점에서 같은 거절이고,
+      //   분기마다 배선하면 다음 분기가 추가될 때 조용히 빠진다(이 파일이 반복해 겪은 드리프트).
+      playBeep('reject');
       // v0.10.0 A1: 소수 의도인데 소수부 유실("111 점 에") → 정수부를 유지하고 "소수점 아래만" 타깃
       // 재질문(전체 재발화 회피). 값 추측(에→1)은 하지 않는다 — 같은 STT 문자열이 111.1·111.5
       // 양쪽에서 나와 조용한 오커밋이 되기 때문(민구 결정).

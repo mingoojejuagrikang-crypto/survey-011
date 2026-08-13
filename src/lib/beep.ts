@@ -27,7 +27,14 @@ export { BEEP_VOLUME_MAX };
  *  종전엔 정상 커밋에 소리가 아예 없었다(alert·corrected·modify 3종뿐) — 민구 제보 F7②의
  *  "확인음이 없다"가 그것이다. 호출부는 useVoiceSession의 커밋 경로 하나이고, **확인음 →
  *  인식값 TTS** 순서가 계약이다(민구 지정 순서). */
-type BeepKind = 'alert' | 'corrected' | 'modify' | 'commit';
+/** 🔴 v0.49 r2 B2(민구 결정 08-13 ⓐ) — 'reject' 신설: **거절 신호**(저신뢰·파싱 실패 재질문).
+ *  W2가 재질문 TTS를 사유 두 어절로 줄이면서 코드 주석이 *"재시도 신호는 화면 큐와 부정 비프가
+ *  전담한다"* 고 적었는데, **그 부정 비프가 배선된 적이 없었다**(합집합 C2 — 전제가 허구).
+ *  화면을 끄고 2~3m 떨어져 쓰는 사용자에게는 그 두 어절이 유일한 신호였다.
+ *  🔑 **음원은 신설하지 않는다**(민구 지시) — 'alert'과 같은 부정 극성 변형이다. 그런데도 kind를
+ *  가르는 이유는 **로그**다: 같은 이름으로 내보내면 이상치 알람 재생 횟수 집계가 거절 건수와
+ *  섞여 조용히 오염된다(A4가 막은 것과 같은 종류의 오염). */
+type BeepKind = 'alert' | 'corrected' | 'modify' | 'commit' | 'reject';
 
 /** modify(수정 모드 진입) 중립음 — 현행 값 그대로. */
 const MODIFY_TONE: ScheduledTone = {
@@ -197,8 +204,8 @@ export function playBeep(kind: BeepKind): void {
       outcome = playSchedule([MODIFY_TONE]);
     } else {
       // 🔴 v0.46.0 WP-I — store가 아니라 고정 상수를 쓴다(위 FIXED_* 주석의 근거).
-      //    'commit'(WP-E 신설)·'corrected'는 긍정 = 화음, 'alert'는 부정 = 트릴.
-      const variant = kind === 'alert'
+      //    'commit'(WP-E 신설)·'corrected'는 긍정 = 화음, 'alert'·'reject'(r2 B2)는 부정 = 트릴.
+      const variant = kind === 'alert' || kind === 'reject'
         ? getBeepVariant(FIXED_NEGATIVE_ID, 'negative')
         : getBeepVariant(FIXED_POSITIVE_ID, 'positive');
       outcome = playSchedule(buildBeepSchedule(variant));

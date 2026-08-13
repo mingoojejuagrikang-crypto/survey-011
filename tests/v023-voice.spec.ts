@@ -607,3 +607,42 @@ test('A4-r2 — 소수부 재질문 문맥에서는 would_salvage를 남기지 �
     .toBeGreaterThanOrEqual(2);
   expect(events.some((e) => e.type === 'value'), '구제값이 커밋되면 안 된다').toBe(false);
 });
+
+/** `beep_play:kind=<kind>` 재생 계측 집계(v047-cfix4-alert-order.spec.ts와 같은 채널). */
+async function beepCount(page: Page, kind: string): Promise<number> {
+  const events = await loadLogEvents(page);
+  return events.filter((e) => e.type === 'app' && String(e.extra ?? '').startsWith(`beep_play:kind=${kind}`)).length;
+}
+
+test('B2-r2 — 거절(저신뢰·파싱실패) 두 분기가 부정 비프를 낸다 + ReaskCue 병행 (민구 결정 ⓐ)', async ({ page }) => {
+  await setupAndStart(page);
+
+  // ① 저신뢰 거절.
+  await fireSttConf(page, '담백', 0.3, 700);
+  const cue = page.locator('[data-testid="reask-cue"]');
+  await expect(cue).toBeVisible({ timeout: 2500 });
+  expect(await cue.getAttribute('data-reason')).toBe('low_confidence');
+  // 🔴 W2가 재질문 TTS를 두 어절로 줄이며 "재시도 신호는 화면 큐와 **부정 비프**가 전담한다"고
+  //    적었지만 그 비프는 배선된 적이 없었다(합집합 C2). 화면을 끄고 2~3m 떨어져 쓰는
+  //    사용자에게는 그 두 어절이 유일한 신호였다.
+  expect(await beepCount(page, 'reject'), '저신뢰 거절에 부정 비프가 없다').toBe(1);
+  // 화면 큐는 그대로 병행한다(비프가 화면 신호를 대체하는 것이 아니다).
+  expect(await ttsLog(page), '사유 TTS도 그대로다').toContain('소리가 불확실.');
+
+  // ② 파싱 실패 거절 — 같은 신호.
+  await fireStt(page, '바나나 사과 포도', 800);
+  expect(await cue.getAttribute('data-reason')).toBe('parse_failed');
+  expect(await beepCount(page, 'reject'), '파싱 실패 거절에 부정 비프가 없다').toBe(2);
+
+  // ③ 🔴 실측: **거절당 정확히 1회**다(브리핑 「연타 시 과다 재생은 실측 후 판단」).
+  //    3회 더 거절시켜 3회만 느는지 본다 — 재질문 TTS/화면 큐 갱신마다 덧나면 여기서 잡힌다.
+  await fireStt(page, '바나나 사과 포도', 700);
+  await fireStt(page, '바나나 사과 포도', 700);
+  await fireStt(page, '바나나 사과 포도', 700);
+  expect(await beepCount(page, 'reject'), '거절 1건당 비프 1회를 넘었다(연타 과다 재생)').toBe(5);
+
+  // ④ 알람 비프와 **섞이지 않는다** — 거절 경로는 값을 커밋하지 않으므로 이상치 알람 자체가
+  //    성립하지 않는다(중첩 실측 결론). kind를 갈라 둔 덕에 기존 alert 집계도 오염되지 않는다.
+  expect(await beepCount(page, 'alert'), '거절이 알람 비프 집계를 오염시켰다').toBe(0);
+  expect(await beepCount(page, 'commit'), '거절인데 커밋 확인음이 났다').toBe(0);
+});
