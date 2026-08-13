@@ -22,7 +22,6 @@
  */
 import type JSZip from 'jszip';
 import type { Session } from '../types';
-import { WOULD_SALVAGE_PREFIX } from './logEvents';
 
 export const CLIPS_MANIFEST_SCHEMA = 1;
 export const CLIPS_MANIFEST_FILENAME = 'clips-manifest.json';
@@ -131,7 +130,15 @@ function findLastCellEvent(
     const e = events[i];
     if (!e || (e.type !== 'value' && e.type !== 'stt')) continue;
     if (e.sessionId !== sessionId || e.row !== row || e.colId !== colId) continue;
-    if (e.type === 'stt' && typeof e.extra === 'string' && e.extra.startsWith(WOULD_SALVAGE_PREFIX)) continue;
+    // 🔴 v0.49 r3 #10(claude r2 MEDIUM) — **판별을 접두 allowlist에서 구조로 바꾼다.** A3는
+    //    `would_salvage:` 하나만 걸렀는데, `type:'stt'`로 남는 **주석 라인**은 그것만이 아니다:
+    //    `manual_hold_restore_controller:started`(useVoiceSession :4334)는 같은 셀 좌표로 남되
+    //    text·confidence가 **아예 없어** 같은 가림을 그대로 재현했고(0.95 → null),
+    //    `decimal_fraction_recovered`·`kick_result:*`도 같은 부류다. allowlist는 **열린 채 실패**한다 —
+    //    새 주석 라인이 추가될 때마다 조용히 새 구멍이 난다.
+    //    🔑 판별자: **엔진 관측 라인에는 `extra`가 없다**(:2622 — text+confidence+alts만 싣는다).
+    //    `extra` 태그가 붙은 stt는 앱이 덧붙인 주석이다. 이제 닫힌 채 실패한다(모르는 태그는 제외).
+    if (e.type === 'stt' && typeof e.extra === 'string' && e.extra !== '') continue;
     const picked = {
       sttText: typeof e.text === 'string' ? e.text : null,
       confidence: typeof e.confidence === 'number' ? e.confidence : null,

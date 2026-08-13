@@ -260,6 +260,42 @@ test('A3 — 합성 라인이 그 셀의 유일한 stt면 정직하게 null이�
   expect(manifest.clips[0].confidence).toBeNull();
 });
 
+test('r3 #10 — 다른 주석 stt(manual_hold_restore)도 원 STT의 confidence를 가리지 않는다', () => {
+  // 🔴 claude r2 #10 — A3의 가드가 `would_salvage:` **단일 접두 allowlist**라, 같은 셀 좌표로
+  //    남는 다른 주석 라인은 그대로 통과했다. `manual_hold_restore_controller:started`
+  //    (useVoiceSession :4334)는 text·confidence가 **아예 없어** 원 STT의 0.95를 null로 떨어뜨리고
+  //    sttText까지 지운다 — A3가 고친 것과 완전히 같은 가림이고 접두만 다르다.
+  //    이제 판별은 접두가 아니라 구조다: 엔진 관측 라인에는 `extra`가 없다.
+  const events = [
+    { type: 'stt', sessionId: 'S1', row: 5, colId: 'c1', text: '삼십삼 점 삼', confidence: 0.95 },
+    { type: 'stt', sessionId: 'S1', row: 5, colId: 'c1', extra: 'manual_hold_restore_controller:started' },
+  ] as unknown as ManifestSourceEvent[];
+  const manifest = buildClipsManifest(
+    [{ file: 'clips/S1:5:c1.webm', key: 'S1:5:c1' }],
+    [{ id: 'S1', rows: [{ index: 5, values: { c1: '' } }] }] as unknown as Session[],
+    events,
+    '0.49.0',
+  );
+  expect(manifest.clips[0].sttText, '주석 라인이 원 발화 텍스트를 지웠다').toBe('삼십삼 점 삼');
+  expect(manifest.clips[0].confidence, '주석 라인이 원 STT의 confidence를 가렸다').toBe(0.95);
+});
+
+test('r3 #10 — 파서 주석(decimal_fraction_recovered)도 관측으로 세지 않는다 — 모르는 태그는 제외', () => {
+  // allowlist는 **열린 채 실패**한다(새 태그가 추가될 때마다 조용히 구멍). 이제 닫힌 채 실패한다.
+  const events = [
+    { type: 'stt', sessionId: 'S1', row: 6, colId: 'c1', text: '이십구 점 부', confidence: 0.82 },
+    { type: 'stt', sessionId: 'S1', row: 6, colId: 'c1', text: '29.9', extra: 'decimal_fraction_recovered' },
+  ] as unknown as ManifestSourceEvent[];
+  const manifest = buildClipsManifest(
+    [{ file: 'clips/S1:6:c1.webm', key: 'S1:6:c1' }],
+    [{ id: 'S1', rows: [{ index: 6, values: { c1: '' } }] }] as unknown as Session[],
+    events,
+    '0.49.0',
+  );
+  expect(manifest.clips[0].sttText).toBe('이십구 점 부');
+  expect(manifest.clips[0].confidence).toBe(0.82);
+});
+
 test('A3 — 접두가 같아도 `value` 이벤트는 건너뛰지 않는다(스킵 대상은 합성 stt뿐)', () => {
   const events = [
     { type: 'stt', sessionId: 'S1', row: 4, colId: 'c1', text: '삼십삼 점 삼', confidence: 0.71 },
