@@ -2128,7 +2128,18 @@ export function useVoiceSession() {
       // `<source>:<from>-><to>`로 유지해 기존 `touch:` 파서와 모양 호환.
       const source = options?.source ?? 'touch';
       logCell({ type: 'command', parsed: 'jump', extra: `${source}:${cur}->${targetRow}`, row: targetRow });
-      if (options?.setReturn ?? true) sess.setReturn(cur, sess.activeColIdx);
+      // 🔴 v0.49 r6 Y8(claude #8) — **예약은 스택이다. 행 이동만 그걸 통째로 갈아엎고 있었다.**
+      //   `setReturn`은 구현이 `returnStack: [{row, colIdx}]` — **전체 교체**다(sessionStore:333).
+      //   그래서 P1 교차행 알람이 `pushReturn`으로 쌓아 둔 **바깥 예약**이, 그 사이 들어온 행
+      //   이동('이전행'·자동칩 점프) 한 번에 사라졌다. v0.47.0-r3 codex f3가 「안쪽 출발점을
+      //   버리지 않으려고」 스택으로 일반화한 바로 그 자료구조를, 형제 하나가 계속 단일 슬롯으로
+      //   다뤘던 셈이다. 이제 **쌓는다** — 소비는 종전대로 `advance()`의 pop 하나뿐이라 LIFO가
+      //   그대로 성립하고, 예약 없는 이동('다음행'의 `setReturn(null, null)`)은 스택을 비우는
+      //   기존 의미 그대로다.
+      //   ⚠️ 관측 차이는 좁다: 예약 목적지가 「떠나온 바로 아래 행」이면 자연 전진과 일치해
+      //     교체든 push든 결과가 같다(m5 ⓓ가 증명한 성질). 갈리는 것은 **자연 전진과 다른 행을
+      //     가리키는 예약**(= P1 중첩)이 함께 서 있을 때뿐이고, 그게 이 수정의 대상이다.
+      if (options?.setReturn ?? true) sess.pushReturn(cur, sess.activeColIdx);
       sess.setActiveRow(targetRow);
       cancelTts();
       // v5.2: bump epoch so in-flight handleFinal's advance() guard aborts

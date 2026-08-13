@@ -21,7 +21,7 @@
  *  ⓒ 남는 조합은 **'이전행'이 세운 바깥 예약**뿐이다. 이 스펙이 그 조합을 끝까지 몰아
  *    「나중 완료가 엉뚱한 행으로 가는가」를 실제로 잰다.
  *
- *  ⓓ 그 바깥 예약은 **엉뚱한 행을 가리킬 수 없다.** `setReturn`을 부르는 명령은 '이전행'
+ *  ⓓ 그 바깥 예약은 **엉뚱한 행을 가리킬 수 없다.** 행 이동 예약을 만드는 명령은 '이전행'
  *    (`gotoAdjacentRow(-1)` → `jumpToRow(R-1, {setReturn:true})`) 하나뿐이고, 그것은 항상
  *    **떠나온 바로 아래 행 R**을 예약한다. 나중에 R-1이 완료돼 `advance()`가 돌 때
  *    `findNextIncompleteRow(R-1+1)`의 **탐색 시작점이 정확히 R**이다:
@@ -29,6 +29,16 @@
  *      · R이 완료면 예약은 pop 후 폴스루로 버려지고(:1190) 자연 전진이 R부터 이어간다 → 같은 행.
  *    즉 잔존 엔트리의 목적지는 **자연 전진과 항상 일치한다.** ('다음행'은 `setReturn(null,null)`로
  *    스택을 먼저 비운다 — 예약을 만들지 않는다.)
+ *
+ *  🔴 **ⓓ 정정(v0.49 r6 Y8, claude #8):** 위 ⓓ는 「예약이 가리키는 **목적지**」만 따졌고,
+ *    그 예약을 **거는 방식**을 안 봤다. `jumpToRow`가 쓰던 `setReturn`은 구현이
+ *    `returnStack: [{row, colIdx}]` — **스택 전체 교체**다(sessionStore:333). 그래서 목적지가
+ *    옳은 것과 별개로, 행 이동 한 번이 P1 교차행 알람의 `pushReturn`이 쌓아 둔 **바깥 예약을
+ *    통째로 지웠다.** ⓑ가 「두 예약은 구조적으로 배타」라고 한 것은 `resumeCell`/`resumeReview`와
+ *    P1 중첩의 관계이지, **행 이동 예약과 P1 중첩**의 관계가 아니다 — 그 둘은 함께 설 수 있다.
+ *    Y8이 `jumpToRow`를 `pushReturn`으로 정합시켰다. 아래 ①②의 판정은 그대로 유효하다
+ *    (목적지가 자연 전진과 일치하는 경우라 교체든 push든 결과가 같다 — [node] ③이 그 이유를
+ *    코드 형태로 잠근다).
  *
  * 판정(①②): 예약은 살아남되 **예약된 그 행으로 정확히** 복귀한다 — 「엉뚱한 행」은 재현되지
  * 않는다. 달라진 것은 목적지가 아니라 **소비 시점**이고, 그 지연이 곧 r3 #7의 계약이다
@@ -140,4 +150,31 @@ test('② 남은 행 예약은 나중에 **예약된 그 행으로** 소비된�
   await expect(chip(page, '측정항목01'), '칩이 2행의 값을 그린다(1행의 77.7이면 복귀 안 함)')
     .toContainText('95.5');
   expect(await activeChipName(page), '2행의 남은 빈 칸에 선다').toContain('측정항목02');
+});
+
+/**
+ * 🔴 [node] ③ (v0.49 r6 Y8) — **예약을 거는 방식이 스택 의미론과 정합한다**(소스 계약).
+ *
+ * 관측 차이가 좁아서 브라우저로 잡기 어렵다: 행 이동 예약의 목적지는 「떠나온 바로 아래 행」이라
+ * 자연 전진과 일치하고(위 ⓓ), 그래서 스택이 교체돼도 **그 예약 자체의** 복귀는 옳게 보인다.
+ * 갈리는 것은 함께 서 있던 **P1 중첩 예약이 사라지는가**인데, 그 조합을 만들려면 교차행 알람과
+ * 행 이동을 한 세션에서 겹쳐야 하고 그 시나리오는 P1 스펙이 이미 다른 축으로 점유하고 있다.
+ * 그래서 형태를 잠근다 — `setReturn`으로 되돌아가면 바깥 예약이 다시 조용히 사라진다.
+ */
+test('[node] ③ 행 이동 예약은 스택에 쌓는다 — 기존 예약을 갈아엎지 않는다 (Y8)', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
+  const start = src.indexOf('const jumpToRow = useCallback(');
+  const body = src.slice(start, src.indexOf('const gotoAdjacentRow = useCallback(', start));
+  expect(
+    body,
+    '행 이동이 예약을 `setReturn`(스택 전체 교체)으로 건다 — P1 중첩의 바깥 예약이 지워진다',
+  ).toContain('sess.pushReturn(cur, sess.activeColIdx);');
+  expect(body, '교체 호출이 남아 있다').not.toContain('sess.setReturn(cur,');
+
+  const store = fs.readFileSync('src/stores/sessionStore.ts', 'utf-8');
+  expect(
+    store,
+    '`setReturn`이 더 이상 전체 교체가 아니면 이 계약의 전제가 바뀐 것이다 — 함께 갱신해라',
+  ).toContain('set({ returnStack: row == null ? [] : [{ row, colIdx }] })');
 });
