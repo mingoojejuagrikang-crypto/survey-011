@@ -25,7 +25,10 @@ export function isCycling(col: Column): boolean {
 
 function spanOf(col: Column): number {
   if (col.auto.kind === 'seq') {
-    return Math.max(1, (col.auto.to || 1) - (col.auto.from || 1) + 1);
+    // 🔴 v0.49 r3 #8(claude r2 MEDIUM) — `|| 1`이 아니라 `?? 1`이다. `from`은 **0이 정상값**이다
+    //   (ColumnCard가 seq로 전환할 때 넣는 기본값이 0이다 — :289). falsy 폴백은 `from=0,to=2`를
+    //   자릿수 2로 세어(3이어야 한다) 총 행 수와 순환값을 통째로 어긋나게 했다.
+    return Math.max(1, (col.auto.to ?? 1) - (col.auto.from ?? 1) + 1);
   }
   if (col.auto.kind === 'options') {
     return Math.max(1, col.auto.selected.length);
@@ -63,7 +66,11 @@ export function isDynamicTodayColumn(col: Column): boolean {
  */
 export function autoValue(col: Column, row: number): string {
   if (col.auto.kind === 'seq') {
-    const from = col.auto.from || 1;
+    // 🔴 v0.49 r3 #8 — `?? 1`. `from=0`(seq 전환 기본값)에서 종전 `|| 1`은 첫 값을 **1**로 만들었고,
+    //   같은 컬럼을 `nestedAutoValue`(:108)는 원값 그대로 **0**부터 돌렸다. 시트에는 0이 올라가고
+    //   과거 대조는 1을 찾으니 그 세션의 「이전 조사」는 영구 '기록 없음'이었다 — 한 값의 정본이
+    //   두 함수로 갈린 형태다(수동 입력 범위 검증 `manualInput.ts:85`도 원값을 쓴다).
+    const from = col.auto.from ?? 1;
     const span = spanOf(col);
     return String(from + ((row - 1) % span));
   }
