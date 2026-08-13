@@ -859,6 +859,88 @@ export function useVoiceSession() {
     activeClipRef.current = { row, colId };
   }, []);
 
+  /**
+   * 🔴 v0.49 r5 Z2 — **착지 국면 전이의 단일 지점.**
+   *
+   * 「착지」 = 커서가 어딘가에 서서 다음 입력/명령을 기다리기 시작하는 순간이다. 이 앱에는 그런
+   * 지점이 넷 있고(`announceField` · `enterCellWait` · `enterReviewWait` · `announceEndReached`),
+   * 넷 다 같은 리셋 묶음을 수행한다: **알람 해제 · 거절 큐 해제 · 수정 표식 해제 · phase 전이.**
+   * 종전엔 그 네 줄이 네 곳에 **손으로 복사**돼 있었고, 이번 라운드 회귀 3건이 전부 그 사본의
+   * 누락이었다:
+   *   · M4  — `announceField`만 `setReaskReason(null)`이 빠져, 거절당한 셀을 떠나도 큐가 남았다.
+   *   · M8① — `announceField`가 phase를 안 열어, 행 경계 착지에서 거절 큐가 `completing` 게이트에
+   *            먹혀 **비프만 남았다**.
+   *   · M8② — `enterCellWait`도 같은 누락(헤더는 "phase는 active"라고 **선언만** 하고 있었다).
+   * 사본을 늘리는 대신 소유자를 하나 만든다 — 다음 착지가 생겨도 빠뜨릴 자리가 없다.
+   *
+   * 🔴 **평탄화하지 않는다.** 네 착지는 실제로 다르고, 그 차이가 계약이다 — 그래서 전부 인자다:
+   *   · `phase`  값을 여는 착지는 `'active'`, 검토/끝 도달은 `'complete'`.
+   *   · `reason` `clearAnomalyAlert` 사유는 **로그에 실린다**(PRINCIPLES §4). 하드코딩하면 네
+   *              착지가 로그에서 한 덩어리가 된다.
+   *   · `modifyIndicator` `announceField`의 수정 재안내만 값이 있고 나머지는 전부 해제다.
+   *   · `decimalReason` 🔴 **소수부 재질문 문맥은 지우는 게 아니라 다시 그린다.** 그건 지나간
+   *              거절이 아니라 지금 살아 있는 대기 상태고(`awaiting`이 정수부를 들고 있다),
+   *              화면만 비우면 M3가 닫은 「무고지 합성」이 재개 경로로 되살아난다(데이터 오염).
+   *              큐 해제를 무조건으로 평탄화하면 M4 오라클은 통과하면서 이 축이 새로 열린다.
+   *
+   * 🔴 **가드 — 종료·일시정지는 착지를 이긴다**(codex R4-F2 · claude #2). fixr4의 M8이 phase를
+   * **무조건** 쓰게 만들면서, 이전엔 잠겨 있던 두 국면이 뒤늦은 continuation에 덮이게 됐다:
+   *   · `stopping`: `stop()`은 첫 await 전에 phase를 잠그고 TTS를 cancel한다. 그 cancel이 앞선
+   *     `await say(...)`를 settle시키면 **낡은 행 이동 continuation이 재개된다.** v0.35의 「종료
+   *     teardown 전체를 단일 비대화형 phase로 잠근다」 상호배타 계약이 거기서 깨졌다.
+   *     ⚠️ **epoch 재확인으로는 못 닫는다** — `stop()`은 epoch를 올리지 않는다(:4179~ 확인).
+   *     그래서 **착지 전체를 거절**한다(phase만 막으면 awaiting·클립이 recorder dispose와 경쟁한다).
+   *     안전한 이유: 대화형 진입점은 전부 이미 `phase === 'stopping'`을 자기 앞에서 거른다
+   *     (`goNextRow` · `gotoAdjacentRow` · `gotoAdjacentField` · `pause` · `resume`) — 여기 닿는
+   *     것은 정의상 낡은 continuation뿐이다.
+   *   · `paused`: **국면 전이만** 보류하고 문맥 재무장(awaiting·수정 표식)은 그대로 진행한다.
+   *     착지 전체를 거절하면 `awaiting`이 null인 채로 남아, `resume`의 폴스루가
+   *     `announceField(cur)`로 떨어져 **값 있는 셀에 `kind:'value'`가 다시 열린다**(_ASK-fix49 Q5의
+   *     선행 파손을 새 경로로 재개방 — 실측 확인). 일시정지 해제는 `resume()`만의 소관이다.
+   *
+   * 🔴 **`endReached`는 phase와 한 쌍이다.** 가드를 phase 한 줄에만 걸면 짝의 반쪽이 그대로 나가
+   * R4-F2와 **같은 형태**(쌍 중 한쪽만 배선)의 결함이 남는다. `setPhase`가 'complete' 이탈 시
+   * `endReached`를 함께 내리므로(sessionStore 계약) 순서는 phase → endReached로 고정한다.
+   *
+   * @returns 착지를 계속해도 되면 `true`. `false`면 **호출부는 즉시 return한다** — awaiting 재무장·
+   *          클립 arm·TTS 전부 하지 않는다.
+   * 오라클: tests/v049-r5-z2-landing-guard.spec.ts
+   */
+  const armLanding = useCallback((opts: {
+    /** `clearAnomalyAlert` 사유 = 로그 축. 착지마다 다르다. */
+    reason: string;
+    /** 값을 여는 착지는 'active', 검토/끝 도달 착지는 'complete'. */
+    phase: 'active' | 'complete';
+    /** 'complete' 착지만 명시한다(끝 도달=true · 행 검토=false). 미지정이면 setPhase가 정한다. */
+    endReached?: boolean;
+    /** 수정 재안내만 값이 있다. 미지정 = 해제. */
+    modifyIndicator?: { name: string; colId: string } | null;
+    /** 살아 있는 소수부 재질문의 정수부. 있으면 큐를 **다시 그린다**. */
+    decimalReason?: string | null;
+  }): boolean => {
+    const sess = useSessionStore.getState();
+    if (sess.phase === 'stopping') {
+      // 새 이름으로 계측한다(PRINCIPLES §4) — 기존 착지 이벤트에 얹으면 「착지했다」와
+      //   「착지를 거절했다」가 로그에서 같은 줄이 된다.
+      logCell({ type: 'session', extra: `landing_refused:stopping:${opts.reason}` });
+      return false;
+    }
+    clearAnomalyAlert(opts.reason);
+    sess.setReaskReason(null);
+    if (opts.decimalReason != null) sess.setDecimalReason(opts.decimalReason);
+    sess.setModifyIndicator(opts.modifyIndicator ?? null);
+    // v0.47.0 W2(FB-C) — committed=false는 「재청취 국면 시작(amber)」 선언이다. 일반 안내(국면
+    //   종료)도 같은 값이라 네 착지 전부 무조건 내린다.
+    useModifyPhase.getState().setCommitted(false);
+    if (sess.phase === 'paused') {
+      logCell({ type: 'session', extra: `landing_phase_held:paused:${opts.reason}` });
+      return true;
+    }
+    sess.setPhase(opts.phase);
+    if (opts.endReached !== undefined) sess.setEndReached(opts.endReached);
+    return true;
+  }, [clearAnomalyAlert]);
+
   const announceField = useCallback(
     // v0.47.0 C-FIX1b — opts.fractionWhole: 재개(resume) 재안내가 소수부 재질문 문맥(정수부)을
     // 잃지 않고 재구성하기 위한 전달로. 값 추측 금지 계약(:113-120)의 합성 문맥이 여기서 끊기면
@@ -868,51 +950,24 @@ export function useVoiceSession() {
     // `advance()`로 빠진다([NAV-FILLED-CELL-1] 불변식 위반 — resumeCellOf 주석).
     async (col: Column, opts?: { isModify?: boolean; previousValue?: string; fractionWhole?: string; resumeCell?: ResumeCell }) => {
       const row = useSessionStore.getState().activeRow;
-      // v0.9.0 — 다음 필드로 진입하면 이전 이상치 알람 팝업은 해제(해소된 것으로 간주).
-      clearAnomalyAlert('announce_field');
-      // 🔴 v0.49 r4 M4(claude r3 #6) — **거절 큐도 여기서 내린다.** 재질문 사유는 **그 셀의 것**인데
-      //   이 함수만 정리를 안 해서, 거절당한 셀을 떠나도(항목 이동·다음 셀 진행·수정 진입) 큐가
-      //   새 셀 위에 그대로 얹혀 있었다 — 사용자는 **방금 말한 값이 거절된 줄 안다.** 형제 착지
-      //   셋(`announceEndReached` · `enterReviewWait` · `enterCellWait`)은 전부 이 줄을 갖고 있고
-      //   이 함수만 빠져 있었다(store 계약도 *"다음 필드 진입 시 null로 리셋"* 이라고 적혀 있다).
-      //   ⚠️ 소수부 재질문 문맥(`opts.fractionWhole`)은 **예외다.** 그건 지나간 거절이 아니라
-      //   지금 살아 있는 대기 상태고(C-FIX1b가 일시정지→재개에서 이 문맥을 복원한다), `awaiting`이
-      //   그 정수부를 그대로 들고 재개하므로 화면만 비우면 M3가 닫은 「무고지 합성」이 재개 경로로
-      //   되살아난다. 상태를 지우는 게 아니라 **그 상태를 다시 그린다.**
-      //   오라클: tests/v049-r4-m4-reask-cue-scope.spec.ts
-      useSessionStore.getState().setReaskReason(null);
-      if (opts?.fractionWhole != null) {
-        useSessionStore.getState().setDecimalReason(opts.fractionWhole);
-      }
-      // 🔴 v0.49 r4 M8(claude r3 #9) — **값을 여는 착지는 phase를 함께 연다.** 이 함수는
-      //   `kind:'value'`(또는 modify)를 무장한다 = 값을 기다리는 상태인데, phase가 'complete'로
-      //   남아 있으면 화면은 「명령 대기」를 그린다. 피해가 조용하다: `CenterStage`가
-      //   `reaskReason={completing ? null : reaskReason}`으로 거절 큐를 억제해(그 게이트 자체는
-      //   옳다 — 완료 화면에 값 재질문 큐는 없어야 한다) **거절이 비프만 남고 화면에서 사라진다.**
-      //   종전엔 호출부가 각자 세웠고(`jumpToRow` :1876 · `gotoAdjacentField` :2069) **행 경계
-      //   착지 두 곳**(goNextRow 마지막 행 · gotoAdjacentRow 첫 행)이 빠져 있었다 —
-      //   분기마다 배선하면 다음 착지에서 또 빠진다(M3와 같은 형태). 여기서 소유한다.
-      //
-      //   ⚠️ **`setPhase`는 'complete'를 벗어날 때 `endReached`를 함께 내린다**(sessionStore 계약).
-      //   호출부를 조건부로 고치는 대신 여기서 무조건 세우는 것이 그 부수효과를 넓히는지
-      //   **전수 확인했다** — 넓히지 않는다:
-      //     · `advance`·`jumpToRow`·`gotoAdjacentField`·`enterModifyMode`는 이 함수 **앞에서**
-      //       이미 'active'를 세운다(같은 값 재기록 = no-op).
-      //     · `resume`은 :4332에서 **무조건** `setPhase('active')`를 먼저 부른다 —
-      //       `atEnd`/`reviewWait` 폴스루(_ASK-fix49 Q5가 「선행 파손」으로 남겨 둔 그 경로)의
-      //       `endReached` 해제는 **이 변경 이전부터** 그 줄이 하고 있었다. 여기서 새로 생기지 않는다.
-      //     · 남는 것은 목표인 행 경계 착지 두 곳뿐이고, 거기서 `endReached`가 참일 수 있으려면
-      //       **미완료 행의 atEnd**여야 하는데 그 상태는 같은 라운드의 M2가 구조적으로 닫았다.
-      useSessionStore.getState().setPhase('active');
-      // v0.12.0 AREA2 V4 — 수정 재안내면 '수정 값' 인디케이터를 켜고, 일반 안내면 해제한다.
-      useSessionStore.getState().setModifyIndicator(
-        opts?.isModify ? { name: col.name, colId: col.id } : null,
-      );
+      // 🔴 v0.49 r5 Z2 — 착지 리셋 4종(알람 해제 · 거절 큐 · 수정 표식 · phase)은 `armLanding`이
+      //   소유한다. 종전엔 이 자리에 그 넷이 손으로 적혀 있었고, 형제 착지 셋과의 **사본 차이**가
+      //   이번 라운드 회귀 3건(M4 · M8 두 건)이었다 — 근거·차이 축·가드는 그 헤더 참조.
+      //   여기 남은 것은 **이 착지 고유의 것**뿐이다: 수정 표식의 값, 소수부 문맥, 진입 단음.
+      //   ⚠️ `false`면 즉시 return — 종료 중(stopping) 낡은 continuation은 awaiting도 클립도
+      //     TTS도 열지 않는다(R4-F2).
+      if (!armLanding({
+        // v0.9.0 — 다음 필드로 진입하면 이전 이상치 알람 팝업은 해제(해소된 것으로 간주).
+        reason: 'announce_field',
+        phase: 'active',
+        // v0.12.0 AREA2 V4 — 수정 재안내면 '수정 값' 인디케이터를 켜고, 일반 안내면 해제한다.
+        modifyIndicator: opts?.isModify ? { name: col.name, colId: col.id } : null,
+        // 🔴 M3/M4 — 살아 있는 소수부 재질문은 **지우는 게 아니라 다시 그린다**(armLanding 헤더).
+        decimalReason: opts?.fractionWhole ?? null,
+      })) return;
       // v0.47.0 W2(FB-C, 민구 08-08) — 수정 **진입** = 중립 단음 + amber(§C4 의미 보존).
       //   종전엔 이 단음이 성공 커밋 시점(:handleFinal)에 났다 — W2가 성공을 화음+green으로
-      //   재정의하며 중립 단음은 "모드 전환" 본래 의미대로 진입으로 옮겼다. committed=false는
-      //   재청취 국면 시작(amber) 선언 — 일반 안내(국면 종료)도 같은 값이라 무조건 내린다.
-      useModifyPhase.getState().setCommitted(false);
+      //   재정의하며 중립 단음은 "모드 전환" 본래 의미대로 진입으로 옮겼다.
       if (opts?.isModify) playBeep('modify');
       awaitingFieldRef.current = opts?.isModify
         ? {
@@ -938,7 +993,7 @@ export function useVoiceSession() {
       useSessionStore.getState().setLastTts(hint);
       await say(opts?.isModify ? `수정. ${col.name}.` : `${col.name}.`, false);
     },
-    [armClipForCell, clearAnomalyAlert, say],
+    [armClipForCell, armLanding, say],
   );
 
   // ── end-of-table (v0.5.0 NAV-1 / 요청3) ────────────────────
@@ -976,12 +1031,12 @@ export function useVoiceSession() {
    *  새 행 커밋 대신 종료 재안내로 흡수한다. 종료는 '종료' 음성 명령 또는 종료 버튼으로만 일어난다. */
   const announceEndReached = useCallback(async () => {
     const sess = useSessionStore.getState();
-    clearAnomalyAlert('end_reached');
-    // 🔴 v0.47.0 W2(FB-G①, 실기기 08-08) — 종단 착지에서 수정 표시 **명시 해제**. 해제 유일
-    //   지점이 announceField(다음 필드 안내)뿐이라, 마지막 행을 수정으로 마감하면 그게 다시
-    //   안 불려 완료 화면까지 amber가 고착됐다. 색 전환(committed)과 별개로 상태 자체를 내린다.
-    sess.setModifyIndicator(null);
-    useModifyPhase.getState().setCommitted(false);
+    // 🔴 v0.49 r5 Z2 — 착지 리셋 4종 + `endReached`는 `armLanding`이 소유한다(그 헤더 참조).
+    //   v0.47.0 W2(FB-G①, 실기기 08-08)의 「종단 착지에서 수정 표시 명시 해제」도 그 안에 있다 —
+    //   해제 유일 지점이 announceField뿐이라 마지막 행을 수정으로 마감하면 완료 화면까지 amber가
+    //   고착됐던 그 계약이다. `endReached: true`가 phase 전이와 **한 쌍으로** 나간다.
+    //   ⚠️ 종료 중이면 여기서 끝난다 — 센티넬도 완료 화면도 열지 않는다.
+    if (!armLanding({ reason: 'end_reached', phase: 'complete', endReached: true })) return;
     const vc = voiceColsList();
     const total = computeTotalRows(getSessionColumns());
     const empties = listEmptyRows(total, vc);
@@ -1014,16 +1069,13 @@ export function useVoiceSession() {
     awaitingFieldRef.current = lastCol
       ? { kind: 'atEnd', row: sess.activeRow, colId: lastCol.id, name: lastCol.name }
       : null;
-    sess.setReaskReason(null);
     sess.setRecognized('');
-    // phase='complete'로 둬 hero가 정적 대기 라벨("N행 완료 — 명령 대기", v0.34.0 A4)을 보이게
-    // 한다(마지막 컬럼을 '듣는 중'처럼 보이는 오해 방지). STT는 계속 돌아 '종료'/'수정' 음성 명령이
-    // 처리되되(handleFinal는 paused만 게이트), early-commit(active 전용)은 멈춘다.
-    // 종료는 '종료' 음성·종료 버튼만.
-    sess.setPhase('complete');
-    // 조사 완료 화면(UI-c: 시각 상태어 없는 `X / N` + 종료 버튼)의 유일한 진입점이다.
-    // 완료 행 검토 대기(enterReviewWait)는 같은 phase지만 [1] active 레이아웃을 쓴다.
-    sess.setEndReached(true);
+    // (phase='complete' + endReached=true는 위 `armLanding`이 세웠다.) phase 'complete'는 hero를
+    // 정적 대기 라벨("N행 완료 — 명령 대기", v0.34.0 A4)로 둬 마지막 컬럼이 '듣는 중'처럼 보이는
+    // 오해를 막는다. STT는 계속 돌아 '종료'/'수정' 음성 명령이 처리되되(handleFinal는 paused만
+    // 게이트) early-commit(active 전용)은 멈춘다. 종료는 '종료' 음성·종료 버튼만.
+    // `endReached=true`는 조사 완료 화면(UI-c: 시각 상태어 없는 `X / N` + 종료 버튼)의 유일한
+    // 진입점이다 — 완료 행 검토 대기(enterReviewWait)는 같은 phase지만 [1] active 레이아웃을 쓴다.
     const msg = buildEndReachedTts(empties);
     sess.setLastTts(msg);
     logCell({
@@ -1031,7 +1083,7 @@ export function useVoiceSession() {
       extra: empties.length > 0 ? `end_reached_waiting:empty=${empties.join(',')}` : 'end_reached_waiting',
     });
     await say(msg);
-  }, [clearAnomalyAlert, say]);
+  }, [armLanding, say]);
 
   // ── v0.33.0 백로그 A(민구 결정 3): 완료 행 착지 → "값 읽어주기 + 명령 대기" ─────
   /** 완료 행에 착지('이전' 음성/◀ 버튼/행 점프)하면 그 행의 음성입력 기록값을 TTS로 읽어주고
@@ -1044,11 +1096,12 @@ export function useVoiceSession() {
    *  착지 필드가 '듣는 중'처럼 보이지 않게 하고 early-commit(active 전용)도 함께 멈춘다(atEnd 패턴). */
   const enterReviewWait = useCallback(async (row: number) => {
     const sess = useSessionStore.getState();
-    clearAnomalyAlert('review_wait');
-    // v0.47.0 W2(FB-G①) — 검토 대기 진입도 종단 착지다(announceField를 안 거친다). 검토 출신
-    //   수정("수정 88.9" 직접값 등)이 여기로 복귀할 때 수정 표시가 잔존하지 않게 명시 해제.
-    sess.setModifyIndicator(null);
-    useModifyPhase.getState().setCommitted(false);
+    // 🔴 v0.49 r5 Z2 — 착지 리셋 4종 + `endReached`는 `armLanding`이 소유한다(그 헤더 참조).
+    //   v0.47.0 W2(FB-G①)의 「검토 대기 진입도 종단 착지 = 수정 표시 명시 해제」가 그 안에 있다 —
+    //   검토 출신 수정("수정 88.9" 직접값 등)이 여기로 복귀할 때의 잔존 방지.
+    //   `endReached: false`는 와이어프레임 §[4] 대비다: 검토 대기는 '조사 완료'가 아니다(끝 도달
+    //   후 '이전'으로 되돌아온 경우까지 포함해 명시적으로 내린다). [1] active 레이아웃 + hero ✓.
+    if (!armLanding({ reason: 'review_wait', phase: 'complete', endReached: false })) return;
     const vc = voiceColsList();
     const values = sess.getRowValues(row);
     const parts = vc
@@ -1057,11 +1110,6 @@ export function useVoiceSession() {
     const firstCol = vc[0] ?? null;
     sess.setActiveCol(0);
     sess.setRecognized('');
-    sess.setReaskReason(null);
-    sess.setPhase('complete');
-    // 와이어프레임 §[4] 대비 — 검토 대기는 '조사 완료'가 아니다(끝 도달 후 '이전'으로 되돌아온
-    // 경우까지 포함해 명시적으로 내린다). [1] active 레이아웃 + hero ✓ 표시를 유지한다.
-    sess.setEndReached(false);
     awaitingFieldRef.current = firstCol
       ? { kind: 'reviewWait', row, colId: firstCol.id, name: firstCol.name }
       : null;
@@ -1074,7 +1122,7 @@ export function useVoiceSession() {
     const msg = `${row}행 완료됨. ${parts.join(', ')}.`;
     sess.setLastTts(msg);
     await say(msg);
-  }, [clearAnomalyAlert, say]);
+  }, [armLanding, say]);
 
   // ── 🔴 v0.49 fix49(리뷰 B-1 blocker): 값이 든 셀 착지 → "값 읽어주기 + 명령 대기" ─────
   /** 항목 이동(`gotoAdjacentField`)·행 경계 재안내가 **이미 값이 있는 셀**에 커서를 세울 때의
@@ -1099,22 +1147,14 @@ export function useVoiceSession() {
   const enterCellWait = useCallback(async (col: Column, value: string) => {
     const sess = useSessionStore.getState();
     const row = sess.activeRow;
-    sess.setModifyIndicator(null);
-    useModifyPhase.getState().setCommitted(false);
+    // 🔴 v0.49 r5 Z2 — 착지 리셋 4종은 `armLanding`이 소유한다(그 헤더 참조). 여기 있던
+    //   `setPhase('active')`(r4 M8)는 위 헤더의 *"phase는 `active` 그대로 둔다"* 를 선언에서
+    //   집행으로 바꾼 줄이었다 — 행 경계 착지는 검토/끝 도달 국면에서 들어올 수 있어
+    //   'complete'가 남으면 `CenterStage`의 `completing` 게이트가 거절 큐를 억제해 비프만 남는다.
+    //   `clearAnomalyAlert`(fix49b #14)도 같은 묶음이다: 「빈 칸에 착지하면 팝업이 사라지고 값
+    //   있는 칸에 착지하면 남는」 비대칭을 없앤 v0.9.0 계약의 세 번째 착지 지점.
+    if (!armLanding({ reason: 'cell_wait', phase: 'active' })) return;
     sess.setRecognized('');
-    sess.setReaskReason(null);
-    // 🔴 v0.49 r4 M8(claude r3 #9) — 위 헤더의 *"phase는 `active` 그대로 둔다"* 를 **선언에서
-    //   집행으로** 바꾼다. 종전엔 호출부가 이미 active라는 것에 기댔는데, 행 경계 착지
-    //   (goNextRow 마지막 행 · gotoAdjacentRow 첫 행)는 검토/끝 도달 국면에서 들어올 수 있어
-    //   'complete'가 그대로 남았다 → `CenterStage`의 `completing` 게이트가 거절 큐를 억제해
-    //   비프만 남는다(announceField의 같은 줄 주석 참조).
-    sess.setPhase('active');
-    // 🔴 v0.49 fix49b(max 리뷰 #14) — 형제 착지 핸들러 둘과 **대칭**(announceField :845
-    //   'announce_field' · enterReviewWait :951 'review_wait'). v0.9.0 계약 「다음 필드로
-    //   진입하면 이전 이상치 알람 팝업은 해제」의 세 번째 착지 지점이다. 빠뜨리면
-    //   「빈 칸에 착지하면 팝업이 사라지고 값 있는 칸에 착지하면 남는」, 사용자에게는 보이지도
-    //   않는 내부 구분에 따라 화면이 갈린다(PRINCIPLES §2 시각·청각 일치).
-    clearAnomalyAlert('cell_wait');
     awaitingFieldRef.current = {
       kind: 'cellWait', row, colId: col.id, name: col.name, previousValue: value,
     };
@@ -1127,7 +1167,7 @@ export function useVoiceSession() {
     const msg = `${col.name} 기록값 ${formatForTts(value)}.`;
     sess.setLastTts(msg);
     await say(msg);
-  }, [clearAnomalyAlert, say]);
+  }, [armLanding, say]);
 
   /** 착지 셀의 현재 값(음성 컬럼) — 있으면 cellWait, 없으면 종전 `announceField`. */
   const announceOrCellWait = useCallback(async (col: Column) => {
@@ -1933,10 +1973,21 @@ export function useVoiceSession() {
       cancelTts();
       if (target < 1) {
         epochRef.current++;
+        // 🔴 v0.49 r5 Z2 — bump **직후** 값을 잡아 둔다(fix49b #6 패턴 — `gotoAdjacentField`
+        //   경계 :2146의 복제). 이 분기는 `await say(...)` **뒤에** 재무장하는 지점이고,
+        //   `advance()`는 그런 지점마다 재확인 가드를 둔다. F13/fix49가 이 두 경계를 만들 때
+        //   bump만 복사하고 재확인을 빠뜨렸다(codex R4-F2가 지목한 세 경로 중 하나).
+        const startEpoch = epochRef.current;
         const msg = '첫 행입니다.';
         useSessionStore.getState().setLastTts(msg);
         const vc = voiceColsList();
         await say(msg);
+        // 🔴 경계 안내 중 barge-in이 들어오면 그 명령의 핸들러가 이미 커서와 대기 상태를 옮긴
+        //   뒤다. 낡은 좌표로 재무장하면 사용자가 귀로 들은 대상과 실제 커밋 대상이 갈린다 —
+        //   무음도 오류도 아닌 **정상처럼 보이는 오귀속**이라 시트에서만 뒤늦게 드러난다.
+        //   ⚠️ 종료(stopping) 축은 이 가드가 **못 닫는다** — `stop()`은 epoch를 올리지 않는다.
+        //     그쪽은 `armLanding`의 거절이 닫는다(그 헤더 참조). 두 축은 별개다.
+        if (epochRef.current !== startEpoch) return;
         // v0.33.0 — 첫 행이 이미 완료면(검토 대기 중 '이전' 등) 값 수신 재안내 대신 검토 대기 재무장
         // (announceField는 bare 값 커밋을 열어 결정 3의 덮어쓰기 금지 계약을 깬다).
         if (isRowVoiceComplete(sess.activeRow, vc)) {
@@ -1985,6 +2036,10 @@ export function useVoiceSession() {
     const total = computeTotalRows(getSessionColumns());
     cancelTts();
     epochRef.current++; // in-flight advance/안내 체인 무효화 (RACE-1 패턴 유지)
+    // 🔴 v0.49 r5 Z2 — bump 직후 값을 잡아 둔다(fix49b #6 패턴 :2146 복제). 아래 마지막 행
+    //   경계가 `await say(...)` 뒤에 재무장하는 지점이다 — 근거는 `gotoAdjacentRow`의 첫 행
+    //   경계에 붙인 같은 가드의 주석(두 경계는 대칭이므로 처리도 대칭이다).
+    const startEpoch = epochRef.current;
     sess.setReturn(null, null);
     const row = sess.activeRow;
     if (row >= total) {
@@ -1997,6 +2052,9 @@ export function useVoiceSession() {
       const msg = '마지막 행입니다.';
       sess.setLastTts(msg);
       await say(msg);
+      // 🔴 v0.49 r5 Z2 — 경계 안내 뒤 재확인(위 bump 지점 주석 참조). 종료(stopping) 축은
+      //   `armLanding`이 닫는다 — `stop()`은 epoch를 올리지 않으므로 이 가드로는 못 닫는다.
+      if (epochRef.current !== startEpoch) return;
       if (isRowVoiceComplete(row, vc)) {
         await enterReviewWait(row);
         return;

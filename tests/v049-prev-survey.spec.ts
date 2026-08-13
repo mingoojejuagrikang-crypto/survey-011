@@ -430,19 +430,22 @@ test('W3-9(r4 M8) — 「미확인」의 사유가 로그에 남는다(6사유 �
  * (`enterCellWait` 헤더의 *"phase는 active 그대로 둔다"*). 소스 계약 테스트의 전례: W3-7·
  * `v043-typo-contract`.
  */
-test('[node] W3-10(r4 M8) — announceField·enterCellWait이 phase를 스스로 active로 연다', async () => {
+test('[node] W3-10(r4 M8 → r5 Z2) — 값을 여는 착지가 phase를 스스로 active로 연다(이제 armLanding 경유)', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
 
+  // r4 M8은 이 두 함수 안에 `setPhase('active')`를 **손으로** 넣어 닫았다. r5 Z2가 그 네 줄을
+  // `armLanding`으로 모았으므로 계약의 **표현**이 바뀐다 — 계약 자체(값을 여는 착지는 phase를
+  // 호출부에 맡기지 않는다)는 그대로다. 사본이 아니라 소유자를 지목하도록 갱신한다.
   const announceField = src.slice(src.indexOf('const announceField = useCallback('));
   expect(
     announceField.slice(0, announceField.indexOf('armClipForCell(row, col.id)')),
     'announceField가 값 대기를 열면서 phase를 호출부에 맡긴다(행 경계 착지가 그 배선을 빠뜨렸다)',
-  ).toContain("setPhase('active')");
+  ).toContain("phase: 'active'");
 
   const enterCellWait = src.slice(src.indexOf('const enterCellWait = useCallback('));
   expect(
     enterCellWait.slice(0, enterCellWait.indexOf('awaitingFieldRef.current = {')),
     'enterCellWait 헤더가 선언한 「phase는 active」를 집행하지 않는다',
-  ).toContain("setPhase('active')");
+  ).toContain("phase: 'active'");
 });
