@@ -186,7 +186,15 @@ export function VoiceHero({
             : <HeroPrimaryLine value={value} reduced={reduced} live={!review} fitRef={valueFitRef} />
         )}
       </HeroValueSlot>
-      {interimValue && <ReaskCue reason={reaskReason} />}
+      {/* 🔴 v0.49 r3 #5(claude r2 HIGH) — **모드 게이트를 떼어낸다.** 종전엔 `{interimValue && …}`,
+          즉 `!review && !showConfirm`이었다. W2가 재질문 TTS를 두 어절로 줄이며 *"재시도 신호는
+          부정 비프 + 이 큐가 전담한다"* 를 계약으로 세웠는데, 그 큐가 **커밋 확인 플래시가 떠
+          있는 1.5초 동안 통째로 사라졌다** — 사유가 서 있는데 화면만 모른다. `ReaskCue`는
+          `reason`이 없으면 스스로 null을 돌려주므로(그 컴포넌트 헤더의 계약) 게이트가 중복이고,
+          중복인 게이트가 **다른 조건**을 들고 있던 것이 결함이다. 판정은 사유 하나로 한다.
+          ⚠️ 짝이 되는 변경은 `CenterStage`의 수정 분기다 — 그쪽은 hero 자체가 없어서 이 줄만
+          고쳐서는 「수정 재기록 중 거절」에 표면이 생기지 않는다(오라클 ①②). */}
+      <ReaskCue reason={reaskReason} />
     </div>
   );
 }

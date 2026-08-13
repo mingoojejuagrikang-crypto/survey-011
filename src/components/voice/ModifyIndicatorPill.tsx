@@ -3,6 +3,7 @@ import { T } from '../../tokens';
 import { useSessionStore } from '../../stores/sessionStore';
 import { ABSORB_CLAMP, HERO_BASE_FONT_PX, HERO_TYPE } from './heroLayout';
 import { useFitGroup } from './useFitGroup';
+import { ReaskCue, type ReaskReason } from './ReaskCue';
 
 /** v0.12.0 AREA2 V4 — 수정 재안내 중 어떤 항목을 다시 말해야 하는지 알리는 안내.
  *  v0.14.0 E(민구 요청) — 모든 알람/안내를 화면 중앙·최대 크기로 통일. 기존 상단 작은 pill을
@@ -16,7 +17,7 @@ import { useFitGroup } from './useFitGroup';
  *   애니메이션하므로 함께 제거.
  *  v0.43.0 UI-c — 수정 중 항목명·지시문은 활성 칩과 상태 문양이 이미 말하므로 시각 삭제한다.
  *   그 공간은 interim/새 값이 열린 fit으로 회수하고, 항목명·듣는 중·인식 중은 aria-label에 남긴다. */
-export function ModifyIndicatorPill({ name, prevValue, newValue }: { name: string; prevValue?: string; newValue?: string }) {
+export function ModifyIndicatorPill({ name, prevValue, newValue, reaskReason = null }: { name: string; prevValue?: string; newValue?: string; reaskReason?: ReaskReason }) {
   // 정정 구간 두 국면을 한 surface로 표현한다(hero와 z-fight 없음).
   // ① 재프롬프트: 중앙은 비우고 활성 칩 + aria 상태만 남긴다. interim이 오면 값을 크게 표시한다.
   // ② 새 값 도착(echo): 새 값을 가장 크게 두고 직전값은 작은 보조 정보로 남긴다.
@@ -110,6 +111,13 @@ export function ModifyIndicatorPill({ name, prevValue, newValue }: { name: strin
           직전 입력 {prevValue}
         </span>
       ) : null}
+      {/* 🔴 v0.49 r3 #5(claude r2 HIGH) — **수정 재기록 중의 거절도 재시도 표면을 얻는다.**
+          `CenterStage`는 6분기 상호배타이고 `ReaskCue`는 hero 분기 **안**에 살았다. 그래서
+          이 분기(수정 재기록)에서 오인식이 나면 두 어절 TTS와 부정 비프 외에 **어느 표면에도**
+          「무엇을 다시 말해야 하는지」가 없었다 — "수정" → 재발화 → 오인식은 이 앱에서 가장
+          흔한 재질문 문맥이다(W2가 TTS 꼬리를 지우며 화면 큐에 넘긴 바로 그 책임).
+          사유가 없으면 `ReaskCue`가 스스로 null을 돌려주므로 평시 레이아웃은 그대로다. */}
+      <ReaskCue reason={reaskReason} />
     </div>
   );
 }

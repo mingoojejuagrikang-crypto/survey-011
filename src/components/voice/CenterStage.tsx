@@ -215,6 +215,8 @@ export function CenterStage({
         name={modifyIndicator.name}
         prevValue={modifyPrevValue}
         newValue={modifyCurrentValue}
+        // 🔴 v0.49 r3 #5 — 이 분기에는 hero가 없어 `ReaskCue`가 통째로 빠져 있었다(그쪽 주석).
+        reaskReason={reaskReason}
       />
     );
   } else if (currentCol) {
