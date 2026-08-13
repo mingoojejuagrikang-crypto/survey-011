@@ -496,6 +496,43 @@ test.describe('previousSurveyRound — 세션 고정 키의 직전 조사일', (
     expect(fixedKeyCellMatches(intKey, 'Infinity', 'Infinity'), '정확 일치는 종전대로 통과').toBe(true);
   });
 
+  /**
+   * 🔴 v0.49 r5 Z10(codex R4-F5 · claude #15) — **`Number()` 대조는 서로 다른 키를 붙인다.**
+   *
+   * M9는 「같은 수의 다른 표기」를 살리려고 마지막 줄을 `Number(raw) === Number(want)`로 뒀는데,
+   * 그러면 IEEE-754의 정밀도·overflow가 그대로 비교에 들어온다. 붙으면 **다른 표본의 이전
+   * 조사일**을 보여준다 — 조사를 시작하기 **전에** 보는 화면이라 판단을 오도한다.
+   * `STRICT_DECIMAL`은 *파서*를 좁힌 것이라 이 충돌을 못 막는다. 처방은 손실 없는 **문자열
+   * 정규화**(부호·선행 0·후행 0만 제거, 자릿수는 하나도 버리지 않는다).
+   *
+   * 반증: `canonicalDecimal` 비교를 `Number()` 비교로 되돌리면 이 세 쌍이 전부 red.
+   */
+  test('Z10 — IEEE-754 충돌: 서로 다른 정밀값이 같은 키로 붙지 않는다', () => {
+    const intKey = col('k1', '라벨', { type: 'int' });
+    const floatKey = col('k2', '규격', { type: 'float' });
+    // ① 2^53 위 — 두 정수가 같은 double이 된다.
+    expect(Number('9007199254740992') === Number('9007199254740993'), '전제: Number()로는 같다').toBe(true);
+    expect(fixedKeyCellMatches(intKey, '9007199254740992', '9007199254740993')).toBe(false);
+    // ② 배정밀도 유효자릿수 초과.
+    expect(Number('0.10000000000000000') === Number('0.10000000000000001'), '전제').toBe(true);
+    expect(fixedKeyCellMatches(floatKey, '0.10000000000000000', '0.10000000000000001')).toBe(false);
+    // ③ overflow — 서로 다른 310자리 정수가 둘 다 Infinity.
+    const big = (lead: string) => lead + '0'.repeat(309);
+    expect(Number(big('1')) === Number(big('2')), '전제: 둘 다 Infinity').toBe(true);
+    expect(fixedKeyCellMatches(intKey, big('1'), big('2'))).toBe(false);
+  });
+
+  test('Z10 — 정규화는 손실이 없다: 큰 수·긴 소수도 같은 값이면 여전히 일치', () => {
+    const intKey = col('k1', '라벨', { type: 'int' });
+    const floatKey = col('k2', '규격', { type: 'float' });
+    // 과잉 교정 반증 — 좁히다가 M9가 살린 「같은 수의 다른 표기」를 죽이면 안 된다.
+    expect(fixedKeyCellMatches(intKey, '009007199254740993', '9007199254740993')).toBe(true);
+    expect(fixedKeyCellMatches(floatKey, '0.10000000000000001', '.10000000000000001000')).toBe(true);
+    expect(fixedKeyCellMatches(floatKey, '-0', '0'), '-0과 0은 수로서 같다').toBe(true);
+    expect(fixedKeyCellMatches(floatKey, '-1.50', '-1.5')).toBe(true);
+    expect(fixedKeyCellMatches(floatKey, '-1.5', '1.5'), '부호는 값이다').toBe(false);
+  });
+
   // ─── 🔴 v0.49 r3 #4 — 고정 키 대조는 **시트 서식**을 넘어야 한다. ────────────────
   test('리터럴 고정일 키가 구글 재포맷(2026. 3. 1)이어도 일치한다 — 영구 「기록 없음」 차단', () => {
     // A8이 「정당한 식별 키」로 인정한 부류(정식일자). 앱은 `2026-03-01` 원문을 들고 있고,

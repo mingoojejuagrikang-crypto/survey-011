@@ -273,44 +273,72 @@ export type PrevSurveyRound =
         | 'no_keyed_rows';
     };
 
-/**
- * 🔴 v0.49 r3 #4 — 고정 키 한 칸의 대조. **날짜 컬럼은 정규화해서 본다.**
- *
- * `want`는 앱이 만든 원문(`autoValue`)이고 `cell`은 시트에서 온 **FORMATTED_VALUE**다. 구글은
- * date 서식 셀을 로케일대로 다시 그리므로(`2026-03-01` → `2026. 3. 1`) 리터럴 고정일 키는
- * **영영 일치하지 않는다** — 그 컬럼은 A8이 「정당한 식별 키」로 인정한 부류(정식일자 등)이고,
- * 불일치의 결과는 영구 '기록 없음'이다. 회차 컬럼만 `normalizeDateCell`을 거치고 있었다.
- *
- * ⚠️ 정확 일치를 **먼저** 본다 — 날짜가 아닌 값의 의미는 건드리지 않는다. 정규화는 date 타입
- * 컬럼에서 정확 일치가 실패했을 때의 2차 시도이고, 양쪽 다 파싱돼야 참이다(파싱 불가끼리
- * `null === null`로 통과하는 구멍을 막는다).
- */
 /** 🔴 v0.49 r4 M9 — 수치 2차 대조를 허용하는 **엄격한** 십진 형태. 지수(`1e3`)·16진(`0x10`)·
  *  천단위 구분(`1,000`)·`Infinity`는 일부러 제외한다: 「같은 수의 다른 표기」를 넓히려는 것이지
  *  파서를 넓히려는 것이 아니다. 넓힐수록 **다른 샘플이 같은 키로 붙는** 위험이 커진다. */
 const STRICT_DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
 
+/**
+ * 🔴 v0.49 r5 Z10(codex R4-F5) — **손실 없는 십진 정규화.** `Number()` 대조를 대체한다.
+ *
+ * M9의 마지막 줄이 `Number(raw) === Number(want)`였다. IEEE-754를 그대로 받으므로 **서로 다른
+ * 표본 키가 같은 것으로 붙는다**(실측 3쌍):
+ *   · `9007199254740992` ↔ `9007199254740993`      (2^53 위 — 두 정수가 같은 double)
+ *   · `0.10000000000000000` ↔ `0.10000000000000001` (배정밀도 유효자릿수 초과)
+ *   · 서로 다른 310자리 정수 둘                      (양쪽 `Infinity`)
+ * 지수·16진을 막은 `STRICT_DECIMAL`만으로는 이 충돌을 못 막는다 — 그건 *파서*를 좁힌 것이고
+ * 이건 *비교*의 문제다. 붙으면 **다른 표본의 이전 조사일**을 보여준다(쓰기 경로는 아니지만
+ * 조사 전에 보는 화면이라 판단을 오도한다).
+ *
+ * 문자열로 정규화해 비교한다 — 부호·선행 0·후행 0만 없애고 **자릿수는 하나도 버리지 않는다.**
+ * `STRICT_DECIMAL`을 통과한 문자열만 들어온다(지수·천단위 구분 없음).
+ */
+function canonicalDecimal(s: string): string {
+  const m = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(s);
+  if (!m) return s; // STRICT_DECIMAL 통과분은 항상 걸린다 — 방어용
+  const int = (m[2] ?? '').replace(/^0+/, '') || '0';
+  const frac = (m[3] ?? '').replace(/0+$/, '');
+  const body = frac ? `${int}.${frac}` : int;
+  // `-0` == `0`(수로서 같다). 그 외 음수만 부호를 남긴다.
+  return m[1] === '-' && body !== '0' ? `-${body}` : body;
+}
+
+/**
+ * 🔴 v0.49 r5 Z10(claude #15) — **축별 패치가 아니라 「양쪽을 같은 규칙으로 정규화」 한 곳.**
+ *
+ * 이 함수가 자란 방식이 결함의 형태였다: date 축(r3 #4)과 수치 축(r4 M9)이 **각자 자기 분기
+ * 안에서** 양쪽을 손으로 맞췄다. 축이 하나 늘 때마다 「양쪽 다 정규화됐는가」 가드를 새로 적어야
+ * 했고, 한쪽만 정규화하면 `null === null`로 조용히 통과하는 구멍이 매번 다시 열렸다.
+ * 이제 **정규화는 여기 하나**이고 비교는 호출부에서 한 번이다.
+ *
+ * 축별 근거(이 헬퍼가 승계한 것):
+ *  · **date**(r3 #4) — `want`는 앱이 만든 원문(`autoValue`)이고 `cell`은 시트의
+ *    **FORMATTED_VALUE**다. 구글이 date 서식 셀을 로케일대로 다시 그리므로
+ *    (`2026-03-01` → `2026. 3. 1`) 리터럴 고정일 키는 **영영 일치하지 않고** 결과는 영구
+ *    '기록 없음'이었다(A8이 「정당한 식별 키」로 인정한 정식일자 등이 그 부류다).
+ *  · **int/float**(r4 M9) — `USER_ENTERED` 강제 변환으로 앱의 `'007'`이 시트에서 숫자 7이 되어
+ *    `'7'`로 돌아오고, `'1.0'`은 `'1'`로 그려진다. 결과는 date 축과 **똑같다**.
+ *    보수적으로 좁힌 세 조건은 그대로다: ①`int`/`float`에만 ②`STRICT_DECIMAL` 형태만
+ *    ③정확 일치 우선(호출부 ①).
+ *
+ * @returns 2차 대조에 쓸 정규형. `null`이면 **이 컬럼/값은 2차 대조 대상이 아니다**
+ *   (`text`/`options`는 값의 의미를 건드리지 않는다 — `'007'`이 고유 라벨일 수 있다).
+ */
+function normalizeFixedKeyCell(col: Column, s: string): string | null {
+  if (col.type === 'date') return normalizeDateCell(s);
+  if (col.type === 'int' || col.type === 'float') {
+    return STRICT_DECIMAL.test(s) ? canonicalDecimal(s) : null;
+  }
+  return null;
+}
+
 export function fixedKeyCellMatches(col: Column, cell: string | undefined, want: string): boolean {
   const raw = (cell ?? '').trim();
+  // ① 정확 일치를 **먼저** 본다 — 정규화 대상이 아닌 값의 의미는 건드리지 않는다(불변).
   if (raw === want) return true;
-  if (col.type === 'date') {
-    const got = normalizeDateCell(raw);
-    return got !== null && got === normalizeDateCell(want);
-  }
-  // 🔴 v0.49 r4 M9(claude r3 #4) — **수치 컬럼은 수로 대조한다.** date만 정규화 2차를 받고
-  //   나머지는 바이트 정확 대조라, 시트를 거치며 표기가 바뀌는 두 형태가 영구 불일치였다:
-  //     · `USER_ENTERED` 강제 변환 — 앱의 고정값 `'007'`이 시트에서 숫자 7이 되고
-  //       FORMATTED_VALUE로 `'7'`이 돌아온다.
-  //     · 소수 표기 — `'1.0'`이 `'1'`로 그려진다(반대도 마찬가지).
-  //   결과는 date 축과 **똑같다**: 영구 「기록 없음」(A5/#4가 닫으려던 그 거짓말).
-  //   ⚠️ **보수적으로 좁힌다**(Larry 지시 — 위험하면 등재로 강등):
-  //     ① `int`/`float`에만 — `text`/`options`는 값의 의미를 건드리지 않는다(`'007'`이
-  //        고유 라벨일 수 있다). ② 양쪽 다 엄격 십진 형태여야 한다(`STRICT_DECIMAL`).
-  //     ③ 정확 일치를 **먼저** 본다(위) — 2차는 실패했을 때만.
-  //   오라클: tests/pastValues.spec.ts 「M9 — 수치 고정 키」
-  if (col.type !== 'int' && col.type !== 'float') return false;
-  if (!STRICT_DECIMAL.test(raw) || !STRICT_DECIMAL.test(want)) return false;
-  return Number(raw) === Number(want);
+  // ② 2차 대조 — **양쪽 다** 정규화돼야 참이다(파싱 불가끼리 `null === null`로 통과하는 구멍 차단).
+  const got = normalizeFixedKeyCell(col, raw);
+  return got !== null && got === normalizeFixedKeyCell(col, want);
 }
 
 export function previousSurveyRound(
