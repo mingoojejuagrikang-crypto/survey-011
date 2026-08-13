@@ -18,6 +18,7 @@ import {
   sessionConstantValue,
   ensureUniqueSessionLabel,
 } from '../src/lib/sessionLabel';
+import { localTodayIso } from '../src/lib/weekTuesday';
 import type { Column } from '../src/types';
 
 function col(over: Partial<Column>): Column {
@@ -97,8 +98,73 @@ test.describe('buildSessionLabel — 세션명 SSOT', () => {
     expect(buildSessionLabel(schema(), { isoDate: '2026-06-25', customName: '   ' })).toBe('2026-06-25 강남호 A');
   });
   test('isoDate 미지정이면 오늘 날짜(YYYY-MM-DD)로 시작', () => {
-    const today = new Date().toISOString().slice(0, 10);
-    expect(buildSessionLabel(schema())).toBe(`${today} 강남호 A`);
+    // 🔴 v0.49 r5 Z1 — 기준은 **로컬** 오늘이다. 종전 이 줄은 `toISOString()`으로 기대값을
+    //   만들어, 제품이 UTC를 쓰는 결함과 **같은 방향으로 함께 틀려** 결함을 가리고 있었다.
+    expect(buildSessionLabel(schema())).toBe(`${localTodayIso()} 강남호 A`);
+  });
+});
+
+/**
+ * 🔴 v0.49 r5 Z1(codex R4-F1) — 접두 날짜가 UTC면 KST 00:00~08:59에 세션명이 **전날**로 찍힌다.
+ *
+ * 이 describe가 **벽시계에 기대지 않는** 이유: 결함 자체가 「특정 시간대에만 드러난다」이므로,
+ * `new Date()`에 의존하는 오라클은 낮에 돌리면 조용히 vacuous가 된다 — 정확히
+ * [TEST-MIDNIGHT-UTC-1]이 남긴 교훈의 반대편 함정이다. 그래서 `opts.now`로 순간을 주입하고,
+ * 로컬/UTC가 **갈리는 순간**을 런타임 오프셋에서 역산한다(TZ 무관 — UTC 실행만 예외 처리).
+ */
+test.describe('Z1 — 접두 날짜는 로컬(UTC 금지)', () => {
+  /** 로컬 날짜와 UTC 날짜가 반드시 갈리는 순간. getTimezoneOffset() = UTC-로컬(분). */
+  function straddling(): { at: Date; local: string; utc: string } | null {
+    const probe = new Date(2026, 7, 14, 12, 0, 0);
+    const offsetMin = probe.getTimezoneOffset(); // KST(UTC+9) → -540
+    if (offsetMin === 0) return null; // UTC 실행에서는 갈릴 수 있는 순간이 없다
+    // 동경(offset<0): 로컬 자정 직후가 UTC로는 전날 / 서경(offset>0): 로컬 자정 직전이 UTC로 다음날
+    const at = offsetMin < 0 ? new Date(2026, 7, 14, 0, 1, 0) : new Date(2026, 7, 14, 23, 59, 0);
+    return { at, local: '2026-08-14', utc: at.toISOString().slice(0, 10) };
+  }
+
+  test('로컬 자정 경계에서 세션명 접두 = 로컬 날짜(≠ UTC 날짜)', () => {
+    const s = straddling();
+    test.skip(s === null, 'UTC 실행 — 로컬/UTC가 갈리는 순간이 존재하지 않는다');
+    expect(s!.utc, '전제: 이 순간은 실제로 로컬/UTC 날짜가 갈린다').not.toBe(s!.local);
+    // 반증: `localTodayIso` 대신 `toISOString()`로 되돌리면 이 단언이 UTC 날짜를 받아 red.
+    expect(buildSessionLabel(schema(), { now: s!.at })).toBe(`${s!.local} 강남호 A`);
+  });
+
+  test('customName은 여전히 날짜를 접두하지 않는다(Z1이 우선순위를 건드리지 않음)', () => {
+    const s = straddling();
+    test.skip(s === null, 'UTC 실행 — 위와 같은 이유');
+    expect(buildSessionLabel(schema(), { now: s!.at, customName: '오전 1차' })).toBe('오전 1차');
+  });
+
+  test('명시 isoDate는 now보다 우선한다(호출부 계약 불변)', () => {
+    expect(buildSessionLabel(schema(), { isoDate: '2026-06-25', now: new Date(2026, 7, 14) }))
+      .toBe('2026-06-25 강남호 A');
+  });
+
+  /**
+   * 🔴 헬퍼만 고치면 **반쪽이다.** 세션명 접두를 만드는 호출부 3곳은 `isoDate`를 **직접 계산해**
+   * 넘긴다 — 거기가 UTC로 남으면 기본값 수정은 우회된다(실측: 이 라운드에서 게이트 W3-3·W3-4를
+   * red로 만든 건 `sessionLabel.ts`가 아니라 `useSettingsActions.prospectiveSessionLabel`이었다).
+   * 그중 둘(`SessionOptionsSection`의 select/input onChange)은 e2e 도달 경로가 없어 소스 계약으로
+   * 잠근다(이 레포의 `[node]` 계약 테스트 관례 — v049-prev-survey W3-7·W3-10).
+   */
+  test('[node] Z1 — 세션명 접두를 만드는 호출부가 UTC로 되돌아가지 않는다', async () => {
+    const fs = await import('node:fs');
+    const sites = [
+      'src/lib/useSettingsActions.ts',
+      'src/components/settings/SessionOptionsSection.tsx',
+      'src/lib/sessionLabel.ts',
+    ];
+    for (const path of sites) {
+      const src = fs.readFileSync(path, 'utf-8');
+      // 주석은 제외한다 — 이 결함의 근거 설명이 본문에 `toISOString()`을 인용한다.
+      const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+      expect(code, `${path}: 세션명 날짜를 UTC(toISOString)로 만들면 KST 새벽에 전날로 찍힌다`)
+        .not.toContain('toISOString().slice(0, 10)');
+      expect(code, `${path}: 로컬 날짜 SSOT(localTodayIso)를 쓰지 않는다`)
+        .toContain('localTodayIso');
+    }
   });
 });
 

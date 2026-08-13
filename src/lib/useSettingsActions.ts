@@ -36,6 +36,7 @@ import { mergeInferredColumnsForSheet } from './columnFlags';
 import { enrichOptionColumns } from './optionExclusions';
 import { computeTotalRows } from './autoValue';
 import { buildSessionLabel, pickSessionLabelValue } from './sessionLabel';
+import { localTodayIso } from './weekTuesday';
 import { getPickerApiKey, openDrivePicker } from './drivePicker';
 import { setPreferredVoiceName, setBargeInEnabled } from './speech';
 import { logger } from './logger';
@@ -373,7 +374,9 @@ export function useSettingsActions() {
   //   단, 사용자가 세션명 *컬럼*을 명시 선택(sessionLabelColId)한 경우는 그 컬럼 값만 접미로 쓰는
   //   기존 동작을 보존한다(자유입력이 없을 때만). 자유입력이 있으면 무엇보다 우선한다.
   const prospectiveSessionLabel = () => {
-    const isoDate = new Date().toISOString().slice(0, 10);
+    // v0.49 r5 Z1 — 로컬 날짜(UTC 금지). 이 미리보기가 곧 세션명이므로 buildSessionLabel과
+    //   같은 출처를 써야 한다 — 근거는 sessionLabel.buildSessionLabel 헤더.
+    const isoDate = localTodayIso();
     const custom = (s.sessionCustomLabel ?? '').trim();
     if (custom) return custom; // 자유입력 최우선(날짜 미접두)
     const pickedCol = s.sessionLabelColId

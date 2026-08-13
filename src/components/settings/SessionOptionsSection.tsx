@@ -1,6 +1,8 @@
 import { T } from '../../tokens';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { buildSessionLabel, pickSessionLabelValue } from '../../lib/sessionLabel';
+// v0.49 r5 Z1 — 세션명 접두 날짜는 로컬(UTC 금지). 근거는 sessionLabel.buildSessionLabel 헤더.
+import { localTodayIso } from '../../lib/weekTuesday';
 import { logger } from '../../lib/logger';
 import { settingChanged } from '../../lib/logEvents';
 // v0.46.0 WP-I — BeepPicker 렌더 제거(소리 고정·UI 숨김). 파일은 남아 있다 — 되살리는 방법은 아래 렌더 지점 주석 참조.
@@ -43,7 +45,7 @@ export function SessionOptionsSection({ prospectiveSessionLabel }: { prospective
                 value={s.sessionLabelColId ?? ''}
                 onChange={(e) => {
                   const newColId = e.target.value || null;
-                  const isoDate = new Date().toISOString().slice(0, 10);
+                  const isoDate = localTodayIso();
                   const custom = (s.sessionCustomLabel ?? '').trim();
                   const pickedCol = newColId ? s.columns.find((c) => c.id === newColId) : null;
                   // v0.22.0 — 효과 라벨 = 자유입력 우선, 없으면 (선택 항목값 또는 상수 join).
@@ -95,7 +97,7 @@ export function SessionOptionsSection({ prospectiveSessionLabel }: { prospective
                 onChange={(e) => {
                   const raw = e.target.value;
                   const custom = raw.trim();
-                  const isoDate = new Date().toISOString().slice(0, 10);
+                  const isoDate = localTodayIso();
                   const pickedCol = s.sessionLabelColId
                     ? s.columns.find((c) => c.id === s.sessionLabelColId)
                     : null;

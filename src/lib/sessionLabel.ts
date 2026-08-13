@@ -15,6 +15,7 @@
 
 import type { Column } from '../types';
 import { isCycling } from './autoValue';
+import { localTodayIso } from './weekTuesday';
 
 /**
  * v0.22.0 — 세션 상수 헬퍼(SSOT). 세션을 식별하는 "상수 값"을 한 컬럼에서 뽑는다.
@@ -52,14 +53,24 @@ export function sessionConstantValue(col: Column): string {
  *   3. 상수가 하나도 없으면 생성일 단독 — 예: `2026-06-25`.
  *
  * 상수 join 순서는 columns 순서(스키마 정의 순)를 따른다. `isoDate` 미지정 시 오늘 날짜를 쓴다.
+ *
+ * 🔴 v0.49 r5 Z1(codex R4-F1) — **접두 날짜는 로컬이다**(`localTodayIso`). 종전
+ * `new Date().toISOString().slice(0,10)`은 UTC라 **KST 00:00~08:59에 세션명이 전날로 찍혔다** —
+ * 농가 아침 작업 시간대가 정확히 그 창이고, 그 라벨은 시트에 남아 세션 식별의 근거가 된다.
+ * 같은 결함을 v0.7.0이 `persistSession`의 `session.date`에서 이미 고쳤고(`useVoiceSession:655`),
+ * 날짜 컬럼의 '오늘' 치환도 로컬이다(`autoValue`) — 이 함수만 정정을 못 받아, 같은 설정 요약
+ * 모달 안에서 「세션명 2026-08-13」과 「조사일자 오늘 (2026-08-14)」이 갈렸다(실측 08-14 01:3x).
+ * 부수효과로 릴리스 게이트 W3-3·W3-4가 그 시간대에 red였다([TEST-MIDNIGHT-UTC-1]).
+ * `opts.now`는 그 축을 벽시계 없이 고정하기 위한 주입구다(`weekTuesday`의 `now` 인자와 같은 관례).
+ * 오라클: tests/sessionLabel.spec.ts 「Z1 — 접두 날짜는 로컬(UTC 금지)」
  */
 export function buildSessionLabel(
   columns: Column[],
-  opts?: { customName?: string | null; isoDate?: string },
+  opts?: { customName?: string | null; isoDate?: string; now?: Date },
 ): string {
   const custom = (opts?.customName ?? '').trim();
   if (custom) return custom;
-  const isoDate = opts?.isoDate ?? new Date().toISOString().slice(0, 10);
+  const isoDate = opts?.isoDate ?? localTodayIso(opts?.now ?? new Date());
   const parts = columns.map(sessionConstantValue).filter(Boolean);
   return parts.length > 0 ? `${isoDate} ${parts.join(' ')}` : isoDate;
 }
