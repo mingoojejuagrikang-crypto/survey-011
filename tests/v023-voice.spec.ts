@@ -577,3 +577,33 @@ test('B2-W4 — extraneous_token은 거절을 유지하면서 would_salvage 관�
   const failEv = events.find((e) => e.type === 'stt_parse_failed');
   expect(failEv?.extra, '사유 필드에 꼬리가 붙으면 기존 집계가 갈린다').toBe('extraneous_token');
 });
+
+test('A4-r2 — 소수부 재질문 문맥에서는 would_salvage를 남기지 않는다 (지표 오염 차단)', async ({ page }) => {
+  await setupAndStart(page);
+
+  // ① 「111 점 에」 = 실기기 원문(iOS STT가 소수부를 오전사) → 정수부 유지 + 소수부만 재질문.
+  //    이 발화는 **평소 문맥**이므로 구제 후보가 있으면 남는 것이 맞다 — 여기서 세어 둔다.
+  await fireStt(page, '111 점 에', 900);
+  const afterFirst = await loadLogEvents(page);
+  expect(
+    afterFirst.some((e) => e.type === 'stt_parse_failed' && e.extra === 'decimal_fraction_lost'),
+    '소수부 재질문 문맥이 서지 않으면 이 테스트가 재는 상태가 아니다',
+  ).toBe(true);
+  const baseline = afterFirst.filter((e) => String(e.extra ?? '').startsWith('would_salvage:')).length;
+
+  // ② 소수부만 기다리는 상태에서 파싱 실패 발화 — 구제 후보(3.3)가 잡히는 원문이다.
+  await fireStt(page, '상식 3.3', 900);
+  const events = await loadLogEvents(page);
+
+  // 🔴 v0.49 r2 A4(합집합 C10) — 이 문맥의 발화는 **조각**이고 구제 후보도 조각이다. 이 계측의
+  //    판정 방법은 "후보 vs 재발화 후 실제 커밋값" 대조인데, 조각 후보를 전체값 커밋과 대조하면
+  //    비교 자체가 성립하지 않는다(정수부 111 + 조각 후보 vs 커밋 111.x). 다음 회차 모수가
+  //    조용히 오염되므로 이 문맥에서는 기록하지 않는다.
+  const salvage = events.filter((e) => String(e.extra ?? '').startsWith('would_salvage:'));
+  expect(salvage.length, '소수부 재질문 문맥의 조각이 would_salvage로 기록됐다 — 지표 오염').toBe(baseline);
+
+  // 거절·재질문 동작 자체는 **현행 그대로**여야 한다(A4는 계측만 끈다).
+  expect(events.filter((e) => e.type === 'stt_parse_failed').length, '거절이 사라지면 안 된다')
+    .toBeGreaterThanOrEqual(2);
+  expect(events.some((e) => e.type === 'value'), '구제값이 커밋되면 안 된다').toBe(false);
+});

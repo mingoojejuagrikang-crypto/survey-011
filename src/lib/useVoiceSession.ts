@@ -2731,7 +2731,14 @@ export function useVoiceSession() {
       //   계약이다(PRINCIPLES §4 — 꼬리 확장은 이벤트별 개별 승인). 꼬리를 붙이면 사유를
       //   정확일치로 세는 기존 집계가 조용히 갈린다. 신규 type도 만들지 않는다(log-replay 호환)
       //   — `enterReviewWait`이 `command`를 재사용한 것과 같은 판단이다.
-      if (attempt.salvageCandidate != null) {
+      //   🔴 v0.49 r2 A4(합집합 C10) — **소수부 재질문 문맥에서는 남기지 않는다.** 그 문맥의
+      //   발화는 조각("구")이고 `salvageCandidate`도 그 조각에서 나온다. 이 계측의 판정 방법은
+      //   *"이 후보를 재발화 후 실제 커밋값과 대조해 오채택률을 잰다"* 인데, 조각 후보를 전체값
+      //   커밋과 대조하면 **비교 자체가 성립하지 않는다**(정수부 111 + 조각 후보 9 vs 커밋 111.9).
+      //   다음 회차 모수가 조용히 오염되므로 억제한다. 합성값(정수부+조각)을 대신 기록하는 쪽은
+      //   택하지 않았다 — 그건 「자동 채택했더라면」이 아니라 **소수부 합성이 성공했을 값**이라
+      //   같은 컬럼에 다른 의미의 수를 섞는다(합집합 처방도 「억제가 단순」).
+      if (attempt.salvageCandidate != null && fractionWhole == null) {
         logCell({
           type: 'stt', extra: wouldSalvage(attempt.salvageCandidate), text,
           row: awaiting.row, colId: awaiting.colId, colName: awaiting.name,
