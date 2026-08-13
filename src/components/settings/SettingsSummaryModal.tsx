@@ -1,9 +1,18 @@
+import { useEffect, useMemo, useState } from 'react';
 import { T } from '../../tokens';
 import { I } from '../icons';
 import type { Column } from '../../types';
 import { SettingsSummary, SummaryStatusRow } from './SettingsSummary';
 import { ModalBase } from '../ModalBase';
-import { getCachedIndex, getFallbackIndex, previousSurveyRound } from '../../lib/pastValues';
+import {
+  ensurePastIndex,
+  getCachedIndex,
+  getFallbackBuiltAt,
+  getFallbackIndex,
+  previousSurveyRound,
+  subscribePastIndexStatus,
+} from '../../lib/pastValues';
+import { logger } from '../../lib/logger';
 import { localTodayIso } from '../../lib/weekTuesday';
 
 /**
@@ -16,14 +25,19 @@ import { localTodayIso } from '../../lib/weekTuesday';
 export type PrevSurveyState =
   | { kind: 'unknown' }             // 과거값 인덱스 미로드 — 오프라인·미로그인·시트 미설정
   | { kind: 'none' }                // 인덱스는 있으나 이 세션 고정 키와 일치하는 과거 기록 0건
-  | { kind: 'date'; iso: string };  // 직전 조사일(오늘 미만 최신 회차)
+  /** 직전 조사일(오늘 미만 최신 회차). `stale` = 신선 캐시가 아니라 **IDB 영속 백업**에서 왔다. */
+  | { kind: 'date'; iso: string; stale: boolean };
 
 /** 🔴 v0.49 r2 A5(codex F4) — 「기록 없음」은 **조회 결과**일 때만 쓴다. 조회가 성립하지 않는
  *  상태(고정 키 0개·헤더 미매핑)는 「미확인」이다 — 그걸 「기록 없음」이라고 말하면 사용자가
  *  "과거 기록이 없구나"라는 **틀린 결론**을 내리고, 그 화면은 스키마를 고치기 전까지 영구 고정된다.
  *  두 상태의 판정은 `pastValues.previousSurveyRound`가 소유한다(여기서 다시 추론하지 않는다). */
 function prevSurveyText(s: PrevSurveyState): string {
-  if (s.kind === 'date') return s.iso;
+  // 🔴 v0.49 r2 A6(합집합 C4) — **백업 출처를 표시에 밝힌다.** 종전엔 14일까지 유효한 IDB 백업의
+  //   날짜가 신선 조회분과 **픽셀 단위로 같은 문자열**이었다. 이 화면은 "조사 전에 직전 조사일을
+  //   확인"하는 용도이므로, 최대 2주 묵은 인덱스에서 온 날짜를 방금 시트에서 읽은 값처럼 보이게
+  //   하면 사용자가 검증할 방법이 없다(§2 — 화면은 아는 만큼만 말한다).
+  if (s.kind === 'date') return s.stale ? `${s.iso} (백업)` : s.iso;
   return s.kind === 'none' ? '기록 없음' : '미확인';
 }
 
@@ -41,19 +55,60 @@ export function readPrevSurveyState(
   columns: Column[],
   roundDateColId: string | null,
 ): PrevSurveyState {
-  const index = getCachedIndex() ?? getFallbackIndex();
+  const fresh = getCachedIndex();
+  const index = fresh ?? getFallbackIndex();
   if (!index) return { kind: 'unknown' };
   const round = previousSurveyRound(index, columns, roundDateColId, localTodayIso());
   // 조회 불가(고정 키 0개·헤더 미매핑)는 인덱스 미로드와 **같은 계열**이다 — 둘 다 「이 화면은
   // 답을 모른다」이지 「과거가 없다」가 아니다(A5). 사유 자체는 순수층이 들고 있다.
   if (round.kind === 'unqueryable') return { kind: 'unknown' };
-  return round;
+  if (round.kind === 'none') return round;
+  return { kind: 'date', iso: round.iso, stale: fresh === null };
+}
+
+/**
+ * 🔴 v0.49 r2 — 「이전 조사」 상태의 **소유자**. 종전엔 `SettingsScreen`이 렌더 중에
+ * `readPrevSurveyState(...)`를 직접 호출해 prop으로 내려줬다. 그래서:
+ *
+ *  - **A9(합집합 C13)** 팝업이 열려 있는 동안 설정 store에 쓰기가 한 번 일어날 때마다 화면이
+ *    다시 렌더되고, 그때마다 인덱스 **전수 스캔**(`previousSurveyRound`의 이중 루프)이 돌았다.
+ *    입력 하나 바꿀 때마다 수천 행을 다시 훑는다. 여기서 `useMemo`로 잠근다 — 키는 실제로 답을
+ *    바꾸는 셋(columns · roundDateColId · 인덱스 상태 버전)뿐이다.
+ *  - **B1(민구 결정 08-13 ⓐ)** 팝업을 여는 순간 준비를 **깨운다**. 종전엔 부팅 프리페치의
+ *    `shouldPreparePastIndex`(이상치 규칙이 하나라도 있어야 true)에 막혀, 규칙 없는 기본
+ *    스키마에서는 캐시를 만들 경로가 아예 없어 영원히 「미확인」이었다. 이 진입로에서는 그
+ *    술어를 적용하지 않는다(민구 확정) — 시트 미지정·미로그인은 `loadPastIndex`가 스스로
+ *    skip하며 사유를 로깅하므로 여전히 「미확인」이고, 헛된 네트워크도 없다.
+ *    🔑 **5개 기존 호출부(부팅·로그인·설정 저장 등)의 술어는 불변이다** — 설계 결정 범위 밖.
+ *  - 준비가 끝나면 `subscribePastIndexStatus`가 깨워 **열려 있는 팝업의 값이 갱신된다**
+ *    (`notifyStatusChanged` 전례 — 3상태 배지가 쓰는 그 신호다).
+ *  - **A6(합집합 C4)** 답이 백업에서 왔으면 `past_index_used_stale`를 남긴다. `pastValues.ts`가
+ *    폴백 계약으로 *"폴백 사용 시 호출자가 로깅한다"* 를 명시하는데 이 신규 소비자만 빠져 있었다.
+ *    ⚠️ 이벤트 **이름을 새로 만든다** — `trend_used_stale_index`에 얹으면 이상치 알람의
+ *    stale 사용 집계가 설정 팝업 열람으로 오염된다(PRINCIPLES §4: 늘릴 땐 새 이름).
+ */
+function usePrevSurvey(columns: Column[], roundDateColId: string | null): PrevSurveyState {
+  const [version, setVersion] = useState(0);
+  useEffect(() => subscribePastIndexStatus(() => setVersion((v) => v + 1)), []);
+  // 열림 = 마운트(호출부가 조건부 렌더한다). 준비 nudge는 열 때 1회.
+  useEffect(() => { ensurePastIndex(); }, []);
+  const state = useMemo(
+    () => readPrevSurveyState(columns, roundDateColId),
+    [columns, roundDateColId, version],
+  );
+  useEffect(() => {
+    if (state.kind !== 'date' || !state.stale) return;
+    const builtAt = getFallbackBuiltAt();
+    const ageH = builtAt == null ? -1 : Math.round((Date.now() - builtAt) / 3_600_000);
+    logger.log({ type: 'app', extra: `past_index_used_stale:summary,age_h=${ageH}` });
+  }, [state]);
+  return state;
 }
 
 export function SettingsSummaryModal({
   googleConnected, userEmail, sheetLabel, columns, totalRows, sessionLabel,
   recognitionTolerance, ttsRate, fastRecognition, tableGenerated, generatedRows,
-  prevSurvey, onClose,
+  roundDateColId, onClose,
 }: {
   googleConnected: boolean;
   userEmail: string | null;
@@ -66,9 +121,12 @@ export function SettingsSummaryModal({
   fastRecognition: boolean;
   tableGenerated: boolean;
   generatedRows: number;
-  prevSurvey: PrevSurveyState;
+  /** v0.49 r2 A9/B1 — 상태를 **prop으로 받지 않는다.** 렌더마다 전수 스캔하던 소유권을 이 컴포넌트
+   *  안으로 옮겼다(usePrevSurvey 주석). 팝업이 재료(컬럼·회차 컬럼)만 받고 답은 스스로 만든다. */
+  roundDateColId: string | null;
   onClose: () => void;
 }) {
+  const prevSurvey = usePrevSurvey(columns, roundDateColId);
   return (
     <ModalBase
       onClose={onClose}
