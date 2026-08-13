@@ -354,7 +354,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
     // "35 입니다" still commit), treat as ambiguous → re-ask, tagged 'extraneous_token'.
     if (lastValid !== null && residuals.length > 0 && !residuals.every(isHarmlessResidual)) {
       // W4 계측 — 여기 도달 = 유효 숫자 **정확히 1개**(≥2는 위 `multi_numeric`이 걷어냈다).
-      return fail('extraneous_token', undefined, formatNum(lastValid, maxDecimals) ?? undefined);
+      return fail('extraneous_token', undefined, formatNum(lastValid, maxDecimals));
     }
     if (lastValid !== null) return formatNum(lastValid, maxDecimals);
   }
@@ -392,7 +392,7 @@ export function parseKoreanNumber(raw: string, maxDecimals?: number): string | n
       const post = s.slice(idx + chunk.length);
       if (!isHarmlessResidual(pre) || !isHarmlessResidual(post)) {
         // W4 계측(무공백 형제 "제17.7"). 덩어리 2개↑는 위 `multi_arabic_chunk`가 걷어냈다.
-        return fail('extraneous_token', undefined, formatNum(parseFloat(chunk), maxDecimals) ?? undefined);
+        return fail('extraneous_token', undefined, formatNum(parseFloat(chunk), maxDecimals));
       }
       const n = parseFloat(chunk);
       if (Number.isFinite(n)) return formatNum(n, maxDecimals);

@@ -552,4 +552,28 @@ test('B2 — 고신뢰지만 파싱 실패 → 사유 큐 parse_failed + stt_par
   expect(await ttsLog(page)).toContain('숫자로 인식 실패.');
   expect(await ttsLog(page), 'TTS 꼬리는 삭제됐다 — 되살아나면 red')
     .not.toContain(`숫자로 인식 실패. ${LONG_NAME} 다시 말씀해 주세요.`);
+
+  // 🔴 v0.49 r2 W4 — 「숫자가 아예 없는」 발화(no_number)에는 구제 후보가 없다.
+  //    계측이 사유 경계를 넘지 않는다는 것을 배선 층에서도 확인한다.
+  expect(events.some((e) => String(e.extra ?? '').startsWith('would_salvage:'))).toBe(false);
+});
+
+test('B2-W4 — extraneous_token은 거절을 유지하면서 would_salvage 관측을 남긴다 (섀도 계측 배선)', async ({ page }) => {
+  await setupAndStart(page);
+  // 08-13 실측 원문. conf 0.95라 **저신뢰 게이트를 통과**하고 파싱 실패 경로로 내려간다.
+  //   (저신뢰였다면 `stt_rejected_low_confidence`가 앞에서 return해 계측 자체가 안 난다 —
+  //    그건 이 지표의 알려진 한계다. 산출물 「미확인」에 기록.)
+  await fireStt(page, '상식 3.3', 800);
+
+  const events = await loadLogEvents(page);
+  // ① 거절은 그대로 — 값이 커밋되지 않았다.
+  expect(events.some((e) => e.type === 'stt_parse_failed' && e.extra === 'extraneous_token')).toBe(true);
+  expect(events.some((e) => e.type === 'value'), '🔴 구제값이 커밋되면 안 된다').toBe(false);
+  // ② 「채택했더라면」의 값이 로그에 남는다 — 다음 회차가 오채택률을 재는 유일한 재료다.
+  const salvage = events.filter((e) => String(e.extra ?? '').startsWith('would_salvage:'));
+  expect(salvage.length, 'would_salvage 라인이 없으면 다음 회차가 잴 것이 없다').toBe(1);
+  expect(salvage[0].extra).toBe('would_salvage:3.3'); // 정답은 33.3 — 그래서 채택하지 않는다
+  // ③ `stt_parse_failed`의 extra는 **사유 단독**이어야 한다(SOP-003 바이트 계약, PRINCIPLES §4).
+  const failEv = events.find((e) => e.type === 'stt_parse_failed');
+  expect(failEv?.extra, '사유 필드에 꼬리가 붙으면 기존 집계가 갈린다').toBe('extraneous_token');
 });
