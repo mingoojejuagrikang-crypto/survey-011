@@ -5442,11 +5442,20 @@ export function useVoiceSession() {
       row: awaiting.row, colId: awaiting.colId,
     });
     // 음성 경로의 trendConfirm 해제('modify' 강등 후 재질문)와 동일 상태(fractionWhole 보존).
-    awaitingFieldRef.current = demoteTrendConfirm(awaiting);
-    armClipForCell(awaiting.row, awaiting.colId);
-    // M11 — 같은 상수. [수정] **터치**는 정의상 접수된 조작이라 거절 신호를 붙이지 않는다.
-    await say(relistenPrompt(awaiting.name));
-  }, [armClipForCell, clearAnomalyAlert, say]);
+    const demoted = demoteTrendConfirm(awaiting);
+    awaitingFieldRef.current = demoted;
+    // 🔴 v0.49 r6 Y4(claude #2) — **재청취 안내는 `relistenInContext`가 소유한다**(그 헤더).
+    //   종전 이 두 줄(`armClipForCell` + `say(relistenPrompt)`)은 Z6이 만든 깔때기를 안 타는
+    //   **세 번째 재청취**였다. 바로 위 `demoteTrendConfirm`이 `fractionWhole`을 **보존**하므로
+    //   (그 계약) 소수 문맥이 살아 있는 채로 여기 오는데, 그 상태에서 두 반쪽을 다 어겼다:
+    //     ① 표면 모순 — 화면 큐는 「130 점, 소수점 아래」인데 귀는 「횡경 다시 말씀해 주세요」.
+    //        안내를 믿고 전체값을 말하면 살아 있는 `fractionWhole`과 합성 규칙이 충돌한다.
+    //     ② [CLIP-DECIMAL-FRAG-1] — `armClipForCell`이 슬롯을 재시작해 직전 원본 전체발화
+    //        버퍼를 폐기한다. 소수 재질문은 조각 발화만 유도하므로 그 슬롯은 계속 녹음해야 한다.
+    //   M11의 「[수정] 터치는 접수된 조작이라 거절 신호를 붙이지 않는다」는 그대로다 —
+    //   `relistenInContext`도 비프·거절 큐를 만들지 않는다(그게 그 함수의 존재 이유다).
+    await relistenInContext(demoted);
+  }, [clearAnomalyAlert, relistenInContext]);
 
   // ── v0.34.0 A1 — 수동 입력 이상치 **보류**(manualHold) 팝업의 터치 버튼 ──
   //   위 confirmAnomalyTouch/modifyAnomalyTouch는 trendConfirm 가드라 음성 경로 전용 — 수동 보류는

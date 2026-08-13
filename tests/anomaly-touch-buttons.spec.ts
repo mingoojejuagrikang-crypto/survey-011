@@ -459,7 +459,16 @@ test('trendConfirm 중 소수부 재질문 → "수정" 강등 → 소수부 "5"
   // '수정' — trendConfirm이 modify로 강등되며 재질문. fractionWhole(130)이 살아 있어야 한다.
   await fireStt(page, '수정', 500);
   const tts2 = await getTtsLog(page);
-  expect(tts2.some((t) => t.includes('횡경') && t.includes('다시'))).toBe(true);
+  // 🔴 v0.49 r6 Y4(codex R5-F4) — 종전 단언은 `'횡경'`과 `'다시'`가 든 **옛 문구**를 요구했다.
+  //   r5 Z6이 「살아 있는 소수 문맥에서는 재청취 안내도 그 문맥을 따른다」로 바꾼 뒤 이 줄이
+  //   갱신되지 않아 전체 suite에 red 1건이 남았고, 바로 아래 핵심 단언(`5` → `130.5`)이
+  //   **실행조차 되지 않았다** — 오라클이 재는 것이 사라진 셈이라 회귀 안전망이 반쪽이었다.
+  //   현행 계약: 정수부를 유지한 소수 재질문 문구를 그대로 반복한다(화면 큐와 같은 말).
+  expect(
+    tts2.at(-1),
+    '소수 문맥의 재청취가 화면 큐와 다른 말을 한다(Z6 계약)',
+  ).toBe(tts1.at(-1));
+  expect(tts2.at(-1), '전제: 정수부를 유지한 소수 재질문이다').toContain('130');
 
   // 소수부만 응답 → 130.5 합성 커밋(재위반 알람은 떠도 무방 — 값 자체가 계약).
   await fireStt(page, '5', 700);
@@ -484,6 +493,16 @@ test('trendConfirm 중 소수부 재질문 → [수정] 터치 강등 → 소수
   // 터치 [수정] — modifyAnomalyTouch 강등 경로.
   await page.locator('[data-testid="anomaly-modify-btn"]').click();
   await page.waitForTimeout(400);
+
+  // 🔴 v0.49 r6 Y4(claude #2) — 터치 [수정]도 `relistenInContext`를 탄다. 종전엔 이 경로만
+  //   `armClipForCell` + `relistenPrompt`를 손으로 조립해, **살아 있는 소수 문맥에서 화면과 귀가
+  //   갈렸다**(Z6이 음성 두 경로에서 닫은 그 결함의 세 번째 얼굴). 위 음성 변형과 **같은 문구**를
+  //   요구하는 것이 곧 「같은 상태·같은 목적의 조작이 입력 수단에 따라 갈리지 않는다」의 단언이다.
+  const tts2 = await getTtsLog(page);
+  expect(
+    tts2.at(-1),
+    '터치 [수정]이 음성 「수정」과 다른 말을 한다 — 화면 큐는 「130 점, 소수점 아래」인데 귀는 전체 재발화 요구',
+  ).toBe(tts1.at(-1));
 
   await fireStt(page, '5', 700);
   await expect.poll(() => readRow1C8(page), { timeout: 5000 }).toBe('130.5');
