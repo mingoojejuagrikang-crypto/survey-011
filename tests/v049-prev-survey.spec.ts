@@ -272,6 +272,13 @@ test('[node] W3-7(r2 A9) — 「이전 조사」 계산의 소유자는 팝업�
   ).toBe(false);
   expect(modal.includes('useMemo('), '팝업이 계산을 잠그지 않았다').toBe(true);
   // 메모 키에 상태 버전이 없으면 준비가 끝나도 열린 팝업이 갱신되지 않는다(B1과 한 설계다).
-  expect(modal).toMatch(/useMemo\([\s\S]{0,200}\[columns, roundDateColId, version\]/);
+  // ⚠️ 이 정규식은 **변수명에 결합돼 있다.** 이름을 바꿨다면 정규식도 같이 고쳐라 —
+  //    계약은 「메모 키에 columns · roundDateColId · **인덱스 상태 버전**이 들어간다」이지
+  //    특정 식별자가 아니다. 여기서 단언을 느슨하게 푸는 것은 수정이 아니라 **위반 승인**이다
+  //    ([UI-ALERT-1]이 기록한 형태 — 계약을 아는 테스트가 계약을 봐준다).
+  expect(
+    modal,
+    '메모 키에 인덱스 상태 버전이 없다(또는 변수명이 바뀌었다 — 위 주석 참조)',
+  ).toMatch(/useMemo\([\s\S]{0,200}\[columns, roundDateColId, version\]/);
   expect(modal.includes('subscribePastIndexStatus('), '준비 완료 신호를 구독하지 않는다').toBe(true);
 });
