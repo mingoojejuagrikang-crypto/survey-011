@@ -373,3 +373,76 @@ test('W3-8(r4 M6) — 신선 TTL만 지난 자기 조회는 「(백업)」이 �
   expect(await staleSummaryLogs(page), 'TTL 경과에 stale 사용 계측이 붙었다(age_h=0 오기록)')
     .toHaveLength(0);
 });
+
+/**
+ * 🔴 W3-9(r4 M8 · claude r3 #11) — **조회 불가 사유를 로그에 남긴다.**
+ *
+ * 순수층은 6사유를 갈라 두었는데(A5 2 + r3 #3 3 + M8 1) 이 소비자가 전부 「미확인」으로 접어
+ * 버려, 사유가 **한 건도 기록되지 않았다.** 화면 문구는 사용자에게 하나여야 맞지만(A5), 그
+ * 화면이 영구 고정된 스키마를 다음 회차가 고치려면 「어느 축이 무너졌는가」가 유일한 단서다.
+ *
+ * 여기서 만드는 상태는 W3-4와 같다(고정 키 컬럼 헤더 개명 → `headers_unmapped`).
+ * 반증(사유 계측 제거 시): red.
+ */
+test('W3-9(r4 M8) — 「미확인」의 사유가 로그에 남는다(6사유 무로깅 해소)', async ({ page }) => {
+  const RENAMED = ['조사일자', '농가명(구)', '라벨', '조사나무', '횡경'];
+  await openSummary(page, { farmName: '이원창', withRecord: true, headers: RENAMED });
+  const modal = page.locator('[data-testid="settings-summary-modal"]');
+  await expect(modal, '전제: 조회 불가 = 미확인').toContainText('미확인');
+
+  const extras = await page.evaluate(async () => {
+    const db: IDBDatabase = await new Promise((resolve) => {
+      const req = indexedDB.open('survey-011');
+      req.onsuccess = () => resolve(req.result);
+    });
+    const rows: { extra?: string }[] = await new Promise((resolve) => {
+      const tx = db.transaction('logEvents', 'readonly');
+      const r = tx.objectStore('logEvents').getAll();
+      r.onsuccess = () => resolve(r.result as { extra?: string }[]);
+      r.onerror = () => resolve([]);
+    });
+    db.close();
+    return rows.map((e) => String(e.extra ?? ''));
+  });
+  const unq = extras.filter((x) => x.startsWith('past_index_unqueryable:summary'));
+  expect(unq, '조회 불가 사유가 통째로 무로깅이다').toHaveLength(1);
+  expect(unq[0], '어느 축이 무너졌는지가 사유다').toBe('past_index_unqueryable:summary,reason=headers_unmapped');
+  // ⚠️ 이름은 로더의 진입 스킵(`past_index_skip:*`)과 **다르다** — 얹으면 두 축이 섞인다.
+  //    (이 픽스처는 미로그인이라 `past_index_skip:not_signed_in`이 **함께** 난다. 그 공존이
+  //     곧 두 축이 갈려 있다는 증거다 — 같은 이름이었다면 여기서 사유가 뭉개진다.)
+  expect(unq[0].startsWith('past_index_skip:'), '두 축이 같은 이름을 쓴다').toBe(false);
+  expect(extras.some((x) => x.startsWith('past_index_skip:')), '전제: 로더 스킵도 따로 난다').toBe(true);
+});
+
+/**
+ * 🔴 W3-10(r4 M8 · claude r3 #9) — **값을 여는 착지는 phase를 함께 연다**(소스 계약).
+ *
+ * `CenterStage`의 `reaskReason={completing ? null : reaskReason}` 게이트 자체는 옳다(완료 화면에
+ * 값 재질문 큐는 없어야 한다). 결함은 **phase가 거짓말을 한다**는 것이었다: 행 경계 착지
+ * (`goNextRow` 마지막 행 · `gotoAdjacentRow` 첫 행)가 검토/끝 도달 국면에서 들어오면
+ * `announceField`/`enterCellWait`이 값 대기를 무장하면서도 phase는 'complete'로 남아, 거절이
+ * **비프만 남고 화면에서 사라졌다**.
+ *
+ * ⚠️ **왜 소스 계약인가** — r4 M2가 「atEnd는 완료된 행에서만 무장한다」를 구조적 불변식으로
+ * 만들면서, 리뷰가 관측한 도달 경로(미완료 행의 atEnd → 행 경계)가 **음성으로는 닫혔다**.
+ * 즉 지금은 브라우저에서 red를 만들 상태를 만들 수 없다. 그래도 배선은 남긴다: 다음 착지가
+ * 추가될 때 다시 열리는 형태이고, 두 원시 착지가 각자 그 불변식을 **선언만** 하고 있었다
+ * (`enterCellWait` 헤더의 *"phase는 active 그대로 둔다"*). 소스 계약 테스트의 전례: W3-7·
+ * `v043-typo-contract`.
+ */
+test('[node] W3-10(r4 M8) — announceField·enterCellWait이 phase를 스스로 active로 연다', async () => {
+  const fs = await import('node:fs');
+  const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
+
+  const announceField = src.slice(src.indexOf('const announceField = useCallback('));
+  expect(
+    announceField.slice(0, announceField.indexOf('armClipForCell(row, col.id)')),
+    'announceField가 값 대기를 열면서 phase를 호출부에 맡긴다(행 경계 착지가 그 배선을 빠뜨렸다)',
+  ).toContain("setPhase('active')");
+
+  const enterCellWait = src.slice(src.indexOf('const enterCellWait = useCallback('));
+  expect(
+    enterCellWait.slice(0, enterCellWait.indexOf('awaitingFieldRef.current = {')),
+    'enterCellWait 헤더가 선언한 「phase는 active」를 집행하지 않는다',
+  ).toContain("setPhase('active')");
+});

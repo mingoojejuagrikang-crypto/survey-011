@@ -25,6 +25,8 @@ import {
   pastValue,
   sessionFixedKeyColumns,
   previousSurveyRound,
+  serializePastIndexEntry,
+  deserializePastIndexEntry,
 } from '../src/lib/pastValues';
 import type { Column } from '../src/types';
 
@@ -407,6 +409,49 @@ test.describe('previousSurveyRound — 세션 고정 키의 직전 조사일', (
     expect(idx.rowCount, '전제: 행은 읽혔다').toBe(2);
     expect(idx.rounds.length, '전제: 회차는 하나도 인덱싱되지 않았다').toBe(0);
     expect(previousSurveyRound(idx, W3_COLS, null, '2026-06-12'))
+      .toEqual({ kind: 'unqueryable', reason: 'round_unindexed' });
+  });
+
+  // ─── 🔴 v0.49 r4 M8(claude r3 #11) — **키 탈락과 회차 미인덱싱을 가른다.** ──────────
+  // `buildPastIndex`의 루프는 샘플키가 없는 행을 회차 집계 **전에** 버린다. 그래서 키가 전량
+  // 탈락하면 회차 축은 멀쩡한데 `rounds`가 비고, 위 `round_unindexed` 가드가 그것까지 삼켰다 —
+  // 사유가 시간축(서식 불일치)이라고 말하니 다음 회차의 수리가 엉뚱한 축으로 간다.
+  test("회차는 읽혔는데 샘플키가 붙은 행이 0줄이면 { reason: 'no_keyed_rows' } — 시간축 오진 차단", () => {
+    const headers = ['조사일자', '농가명', '라벨', '조사나무', '횡경', '종경'];
+    // 회차는 정상 서식인데 샘플키 컬럼(농가명·라벨)이 전량 공백 → buildSampleKey가 null.
+    const rows = [
+      ['2026-05-13', '', '', '1', '10', '20'],
+      ['2026-05-20', '', '', '2', '11', '21'],
+    ];
+    const idx = buildPastIndex(headers, rows, W3_COLS, resolveRoundCol(W3_COLS, null));
+    expect(idx.rowCount, '전제: 행은 읽혔다').toBe(2);
+    expect(idx.rounds.length, '전제: 키 탈락으로 회차 집계까지 비었다').toBe(0);
+    expect(idx.roundParsedRows, '회차 축 자체는 두 줄 다 읽혔다').toBe(2);
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-06-12'))
+      .toEqual({ kind: 'unqueryable', reason: 'no_keyed_rows' });
+  });
+
+  test('대조군 — 회차 서식이 깨진 경우는 여전히 round_unindexed다(두 사유가 안 섞인다)', () => {
+    const headers = ['조사일자', '농가명', '라벨', '조사나무', '횡경', '종경'];
+    const rows = [['2026년 5월 13일', '이원창', 'A', '1', '10', '20']];
+    const idx = buildPastIndex(headers, rows, W3_COLS, resolveRoundCol(W3_COLS, null));
+    expect(idx.roundParsedRows, '회차가 한 줄도 안 읽혔다').toBe(0);
+    expect(previousSurveyRound(idx, W3_COLS, null, '2026-06-12'))
+      .toEqual({ kind: 'unqueryable', reason: 'round_unindexed' });
+  });
+
+  test('구버전 영속 레코드(roundParsedRows 없음)는 폐기되지 않고 종전 판정으로 복원된다', () => {
+    const headers = ['조사일자', '농가명', '라벨', '조사나무', '횡경', '종경'];
+    const rows = [['2026-05-13', '', '', '1', '10', '20']];
+    const idx = buildPastIndex(headers, rows, W3_COLS, resolveRoundCol(W3_COLS, null));
+    const rec = serializePastIndexEntry({ fp: 'fp-old', builtAt: 1, index: idx });
+    // 이 필드 이전에 저장된 백업 = 키가 아예 없다. 형태 검증에 넣었다면 여기서 null이 된다.
+    const legacy = { ...rec } as Record<string, unknown>;
+    delete legacy.roundParsedRows;
+    const restored = deserializePastIndexEntry(legacy);
+    expect(restored, '구버전 백업이 통째로 폐기되면 14일 폴백이 끊긴다').not.toBeNull();
+    expect(restored!.index.roundParsedRows, '없으면 0 = 종전 판정').toBe(0);
+    expect(previousSurveyRound(restored!.index, W3_COLS, null, '2026-06-12'))
       .toEqual({ kind: 'unqueryable', reason: 'round_unindexed' });
   });
 

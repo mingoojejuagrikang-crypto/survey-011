@@ -114,6 +114,13 @@ export interface PastIndex {
   duplicateCount: number;
   /** 헤더 제외 데이터 행 수(스킵된 행 포함). */
   rowCount: number;
+  /** 🔴 v0.49 r4 M8(claude r3 #11) — **회차 셀이 실제로 파싱된 행 수**(샘플키 성공 여부와 무관).
+   *  `rounds`와 갈리는 이유: 아래 루프는 샘플키가 없는 행을 회차 집계 **전에** 버리므로,
+   *  키가 전량 탈락하면 회차 축은 멀쩡한데 `rounds`가 빈다 — `previousSurveyRound`가 그걸
+   *  `round_unindexed`(회차를 못 읽었다)로 **오진**했다. 두 원인을 가르는 유일한 근거다.
+   *  ⚠️ `rounds`의 의미는 건드리지 않는다 — 조회탭의 `recentTwoRounds`가 「샘플 데이터가 있는
+   *  회차」로 읽는다(키 탈락 행의 회차를 섞으면 값이 전부 '—'인 회차가 화면에 선다). */
+  roundParsedRows: number;
 }
 
 /** 시트 전체 행에서 과거값 인덱스를 빌드한다. roundCol이 null이면 회차 구분 불가 → samples 빈 인덱스. */
@@ -143,15 +150,20 @@ export function buildPastIndex(
   const roundsSet = new Set<string>();
   let duplicateCount = 0;
 
+  let roundParsedRows = 0;
   for (const row of rows) {
     const rec: Record<string, string> = {};
     for (const [colId, idx] of headersMapped) {
       rec[colId] = (row[idx] ?? '').toString();
     }
+    // 🔴 v0.49 r4 M8(#11) — **회차 파싱을 키 탈락보다 먼저 센다.** 순서 자체는 그대로 두되
+    //   (`rounds`·`samples`의 의미 불변), 「회차 축은 읽혔는가」를 독립으로 부기한다.
+    //   종전엔 이 두 사건이 구분 없이 같은 증상(`rounds` 0개)으로 합쳐졌다.
+    const round = roundCol ? normalizeDateCell(rec[roundCol.id]) : null;
+    if (round) roundParsedRows++;
     // 키 컬럼이 미매핑이면 rec에 값이 없어 키가 null → 행 skip (unmappedColumns가 원인 설명).
     const key = buildSampleKey(keyCols, rec);
     if (!key) continue;
-    const round = roundCol ? normalizeDateCell(rec[roundCol.id]) : null;
     if (!round) continue;
     roundsSet.add(round);
     let byRound = samples.get(key);
@@ -170,6 +182,7 @@ export function buildPastIndex(
     samples,
     duplicateCount,
     rowCount: rows.length,
+    roundParsedRows,
   };
 }
 
@@ -252,7 +265,12 @@ export type PrevSurveyRound =
    *  그 절반이 그대로 '기록 없음'으로 샜다(아래 `previousSurveyRound` 가드 주석). */
   | {
       kind: 'unqueryable';
-      reason: 'no_fixed_key' | 'headers_unmapped' | 'no_round_col' | 'round_unmapped' | 'round_unindexed';
+      reason: 'no_fixed_key' | 'headers_unmapped' | 'no_round_col' | 'round_unmapped'
+        | 'round_unindexed'
+        /** 🔴 v0.49 r4 M8(#11) — 회차는 읽혔는데 **샘플키가 붙은 행이 0줄**이다(키 컬럼이
+         *  전량 공백 등). 종전엔 `round_unindexed`로 오진돼 다음 회차의 조사 방향이 시간축
+         *  수리로 갔다 — 실제로 고쳐야 하는 것은 샘플키 축이다. */
+        | 'no_keyed_rows';
     };
 
 /**
@@ -306,7 +324,14 @@ export function previousSurveyRound(
   //   매핑은 됐는데 인덱싱된 회차가 0개 = **파싱 가능한 날짜 셀이 한 줄도 없었다**(서식 불일치·
   //   빈 칸·불완전 샘플키로 전량 skip). 데이터 행 자체가 0줄이면 그건 정직한 '기록 없음'이다.
   if (index.rowCount > 0 && index.rounds.length === 0) {
-    return { kind: 'unqueryable', reason: 'round_unindexed' };
+    // 🔴 v0.49 r4 M8(#11) — 두 원인을 가른다. `roundParsedRows > 0`이면 회차 축은 멀쩡했고
+    //   샘플키가 전량 탈락한 것이다(키 탈락이 회차 집계보다 **먼저** 돌기 때문에 `rounds`가
+    //   비었다). 구버전 영속 레코드는 이 필드가 없어 0으로 복원되므로 종전 판정 그대로다
+    //   (= 마이그레이션 없이 하위호환 — 그 필드 주석 참조).
+    return {
+      kind: 'unqueryable',
+      reason: index.roundParsedRows > 0 ? 'no_keyed_rows' : 'round_unindexed',
+    };
   }
   const want = fixedCols.map((c) => [c, autoValue(c, 1).trim()] as const);
   let best: string | null = null;
@@ -374,6 +399,8 @@ export interface PersistedPastIndexRecord {
   samples: [string, [string, Record<string, string>][]][];
   duplicateCount: number;
   rowCount: number;
+  /** M8(#11) — 구버전 레코드에는 없다. 복원 시 0(= 종전 판정)으로 떨어진다. */
+  roundParsedRows?: number;
 }
 
 export function serializePastIndexEntry(entry: {
@@ -393,6 +420,7 @@ export function serializePastIndexEntry(entry: {
     ),
     duplicateCount: index.duplicateCount,
     rowCount: index.rowCount,
+    roundParsedRows: index.roundParsedRows,
   };
 }
 
@@ -434,6 +462,9 @@ export function deserializePastIndexEntry(
         samples,
         duplicateCount: r.duplicateCount,
         rowCount: r.rowCount,
+        // M8(#11) — **형태 검증에 넣지 않는다.** 필수로 만들면 이 필드 이전에 저장된 백업이
+        //   통째로 폐기돼(deserialize가 null) 14일 폴백이 끊긴다. 없으면 0 = 종전 판정.
+        roundParsedRows: typeof r.roundParsedRows === 'number' ? r.roundParsedRows : 0,
       },
     };
   } catch {

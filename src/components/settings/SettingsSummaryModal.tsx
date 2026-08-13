@@ -10,6 +10,7 @@ import {
   previousSurveyRound,
   readIndexWithProvenance,
   subscribePastIndexStatus,
+  type PrevSurveyRound,
 } from '../../lib/pastValues';
 import { logger } from '../../lib/logger';
 import { localTodayIso } from '../../lib/weekTuesday';
@@ -22,7 +23,12 @@ import { localTodayIso } from '../../lib/weekTuesday';
  * 타입이 잡아주지 못하고, 두 상태의 의미가 서로 다르기 때문이다(전자는 조회 결과, 후자는 미조회).
  */
 export type PrevSurveyState =
-  | { kind: 'unknown' }             // 과거값 인덱스 미로드 — 오프라인·미로그인·시트 미설정
+  /** 과거값 인덱스 미로드(오프라인·미로그인·시트 미설정) **또는** 인덱스는 있으나 조회 불가.
+   *  🔴 v0.49 r4 M8(claude r3 #11) — `reason`이 붙었다. 화면 문구는 둘 다 「미확인」이지만
+   *  (A5 계약 — 사용자에게는 같은 상태다), **왜** 조회가 성립하지 않았는지가 로그에서 통째로
+   *  비어 있었다: 순수층이 6사유를 갈라 두고도 이 소비자가 전부 버렸다. 「미확인」이 영구
+   *  고정된 스키마를 다음 회차가 고치려면 그 사유가 유일한 단서다. */
+  | { kind: 'unknown'; reason?: 'no_index' | PrevSurveyRoundReason }
   /** 인덱스는 있으나 이 세션 고정 키와 일치하는 과거 기록 0건.
    *  🔴 v0.49 r3 F7(codex r2) — **`stale`을 여기도 싣는다.** 종전엔 `date`에만 있어서, 최대 14일
    *  묵은 IDB 백업으로 계산한 0건을 **방금 시트를 조회해 0건인 것처럼** 그렸다. 백업 이후 시트에
@@ -69,11 +75,12 @@ export function readPrevSurveyState(
   //   읽어 온 인덱스**가 「(백업)」으로 그려지고 아래 계측이 `age_h=0`을 남겼다 — 「최대 14일
   //   묵은 백업」이라는 강한 주장이 0시간짜리 자기 조회에 붙는다(그 헤더 참조).
   const src = readIndexWithProvenance();
-  if (!src) return { kind: 'unknown' };
+  if (!src) return { kind: 'unknown', reason: 'no_index' };
   const round = previousSurveyRound(src.index, columns, roundDateColId, localTodayIso());
   // 조회 불가(고정 키 0개·헤더 미매핑)는 인덱스 미로드와 **같은 계열**이다 — 둘 다 「이 화면은
   // 답을 모른다」이지 「과거가 없다」가 아니다(A5). 사유 자체는 순수층이 들고 있다.
-  if (round.kind === 'unqueryable') return { kind: 'unknown' };
+  // M8(#11) — 그 사유를 **버리지 않고 실어 보낸다**(화면 문구는 불변, 계측만 추가).
+  if (round.kind === 'unqueryable') return { kind: 'unknown', reason: round.reason };
   // F7 — 신선도는 **답의 종류와 무관하게** 같은 출처에서 온다. 0건도 그대로 실어 보낸다.
   if (round.kind === 'none') return { kind: 'none', stale: src.stale };
   return { kind: 'date', iso: round.iso, stale: src.stale };
@@ -100,10 +107,14 @@ export function readPrevSurveyState(
  *    ⚠️ 이벤트 **이름을 새로 만든다** — `trend_used_stale_index`에 얹으면 이상치 알람의
  *    stale 사용 집계가 설정 팝업 열람으로 오염된다(PRINCIPLES §4: 늘릴 땐 새 이름).
  */
+type PrevSurveyRoundReason = Extract<PrevSurveyRound, { kind: 'unqueryable' }>['reason'];
+
 /** #9 — stale 계측의 세션 스코프 dedupe 집합(의미 키). `trendSkipLoggedRef`와 같은 컨벤션이고,
  *  차이는 소유자가 훅 ref가 아니라 모듈이라는 점뿐이다 — 이 팝업은 열 때마다 **새로 마운트**되므로
  *  ref로 들면 열람 횟수만큼 다시 기록된다(그게 이 결함의 절반이다). */
 const staleLogged = new Set<string>();
+/** M8(#11) — 조회 불가 사유 계측의 dedupe. `staleLogged`와 같은 컨벤션·같은 이유(모듈 스코프). */
+const unqueryableLogged = new Set<string>();
 
 function usePrevSurvey(columns: Column[], roundDateColId: string | null): PrevSurveyState {
   const [version, setVersion] = useState(0);
@@ -133,6 +144,17 @@ function usePrevSurvey(columns: Column[], roundDateColId: string | null): PrevSu
     const ageH = builtAt == null ? -1 : Math.round((Date.now() - builtAt) / 3_600_000);
     logger.log({ type: 'app', extra: `past_index_used_stale:summary,age_h=${ageH}` });
   }, [staleKey]);
+  // 🔴 v0.49 r4 M8(claude r3 #11) — **조회 불가 사유를 남긴다.** 순수층이 6사유를 갈라 두고도
+  //   (A5 + r3 #3 + M8) 이 소비자가 전부 「미확인」으로 접어 버려, 화면이 영구 고정된 스키마를
+  //   다음 회차가 어느 축(샘플키·헤더·회차·인덱싱)에서 고쳐야 하는지 로그로 알 수 없었다.
+  //   ⚠️ 이벤트 이름은 **새로 만든다**(PRINCIPLES §4) — `past_index_skip:*`은 로더의 진입 스킵
+  //   (미설정·미로그인)이라 의미가 다르고, 얹으면 두 축의 집계가 섞인다. 화면 문구는 불변이다.
+  const unqueryableReason = state.kind === 'unknown' ? (state.reason ?? null) : null;
+  useEffect(() => {
+    if (unqueryableReason === null || unqueryableLogged.has(unqueryableReason)) return;
+    unqueryableLogged.add(unqueryableReason);
+    logger.log({ type: 'app', extra: `past_index_unqueryable:summary,reason=${unqueryableReason}` });
+  }, [unqueryableReason]);
   return state;
 }
 

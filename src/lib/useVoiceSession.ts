@@ -884,6 +884,15 @@ export function useVoiceSession() {
       if (opts?.fractionWhole != null) {
         useSessionStore.getState().setDecimalReason(opts.fractionWhole);
       }
+      // 🔴 v0.49 r4 M8(claude r3 #9) — **값을 여는 착지는 phase를 함께 연다.** 이 함수는
+      //   `kind:'value'`(또는 modify)를 무장한다 = 값을 기다리는 상태인데, phase가 'complete'로
+      //   남아 있으면 화면은 「명령 대기」를 그린다. 피해가 조용하다: `CenterStage`가
+      //   `reaskReason={completing ? null : reaskReason}`으로 거절 큐를 억제해(그 게이트 자체는
+      //   옳다 — 완료 화면에 값 재질문 큐는 없어야 한다) **거절이 비프만 남고 화면에서 사라진다.**
+      //   종전엔 호출부가 각자 세웠고(`jumpToRow` :1876 · `gotoAdjacentField` :2069) **행 경계
+      //   착지 두 곳**(goNextRow 마지막 행 · gotoAdjacentRow 첫 행)이 빠져 있었다 —
+      //   분기마다 배선하면 다음 착지에서 또 빠진다(M3와 같은 형태). 여기서 소유한다.
+      useSessionStore.getState().setPhase('active');
       // v0.12.0 AREA2 V4 — 수정 재안내면 '수정 값' 인디케이터를 켜고, 일반 안내면 해제한다.
       useSessionStore.getState().setModifyIndicator(
         opts?.isModify ? { name: col.name, colId: col.id } : null,
@@ -1083,6 +1092,12 @@ export function useVoiceSession() {
     useModifyPhase.getState().setCommitted(false);
     sess.setRecognized('');
     sess.setReaskReason(null);
+    // 🔴 v0.49 r4 M8(claude r3 #9) — 위 헤더의 *"phase는 `active` 그대로 둔다"* 를 **선언에서
+    //   집행으로** 바꾼다. 종전엔 호출부가 이미 active라는 것에 기댔는데, 행 경계 착지
+    //   (goNextRow 마지막 행 · gotoAdjacentRow 첫 행)는 검토/끝 도달 국면에서 들어올 수 있어
+    //   'complete'가 그대로 남았다 → `CenterStage`의 `completing` 게이트가 거절 큐를 억제해
+    //   비프만 남는다(announceField의 같은 줄 주석 참조).
+    sess.setPhase('active');
     // 🔴 v0.49 fix49b(max 리뷰 #14) — 형제 착지 핸들러 둘과 **대칭**(announceField :845
     //   'announce_field' · enterReviewWait :951 'review_wait'). v0.9.0 계약 「다음 필드로
     //   진입하면 이전 이상치 알람 팝업은 해제」의 세 번째 착지 지점이다. 빠뜨리면
