@@ -565,16 +565,17 @@ export function useVoiceSession() {
 
   // ── persistence ────────────────────────────────────────────
   // [ENV-12] Stage 3 서브 훅 #2 — 세션 영속화(persistSession)는 usePersistSession이 소유한다
-  // (이 파일은 호출만). 세션 컨텍스트는 주입으로 넘긴다.
+  // (이 파일은 호출만). 세션 컨텍스트는 getter/callback으로 넘긴다(훅이 이 파일의 ref를 직접
+  // 보지 않게 — useClipCapture와 동일 계약).
   const { persistSession } = usePersistSession({
-    sessionIdRef,
-    correctionBackupRef,
-    pendingClipsRef,
-    brokenClipKeysRef,
-    sessionTargetRef,
-    sessionLabelRef,
-    sessionTodayRef,
+    getSessionId: () => sessionIdRef.current,
     getSessionColumns,
+    getCorrectionBackup: () => correctionBackupRef.current,
+    getPendingClips: () => pendingClipsRef.current,
+    getBrokenClipKeys: () => brokenClipKeysRef.current,
+    getSessionTarget: () => sessionTargetRef.current,
+    getSessionLabel: () => sessionLabelRef.current,
+    getSessionToday: () => sessionTodayRef.current,
     composeRowValues,
     localTodayISO,
   });

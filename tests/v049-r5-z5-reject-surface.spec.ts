@@ -217,8 +217,14 @@ test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 �
   // 주석은 제외한다 — 근거 서술이 옛 호출을 인용한다.
   const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
   const calls = code.split('armRejectCue(').length - 1;
+  // uvs-a(ENV-12 #2) — persistSession이 usePersistSession.ts로 분리됐다. 분리 전에는 이 파일
+  // 전역이 이 개수 계약의 우발 커버 안이었으므로, 분리 파일의 호출도 합산해 커버를 유지한다
+  // (R1 C-1 전례 — 부정 단언만 확장). 현재 분리 파일의 호출은 0이다.
+  const persistCode = fs.readFileSync('src/lib/usePersistSession.ts', 'utf-8')
+    .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const persistCalls = persistCode.split('armRejectCue(').length - 1;
   expect(
-    calls,
+    calls + persistCalls,
     'armRejectCue를 부르는 곳이 rejectValue 하나가 아니다 — 거절 표면이 다시 이원화됐다',
   ).toBe(1);
 

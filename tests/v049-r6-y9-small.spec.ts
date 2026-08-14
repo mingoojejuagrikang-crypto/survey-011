@@ -78,7 +78,9 @@ test('[node] Y11 unqueryable dedupe 키가 effectiveSampleKey를 쓴다', async 
  * 재현하려면 두 persist의 완료 순서를 뒤집고 그 사이에 후보를 세워야 해서 e2e 비용이 크다.
  */
 test('[node] Y12 단조 가드 분기는 게이트 플래그만 벗긴다', async () => {
-  const src = await read('src/lib/useVoiceSession.ts');
+  // uvs-a(ENV-12 #2) — persistSession(단조 가드 포함)이 usePersistSession.ts로 분리됐다.
+  // 마커·ref 이름은 소유 이동이라 그대로다(가드 ref는 분리 훅이 소유한다).
+  const src = await read('src/lib/usePersistSession.ts');
   const branch = src.slice(
     src.indexOf('if (mySeq < persistAppliedSeqRef.current) {'),
     src.indexOf('persistAppliedSeqRef.current = mySeq;'),

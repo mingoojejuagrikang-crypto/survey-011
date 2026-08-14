@@ -23,14 +23,20 @@ import { logger } from './logger';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
 
 export interface PersistSessionDeps {
-  sessionIdRef: { current: string };
-  correctionBackupRef: { current: SessionRow | null };
-  pendingClipsRef: { current: Record<number, Record<string, string>> };
-  brokenClipKeysRef: { current: Set<string> };
-  sessionTargetRef: { current: SessionTarget | null };
-  sessionLabelRef: { current: string | undefined };
-  sessionTodayRef: { current: string };
+  /** 현재 세션 id — 세션 경계마다 바뀌므로 값이 아니라 getter로 받는다. */
+  getSessionId: () => string;
+  /** 세션 시작에 동결한 컬럼(sessionColumnsRef ?? 설정 store) — persist 스냅샷의 스키마 축. */
   getSessionColumns: () => Column[];
+  /** cascade 정정 중 백업 행 스냅샷 — 정정 구획이 세우고 stop() 전 persist가 승계한다. */
+  getCorrectionBackup: () => SessionRow | null;
+  /** rowIndex → colId → IDB 클립 키 장부(클립 캡처 경로가 채운다). */
+  getPendingClips: () => Record<number, Record<string, string>>;
+  /** 실패 캡처 tombstone 키 집합([CLIP-VAL-1]③) — 재영속 금지 판정에 쓴다. */
+  getBrokenClipKeys: () => Set<string>;
+  getSessionTarget: () => SessionTarget | null;
+  getSessionLabel: () => string | undefined;
+  /** 세션 시작 시점의 로컬 오늘 ISO(start()에서 1회 계산) — 미설정 센티넬은 ''다(r7 #2 `||`). */
+  getSessionToday: () => string;
   composeRowValues: (columns: Column[], row: number) => Record<string, string>;
   localTodayISO: () => string;
 }
@@ -42,10 +48,6 @@ export function usePersistSession(deps: PersistSessionDeps) {
   // 원본이 `useCallback(..., [])`로 고정이었던 계약을 그대로 보존하는 것이 목적이다).
   const depsRef = useRef(deps);
   depsRef.current = deps;
-  // (이동 커밋 한정 임시 배선 — 다음 수정 커밋에서 getter 계약으로 전환한다.)
-  const { sessionIdRef, correctionBackupRef, pendingClipsRef, brokenClipKeysRef,
-    sessionTargetRef, sessionLabelRef, sessionTodayRef,
-    getSessionColumns, composeRowValues, localTodayISO } = depsRef.current;
 
   // v0.24.0 데이터-3 방어 — persistSession 단조 가드. 값 커밋마다 fire-and-forget persist가 겹쳐 돌 때,
   // 더 일찍 시작된(=옛 값) 호출이 더 늦게 시작된(=새 값) 호출의 dataStore upsert를 last-writer-wins로
@@ -60,6 +62,11 @@ export function usePersistSession(deps: PersistSessionDeps) {
     pendingOverride?: Session['pendingValidation'] | null,
     publishPendingStage = false,
   ): Promise<boolean> => {
+    const {
+      getSessionId, getSessionColumns, getCorrectionBackup, getPendingClips,
+      getBrokenClipKeys, getSessionTarget, getSessionLabel, getSessionToday,
+      composeRowValues, localTodayISO,
+    } = depsRef.current;
     // v0.24.0 데이터-3 — 이 호출의 단조 순번(호출 순서=스냅샷 신선도 순서, setRowValue가 호출 전 실행됨).
     const mySeq = ++persistSeqRef.current;
     const columns = getSessionColumns();
@@ -67,14 +74,14 @@ export function usePersistSession(deps: PersistSessionDeps) {
     const completed = [...sess.completedRows].sort((a, b) => a - b);
     // Check backup BEFORE early return: if cascade correction is in progress and the correcting row
     // was the only completed row, we still need to persist the backup snapshot.
-    const backup = correctionBackupRef.current;
+    const backup = getCorrectionBackup();
     // v0.4.4 증분 영속화: 진행 중(활성·미완료) 행도 부분값/클립이 있으면 저장 대상에 포함해, 행을 다
     // 채우기 전 새로고침/앱 업데이트로 입력이 유실되는 것을 막는다. (sync는 complete 행만 업로드.)
     const activeRow = sess.activeRow;
     const activeHasData =
       !completed.includes(activeRow) &&
       (Object.values(sess.getRowValues(activeRow) ?? {}).some((v) => v !== '') ||
-        Object.keys(pendingClipsRef.current[activeRow] ?? {}).length > 0);
+        Object.keys(getPendingClips()[activeRow] ?? {}).length > 0);
     // v0.5.0 NAV-1: '다음'으로 건너뛴 행도 complete:false placeholder로 영속화 — 자동/고정값은
     // 채워지고 음성 칸만 빈 채 데이터탭에 보여, 사용자가 터치로 채울 수 있다. (v0.6.0부터
     // sync가 placeholder도 공백 행으로 시트에 업로드해 sheetRow를 예약한다 — 행 단위 재동기화.)
@@ -92,19 +99,19 @@ export function usePersistSession(deps: PersistSessionDeps) {
     //   👉 조립 직후(첫 await 전) 스냅샷을 ref에 남기고, store가 아직 비어 있으면 그걸 승계원으로
     //     쓴다. durable 실패로 그 put이 버려지더라도 승계 대상은 **기록 시점 자동값**이라 옳다.
     const existingSession = useDataStore.getState().sessions.find(
-      (s) => s.id === sessionIdRef.current,
-    ) ?? (inFlightSessionRef.current?.id === sessionIdRef.current ? inFlightSessionRef.current : undefined);
+      (s) => s.id === getSessionId(),
+    ) ?? (inFlightSessionRef.current?.id === getSessionId() ? inFlightSessionRef.current : undefined);
     const buildRow = (r: number, complete: boolean): SessionRow => {
       const existingRow = existingSession?.rows.find((row) => row.index === r);
       // Merge stored clips (from previous persists) with newly recorded clips
       const mergedClips = {
         ...(existingRow?.audioClips ?? {}),
-        ...(pendingClipsRef.current[r] ?? {}),
+        ...(getPendingClips()[r] ?? {}),
       };
       // [CLIP-VAL-1]③: tombstoned keys (failed captures) must never be persisted — without this
       // a persist whose existingRow predates an unlink would resurrect the broken pointer.
       for (const k of Object.keys(mergedClips)) {
-        if (brokenClipKeysRef.current.has(mergedClips[k])) delete mergedClips[k];
+        if (getBrokenClipKeys().has(mergedClips[k])) delete mergedClips[k];
       }
       // 🔴 v0.49 r5 Z3(claude #1) — **이미 기록된 행의 파생값은 다시 파생하지 않는다.**
       //   `composeRowValues`는 자동 컬럼을 **매 persist마다 재계산**한다. 사람이 넣은 값이 아니라
@@ -168,10 +175,10 @@ export function usePersistSession(deps: PersistSessionDeps) {
     // D-2 (RACE-7): prefer the ref, but fall back to the store-persisted id/startedAt so a session
     // that lost its hook ref (unmount during pause) still persists with a valid id and a finite
     // startedAt instead of `id:''` + `startedAt:NaN`.
-    const resolvedId = sessionIdRef.current || sess.sessionId;
+    const resolvedId = getSessionId() || sess.sessionId;
     const resolvedStartedAt =
       sess.startedAt || parseInt(resolvedId.replace('sess_', ''), 10) || Date.now();
-    const target = sessionTargetRef.current ?? existingSession?.target;
+    const target = getSessionTarget() ?? existingSession?.target;
     const session: Session = {
       id: resolvedId,
       // v0.7.0: LOCAL date, not UTC — toISOString() stamped KST 00:00~08:59 sessions with
@@ -195,8 +202,8 @@ export function usePersistSession(deps: PersistSessionDeps) {
       //     세션 레코드를 만드는 유일한 작성자가 이 함수다). 그래서 오라클은 렌더가 아니라
       //     **술어 자체**를 잠근다 — 도달로가 하나 생기는 순간 값 유실로 바뀌는 자리다.
       //     오라클: tests/v049-r7-small.spec.ts
-      date: existingSession?.date || sessionTodayRef.current || localTodayISO(),
-      label: sessionLabelRef.current || sess.sessionLabel,
+      date: existingSession?.date || getSessionToday() || localTodayISO(),
+      label: getSessionLabel() || sess.sessionLabel,
       columns,
       ...(target ? { target } : {}),
       rows,
@@ -244,17 +251,17 @@ export function usePersistSession(deps: PersistSessionDeps) {
     // page death right after persistSession cannot leave the broken pointer as the last
     // durably-persisted state.
     let finalSession = session;
-    if (brokenClipKeysRef.current.size > 0) {
+    if (getBrokenClipKeys().size > 0) {
       let changed = false;
       const strippedRows = session.rows.map((r) => {
         if (!r.audioClips) return r;
         const next: Record<string, string> = {};
         let rowChanged = false;
         for (const [colId, key] of Object.entries(r.audioClips)) {
-          if (!brokenClipKeysRef.current.has(key)) { next[colId] = key; continue; }
+          if (!getBrokenClipKeys().has(key)) { next[colId] = key; continue; }
           rowChanged = true;
-          const fresh = pendingClipsRef.current[r.index]?.[colId];
-          if (fresh && !brokenClipKeysRef.current.has(fresh)) next[colId] = fresh;
+          const fresh = getPendingClips()[r.index]?.[colId];
+          if (fresh && !getBrokenClipKeys().has(fresh)) next[colId] = fresh;
         }
         if (!rowChanged) return r;
         changed = true;
