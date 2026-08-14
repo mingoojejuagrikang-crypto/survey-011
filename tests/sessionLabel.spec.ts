@@ -152,7 +152,8 @@ test.describe('Z1 — 접두 날짜는 로컬(UTC 금지)', () => {
   test('[node] Z1 — 세션명 접두를 만드는 호출부가 UTC로 되돌아가지 않는다', async () => {
     const fs = await import('node:fs');
     const sites = [
-      'src/lib/useSettingsActions.ts',
+      // v0.49 R1 P1-2 — prospectiveSessionLabel이 useSettingsActions.ts에서 서브 훅으로 이동.
+      'src/lib/useSettingsTableGeneration.ts',
       'src/components/settings/SessionOptionsSection.tsx',
       'src/lib/sessionLabel.ts',
     ];

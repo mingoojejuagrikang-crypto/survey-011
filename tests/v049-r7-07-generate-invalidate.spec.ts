@@ -43,7 +43,8 @@ async function read(path: string): Promise<string> {
 }
 
 test('[node] ① `totalRows`의 쓰기 주체는 하나이고 그 값은 computeTotalRows다', async () => {
-  const actions = await read('src/lib/useSettingsActions.ts');
+  // v0.49 R1 P1-2 — onGenerateConfirm이 useSettingsActions.ts에서 서브 훅으로 이동.
+  const actions = await read('src/lib/useSettingsTableGeneration.ts');
   expect(
     actions,
     '생성이 computeTotalRows 말고 다른 수를 쓰면 가드의 두 항이 처음부터 어긋나 모든 편집이 무효화된다',
@@ -52,7 +53,10 @@ test('[node] ① `totalRows`의 쓰기 주체는 하나이고 그 값은 compute
 
   // 두 번째 쓰기 주체가 생기면 이 불변식이 깨진다 — 그 순간 무효화는 진짜로 과잉이 된다.
   const writers = (await Promise.all(
-    ['src/lib/useSettingsActions.ts', 'src/stores/settingsStore.ts', 'src/screens/SettingsScreen.tsx']
+    // v0.49 R1 P1-2 — 설정탭 훅이 4파일로 갈렸다. 쓰기 주체 스캔은 그 전부를 덮는다.
+    ['src/lib/useSettingsActions.ts', 'src/lib/useSettingsSheetConnection.ts',
+      'src/lib/useSettingsTableGeneration.ts', 'src/lib/useSettingsReset.ts',
+      'src/stores/settingsStore.ts', 'src/screens/SettingsScreen.tsx']
       .map(read),
   )).join('\n').match(/totalRows:\s*(?!d\.totalRows|state\.totalRows)[A-Za-z0-9_(.]+/g) ?? [];
   expect(
