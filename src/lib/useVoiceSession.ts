@@ -699,7 +699,17 @@ export function useVoiceSession() {
       //   세션 헤더만 남아 있던 자리다.
       //   승계 순서: 이미 기록된 값(`existingSession.date`) → 세션 고정 시계(`sessionTodayRef`,
       //   start()에서 1회 계산) → 최후에만 현재 로컬 날짜.
-      date: existingSession?.date ?? sessionTodayRef.current ?? localTodayISO(),
+      //   🔴 v0.49 r7 #2(codex r6#13) — 술어는 `||`다. `??`는 **빈 문자열을 통과시킨다**:
+      //     `sessionTodayRef`의 미설정 센티넬은 `null`이 아니라 `''`(`useRef<string>('')`)이고,
+      //     `existingSession.date`도 한 번 `''`로 내구화되면 그 뒤 모든 persist가 `??`를 통과해
+      //     **빈 날짜가 영구히 굳는다**. `date`는 「오늘 세션」 매칭·목록·시트 라벨의 기준이라
+      //     빈 값은 그 세션을 목록에서 지운다(v0.7.0 UTC 결함과 같은 증상, 원인만 다르다).
+      //     형제 호출부 둘(:안내 브리핑의 `today`)은 처음부터 `||`였다 — 이 자리만 안 옮겨졌다.
+      //   ⚠️ 현행 코드에서 이 폴스루는 **도달 불가**다(`start()`가 첫 커밋 전에 ref를 세우고,
+      //     세션 레코드를 만드는 유일한 작성자가 이 함수다). 그래서 오라클은 렌더가 아니라
+      //     **술어 자체**를 잠근다 — 도달로가 하나 생기는 순간 값 유실로 바뀌는 자리다.
+      //     오라클: tests/v049-r7-small.spec.ts
+      date: existingSession?.date || sessionTodayRef.current || localTodayISO(),
       label: sessionLabelRef.current || sess.sessionLabel,
       columns,
       ...(target ? { target } : {}),
