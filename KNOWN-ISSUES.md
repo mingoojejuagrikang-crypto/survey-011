@@ -2367,3 +2367,31 @@ TTS 구간(`:2522-2523`)에 오버레이가 열리면 **모달 뒤에서 STT 인
     (`useSettingsActions` 되돌림). 수정 후 42/42 green(포트 5197, KST 01:5x = 창 안).
 - **현재 상태:** ✅RESOLVED → 계약은 `[DATE-LOCAL-1]`. 이 항목은 「자정 UTC red」를 다시 만난
   사람이 원 증상으로 검색할 수 있게 남긴다.
+
+## 2026-08-14 v0.49 r7 소형 패치 라운드 (회차 SSOT: `workspace_teamops/deliverables/2026-08-14-fixr7-fixes.md`)
+
+### [MANUALHOLD-JUMP-BYPASS-1] 자동칩 행 점프가 `isManualHoldBlocked`를 지나지 않아 **미확인 이상치 팝업을 소리 없이 내린다**
+- **증상(2026-08-14 브라우저 실측, 포트 5197):** 키패드 커밋이 이상치에 걸려 `manualHold` 팝업이
+  뜬 상태에서 **조사나무(자동 seq) 칩을 인라인 편집해 `2`로 바꾸면**, 팝업이 사라지고 TTS가
+  「조사나무 2. / 측정항목01.」로 2행을 연다. 사용자는 [확인]/[수정] 중 어느 것도 누르지 않았다.
+- **원인:** `manualHold` 중 포인터를 옮기는 진입로는 넷인데 게이트가 셋에만 있다.
+  - `handleFinal`(STT) · `gotoAdjacentRow`(터치 [이전]) · `goNextRow`(터치 [다음]) ·
+    `gotoAdjacentField` · `pause` → 전부 `isManualHoldBlocked(...)`로 거부.
+  - **`ActiveState.onCommit`의 자동 컬럼 분기** → `computeRowFromAutoChange` →
+    `VoiceScreen.onJumpToRow` → `voiceSession.jumpToRow` → **게이트 없음.**
+    `jumpToRow`는 훅이 **외부로 노출한** 공용 코어라 내부 콜러들이 각자 붙인 게이트를 안 받는다.
+  점프의 `announceField`가 `clearAnomalyAlert('announce_field')`를 부르는 것이 팝업 소멸의 직접 원인이다.
+- **왜 문제인가:** 이 게이트의 존재 이유가 정확히 **「미확인 이상치 우회 차단」**이다
+  (v0.34.0 리뷰 라운드2 Codex High + 민구 결정 2026-07-14 「수동 보류는 터치 [확인]/[수정] 전용」).
+  후보값은 `pendingValidation` 태그를 단 채 IDB에 남고, 검증 절차만 증발한다.
+- **왜 r7에서 안 고쳤나:** r7 브리핑은 7건 밖 확장을 금지했고, #6의 지정 처방은
+  「확인 시 보류 셀 소유 재검증」(적용 완료 — `confirmManualAnomaly`)이다. 게이트를 다는 것은
+  **별개 처방**이고 07-14 민구 결정의 적용 범위를 건드리므로 결정을 받아야 한다.
+- **처방 후보:** ⓐ `jumpToRow` 진입에 `isManualHoldBlocked('jump')` — 가장 좁고, 공용 코어라
+  미래의 새 콜러까지 함께 막힌다. ⓑ `ActiveState`의 자동칩 커밋 분기에서 `anomalyPending`이면
+  편집 자체를 막는다(표면에서 차단 — 「왜 안 되는지」를 보여줄 수 있다).
+  ⓐ가 구조적으로 맞고, ⓑ는 안내 품질용으로 함께 갈 수 있다.
+- **재현 절차:** `tests/v049-r7-06-hold-confirm-owner.spec.ts` 헤더의 실측 기록 참조.
+  칩 클릭은 `{force:true}`가 필요하다 — 팝업이 막아서가 아니라 **칩 스윕 애니메이션** 때문에
+  Playwright의 stability 판정을 못 받을 뿐이고, 히트 테스트는 칩 자신이 받는다(실기기 탭은 닿는다).
+- **현재 상태:** 🔴OPEN — 처방 미적용. r7은 소유 재검증(backstop)만 넣었다.

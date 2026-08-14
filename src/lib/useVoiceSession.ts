@@ -5640,8 +5640,52 @@ export function useVoiceSession() {
     }
     // 보류 시 재무장을 미뤘던 진행 재개 — reviewWait 출신은 검토 대기 재진입, 그 외 advance
     // (commitManualValue와 동일 착지, proceedAfterCommit SSOT).
-    await proceedAfterCommit(awaitingFieldRef.current);
-  }, [clearAnomalyAlert, proceedAfterCommit]);
+    //
+    // 🔴 v0.49 r7 #6(codex r6#14) — **착지 전에 보류 셀의 소유권을 다시 확인한다.**
+    //   종전엔 `awaitingFieldRef.current`를 그대로 넘겼다. 그 ref가 보류 시점의 것이라는 보장이
+    //   이 함수 안에는 없는데, 넘긴 값이 어긋나면 피해가 둘이다:
+    //     ① `proceedAfterCommit`이 **남의 행에 착지한다** — 그 행의 열린 칸을 `advance()`로
+    //        지나쳐 사용자가 방금 안내받은 칸이 조용히 건너뛰어진다.
+    //     ② 그 안의 `finalizeRowCompletion(awaiting.row)`가 **남의 행에 걸려** 보류한 행이 완료
+    //        부기를 영영 못 받는다. `persistSession`은 rows를 completedRows·activeRow·skippedRows
+    //        셋에서만 만들므로 어느 집합에도 없는 그 행은 다음 persist에서 **통째로 떨어진다**
+    //        (Z8이 닫은 값 유실이 이 경로로 다시 열린다).
+    //   👉 술어는 `commitManualValue`와 **같다**(M1이 세운 「착지도 같은 술어를 쓴다」). 좌표 정본은
+    //      `pendingValidation`이다 — 그게 보류된 커밋의 SSOT다.
+    //   👉 내구성 부기는 **소유와 무관**하게 보류된 행에 건다(Z8의 계약: 부기는 흐름 소유권이
+    //      아니라 커밋 사실에 붙는다). 소유면 `proceedAfterCommit`이 같은 함수를 다시 부르지만
+    //      멱등이라 IDB 쓰기가 늘지 않는다.
+    //
+    //   ⚠️ **전제 재검증(실측 2026-08-14, 브리핑 원문과 갈림)**: 리뷰가 상정한 「점프 창」은
+    //     현행 UI에서 **도달 불가**다. manualHold 중 포인터를 옮길 수 있는 진입로는 넷인데
+    //     STT·[이전]/[다음]·[일시정지] 셋은 `isManualHoldBlocked`가 막고, 게이트를 안 지나는
+    //     넷째(자동 컬럼 칩 인라인 편집 → `computeRowFromAutoChange` → `jumpToRow`)는 팝업
+    //     오버레이가 칩을 덮어 **클릭 자체가 불가**했다(브라우저 실측: click actionability 타임아웃).
+    //     남는 도달로는 reload 복원 경로가 `getColById(pending.colId)` 실패로 조기 return해
+    //     ref가 **null인 채** 팝업만 서는 형상뿐이다 — 그때 종전 코드는 `proceedAfterCommit(null)`로
+    //     부기를 통째로 건너뛴다.
+    //   👉 그래서 이건 증상 수정이 아니라 **구조적 backstop**이다(Z2의 armLanding 거절·Y3의 종료
+    //     가드와 같은 성격). 넷째 진입로가 게이트를 안 지난다는 사실 자체는 남아 있고 그 방어가
+    //     오버레이 z-순서라는 **UI 우연**에 걸려 있다 — 이 라운드 범위 밖이라 산출물에 보고만 한다.
+    //   오라클: tests/v049-r7-06-hold-confirm-owner.spec.ts
+    const pv = staged.pendingValidation;
+    if (pv && !(await finalizeRowCompletion(pv.row))) {
+      notifyRowPersistFailed(pv.row, awaitingFieldRef.current);
+      return;
+    }
+    const aw = awaitingFieldRef.current;
+    const ownsHold = !!pv && !!aw && (aw.kind === 'reviewWait'
+      ? aw.row === pv.row
+      : aw.kind !== 'atEnd' && aw.row === pv.row && aw.colId === pv.colId);
+    if (!ownsHold) {
+      logCell({
+        type: 'command', parsed: 'confirm', extra: 'manual_hold:flow_not_owned',
+        row: pv?.row ?? alert.row, ...(pv?.colId ? { colId: pv.colId } : {}),
+      });
+      return;
+    }
+    await proceedAfterCommit(aw);
+  }, [clearAnomalyAlert, finalizeRowCompletion, notifyRowPersistFailed, proceedAfterCommit]);
 
   /** [수정] — 팝업 해제만 수행. 해당 셀 ManualValueSheet 재오픈은 시트 open 상태를 소유한
    *  VoiceScreen이 조립한다(이 콜백 직후 alert.colId로 openManualSheet). awaiting은
