@@ -44,28 +44,28 @@ export function useRowNav(deps: RowNavDeps) {
   const depsRef = useRef(deps);
   depsRef.current = deps;
   /** "3행, 7행" 식 행 목록 포맷. 목록이 길면 TTS가 늘어지므로 3개 + "외 N개 행"으로 요약. */
-  const formatRowList = (rows: number[]): string =>
+  const formatRowList = useCallback((rows: number[]): string =>
     rows.length <= 5
       ? rows.map((r) => `${r}행`).join(', ')
-      : `${rows.slice(0, 3).map((r) => `${r}행`).join(', ')} 외 ${rows.length - 3}개 행`;
+      : `${rows.slice(0, 3).map((r) => `${r}행`).join(', ')} 외 ${rows.length - 3}개 행`, []);
 
-  const listEmptyRows = (total: number, vCols: Column[]): number[] => {
+  const listEmptyRows = useCallback((total: number, vCols: Column[]): number[] => {
     const { isRowVoiceComplete } = depsRef.current;
     const out: number[] = [];
     for (let r = 1; r <= total; r++) {
       if (!isRowVoiceComplete(r, vCols)) out.push(r);
     }
     return out;
-  };
+  }, []);
 
   /** 끝 도달 안내(확정표 #5+6 통합) — **트리거 두 곳이 이 한 줄을 공유한다**(`announceEndReached`
    *  진입 · atEnd 값 흡수). 종전엔 두 곳이 서로 다른 문구를 인라인으로 들고 있었다.
    *  🔴 완료 행 수는 **화면 `X / N`의 X와 같은 출처**(`completedRows.length`)를 쓴다 —
    *  `total - empties.length`로 새로 세면 부분 입력·스킵 처리에서 화면과 갈린다(§2 의미 동등). */
-  const buildEndReachedTts = (empties: number[]): string => endReachedTts(
+  const buildEndReachedTts = useCallback((empties: number[]): string => endReachedTts(
     useSessionStore.getState().completedRows.length,
     empties.length > 0 ? formatRowList(empties) : null,
-  );
+  ), []);
 
   /** v0.23.0 입력탭#4(민구 결정 — "안내 후 대기"): 마지막 행 너머에 더 갈 곳이 없어도 **자동 종료하지
    *  않는다**. 빈 행이 있으면 함께 안내하고, 어느 경우든 안내 후 세션을 active로 유지한다.
