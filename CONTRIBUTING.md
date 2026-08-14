@@ -60,8 +60,10 @@ npm run test:e2e -- --workers=1                       # 격리 실행 (신규·�
 
 없다. 마지막으로 남아 있던 `scripts/test-sheets-url.mjs`는 v0.49 R1 리팩토링(2026-08-14)에서
 민구 승인(knip 판정표 §5 — 초기화 커밋 `04fbdef` 이후 커밋 0, survey-011에서 쓰인 적 없는
-상속 복제 유물)으로 삭제했다. `parseSpreadsheetId` 회귀는 Playwright 스펙(`settings-ux` 등
-연결 흐름)과 tsc가 덮는다.
+상속 복제 유물)으로 삭제했다. `parseSpreadsheetId` 회귀는 전용 스펙
+`tests/sheetsUrlParse.spec.ts`(구 스크립트 4케이스 이관 · `[node]` · 게이트 소속)가 덮는다.
+(종전 문구 "연결 흐름 스펙이 덮는다"는 R1 리뷰 CX-1이 반증 — 연결 스펙은 URL을 store에 직접
+seed해 파서를 우회한다.)
 
 (`test-koreanNum.mjs` · `test-autoValue.mjs`는 `tests/koreanNum.spec.ts` ·
 `tests/autoValue.spec.ts`가 완전히 대체해 v0.39.0 문서 정리에서 삭제했다. 두 스크립트는 이미
