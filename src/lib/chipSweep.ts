@@ -60,9 +60,6 @@ export function chipSweepSecondsForLevel(level: number): number {
 /** 기본 편도 초(파생 — 리터럴로 적지 마라). */
 export const CHIP_SWEEP_DEFAULT_SECONDS = chipSweepSecondsForLevel(CHIP_SWEEP_DEFAULT_LEVEL);
 
-/** coercion 상한. 단계 1의 초와 같아야 한다(둘이 갈라지면 영속본이 눈금 밖으로 샌다). */
-export const CHIP_SWEEP_MAX_SECONDS = CHIP_SWEEP_SLOWEST_SECONDS;
-
 /** 편도 초 → 가장 가까운 단계. 구버전 영속본(예: 8초)·수동 편집값을 눈금으로 되돌린다.
  *  🔑 **8초처럼 눈금보다 빠른 값은 10으로 접힌다** — 눈금 밖이지 오류가 아니다. */
 export function chipSweepLevelForSeconds(seconds: number): number {
@@ -84,7 +81,8 @@ export const CHIP_SWEEP_MIN_TRAVEL_PX = 1;
  *  비수·비유한수·음수·상한 초과는 기본값으로 되돌린다(settingsStore의 무조건 coercion 패턴). */
 export function normalizeChipSweepSeconds(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return CHIP_SWEEP_DEFAULT_SECONDS;
-  if (value < 0 || value > CHIP_SWEEP_MAX_SECONDS) return CHIP_SWEEP_DEFAULT_SECONDS;
+  // coercion 상한 = 단계 1의 초(별칭 CHIP_SWEEP_MAX_SECONDS는 v0.49 R1 P3 §11-③에서 통합).
+  if (value < 0 || value > CHIP_SWEEP_SLOWEST_SECONDS) return CHIP_SWEEP_DEFAULT_SECONDS;
   if (value === 0) return 0; // 정지는 유효값
   // 🔴 v0.46.1 WP-4 — **눈금(단계 1~10)에 스냅한다.** 종전엔 1초 격자였으나 이제 설정 UI가
   //    단계를 다루므로, UI가 표시할 수 없는 중간 초가 스토어에 남으면 스텝퍼가 값을 잃는다.
