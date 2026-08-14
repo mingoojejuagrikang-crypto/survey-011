@@ -106,7 +106,7 @@ export async function fetchSpreadsheetMeta(spreadsheetId: string): Promise<Sprea
  * v0.46.0 WP-J J-1 — **행 상한을 없앴다**(종전 `A1:Z1001` = 앞에서 1,000행).
  * 근인: 표본이 시트 **앞쪽에 고정**되면 타입 추론이 최근 데이터를 못 본다. 파생 피해가 두 겹이다.
  *  ① `inferColumns`의 **리스트 승격 판정 자체가 이 표본으로 난다** — 앞 1,000행에서 고유값이
- *     1개인 컬럼은 `options`가 되지 못하고, 그러면 호출부(useSettingsActions.loadHeaders)의
+ *     1개인 컬럼은 `options`가 되지 못하고, 그러면 호출부(useSettingsSheetConnection.loadHeaders)의
  *     `fetchColumnUniqueValues`가 **아예 호출되지 않는다**. 즉 열 전체 수집만으로는 안 닫힌다.
  *  ② `columnFlags.preserveUserColumnSettings`는 타입이 달라지면 사용자 설정을 버리고 재유추값을
  *     쓴다(`isSemanticTypeChange`). 표본이 옛 데이터뿐이면 `options`→`text` 되돌림이 재연결마다 난다.

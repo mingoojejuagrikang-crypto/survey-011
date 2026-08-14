@@ -102,4 +102,4 @@ export const FIRST_ENTRY_TIP =
   '각 항목의 날짜·입력방식(자동/음성/수동)·음성확인·입력값·추세 알람·이상값 범위(%)를 정할 수 있어요. ' +
   '자세한 설명은 항목 카드의 ? 를 누르면 나옵니다.';
 
-// SETTINGS_TIP_SEEN_KEY는 유일 소비자인 lib/useSettingsActions.ts로 이동(v0.35.2 리뷰 r1 — lib→components 역참조 해소).
+// SETTINGS_TIP_SEEN_KEY는 유일 소비자인 lib/useSettingsReset.ts로 이동(v0.35.2 리뷰 r1 — lib→components 역참조 해소 · v0.49 R1 P1-2 서브 훅 분리로 재이동).

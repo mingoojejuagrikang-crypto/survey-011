@@ -180,7 +180,7 @@ interface SettingsState {
    *      최상위 맵은 살아남는다는 것이다 — 컬럼 안에 두면 자동 갱신이 제외 목록을 지워 R11이 깨진다.
    *
    *  ⚠️ 키인 colId는 `sheets.stableColumnId`가 **컬럼 이름에서 만든 해시**라, 다른 시트라도 이름이
-   *  같으면 같은 id가 된다. 그래서 컬럼 출처 시트가 바뀌면 이 맵을 비운다(useSettingsActions.loadHeaders)
+   *  같으면 같은 id가 된다. 그래서 컬럼 출처 시트가 바뀌면 이 맵을 비운다(useSettingsSheetConnection.loadHeaders)
    *  — 안 그러면 감귤 시트에서 지운 값이 품질조사 시트의 동명 컬럼에 새어 붙는다. */
   optionExclusions: Record<string, string[]>;
 
@@ -317,7 +317,7 @@ export function makeSettingsDefaults(): SettingsDefaults {
 }
 
 /** v0.44.0 §C8 F28 — "입력값 설정"으로 간주하는 키(자동 초기화 대상 = 스탬프 갱신 대상).
- *  범위 판단: 수동 '초기화'(useSettingsActions.onResetConfirm)가 기본 보존하는 로그인·시트
+ *  범위 판단: 수동 '초기화'(useSettingsReset.onResetConfirm)가 기본 보존하는 로그인·시트
  *  주소·시트 탭·계정 캐시를 뺀 **나머지 전부** — 컬럼(+출처는 항상 동반), 생성 테이블, 세션명,
  *  음성/소리/검토 옵션. 민구 원문(F28): "초기화 기능 발동 조건 추가 … (로그인정보, 구글시트 주소,
  *  시트 선택 탭은 제외)" — 즉 효과는 기존 초기화(보존 기본값)와 동일해야 한다. */
@@ -710,7 +710,7 @@ export const useSettingsStore = create<SettingsState>()(
         // ── v12 (v0.38.0) — columns의 시트 출처 기록 ────────────────────────────────
         // **출처를 추측해 backfill하지 않는다.** v11 저장본에는 columns가 어느 시트에서 왔는지를
         // 입증할 정보가 없고, "현재 연결된 sheetUrl·sheetTab에서 왔을 것"이라는 추측은 오류 경로에서
-        // 깨진다: sheetUrl·sheetTab은 loadHeaders **전에** 먼저 저장되므로(useSettingsActions),
+        // 깨진다: sheetUrl·sheetTab은 loadHeaders **전에** 먼저 저장되므로(useSettingsSheetConnection),
         // 헤더 조회가 오프라인·권한 오류로 실패하면 "URL은 B농가, columns는 A농가" 불일치가 남는다.
         // 그 상태를 backfill하면 A농가의 fixed 자동값이 B시트 것으로 확정돼 **B 시트에 기록된다**
         // (리뷰#3 Critical). 잘못 보존하느니 새로 유추하는 쪽이 안전하다.
