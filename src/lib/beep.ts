@@ -20,9 +20,6 @@ import {
 import { logger } from './logger';
 import { beepPlay } from './logEvents';
 
-// 재노출(기존 import 경로 호환). 매핑·상한 SSOT는 beepVariants.ts(순수·단위 테스트 대상).
-export { BEEP_VOLUME_MAX };
-
 /** v0.46.0 WP-E(F7②) — 'commit' 신설: 값이 저장될 때 울리는 **커밋 확인음**. 긍정 극성이다.
  *  종전엔 정상 커밋에 소리가 아예 없었다(alert·corrected·modify 3종뿐) — 민구 제보 F7②의
  *  "확인음이 없다"가 그것이다. 호출부는 useVoiceSession의 커밋 경로 하나이고, **확인음 →

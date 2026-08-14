@@ -15,9 +15,6 @@ import { mapColumnsToHeader, buildRowForMapping, buildSparseCellsForMapping, typ
 import type { Session, SessionRow } from '../types';
 import { withoutPendingCandidate } from './pendingValidation';
 
-// Re-export so existing importers of recountSynced from sync.ts keep working (SSOT now in sessionSync).
-export { recountSynced } from './sessionSync';
-
 // C3 — module-level in-flight guard. A second syncSelected() call (double-tap, two tabs, retry
 // racing the first) must never re-append a session that's still being pushed. We register each
 // sessionId on entry and skip any session already in this set, releasing it in finally. This is a
