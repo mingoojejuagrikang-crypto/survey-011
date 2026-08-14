@@ -580,8 +580,8 @@ export const useSettingsStore = create<SettingsState>()(
         if (
           typeof s.recognitionTolerance !== 'number' ||
           !Number.isFinite(s.recognitionTolerance) ||
-          s.recognitionTolerance < 0.4 ||
-          s.recognitionTolerance > 0.9
+          s.recognitionTolerance < RECOGNITION_TOLERANCE_MIN ||
+          s.recognitionTolerance > RECOGNITION_TOLERANCE_MAX
         ) {
           s.recognitionTolerance = 0.6;
         }
