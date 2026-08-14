@@ -208,9 +208,14 @@ test('⑨ 검토 대기의 흡수도 같은 계약 (Y6)', async ({ page }) => {
 test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 직접 부르지 않는다', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
+  // uvs-c(ENV-12 #5) — 거절 종단(armRejectCue·rejectValue)이 useTrendGate.ts로 분리됐다(이동 커밋).
+  // 형제 순서(armRejectCue → rejectValue → relistenInContext)가 그대로 보존돼 판정 로직은 불변 —
+  // 소스 경로만 재표적한다. handleFinal은 여전히 본체에 있으므로 「호출 1곳」 개수 계약(아래)은
+  // 두 파일을 합산해 그대로 잰다.
+  const gateSrc = fs.readFileSync('src/lib/useTrendGate.ts', 'utf-8');
 
-  const from = src.indexOf('const armRejectCue = useCallback(');
-  const rejectFrom = src.indexOf('const rejectValue = useCallback(');
+  const from = gateSrc.indexOf('const armRejectCue = useCallback(');
+  const rejectFrom = gateSrc.indexOf('const rejectValue = useCallback(');
   expect(from, 'armRejectCue를 찾지 못했다').toBeGreaterThan(0);
   expect(rejectFrom, 'rejectValue를 찾지 못했다').toBeGreaterThan(from);
 
@@ -229,12 +234,19 @@ test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 �
     .map((p) => fs.readFileSync(p, 'utf-8')
       .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n'))
     .reduce((n, navCode) => n + navCode.split('armRejectCue(').length - 1, 0);
+  // uvs-c(ENV-12 #5) — 종단 자체가 useTrendGate.ts로 갔다. 개수 계약은 **합산**으로 유지한다
+  // (부정 단언만 확장 — R1 C-1 전례). 현재 이 파일의 호출이 유일한 1이다.
+  const gateCalls = gateSrc
+    .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
+    .split('armRejectCue(').length - 1;
   expect(
-    calls + persistCalls + navCalls,
+    calls + persistCalls + navCalls + gateCalls,
     'armRejectCue를 부르는 곳이 rejectValue 하나가 아니다 — 거절 표면이 다시 이원화됐다',
   ).toBe(1);
 
-  const rejectBody = src.slice(rejectFrom, src.slice(rejectFrom).indexOf('}, [armRejectCue') + rejectFrom);
+  // 🔴 본문 종료 마커가 `'}, [armRejectCue'`였다 — uvs-c 수정 커밋의 depsRef 계약 전환(노출
+  //   useCallback deps 배열 전부 `[]` 고정)으로 그 바이트가 사라졌다. 형제 경계로 잡는다.
+  const rejectBody = gateSrc.slice(rejectFrom, gateSrc.indexOf('const relistenInContext = useCallback(', rejectFrom));
   expect(rejectBody, '종단이 표면 무장을 소유하지 않는다').toContain('armRejectCue(reason)');
   expect(rejectBody, '종단이 소수 문맥의 화면/TTS 일치를 소유하지 않는다').toContain('decimalReaskPrompt(whole)');
   expect(rejectBody, '꼬리 인자가 없다 — 명령 거절이 다시 종단을 우회하게 된다').toContain('opts?.tail');

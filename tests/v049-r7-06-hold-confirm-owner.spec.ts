@@ -71,7 +71,11 @@ const confirmBtn = (page: Page) => page.locator('[data-testid="anomaly-confirm-b
  */
 test('[node] ① 보류 [확인]의 착지는 소유 술어를, 부기는 보류 셀의 행을 쓴다', async () => {
   const fs = await import('node:fs');
-  const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
+  // uvs-c(ENV-12 #5) — manualHold 터치 구획이 useTrendGate.ts로 분리됐다(이동 커밋). 형제 순서
+  // (confirmManualAnomaly → modifyManualAnomaly)가 그대로 보존돼 슬라이스 로직은 불변 — 소스
+  // 경로만 재표적한다. `awaitingFieldRef`는 그 훅에도 **ref 그대로** 주입되므로 아래 부정 단언의
+  // 바이트 형태(`proceedAfterCommit(awaitingFieldRef.current)`)도 이동 전과 동일하다.
+  const src = fs.readFileSync('src/lib/useTrendGate.ts', 'utf-8');
   const body = src.slice(
     src.indexOf('const confirmManualAnomaly = useCallback'),
     src.indexOf('const modifyManualAnomaly = useCallback'),

@@ -1184,10 +1184,10 @@ export function useVoiceSession() {
     fractionWholeOf,
     isModifyLike,
     demoteTrendConfirm,
+    getSessionToday: () => sessionTodayRef.current,
+    getRecorder: () => recorderRef.current,
+    getSessionId: () => sessionIdRef.current,
     trendSkipLoggedRef,
-    sessionTodayRef,
-    recorderRef,
-    sessionIdRef,
     awaitingFieldRef,
     epochRef,
   });

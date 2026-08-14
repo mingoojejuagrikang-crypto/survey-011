@@ -48,12 +48,13 @@ export interface TrendGateDeps {
   fractionWholeOf: (a: AwaitingField) => string | undefined;
   isModifyLike: (a: AwaitingField) => boolean;
   demoteTrendConfirm: (a: Extract<AwaitingField, { kind: 'trendConfirm' }>) => AwaitingField;
+  /** 세션 시작 시점의 로컬 오늘 ISO(start()에서 1회 계산) — 미설정 센티넬은 ''다(r7 #2 `||`). */
+  getSessionToday: () => string;
+  getRecorder: () => AudioRecorder | null;
+  /** 현재 세션 id — 세션 경계마다 바뀌므로 값이 아니라 getter로 받는다. */
+  getSessionId: () => string;
   /** 세션당 1회 dedupe 장부 — 동결 코어 start()가 세션 경계마다 리셋한다(헤더 ② 참조). */
   trendSkipLoggedRef: { current: Set<string> };
-  /** 세션 시작 시점의 로컬 오늘 ISO(start()에서 1회 계산) — 미설정 센티넬은 ''다. */
-  sessionTodayRef: { current: string };
-  recorderRef: { current: AudioRecorder | null };
-  sessionIdRef: { current: string };
   awaitingFieldRef: { current: AwaitingField | null };
   epochRef: { current: number };
 }
@@ -63,17 +64,11 @@ export function useTrendGate(deps: TrendGateDeps) {
   // 반환 함수들이 본체 handleFinal 의존성에 들어가므로 identity가 흔들리면 STT 배선이 요동친다).
   const depsRef = useRef(deps);
   depsRef.current = deps;
-  // (이동 커밋 한정 임시 배선 — 다음 수정 커밋에서 콜백 내부 destructure로 전환한다.)
-  const {
-    logCell, say, armClipForCell, clearAnomalyAlert, proceedAfterCommit, finalizeRowCompletion,
-    notifyRowPersistFailed, getSessionColumns, composeRowValues, localTodayISO, fractionWholeOf,
-    isModifyLike, demoteTrendConfirm, trendSkipLoggedRef, sessionTodayRef, recorderRef,
-    sessionIdRef, awaitingFieldRef, epochRef,
-  } = depsRef.current;
 
   /** trend_skip 텔레메트리 — 같은 원인은 세션당 1회만 기록(셀마다 반복돼 로그를 도배하지 않게).
    *  Set은 start()에서 리셋된다. */
   const logTrendSkip = useCallback((cause: string, row: number, colId: string) => {
+    const { logCell, trendSkipLoggedRef } = depsRef.current;
     if (trendSkipLoggedRef.current.has(cause)) return;
     trendSkipLoggedRef.current.add(cause);
     logCell({ type: 'trend', extra: `trend_skip:${cause}`, row, colId });
@@ -131,6 +126,7 @@ export function useTrendGate(deps: TrendGateDeps) {
     //     기존 문맥은 종전대로 `awaiting`에서 읽는다 — 두 입구가 같은 꼬리로 수렴한다.
     opts?: { restartClip?: boolean; tail?: string; whole?: string },
   ) => {
+    const { say, fractionWholeOf, getRecorder } = depsRef.current;
     armRejectCue(reason);
     const whole = opts?.whole ?? (awaiting ? fractionWholeOf(awaiting) : null);
     if (whole != null) {
@@ -140,9 +136,9 @@ export function useTrendGate(deps: TrendGateDeps) {
       await say(decimalReaskPrompt(whole));
       return;
     }
-    if (opts?.restartClip) recorderRef.current?.startClip();
+    if (opts?.restartClip) getRecorder()?.startClip();
     await say(opts?.tail ?? REASK_TTS[reason]);
-  }, [armRejectCue, say]);
+  }, []);
 
   /**
    * 🔴 v0.49 r5 Z6(claude #6) — **재청취 안내의 소수 문맥 판정 한 곳.**
@@ -164,6 +160,7 @@ export function useTrendGate(deps: TrendGateDeps) {
    * 오라클: tests/v049-r5-z6-relisten-context.spec.ts
    */
   const relistenInContext = useCallback(async (a: AwaitingField): Promise<void> => {
+    const { say, armClipForCell, fractionWholeOf } = depsRef.current;
     const whole = fractionWholeOf(a);
     if (whole != null) {
       // 화면 큐는 이미 이 문구를 그리고 있다(아무도 지우지 않았다) — 다시 세우지 않고 맞춘다.
@@ -172,7 +169,7 @@ export function useTrendGate(deps: TrendGateDeps) {
     }
     armClipForCell(a.row, a.colId);
     await say(relistenPrompt(a.name));
-  }, [armClipForCell, say]);
+  }, []);
 
   /** 방금 커밋된 값의 이상치 알람 검사(v0.8.0). 전역 마스터 토글 제거 — 컬럼에 방향 규칙
    *  (trendRule) 또는 변동률 % 임계값(pctThreshold)이 하나라도 있으면 활성. 규칙 없는 컬럼은
@@ -182,6 +179,9 @@ export function useTrendGate(deps: TrendGateDeps) {
    *  (행 단위 재fetch 금지, B2 설계). */
   const evaluateTrend = useCallback(
     (col: Column | null, row: number, colId: string, nextRaw: string): TrendViolation | null => {
+      const {
+        logCell, getSessionColumns, composeRowValues, localTodayISO, getSessionToday, trendSkipLoggedRef,
+      } = depsRef.current;
       const columns = getSessionColumns();
       return evaluateTrendForRow({
         col,
@@ -190,7 +190,7 @@ export function useTrendGate(deps: TrendGateDeps) {
         // thunk로 넘겨 인덱스/키 검사 통과 시에만 계산(종전 순서 보존).
         composeRow: () => composeRowValues(columns, row),
         // 로컬 날짜(UTC 아님) — start()에서 세션당 1회 계산(핫패스 호이스팅), ref 빈 경우만 지연 계산.
-        today: sessionTodayRef.current || localTodayISO(),
+        today: getSessionToday() || localTodayISO(),
         nextRaw,
         onSkip: (cause) => logTrendSkip(cause, row, colId),
         // 폴백 사용 계측(세션당 1회 — trend_skip과 동일 dedupe 컨벤션). age_h = 비교선 나이.
@@ -204,7 +204,8 @@ export function useTrendGate(deps: TrendGateDeps) {
         },
       });
     },
-    [logTrendSkip],
+    // logTrendSkip은 []-고정 const라 클로저 캡처로 identity가 불변이다(동일-훅 상호 참조).
+    [],
   );
 
   /** v0.12.0 AREA2 V2 — 이상치 팝업에 곁들일 식별정보(샘플키 + 직전 회차 ISO 날짜)를 재계산한다.
@@ -213,11 +214,12 @@ export function useTrendGate(deps: TrendGateDeps) {
    *  해당 필드를 undefined로 둔다(팝업이 '행 N' 폴백 + 날짜 라벨 생략으로 안전 처리). */
   const getAnomalyAlertData = useCallback(
     (row: number): { sampleKey?: string; prevDate?: string } => {
+      const { getSessionColumns, composeRowValues, localTodayISO, getSessionToday } = depsRef.current;
       const columns = getSessionColumns();
       return anomalyAlertContext({
         columns,
         composeRow: () => composeRowValues(columns, row),
-        today: sessionTodayRef.current || localTodayISO(),
+        today: getSessionToday() || localTodayISO(),
       });
     },
     [],
@@ -227,6 +229,7 @@ export function useTrendGate(deps: TrendGateDeps) {
   /** [확인] 버튼 — 음성 '확인'과 동일: 커밋된 값 확정 + 팝업 해제 + advance 1회. attribution은
    *  선행 command 이벤트의 extra('touch' vs 음성의 tts_*)로 구분되고 trend 이벤트는 글자 동일. */
   const confirmAnomalyTouch = useCallback(async () => {
+    const { logCell, clearAnomalyAlert, proceedAfterCommit, awaitingFieldRef, epochRef } = depsRef.current;
     const awaiting = awaitingFieldRef.current;
     if (awaiting?.kind !== 'trendConfirm') return; // 응답 대기 중이 아니면 no-op(정보성 팝업 등)
     epochRef.current++;
@@ -247,12 +250,15 @@ export function useTrendGate(deps: TrendGateDeps) {
     //   (fix49b #7이 키패드 재커밋에서 고친 것과 정확히 같은 비대칭). P1 검토 대기 착지 계약은
     //   `proceedAfterCommit` 안에 그대로 산다.
     await proceedAfterCommit(awaiting);
-  }, [clearAnomalyAlert, proceedAfterCommit]);
+  }, []);
 
   /** [수정] 버튼 — 음성 '수정'(trendConfirm 해제 → isModify 재청취)과 동일 착지: 같은 필드에서
    *  대기하며 기존값은 새 발화가 덮어쓰기 전까지 보존된다. 터치에는 보존할 명령 발화가 없으므로
    *  preserveCommandClip 없이 클립 슬롯만 재무장한다. */
   const modifyAnomalyTouch = useCallback(async () => {
+    const {
+      logCell, clearAnomalyAlert, demoteTrendConfirm, awaitingFieldRef, epochRef,
+    } = depsRef.current;
     const awaiting = awaitingFieldRef.current;
     if (awaiting?.kind !== 'trendConfirm') return;
     epochRef.current++;
@@ -280,7 +286,8 @@ export function useTrendGate(deps: TrendGateDeps) {
     //   M11의 「[수정] 터치는 접수된 조작이라 거절 신호를 붙이지 않는다」는 그대로다 —
     //   `relistenInContext`도 비프·거절 큐를 만들지 않는다(그게 그 함수의 존재 이유다).
     await relistenInContext(demoted);
-  }, [clearAnomalyAlert, relistenInContext]);
+    // relistenInContext는 []-고정 const라 클로저 캡처로 identity가 불변이다(동일-훅 상호 참조).
+  }, []);
 
   // ── v0.34.0 A1 — 수동 입력 이상치 **보류**(manualHold) 팝업의 터치 버튼 ──
   //   위 confirmAnomalyTouch/modifyAnomalyTouch는 trendConfirm 가드라 음성 경로 전용 — 수동 보류는
@@ -289,9 +296,13 @@ export function useTrendGate(deps: TrendGateDeps) {
   /** [확인] — 커밋된 수동 값 확정 + 팝업 해제 + 보류했던 진행 재개(advance 1회.
    *  검토 대기 출신이면 enterReviewWait 재진입 — 갱신값 재낭독 + 명령 대기). */
   const confirmManualAnomaly = useCallback(async () => {
+    const {
+      logCell, clearAnomalyAlert, proceedAfterCommit, finalizeRowCompletion, notifyRowPersistFailed,
+      isModifyLike, getSessionId, awaitingFieldRef, epochRef,
+    } = depsRef.current;
     const alert = useSessionStore.getState().anomalyAlert;
     if (!alert?.manualHold) return; // 보류 팝업이 아니면 no-op
-    const staged = useDataStore.getState().sessions.find((s) => s.id === sessionIdRef.current);
+    const staged = useDataStore.getState().sessions.find((s) => s.id === getSessionId());
     // 팝업이 보이더라도 후보+pending 단일 put이 아직 끝나지 않았거나 태그 자체가 없으면 절대
     // alert를 해제/advance하지 않는다. 느린 IDB와 ManualValueSheet fire-and-forget 사이 우회 차단.
     if (!staged?.pendingValidation || staged.pendingValidationPersisting) {
@@ -391,13 +402,14 @@ export function useTrendGate(deps: TrendGateDeps) {
       return;
     }
     await proceedAfterCommit(aw);
-  }, [clearAnomalyAlert, finalizeRowCompletion, notifyRowPersistFailed, proceedAfterCommit]);
+  }, []);
 
   /** [수정] — 팝업 해제만 수행. 해당 셀 ManualValueSheet 재오픈은 시트 open 상태를 소유한
    *  VoiceScreen이 조립한다(이 콜백 직후 alert.colId로 openManualSheet). awaiting은
    *  commitManualValue가 무장해 둔 isModify(같은 셀) 또는 reviewWait 센티넬을 그대로 둔다 —
    *  시트 재커밋(commitManualValue)이 같은 경로로 재평가한다. */
   const modifyManualAnomaly = useCallback(() => {
+    const { logCell, epochRef } = depsRef.current;
     const alert = useSessionStore.getState().anomalyAlert;
     if (!alert?.manualHold) return;
     epochRef.current++;

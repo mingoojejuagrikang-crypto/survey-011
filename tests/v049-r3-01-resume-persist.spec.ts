@@ -224,7 +224,11 @@ test('[node] ①c 행 완료 부기 배선 6곳(advance 2 · 커밋 종단 · �
   const persistCalls = persistCode.match(/finalizeRowCompletion\((?!row: number)/g) ?? [];
   // uvs-b(ENV-12 #3·#4) — 내비 구획이 useRowNav.ts/useFieldNav.ts로 분리됐다. 같은 우발 커버를
   // 유지한다(R1 C-1 전례 — 부정 단언만 확장). 현재 두 파일의 호출은 0이다.
-  const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useFieldNav.ts'].flatMap((p) => {
+  // uvs-c(ENV-12 #5) — 추세/이상치 구획이 useTrendGate.ts로 분리되며 **여섯 번째 배선**
+  // (`confirmManualAnomaly`의 보류 [확인] 부기)이 그 파일로 갔다. 합산 대상에 넣어 개수 6을
+  // 유지한다(본체 5 + 훅 1). 주입 deps 선언(`finalizeRowCompletion: (row: number) => ...`)은
+  // 프로퍼티 표기라 위 정규식에 걸리지 않는다.
+  const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useFieldNav.ts', 'src/lib/useTrendGate.ts'].flatMap((p) => {
     const navCode = fs.readFileSync(p, 'utf-8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
@@ -255,7 +259,11 @@ test('[node] ①c 행 완료 부기 배선 6곳(advance 2 · 커밋 종단 · �
   //   「새 커밋 경로가 부기를 조용히 빠뜨린다」의 여섯 번째다.
   //   오라클: v049-r7-06-hold-confirm-owner.spec.ts
   expect(calls.length + persistCalls.length + navCalls.length, '배선이 6곳이 아니다 — 어느 커밋 경로가 빠졌는지 확인해라(#1 근인)').toBe(6);
-  expect(code, '수동 보류 [확인]의 부기(r7 #6 — 좌표는 보류된 셀의 행이다)')
+  // uvs-c(ENV-12 #5) — 이 한 줄만 useTrendGate.ts로 갔다(나머지 배선 다섯은 본체 잔류). 소스만 재표적.
+  const gateCode = fs.readFileSync('src/lib/useTrendGate.ts', 'utf-8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+  expect(gateCode, '수동 보류 [확인]의 부기(r7 #6 — 좌표는 보류된 셀의 행이다)')
     .toContain('if (pv && !(await finalizeRowCompletion(pv.row))) {');
   expect(code, 'advance() 종료 가드의 부기(Y3)').toContain('if (isRowVoiceComplete(row, vc)) void finalizeRowCompletion(row);');
   expect(code, 'advance()의 행 완료 부기(durable 결과 수신)').toContain('if (!(await finalizeRowCompletion(row))) {');

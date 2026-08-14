@@ -47,9 +47,13 @@ test('[node] #2 세션 date 폴백이 빈 문자열을 통과시키지 않는다
     (persist.match(/getSessionToday\(\) \|\| localTodayISO\(\)/g) ?? []).length,
     '세션 고정 시계를 읽는 자리는 전부 같은 술어를 쓴다(date 조립 1)',
   ).toBe(1);
-  const src = await read('src/lib/useVoiceSession.ts');
+  // uvs-c(ENV-12 #5) — 「브리핑 today」 두 자리(evaluateTrend·getAnomalyAlertData)가 추세 검증
+  // 구획과 함께 useTrendGate.ts로 분리됐다. 그 훅도 stage A 규범대로 `getSessionToday()` getter를
+  // 주입받으므로 표기가 usePersistSession과 같아진다(위 주석이 이미 인정한 「파일별 표기 차이」).
+  // 계약(`||` 사슬·빈 문자열 불통과)과 자리 수(2)는 불변 — 소스 경로와 표기만 재표적한다.
+  const gate = await read('src/lib/useTrendGate.ts');
   expect(
-    (src.match(/sessionTodayRef\.current \|\| localTodayISO\(\)/g) ?? []).length,
+    (gate.match(/getSessionToday\(\) \|\| localTodayISO\(\)/g) ?? []).length,
     '세션 고정 시계를 읽는 자리는 전부 같은 술어를 쓴다(브리핑 today 2)',
   ).toBe(2);
 });
