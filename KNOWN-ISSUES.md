@@ -1080,7 +1080,7 @@
   - **비용(실측):** row17 횡경이 09:49:26 첫 안내 → 09:54:29 커밋으로 **5분 3초** 걸렸고 "횡경." 안내가 **6회** 반복됐다. 개선요청 작성 182초를 빼도 **약 2분**이 오터치 씨름에 소모.
 - **🟢 데이터 영향 없음:** 일시정지 토글은 커밋 경로가 아니다. 같은 회차 36/36행이 시트와 완전 일치(불일치 0).
 - **[REGION-1]과 별건이다.** 그쪽은 *수동입력 시트 ↔ 하단 나비* 및 *알람 카드 침범*(후자는 in-flow 카드라 resolved-by-construction). 이건 **하단 컨트롤바 내부**의 겹침이다. [MIC-BANNER-POPUP-OVERLAP-1](배너 z-index)과도 다르다.
-- **권장 수정 방향(민구 요청 포함):** 패널 `open` 동안 `indicatorInteractive=false`로 내려 버튼 자체를 없앤다(접히면 자동 복귀). `open`이 현재 `ActiveControlSteppers` 내부 `useState`라 **부모 승격 배선이 필요**하다. ⚠️ **`pointer-events:none`으로 때우지 말 것** — 레이아웃 겹침이 남으면 `<` `>`도 같은 위험에 노출된다. **겹침과 히트테스트를 함께 고친다.**
+- **권장 수정 방향(민구 요청 포함):** 패널 `open` 동안 `indicatorInteractive=false`로 내려 버튼 자체를 없앤다(접히면 자동 복귀). ~~`open`이 현재 `ActiveControlSteppers` 내부 `useState`라 **부모 승격 배선이 필요**하다.~~ → ✅ **선행분 이행됨(R1 08-14 실측):** `open`은 이미 부모 소유 prop(`ActiveControlSteppers.tsx:60` `open`+`onOpenChange` 계약). 잔여는 `ActiveState.tsx:389`의 `indicatorInteractive` 조건에 패널 open 축이 실제로 걸렸는지 재감사 — 이슈 본체 해소 여부는 별도 판정 몫. ⚠️ **`pointer-events:none`으로 때우지 말 것** — 레이아웃 겹침이 남으면 `<` `>`도 같은 위험에 노출된다. **겹침과 히트테스트를 함께 고친다.**
 - **출처:** `2026-07-27 실기기 로그`(`sess_1785112420945`) + 개선요청 fb-27-5/fb-27-6 스크린샷 2장(펼침=겹침 / 접힘=겹침 없음으로 원인 분리). 분석: `Deliverables/2026-07-27-survey-011-log-analysis.md` §3.5~3.6.
 - **현재 상태:** 🔴**미수정**(v0.39.0). Vance 배정.
 
@@ -2367,6 +2367,20 @@ TTS 구간(`:2522-2523`)에 오버레이가 열리면 **모달 뒤에서 STT 인
     (`useSettingsActions` 되돌림). 수정 후 42/42 green(포트 5197, KST 01:5x = 창 안).
 - **현재 상태:** ✅RESOLVED → 계약은 `[DATE-LOCAL-1]`. 이 항목은 「자정 UTC red」를 다시 만난
   사람이 원 증상으로 검색할 수 있게 남긴다.
+
+## 2026-08-14 v0.49 R1 리팩토링 라운드 (회차 SSOT: `workspace_teamops/deliverables/2026-08-14-r1-review-{claude,codex}.md`)
+
+### [LOGEVENTS-CYCLE-1] logEvents 배럴 순환 import 4쌍 — 현재 안전·구조 부채로 등재
+- **무엇:** 도메인 leaf 3파일(`logEventsAudio`·`Session`·`Ui`)이 `kv`를 배럴 `./logEvents`에서
+  import하고 배럴이 그들을 재수출한다 — R1 P1-3이 순환 3쌍을 추가(기존 `logEventsInstrumentation`
+  1쌍과 같은 패턴, 총 4쌍). 발견: R1 콜드 리뷰 CX-2(codex).
+- **왜 지금 안전한가:** 전 leaf가 최상위 실행 0 + 함수 선언 호이스팅 — ESM live binding으로 동작
+  (claude 측 리뷰가 같은 축을 독립 검증). 특성화·게이트 green.
+- **위험 조건:** leaf 최상위에 `kv` 호출 initializer나 모듈 초기화 계측이 생기면 TDZ/초기화 순서
+  결함이 배럴 소비처 전체에 전파될 수 있다.
+- **처방(후속):** `kv`/`withErr`를 의존성 없는 leaf 모듈로 내리고 배럴·도메인이 그것만 import.
+  R1에서는 diff 최소화 원칙(§3-4)으로 보류 — 다음 logEvents 접촉 회차에 함께.
+- **현재 상태:** 🟡 등재만(08-14). 소스 주석(`logEventsAudio.ts:9`)이 안전 조건을 이미 문서화.
 
 ## 2026-08-14 v0.49 r7 소형 패치 라운드 (회차 SSOT: `workspace_teamops/deliverables/2026-08-14-fixr7-fixes.md`)
 
