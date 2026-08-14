@@ -10,6 +10,7 @@ import {
 } from '../../lib/chipSweep';
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 import { ACTIVE_ZONE_RATIOS, VOICE_TYPE } from './heroLayout';
+import { StepperControl, clampStep } from './StepperControl';
 
 /** 🔴 v0.46.1 **FB-4**(민구 제보 08-07 *"서랍 펼칠시 스크롤 없이 보이게 변경"* → 확정 답변
  *  **「서랍을 더 높게 펼쳐라」**) — 펼친 서랍이 **위로** 자랄 수 있는 상한.
@@ -55,10 +56,6 @@ const DRAWER_MAX_HEIGHT =
  *  v0.44.0 §D1 — 세 번째 항목 [말끊기 ON/OFF](BargeInToggle, 기본 ON)를 그 아래 전폭 1행으로
  *  추가(민구 확정 08-02: "바지인 기능 토글을 입력탭의 서랍메뉴에 포함"). 접힌 요약 필은 종전
  *  두 값만 유지한다 — 문자열이 길어지면 375 폭 오버레이 필이 줄바꿈돼 §C5-b 겹침 관례를 해친다. */
-function clampStep(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, Math.round(value * 100) / 100));
-}
-
 export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange }: {
   uiCommand: VoiceUiCommandSignal | null;
   /** 확장 여부 — **부모가 소유**한다. 열려 있는 동안 하단 인디케이터·`<`·`>`를 숨겨야 하는데
@@ -411,89 +408,6 @@ function BargeInToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) 
       >
         {on ? '✓' : '✕'}
       </span>
-    </button>
-  );
-}
-
-function StepperControl({
-  testId, label, value, detail, accent, minusLabel, plusLabel, canMinus, canPlus, onMinus, onPlus,
-  fullWidth = false,
-}: {
-  testId: string;
-  label: string;
-  value: string;
-  detail: string;
-  accent: string;
-  minusLabel: string;
-  plusLabel: string;
-  canMinus: boolean;
-  canPlus: boolean;
-  onMinus: () => void;
-  onPlus: () => void;
-  /** v0.46.0 WP-D — 2열 그리드에서 한 행을 통째로 쓴다(BargeInToggle과 같은 관례). */
-  fullWidth?: boolean;
-}) {
-  return (
-    <div
-      data-testid={testId}
-      style={{
-        ...(fullWidth ? { gridColumn: '1 / -1' } : null),
-        minWidth: 0,
-        borderRadius: 16,
-        border: `1px solid ${T.lineStrong}`,
-        background: 'rgba(255,255,255,0.035)',
-        padding: 8,
-        display: 'grid',
-        gridTemplateColumns: '48px minmax(0, 1fr) 48px',
-        alignItems: 'center',
-        gap: 8,
-      }}
-    >
-      <StepperButton label="−" title={minusLabel} disabled={!canMinus} onClick={onMinus} testId={`${testId}-minus`} />
-      <div style={{ minWidth: 0, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontSize: VOICE_TYPE.captionXs, color: T.textMute, fontWeight: 800, lineHeight: 1 }}>{label}</span>
-        <span style={{ fontSize: VOICE_TYPE.stepperValue, color: accent, fontWeight: 950, lineHeight: 1.15, fontFamily: 'JetBrains Mono, ui-monospace, monospace' }}>
-          {value}
-        </span>
-        <span style={{ fontSize: VOICE_TYPE.captionXxs, color: T.textMute, fontWeight: 650, lineHeight: 1.2, whiteSpace: 'nowrap' }}>{detail}</span>
-      </div>
-      <StepperButton label="+" title={plusLabel} disabled={!canPlus} onClick={onPlus} testId={`${testId}-plus`} />
-    </div>
-  );
-}
-
-function StepperButton({
-  label, title, disabled, onClick, testId,
-}: {
-  label: string;
-  title: string;
-  disabled: boolean;
-  onClick: () => void;
-  testId: string;
-}) {
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      title={title}
-      aria-label={title}
-      disabled={disabled}
-      onClick={onClick}
-      style={{
-        width: 48,
-        height: 48,
-        borderRadius: 14,
-        border: `1px solid ${T.lineStrong}`,
-        background: disabled ? 'rgba(255,255,255,0.025)' : T.card,
-        color: disabled ? T.textMute : T.text,
-        fontSize: VOICE_TYPE.stepperValueLg,
-        fontWeight: 950,
-        lineHeight: 1,
-        cursor: disabled ? 'default' : 'pointer',
-        touchAction: 'manipulation',
-      }}
-    >
-      {label}
     </button>
   );
 }

@@ -196,6 +196,11 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //   PersistErrorBanner(stop 전용)와 동일한 시각 계약을 따르는 셀 스코프 변형이라
   //   같은 세 타입 토큰을 참조한다. 62 → 65.
   //   🔴 위 W7과 같은 함정: 이 파일을 `src/components/voice/` 밖으로 옮기면 계약 −3.
+  // 리팩토링 R1 P1-1(08-14): 스텝퍼 프리미티브(StepperControl·StepperButton·clampStep)가
+  //   `ActiveControlSteppers.tsx`(499줄 — max-lines 500까지 여유 1)에서 **같은 디렉터리의
+  //   `StepperControl.tsx`로 분리**됐다. 이 검사기는 재귀 순회라 계약 4건(captionXs·
+  //   stepperValue·captionXxs·stepperValueLg 참조)은 그대로 세어진다. 65 그대로.
+  //   🔴 그 파일을 디렉터리 밖으로 옮기면 계약 −4(AlarmInterimStrip 분리 때와 같은 함정).
   expect(contractCount, '계약 참조 (통과)').toBe(65);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);
