@@ -322,8 +322,9 @@
   정책과도 충돌**했고, 파일 주석은 `node scripts/...`, README는 `npx tsx`로 서로 달랐다.
 - **수정(v0.39.0 문서 정리):** `scripts/test-koreanNum.mjs`·`scripts/test-autoValue.mjs` 삭제
   (`tests/koreanNum.spec.ts`·`tests/autoValue.spec.ts`가 완전 대체). 문서의 테스트 절차는
-  [CONTRIBUTING.md](./CONTRIBUTING.md)로 단일화. `scripts/test-sheets-url.mjs`는 대체 스펙이
-  없어 존치한다.
+  [CONTRIBUTING.md](./CONTRIBUTING.md)로 단일화. `scripts/test-sheets-url.mjs`는 당시 대체
+  스펙이 없어 존치했다가, v0.49 R1(2026-08-14)에서 민구 승인(knip 판정표 §5 상속 유물)으로
+  삭제했다 — 수동 스크립트는 이제 0개다.
 - **출처:** `2026-06-04~05 세션` → 정리 `2026-07-26`
 - **현재 상태:** 해소. 새 개발 문서를 쓸 때 이 규칙을 유지하라.
 
