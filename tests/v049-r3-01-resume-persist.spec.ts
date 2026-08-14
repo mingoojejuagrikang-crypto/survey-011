@@ -203,10 +203,17 @@ test('①b 셀 검토 대기의 **직접값** 수정도 IDB에 남고 셀 검토
  * 추가될 때 조용히 빠진다」였고, 이 배선은 그 재발을 막는 방어선이다.
  * 소스 계약 테스트의 전례: `v049-prev-survey` W3-7·W3-10 · `v043-typo-contract`.
  */
-test('[node] ①c 행 완료 부기 배선 4곳(advance · 커밋 종단 · 직접 수정 우회 · 수동 커밋)이 모두 있다', async () => {
+test('[node] ①c 행 완료 부기 배선 6곳(advance 2 · 커밋 종단 · 직접 수정 우회 · 수동 커밋 · 보류 확인)이 모두 있다', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
-  const calls = src.match(/finalizeRowCompletion\((?!row: number)/g) ?? [];
+  // 🔴 v0.49 r7 — **주석을 먼저 걷어낸다.** 종전엔 원문에서 셌는데, 이 배선을 **설명하는 주석**이
+  //   같은 식별자를 인용하면 개수가 조용히 늘어 계약이 «코드»가 아니라 «산문»을 세게 된다
+  //   (r7 #6에서 실측으로 걸렸다 — 6곳인데 7로 셌다. fixr6 Z9 ③이 겪은 함정의 반대 방향).
+  //   블록 주석 + 줄 시작이 `//`/`*`인 줄만 지운다(코드 중간의 문자열은 건드리지 않는다).
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+  const calls = code.match(/finalizeRowCompletion\((?!row: number)/g) ?? [];
   // 선언부(`const finalizeRowCompletion = useCallback`)는 위 정규식에 안 걸린다.
   // 🔴 v0.49 r5 Z8 — **3 → 4.** 이 계약이 예언한 그대로 「새 커밋 경로가 추가될 때 조용히
   //   빠지는」 네 번째가 실재했다: `commitManualValue`의 **비-awaiting 분기**가
@@ -224,14 +231,23 @@ test('[node] ①c 행 완료 부기 배선 4곳(advance · 커밋 종단 · 직�
   //   전이·낭독·전진을 하지 않되 부기는 남겨야 한다(건너뛰면 커밋된 값이 완료 마킹 없이
   //   `stop()`의 persist에 `complete:false`로 굳어 sync가 영영 안 올린다). 그 자리는 실패를
   //   고지할 표면이 없어(StoppingState) `void`다 — durable 실패는 `stop()`의 `persistError`가 받는다.
-  expect(calls.length, '배선이 5곳이 아니다 — 어느 커밋 경로가 빠졌는지 확인해라(#1 근인)').toBe(5);
-  expect(src, 'advance() 종료 가드의 부기(Y3)').toContain('if (isRowVoiceComplete(row, vc)) void finalizeRowCompletion(row);');
-  expect(src, 'advance()의 행 완료 부기(durable 결과 수신)').toContain('if (!(await finalizeRowCompletion(row))) {');
-  expect(src, '커밋 종단(proceedAfterCommit) 진입점 부기(durable 결과 수신)')
+  //   🔴 v0.49 r7 #6 — **5 → 6.** 여섯 번째는 `confirmManualAnomaly`(수동 이상치 보류 [확인])다.
+  //   그 종단은 `proceedAfterCommit(awaiting)`에 부기를 **위임**하고 있었는데, `awaiting`이 보류한
+  //   셀과 어긋나면 부기가 **남의 행에** 걸린다 — 보류한 행은 completedRows에 못 들어가고 다음
+  //   persist가 통째로 떨어뜨린다(Z8이 닫은 값 유실의 재개방). 그래서 부기를 위임하지 않고
+  //   **보류된 셀의 행(`pendingValidation.row`)에 직접** 건다. 이 계약이 또 한 번 예언한
+  //   「새 커밋 경로가 부기를 조용히 빠뜨린다」의 여섯 번째다.
+  //   오라클: v049-r7-06-hold-confirm-owner.spec.ts
+  expect(calls.length, '배선이 6곳이 아니다 — 어느 커밋 경로가 빠졌는지 확인해라(#1 근인)').toBe(6);
+  expect(code, '수동 보류 [확인]의 부기(r7 #6 — 좌표는 보류된 셀의 행이다)')
+    .toContain('if (pv && !(await finalizeRowCompletion(pv.row))) {');
+  expect(code, 'advance() 종료 가드의 부기(Y3)').toContain('if (isRowVoiceComplete(row, vc)) void finalizeRowCompletion(row);');
+  expect(code, 'advance()의 행 완료 부기(durable 결과 수신)').toContain('if (!(await finalizeRowCompletion(row))) {');
+  expect(code, '커밋 종단(proceedAfterCommit) 진입점 부기(durable 결과 수신)')
     .toContain('if (awaiting && !(await finalizeRowCompletion(awaiting.row))) {');
-  expect(src, '직접 수정 우회 배선(F9 — no-op 방어선이라 void)').toContain('void finalizeRowCompletion(targetRow);');
+  expect(code, '직접 수정 우회 배선(F9 — no-op 방어선이라 void)').toContain('void finalizeRowCompletion(targetRow);');
   // 수동(키패드) 커밋 — 소유권 분기 **앞**이어야 한다(비-awaiting 분기도 지나가야 하므로).
-  const manual = src.slice(src.indexOf('const commitManualValue = useCallback('));
+  const manual = code.slice(code.indexOf('const commitManualValue = useCallback('));
   expect(
     manual.slice(0, manual.indexOf("playBeep('commit')")),
     '수동 커밋 부기가 소유권 분기 앞에 없다 — 비-awaiting 커밋이 행을 완성하면 그 행이 사라진다',
