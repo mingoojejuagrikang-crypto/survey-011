@@ -1272,9 +1272,26 @@ export function useVoiceSession() {
    *  **전체를 다시 태운다**. 즉 행 부기 실패도 같은 버튼 하나로 실제 회복된다 — 「실패는 화면에
    *  남기고 재시도 경로를 제공한다」(PRINCIPLES §1)를 새 UI 없이 만족하는 유일한 기존 깔때기다.
    *  좌표는 **그 행에서 값이 있는 마지막 음성 컬럼** = 방금 행을 완성시킨 칸이다(재커밋해도 값이
-   *  같아 부작용이 없고, 배너 문구가 사용자가 마지막으로 넣은 값을 가리킨다). */
-  const notifyRowPersistFailed = useCallback((row: number) => {
+   *  같아 부작용이 없고, 배너 문구가 사용자가 마지막으로 넣은 값을 가리킨다).
+   *
+   *  🔴 v0.49 r7 #1(codex R6-F3 High) — **좌표 정본은 흐름 소유자(`landing`)다.** 위 「마지막 음성
+   *   컬럼 = 방금 행을 완성시킨 칸」은 순차 입력에서만 참이다. 빈 칸을 지나쳐 뒤 칸을 먼저 채운 뒤
+   *   `row_gap_return`(:advance)이 커서를 되돌려 **앞 칸에서** 행이 완성되면 둘이 갈린다 —
+   *   완성시킨 칸은 앞 칸인데 배너는 뒤 칸을 가리켰다.
+   *   피해는 배너 문구 오표기가 아니라 **재시도가 흐름을 회복하지 못하는 것**이다: 배너의 재시도는
+   *   `commitManualValue(row,colId,value)`이고, 그 안의 `ownsCell`이 **`awaiting.colId` 일치**를
+   *   요구한다. 좌표가 갈리면 `ownsFlow=false`가 돼 값·부기는 저장되는데 `proceedAfterCommit`
+   *   착지가 안 돌고, 복원된 awaiting이 **앞 칸에 걸린 채** 남아 다음 발화가 방금 넣은 값을
+   *   덮어쓴다(값 손상 꼬리).
+   *   👉 `landing`이 그 행의 실재 값을 가진 칸을 가리키면 그것을 쓴다. `reviewWait`은 **행 스코프**라
+   *      좌표를 요구하지 않으므로(그쪽 `ownsReviewWait`은 행만 본다) 종전 폴백에 맡긴다. */
+  const notifyRowPersistFailed = useCallback((row: number, landing?: AwaitingField | null) => {
     const values = useSessionStore.getState().getRowValues(row);
+    if (landing && landing.kind !== 'reviewWait' && landing.row === row
+      && (values[landing.colId] ?? '') !== '') {
+      notifyCellPersistFailed(row, landing.colId, values[landing.colId]!);
+      return;
+    }
     const target = [...voiceColsList()].reverse().find((c) => (values[c.id] ?? '') !== '');
     if (!target) return;
     notifyCellPersistFailed(row, target.id, values[target.id]!);
@@ -1399,7 +1416,9 @@ export function useVoiceSession() {
       //     남기는 이유는 `advance()`를 **직접** 부르는 경로가 실재하기 때문이다 — 예약이 없는
       //     상태의 '유지'(:2638)가 그것이고, 그 자리에서 행이 완성되면 여기가 유일한 방어다.
       if (!(await finalizeRowCompletion(row))) {
-        notifyRowPersistFailed(row);
+        // awaiting은 **여기서 비우지 않는다** — 아래 `awaitingFieldRef.current = null`(성공 경로)에
+        //   닿기 전에 return하므로 이 경로의 소유자는 그대로 살아 있다(r7 #1의 보존 계약과 동일).
+        notifyRowPersistFailed(row, awaitingFieldRef.current);
         return;
       }
       sess.setPhase('complete');
@@ -1508,8 +1527,25 @@ export function useVoiceSession() {
     // 🔴 v0.49 r6 Y1 — 여기도 durable 실패면 착지 전체를 멈춘다. 아래 착지들은 「저장됐다」를
     //   전제로 갱신값을 재낭독하거나 다음 셀로 나가므로, 실패를 통과시키면 그 낭독이 곧
     //   성공 고지가 된다(C-FIX2가 수동 커밋에서 세운 「실패면 영수증·에코·진행 전부 억제」와 동일).
+    // 🔴 v0.49 r7 #1(codex R6-F3 High) — **실패 시 흐름 소유자를 복원한다.** 음성 커밋 종단은
+    //   이 함수를 부르기 **전에** `awaitingFieldRef.current = null`로 만든다(:handleFinal의 burst
+    //   직후) — 커밋이 끝났다는 전제의 정리다. 그 전제가 깨진 게 이 분기다.
+    //   실측(codex R6-F3, 2026-08-14): 음성으로 행을 완주시키고 put을 전부 실패시키면 배너가 서고,
+    //   seam 해제 후 [다시 저장]을 눌러 IDB가 회복돼도 **awaiting이 null이라** 이어지는 숫자 발화가
+    //   TTS 0·값 변화 0으로 **무음 흡수**됐다. 2~3m 거리의 음성 전용 사용자(PRINCIPLES §2)는
+    //   성공/실패 어느 안내도 없이 입력 불능에 주차된다.
+    //   👉 복원이 닫는 것은 둘이다: ①재시도 버튼의 `commitManualValue`가 `ownsFlow=true`를 얻어
+    //      `proceedAfterCommit` 착지(행 완료 낭독·다음 행 전진)를 **원 흐름 그대로** 재개한다
+    //      ②버튼에 손이 닿지 않아도 **같은 값을 다시 말하면** 커밋 경로 전체가 재시도가 된다.
+    //   ⚠️ 형제 실패 분기들(`advance`의 부기 실패, `commitManualValue`의 두 durable 게이트)은
+    //     애초에 이 ref를 비우기 전에 return하므로 이미 보존돼 있다 — 비우고 나서 실패를 아는
+    //     경로가 여기 하나뿐이라 처방도 여기 하나다.
+    //   ⚠️ ✓·값 에코·화음은 이미 나간 뒤다(음성 증분 persist가 fire-and-forget인 별개 축 —
+    //     R6-F1, 선행 내구성 부채로 v0.50 라운드 몫). 이 수정은 **재시도 이후의 흐름**만 닫는다.
+    //   오라클: tests/v049-r7-01-retry-landing.spec.ts
     if (awaiting && !(await finalizeRowCompletion(awaiting.row))) {
-      notifyRowPersistFailed(awaiting.row);
+      awaitingFieldRef.current = awaiting;
+      notifyRowPersistFailed(awaiting.row, awaiting);
       return;
     }
     if (awaiting?.kind === 'reviewWait') {
