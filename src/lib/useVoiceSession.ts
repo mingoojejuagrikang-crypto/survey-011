@@ -5406,7 +5406,20 @@ export function useVoiceSession() {
     //   return하므로 여기 도달 = 확정 커밋(일반값·정보성 이상치). 보류 정정값은 confirmManualAnomaly가 발행.
     useSessionStore.getState().pushCommitReceipt(row, colId, col.name, value);
     sess.setRecognized(value);
-    sess.setReaskReason(null);
+    // 🔴 v0.49 r7 #5(codex r6#9) — **거절 큐 해제는 흐름을 소유한 커밋만 한다.**
+    //   `reaskReason`은 「이 커밋이 성공했다」가 아니라 **`awaiting` 셀이 무엇을 기다리는가**를
+    //   설명하는 화면 큐다(M4가 세운 「거절 큐는 그 셀의 것이다」). 그런데 이 줄이 소유권 분기
+    //   **앞**에 무조건 있어서, **다른 셀을 덮어쓰는 비-awaiting 키패드 커밋**이 남의 큐를 내렸다.
+    //   피해는 M3가 닫은 **「무고지 합성」의 화면 축**이다: `setReaskReason(null)`은 store 계약상
+    //   `reaskDecimalWhole`까지 함께 지우는데, `awaiting`의 `fractionWhole`은 **그대로 살아 있다**
+    //   (이 분기는 진행 상태를 건드리지 않는다는 v0.47.0 W1 계약). 그래서 화면에서는 「111 점,
+    //   소수점 아래」 큐가 사라졌는데 다음 발화 '오'는 여전히 111.5로 합성된다 — 사용자는 전체값을
+    //   말해야 하는지 소수부만 말해야 하는지 알 수 없다(PRINCIPLES §2 화면·청각 동일성).
+    //   Z4가 승계 규칙에서 `fractionWhole`을 일부러 두고 간 근거의 **반대편 반쪽**이다: 그쪽은
+    //   「화면을 지웠으니 문맥도 들고 가지 마라」였고, 여기는 「문맥이 사는데 화면만 지우지 마라」다.
+    //   ⚠️ 소유 커밋(`ownsFlow`)에서는 종전 그대로다 — 그건 실제로 그 대기를 끝낸 커밋이다.
+    //   오라클: tests/v049-r7-05-nonowner-reask.spec.ts
+    if (ownsFlow) sess.setReaskReason(null);
 
     // 🔴🔴 v0.49 r5 Z8(claude #8) — **행 완료 부기는 흐름 소유권과 무관하다. 값 유실이었다.**
     //
