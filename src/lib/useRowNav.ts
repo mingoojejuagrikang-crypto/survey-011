@@ -43,12 +43,6 @@ export function useRowNav(deps: RowNavDeps) {
   // 반환 함수들이 본체 handleFinal 의존성에 들어가므로 identity가 흔들리면 STT 배선이 요동친다).
   const depsRef = useRef(deps);
   depsRef.current = deps;
-  // (이동 커밋 한정 임시 배선 — 다음 수정 커밋에서 콜백 내부 destructure로 전환한다.)
-  const {
-    logCell, say, armLanding, announceField, announceRowDiff, persistSession, getSessionColumns,
-    voiceColsList, isRowVoiceComplete, firstIncompleteColIdx, isManualHoldBlocked, awaitingFieldRef, epochRef,
-  } = depsRef.current;
-
   /** "3행, 7행" 식 행 목록 포맷. 목록이 길면 TTS가 늘어지므로 3개 + "외 N개 행"으로 요약. */
   const formatRowList = (rows: number[]): string =>
     rows.length <= 5
@@ -56,6 +50,7 @@ export function useRowNav(deps: RowNavDeps) {
       : `${rows.slice(0, 3).map((r) => `${r}행`).join(', ')} 외 ${rows.length - 3}개 행`;
 
   const listEmptyRows = (total: number, vCols: Column[]): number[] => {
+    const { isRowVoiceComplete } = depsRef.current;
     const out: number[] = [];
     for (let r = 1; r <= total; r++) {
       if (!isRowVoiceComplete(r, vCols)) out.push(r);
@@ -82,6 +77,7 @@ export function useRowNav(deps: RowNavDeps) {
    *  계속 dispatch되되(handleFinal `if(!awaiting) return` 게이트 통과), 일반 값 발화는 atEnd 가드가
    *  새 행 커밋 대신 종료 재안내로 흡수한다. 종료는 '종료' 음성 명령 또는 종료 버튼으로만 일어난다. */
   const announceEndReached = useCallback(async () => {
+    const { armLanding, voiceColsList, getSessionColumns, awaitingFieldRef, logCell, say } = depsRef.current;
     const sess = useSessionStore.getState();
     // 🔴 v0.49 r5 Z2 — 착지 리셋 4종 + `endReached`는 `armLanding`이 소유한다(그 헤더 참조).
     //   v0.47.0 W2(FB-G①, 실기기 08-08)의 「종단 착지에서 수정 표시 명시 해제」도 그 안에 있다 —
@@ -135,7 +131,7 @@ export function useRowNav(deps: RowNavDeps) {
       extra: empties.length > 0 ? `end_reached_waiting:empty=${empties.join(',')}` : 'end_reached_waiting',
     });
     await say(msg);
-  }, [armLanding, say]);
+  }, []);
 
   // ── v0.33.0 백로그 A(민구 결정 3): 완료 행 착지 → "값 읽어주기 + 명령 대기" ─────
   /** 완료 행에 착지('이전' 음성/◀ 버튼/행 점프)하면 그 행의 음성입력 기록값을 TTS로 읽어주고
@@ -147,6 +143,7 @@ export function useRowNav(deps: RowNavDeps) {
    *  reviewWait 가드가 흡수한다(덮어쓰기 금지 — 수정은 '수정' 명령으로만). phase='complete'로 둬
    *  착지 필드가 '듣는 중'처럼 보이지 않게 하고 early-commit(active 전용)도 함께 멈춘다(atEnd 패턴). */
   const enterReviewWait = useCallback(async (row: number) => {
+    const { armLanding, voiceColsList, awaitingFieldRef, logCell, say } = depsRef.current;
     const sess = useSessionStore.getState();
     // 🔴 v0.49 r5 Z2 — 착지 리셋 4종 + `endReached`는 `armLanding`이 소유한다(그 헤더 참조).
     //   v0.47.0 W2(FB-G①)의 「검토 대기 진입도 종단 착지 = 수정 표시 명시 해제」가 그 안에 있다 —
@@ -174,7 +171,7 @@ export function useRowNav(deps: RowNavDeps) {
     const msg = `${row}행 완료됨. ${parts.join(', ')}.`;
     sess.setLastTts(msg);
     await say(msg);
-  }, [armLanding, say]);
+  }, []);
 
   // ── 🔴 v0.49 fix49(리뷰 B-1 blocker): 값이 든 셀 착지 → "값 읽어주기 + 명령 대기" ─────
   /** 항목 이동(`gotoAdjacentField`)·행 경계 재안내가 **이미 값이 있는 셀**에 커서를 세울 때의
@@ -197,6 +194,7 @@ export function useRowNav(deps: RowNavDeps) {
    *  (v0.49 r2 — 종전 이 줄이 지목하던 `v049-fix49-nav-guards.spec.ts`는 **실재한 적이 없다**.
    *   ①②⑥은 cell-guard의 항목 번호와 정확히 대응한다.) */
   const enterCellWait = useCallback(async (col: Column, value: string) => {
+    const { armLanding, awaitingFieldRef, logCell, say } = depsRef.current;
     const sess = useSessionStore.getState();
     const row = sess.activeRow;
     // 🔴 v0.49 r5 Z2 — 착지 리셋 4종은 `armLanding`이 소유한다(그 헤더 참조). 여기 있던
@@ -219,14 +217,15 @@ export function useRowNav(deps: RowNavDeps) {
     const msg = `${col.name} 기록값 ${formatForTts(value)}.`;
     sess.setLastTts(msg);
     await say(msg);
-  }, [armLanding, say]);
+  }, []);
 
   /** 착지 셀의 현재 값(음성 컬럼) — 있으면 cellWait, 없으면 종전 `announceField`. */
   const announceOrCellWait = useCallback(async (col: Column) => {
+    const { announceField } = depsRef.current;
     const v = useSessionStore.getState().getRowValues(useSessionStore.getState().activeRow)[col.id] ?? '';
     if (v !== '') { await enterCellWait(col, v); return; }
     await announceField(col);
-  }, [announceField, enterCellWait]);
+  }, []);
 
   /** v0.47.0 C-FIX2 — 셀 영속 실패 고지(수동·터치 공통 · manualHold 실패 처리와 대칭 목적).
    *  경고 트릴 + 발화 — 현장은 폰을 2~3m 떨어뜨려 둬 화면을 못 본다(PRINCIPLES §2).
@@ -242,12 +241,13 @@ export function useRowNav(deps: RowNavDeps) {
    *   durable 실패도 같은 배너로 고지해야 하는데(아래 `notifyRowPersistFailed`), 그 소비자가
    *   `finalizeRowCompletion`/`advance`라 여기 있어야 참조된다. 본문 무변경. */
   const notifyCellPersistFailed = useCallback((row: number, colId: string, value: string) => {
+    const { say } = depsRef.current;
     useCellPersistError.getState().arm({ row, colId, value });
     playBeep('alert');
     const msg = '저장하지 못했습니다. 다시 저장 버튼을 눌러 주세요.';
     useSessionStore.getState().setLastTts(msg);
     void say(msg);
-  }, [say]);
+  }, []);
 
   /** 🔴 v0.49 r6 Y1 — **행 완료 부기의 durable 실패 고지.** 셀 실패 배너를 그대로 재사용한다.
    *
@@ -270,6 +270,7 @@ export function useRowNav(deps: RowNavDeps) {
    *   👉 `landing`이 그 행의 실재 값을 가진 칸을 가리키면 그것을 쓴다. `reviewWait`은 **행 스코프**라
    *      좌표를 요구하지 않으므로(그쪽 `ownsReviewWait`은 행만 본다) 종전 폴백에 맡긴다. */
   const notifyRowPersistFailed = useCallback((row: number, landing?: AwaitingField | null) => {
+    const { voiceColsList } = depsRef.current;
     const values = useSessionStore.getState().getRowValues(row);
     if (landing && landing.kind !== 'reviewWait' && landing.row === row
       && (values[landing.colId] ?? '') !== '') {
@@ -279,11 +280,13 @@ export function useRowNav(deps: RowNavDeps) {
     const target = [...voiceColsList()].reverse().find((c) => (values[c.id] ?? '') !== '');
     if (!target) return;
     notifyCellPersistFailed(row, target.id, values[target.id]!);
-  }, [notifyCellPersistFailed]);
+  }, []);
 
   // ── public: jump to a specific row (auto-chip change / 행 이동 공용) ──────
   const jumpToRow = useCallback(
     async (targetRow: number, options?: { setReturn?: boolean; source?: 'voice' | 'touch' }) => {
+      const { voiceColsList, getSessionColumns, logCell, epochRef, awaitingFieldRef,
+        isRowVoiceComplete, announceRowDiff, announceField, firstIncompleteColIdx } = depsRef.current;
       const sess = useSessionStore.getState();
       const vc = voiceColsList();
       const total = computeTotalRows(getSessionColumns());
@@ -350,7 +353,7 @@ export function useRowNav(deps: RowNavDeps) {
       if (epochRef.current !== startEpoch) return;
       if (vc[targetCol]) await announceField(vc[targetCol]);
     },
-    [announceField, announceRowDiff, enterReviewWait],
+    [],
   );
 
   // ── public: move to the previous row (◀이전 버튼 + 음성 '이전' 공용 — v0.33.0 백로그 A 통일) ──
@@ -360,6 +363,7 @@ export function useRowNav(deps: RowNavDeps) {
   // On a boundary we REPROMPT instead of silently stalling (REVIEW-4).
   const gotoAdjacentRow = useCallback(
     async (delta: -1, source: 'voice' | 'touch' = 'touch') => {
+      const { isManualHoldBlocked, epochRef, say, voiceColsList, isRowVoiceComplete } = depsRef.current;
       const sess = useSessionStore.getState();
       if (sess.phase === 'stopping') return;
       // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중엔 **모든 비해소 이동을 거부**한다.
@@ -402,7 +406,7 @@ export function useRowNav(deps: RowNavDeps) {
       }
       await jumpToRow(target, { setReturn: true, source });
     },
-    [announceOrCellWait, enterReviewWait, jumpToRow, say],
+    [],
   );
 
   // ── v0.44.0 §C8 F13(민구 확정 08-02): '다음' = '이전'과 대칭인 **항상 +1 이동** ──────────
@@ -424,6 +428,7 @@ export function useRowNav(deps: RowNavDeps) {
   // 마킹한다(경계 멈춤은 이동이 아니므로 마킹하지 않는다).
   // 오라클: tests/v0440-c8-flow.spec.ts (jump delta 전 구간 ±1 · 경계 멈춤 · skip placeholder).
   const goNextRow = useCallback(async (source: 'voice' | 'touch' = 'touch') => {
+    const { isManualHoldBlocked, voiceColsList, getSessionColumns, epochRef, logCell, say, isRowVoiceComplete, persistSession } = depsRef.current;
     if (useSessionStore.getState().phase === 'stopping') return;
     // v0.34.0 리뷰 라운드2(Codex High) — manualHold 중 행 이동 거부(위 gotoAdjacentRow와 동일 근거:
     // [다음]으로 미확인 이상치를 남긴 채 다음 행으로 새어나가던 경로).
@@ -480,7 +485,7 @@ export function useRowNav(deps: RowNavDeps) {
     }
     // 완료 행 착지는 jumpToRow가 검토 대기로, 미완료 행 착지는 첫 미완료 필드 안내로 처리한다.
     await jumpToRow(row + 1, { setReturn: false, source });
-  }, [announceOrCellWait, enterReviewWait, jumpToRow, persistSession, say]);
+  }, []);
   return { formatRowList, listEmptyRows, buildEndReachedTts, announceEndReached, enterReviewWait,
     enterCellWait, announceOrCellWait, notifyCellPersistFailed, notifyRowPersistFailed, jumpToRow, gotoAdjacentRow, goNextRow };
 }

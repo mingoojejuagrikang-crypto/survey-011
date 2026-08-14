@@ -189,26 +189,30 @@ test('②-b 과잉 거절 반증 — 보류는 국면 전이만이다. 문맥은
 test('[node] ③ 착지 리셋 4종은 armLanding 한 곳이 소유한다 — 사본이 다시 생기면 red', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
+  // uvs-b(ENV-12 #3) — 착지 셋(enterCellWait·enterReviewWait·announceEndReached)이 useRowNav.ts로
+  // 분리됐다(소유자 armLanding과 announceField는 본체 잔류). 착지별로 읽는 소스만 갈린다 —
+  // 마커·계약 바이트는 이동 전과 동일하다(ref 주입이 형태를 보존).
+  const navSrc = fs.readFileSync('src/lib/useRowNav.ts', 'utf-8');
 
   /** `const <name> = useCallback(` 부터 다음 착지/함수 경계까지 — 주석 줄은 제거한다
    *  (근거 주석이 옛 코드를 인용하므로, 주석을 보면 이 계약은 영영 red다). */
-  function body(name: string, until: string): string {
-    const from = src.indexOf(`const ${name} = useCallback(`);
+  function body(name: string, until: string, source = src): string {
+    const from = source.indexOf(`const ${name} = useCallback(`);
     expect(from, `${name}을 찾지 못했다 — 이름이 바뀌었으면 이 계약도 함께 갱신하라`).toBeGreaterThan(0);
-    const slice = src.slice(from, from + src.slice(from).indexOf(until));
+    const slice = source.slice(from, from + source.slice(from).indexOf(until));
     return slice.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
   }
 
-  const landings: Array<[string, string, string]> = [
-    // [함수, 본문 종료 마커, 기대 phase]
+  const landings: Array<[string, string, string, string?]> = [
+    // [함수, 본문 종료 마커, 기대 phase, 소스(기본=본체)]
     ['announceField', 'armClipForCell(row, col.id)', "phase: 'active'"],
-    ['enterCellWait', 'awaitingFieldRef.current = {', "phase: 'active'"],
-    ['enterReviewWait', 'awaitingFieldRef.current = firstCol', "phase: 'complete'"],
-    ['announceEndReached', 'awaitingFieldRef.current = lastCol', "phase: 'complete'"],
+    ['enterCellWait', 'awaitingFieldRef.current = {', "phase: 'active'", navSrc],
+    ['enterReviewWait', 'awaitingFieldRef.current = firstCol', "phase: 'complete'", navSrc],
+    ['announceEndReached', 'awaitingFieldRef.current = lastCol', "phase: 'complete'", navSrc],
   ];
 
-  for (const [name, marker, wantPhase] of landings) {
-    const b = body(name, marker);
+  for (const [name, marker, wantPhase, source] of landings) {
+    const b = body(name, marker, source);
     expect(b, `${name}: 착지 리셋을 armLanding에 맡기지 않는다`).toContain('armLanding({');
     expect(b, `${name}: armLanding 거절(종료 중)에서 즉시 return하지 않는다 — awaiting·클립·TTS가 샌다`)
       .toContain(')) return;');
@@ -233,7 +237,8 @@ test('[node] ③ 착지 리셋 4종은 armLanding 한 곳이 소유한다 — �
 // ── ④ 행 경계 두 곳의 epoch 재확인(fix49b #6 패턴 복제) ──────────────────────────
 test('[node] ④ 행 경계 재무장 두 곳이 안내 뒤 epoch를 재확인한다', async () => {
   const fs = await import('node:fs');
-  const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
+  // uvs-b(ENV-12 #3) — gotoAdjacentRow·goNextRow가 useRowNav.ts로 분리됐다. 소스만 재표적.
+  const src = fs.readFileSync('src/lib/useRowNav.ts', 'utf-8');
 
   for (const [name, marker] of [
     ['gotoAdjacentRow', "await say(msg);"],

@@ -163,7 +163,9 @@ test('② 남은 행 예약은 나중에 **예약된 그 행으로** 소비된�
  */
 test('[node] ③ 행 이동 예약은 스택에 쌓는다 — 기존 예약을 갈아엎지 않는다 (Y8)', async () => {
   const fs = await import('node:fs');
-  const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
+  // uvs-b(ENV-12 #3) — jumpToRow가 useRowNav.ts로 분리됐다(이동 커밋). 형제 순서
+  // (jumpToRow → gotoAdjacentRow)가 그대로 보존돼 슬라이스 로직은 불변 — 소스 경로만 재표적.
+  const src = fs.readFileSync('src/lib/useRowNav.ts', 'utf-8');
   const start = src.indexOf('const jumpToRow = useCallback(');
   const body = src.slice(start, src.indexOf('const gotoAdjacentRow = useCallback(', start));
   expect(

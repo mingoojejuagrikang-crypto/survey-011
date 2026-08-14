@@ -21,10 +21,18 @@
 import { test, expect } from '@playwright/test';
 
 const SRC = 'src/lib/useVoiceSession.ts';
+// uvs-b(ENV-12 #3) — jumpToRow가 useRowNav.ts로 분리됐다. ①②(jumpToRow 본문)는 분리 파일에서,
+// ③(advance)은 본체에서 읽는다. 형제 순서(jumpToRow → gotoAdjacentRow)는 분리 파일에 보존됐다.
+const NAV_SRC = 'src/lib/useRowNav.ts';
 
 async function source(): Promise<string> {
   const fs = await import('node:fs');
   return fs.readFileSync(SRC, 'utf-8');
+}
+
+async function navSource(): Promise<string> {
+  const fs = await import('node:fs');
+  return fs.readFileSync(NAV_SRC, 'utf-8');
 }
 
 /** `jumpToRow`의 본문만 잘라낸다(형제 콜러의 가드가 섞여 통과하지 않게). */
@@ -36,7 +44,7 @@ function jumpBody(src: string): string {
 }
 
 test('[node] ① 행 이동 공유 코어가 종료를 거절한다', async () => {
-  const body = jumpBody(await source());
+  const body = jumpBody(await navSource());
   expect(
     body,
     'jumpToRow에 stopping 가드가 없다 — 착지는 armLanding이 거절해도 커서·예약·epoch는 이미 옮겨진다',
@@ -46,7 +54,7 @@ test('[node] ① 행 이동 공유 코어가 종료를 거절한다', async () =
 });
 
 test('[node] ② 행 이동 공유 코어가 bump 뒤 epoch를 재확인한다(착지 무장 직전 2곳)', async () => {
-  const body = jumpBody(await source());
+  const body = jumpBody(await navSource());
   expect(body, 'bump 직후 startEpoch를 잡지 않는다').toContain('const startEpoch = epochRef.current;');
   expect(
     body.match(/if \(epochRef\.current !== startEpoch\) return;/g) ?? [],

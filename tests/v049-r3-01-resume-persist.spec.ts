@@ -222,6 +222,14 @@ test('[node] ①c 행 완료 부기 배선 6곳(advance 2 · 커밋 종단 · �
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
   const persistCalls = persistCode.match(/finalizeRowCompletion\((?!row: number)/g) ?? [];
+  // uvs-b(ENV-12 #3·#4) — 내비 구획이 useRowNav.ts/useFieldNav.ts로 분리됐다. 같은 우발 커버를
+  // 유지한다(R1 C-1 전례 — 부정 단언만 확장). 현재 두 파일의 호출은 0이다.
+  const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useFieldNav.ts'].flatMap((p) => {
+    const navCode = fs.readFileSync(p, 'utf-8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    return navCode.match(/finalizeRowCompletion\((?!row: number)/g) ?? [];
+  });
   // 선언부(`const finalizeRowCompletion = useCallback`)는 위 정규식에 안 걸린다.
   // 🔴 v0.49 r5 Z8 — **3 → 4.** 이 계약이 예언한 그대로 「새 커밋 경로가 추가될 때 조용히
   //   빠지는」 네 번째가 실재했다: `commitManualValue`의 **비-awaiting 분기**가
@@ -246,7 +254,7 @@ test('[node] ①c 행 완료 부기 배선 6곳(advance 2 · 커밋 종단 · �
   //   **보류된 셀의 행(`pendingValidation.row`)에 직접** 건다. 이 계약이 또 한 번 예언한
   //   「새 커밋 경로가 부기를 조용히 빠뜨린다」의 여섯 번째다.
   //   오라클: v049-r7-06-hold-confirm-owner.spec.ts
-  expect(calls.length + persistCalls.length, '배선이 6곳이 아니다 — 어느 커밋 경로가 빠졌는지 확인해라(#1 근인)').toBe(6);
+  expect(calls.length + persistCalls.length + navCalls.length, '배선이 6곳이 아니다 — 어느 커밋 경로가 빠졌는지 확인해라(#1 근인)').toBe(6);
   expect(code, '수동 보류 [확인]의 부기(r7 #6 — 좌표는 보류된 셀의 행이다)')
     .toContain('if (pv && !(await finalizeRowCompletion(pv.row))) {');
   expect(code, 'advance() 종료 가드의 부기(Y3)').toContain('if (isRowVoiceComplete(row, vc)) void finalizeRowCompletion(row);');

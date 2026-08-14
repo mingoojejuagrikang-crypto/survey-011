@@ -443,7 +443,9 @@ test('[node] W3-10(r4 M8 → r5 Z2) — 값을 여는 착지가 phase를 스스�
     'announceField가 값 대기를 열면서 phase를 호출부에 맡긴다(행 경계 착지가 그 배선을 빠뜨렸다)',
   ).toContain("phase: 'active'");
 
-  const enterCellWait = src.slice(src.indexOf('const enterCellWait = useCallback('));
+  // uvs-b(ENV-12 #3) — enterCellWait이 useRowNav.ts로 분리됐다(announceField는 본체 잔류).
+  const navSrc = fs.readFileSync('src/lib/useRowNav.ts', 'utf-8');
+  const enterCellWait = navSrc.slice(navSrc.indexOf('const enterCellWait = useCallback('));
   expect(
     enterCellWait.slice(0, enterCellWait.indexOf('awaitingFieldRef.current = {')),
     'enterCellWait 헤더가 선언한 「phase는 active」를 집행하지 않는다',

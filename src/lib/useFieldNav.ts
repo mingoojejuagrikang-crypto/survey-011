@@ -29,12 +29,6 @@ export function useFieldNav(deps: FieldNavDeps) {
   // 주입 deps를 ref로 받아 노출 함수 identity를 영구 고정한다(useClipCapture:57-63 계약).
   const depsRef = useRef(deps);
   depsRef.current = deps;
-  // (이동 커밋 한정 임시 배선 — 다음 수정 커밋에서 콜백 내부 destructure로 전환한다.)
-  const {
-    logCell, say, voiceColsList, isManualHoldBlocked, fractionWholeOf, announceOrCellWait,
-    awaitingFieldRef, epochRef,
-  } = depsRef.current;
-
   // 민구 원문: *"「이전」, 「다음」은 사용자가 입력 대상 항목들을 하나씩 이동하고, 「이전행」,
   // 「다음행」은 아예 입력행 자체를 이동했으면 좋겠어."*
   // 종전엔 이 두 단어가 **행 이동**이었다(v0.33.0 백로그 A) — 08-12 결정이 행 이동을
@@ -94,6 +88,7 @@ export function useFieldNav(deps: FieldNavDeps) {
   //   · tests/v049-fix49-phase-guard.spec.ts(미해결 국면 거부 — W1의 범위 밖, 불변)
   //   · tests/v049-fix49-cell-guard.spec.ts(filled 셀 착지 = cellWait, B-1)
   const gotoAdjacentField = useCallback(async (delta: -1 | 1) => {
+    const { logCell, say, voiceColsList, isManualHoldBlocked, fractionWholeOf, announceOrCellWait, awaitingFieldRef, epochRef } = depsRef.current;
     const sess = useSessionStore.getState();
     if (sess.phase === 'stopping') return;
     // manualHold 중 이동 거부 — gotoAdjacentRow/goNextRow와 동일 근거(미확인 이상치 우회 차단).
@@ -195,6 +190,6 @@ export function useFieldNav(deps: FieldNavDeps) {
     sess.setActiveCol(target);
     sess.setRecognized('');
     await announceOrCellWait(vc[target]);
-  }, [announceOrCellWait, say]);
+  }, []);
   return { gotoAdjacentField };
 }
