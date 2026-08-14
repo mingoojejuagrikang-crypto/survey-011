@@ -157,6 +157,14 @@ test.describe('Z1 — 접두 날짜는 로컬(UTC 금지)', () => {
       'src/components/settings/SessionOptionsSection.tsx',
       'src/lib/sessionLabel.ts',
     ];
+    // R1 리뷰 C-1 — 분리 전에는 설정탭 훅 파일 전체가 이 스캔의 우발 커버 안에 있었다.
+    // 나머지 분리 파일에도 부정 단언만 유지한다(긍정 단언을 걸면 오탐 red — conn/reset/조립
+    // 훅은 날짜 접두를 만들지 않아 localTodayIso를 쓸 일이 없다).
+    const noUtcOnlySites = [
+      'src/lib/useSettingsActions.ts',
+      'src/lib/useSettingsSheetConnection.ts',
+      'src/lib/useSettingsReset.ts',
+    ];
     for (const path of sites) {
       const src = fs.readFileSync(path, 'utf-8');
       // 주석은 제외한다 — 이 결함의 근거 설명이 본문에 `toISOString()`을 인용한다.
@@ -165,6 +173,12 @@ test.describe('Z1 — 접두 날짜는 로컬(UTC 금지)', () => {
         .not.toContain('toISOString().slice(0, 10)');
       expect(code, `${path}: 로컬 날짜 SSOT(localTodayIso)를 쓰지 않는다`)
         .toContain('localTodayIso');
+    }
+    for (const path of noUtcOnlySites) {
+      const src = fs.readFileSync(path, 'utf-8');
+      const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+      expect(code, `${path}: 세션명 날짜를 UTC(toISOString)로 만들면 KST 새벽에 전날로 찍힌다`)
+        .not.toContain('toISOString().slice(0, 10)');
     }
   });
 });
