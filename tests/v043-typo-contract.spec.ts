@@ -201,6 +201,9 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //   `StepperControl.tsx`로 분리**됐다. 이 검사기는 재귀 순회라 계약 4건(captionXs·
   //   stepperValue·captionXxs·stepperValueLg 참조)은 그대로 세어진다. 65 그대로.
   //   🔴 그 파일을 디렉터리 밖으로 옮기면 계약 −4(AlarmInterimStrip 분리 때와 같은 함정).
+  // 리팩토링 R1 P1-1 ②(08-14): `BargeInToggle`도 같은 디렉터리의 자기 파일로 분리됐다
+  //   (본 파일 413→351줄 안전권 착지). 계약 4건(captionXs·stepperValue·captionXxs·
+  //   stepperValueLg 참조) 그대로 — 🔴 디렉터리 밖 이동 금지 함정 동일. 65 그대로.
   expect(contractCount, '계약 참조 (통과)').toBe(65);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);

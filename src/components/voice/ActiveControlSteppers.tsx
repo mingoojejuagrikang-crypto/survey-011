@@ -11,6 +11,7 @@ import {
 import type { VoiceUiCommandSignal } from '../../lib/voiceCommands';
 import { ACTIVE_ZONE_RATIOS, VOICE_TYPE } from './heroLayout';
 import { StepperControl, clampStep } from './StepperControl';
+import { BargeInToggle } from './BargeInToggle';
 
 /** 🔴 v0.46.1 **FB-4**(민구 제보 08-07 *"서랍 펼칠시 스크롤 없이 보이게 변경"* → 확정 답변
  *  **「서랍을 더 높게 펼쳐라」**) — 펼친 서랍이 **위로** 자랄 수 있는 상한.
@@ -346,68 +347,5 @@ export function ActiveControlSteppers({ uiCommand, open, canExpand, onOpenChange
         </div>
       )}
     </div>
-  );
-}
-
-/** v0.44.0 §D1 — 세 번째 서랍 항목: 말끊기 ON/OFF(기본 ON). 두 스텝퍼 아래 전폭 1행
- *  (375 폭에서 3항목 가로 배치는 48px 터치 타깃이 안 나온다). 행 전체가 하나의 토글 버튼 —
- *  터치 타깃 = 행 전체(minHeight 56 ≥ 48). 시각 관례는 StepperControl을 따른다(테두리·배경·
- *  라벨/값/설명 3단 타이포). ON=현행 이어폰 barge-in(안내 중 말하면 즉시 끊고 인식),
- *  OFF=half-duplex(안내 중 인식 중지 — 스피커폰 에코 오인식 방지). */
-function BargeInToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      data-testid="toggle-barge-in"
-      role="switch"
-      aria-checked={on}
-      aria-label={on ? '말끊기 끄기' : '말끊기 켜기'}
-      title={on ? '말끊기 끄기' : '말끊기 켜기'}
-      onClick={onToggle}
-      style={{
-        gridColumn: '1 / -1',
-        minHeight: 56,
-        borderRadius: 16,
-        border: `1px solid ${T.lineStrong}`,
-        background: 'rgba(255,255,255,0.035)',
-        padding: 8,
-        display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) 48px',
-        alignItems: 'center',
-        gap: 8,
-        cursor: 'pointer',
-        touchAction: 'manipulation',
-      }}
-    >
-      <span style={{ minWidth: 0, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontSize: VOICE_TYPE.captionXs, color: T.textMute, fontWeight: 800, lineHeight: 1 }}>말끊기</span>
-        <span style={{ fontSize: VOICE_TYPE.stepperValue, color: on ? T.green : T.textMute, fontWeight: 950, lineHeight: 1.15 }}>
-          {on ? '켬' : '끔'}
-        </span>
-        <span style={{ fontSize: VOICE_TYPE.captionXxs, color: T.textMute, fontWeight: 650, lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-          {on ? '안내 중 말하면 즉시 인식' : '안내 중에는 인식 중지'}
-        </span>
-      </span>
-      {/* 상태 심볼 — 스텝퍼의 48px 우측 버튼 자리와 정렬(시각 관례 유지). aria는 버튼 본체가 진다. */}
-      <span
-        aria-hidden
-        style={{
-          width: 48,
-          height: 48,
-          borderRadius: 14,
-          border: `1px solid ${on ? T.green : T.lineStrong}`,
-          background: on ? T.greenGlowFaint : 'rgba(255,255,255,0.025)',
-          color: on ? T.green : T.textMute,
-          fontSize: VOICE_TYPE.stepperValueLg,
-          fontWeight: 950,
-          lineHeight: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {on ? '✓' : '✕'}
-      </span>
-    </button>
   );
 }

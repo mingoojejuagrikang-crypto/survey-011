@@ -350,7 +350,7 @@ EXIT=1은 검출 존재 시 정상이며 게이트 밖이라 배포 무영향). 
 | 축 | 실측 |
 |----|------|
 | 소스 리터럴 복제 | 🔴 **같은 파일** `settingsStore.ts:557-558` — `s.recognitionTolerance < 0.4 \|\| s.recognitionTolerance > 0.9` 로 **대역을 리터럴로 복제해 coercion 게이트를 돌린다** |
-| 소스 주석 복제 | `ActiveControlSteppers.tsx:54` — *"허용범위(recognitionTolerance) **0.40~0.90** → %로 표시"* |
+| 소스 주석 복제 | `ActiveControlSteppers.tsx:55` — *"허용범위(recognitionTolerance) **0.40~0.90** → %로 표시"* |
 | 소스가 계약이라 선언 | `settingsStore.ts:82` — *"저장값·다이얼 위치·기본값(0.60)·**대역[0.40~0.90]은 전 과정 내내 불변**"* |
 | 스펙 리터럴 계약 | `v026-tolerance-strict.spec.ts:163`(`setupAndStart(page, 0.9)` — T1 엄격 끝) · `:184`·`:203`(`0.4` — T2 관대 끝) · `:179` `expect(lowConf?.extra).toBe('tolerance:0.9,minConf:0.9')`. 그 스펙은 **`settingsStore`의 tolerance 매핑 전용 오라클**이고 헤더가 *"반드시 민구 결정 이력(settingsStore.ts 주석)을 확인하고 수정할 것"*이라 적었다 |
 
