@@ -177,11 +177,6 @@ export async function deleteSession(id: string): Promise<void> {
   await tx.done;
 }
 
-export async function loadUnsyncedSessions(): Promise<Session[]> {
-  const all = await loadAllSessions();
-  return all.filter((s) => s.syncedRows < s.completedRows);
-}
-
 /** iOS Safari는 Blob을 IndexedDB에 직접 저장할 때 실패하는 이력이 있음(WebKit 버그).
  *  ArrayBuffer + type 문자열로 분해 저장하면 모든 브라우저에서 안전하게 round-trip됨. */
 interface StoredClip {

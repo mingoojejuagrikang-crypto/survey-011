@@ -57,15 +57,6 @@ export interface SavedSheet {
   addedAt: number;
 }
 
-export interface AppSettings {
-  googleConnected: boolean;
-  userEmail: string | null;
-  sheet: SheetConfig | null;
-  manualMode: boolean;
-  columns: Column[];
-  ttsRate: number;
-}
-
 /** A single row in the day's pre-built table */
 export interface SessionRow {
   index: number;
@@ -142,4 +133,3 @@ export interface Session {
   pendingValidationPersisting?: boolean;
 }
 
-export type VoiceState = 'IDLE' | 'READY' | 'ANNOUNCE' | 'LISTEN' | 'ECHO' | 'ROW_DONE' | 'DONE';
