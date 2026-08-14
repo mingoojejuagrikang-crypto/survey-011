@@ -21,8 +21,10 @@ import { logger } from './logger';
 import { isSheetSourceBlocked } from './sheetConnection';
 import type { SettingsActionsShared } from './useSettingsSheetConnection';
 
-/** S-2: a column whose saved type differs from the sheet's inferred data type. */
-export interface TypeMismatch { id: string; name: string; saved: DataType; sheet: DataType; }
+/** S-2: a column whose saved type differs from the sheet's inferred data type.
+ *  (임포터 0 — TypeReviewModal은 구조 동일 인터페이스를 로컬 재선언한다. export하면 knip 신규
+ *  검출이 생겨 비공개로 둔다 — 종전 useSettingsActions의 export도 검출 0이었던 것과 파리티.) */
+interface TypeMismatch { id: string; name: string; saved: DataType; sheet: DataType; }
 
 /** 타입 검토 상태 (null = not run; checked = columns compared) — 초기화 서브 훅이 setter를 받는다. */
 export type TypeReviewState = { mismatches: TypeMismatch[]; checked: number } | null;

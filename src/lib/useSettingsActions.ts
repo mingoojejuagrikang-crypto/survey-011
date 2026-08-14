@@ -15,8 +15,6 @@ import { useSettingsSheetConnection } from './useSettingsSheetConnection';
 import { useSettingsTableGeneration } from './useSettingsTableGeneration';
 import { useSettingsReset } from './useSettingsReset';
 
-export type { TypeMismatch } from './useSettingsTableGeneration';
-
 export function useSettingsActions() {
   const conn = useSettingsSheetConnection();
   const gen = useSettingsTableGeneration(conn.internal);

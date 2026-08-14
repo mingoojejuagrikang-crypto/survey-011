@@ -54,10 +54,11 @@ export {
   type ForegroundReturnTeardownResult, type ForegroundReturnTeardown,
 } from './logEventsAudio';
 
-// 세션·행 진행 도메인 — logEventsSession.ts.
+// 세션·행 진행 도메인 — logEventsSession.ts. (WOULD_SALVAGE_PREFIX는 임포터 0이라 — r3 #10이
+// 접두 판별을 구조 판별로 대체 — 배럴 재수출 없이 정의 파일에만 둔다. knip 검출 파리티.)
 export {
   rowMarked, endReachedRender, anomalyAlertCleared, lowConfidenceParsed,
-  WOULD_SALVAGE_PREFIX, wouldSalvage,
+  wouldSalvage,
 } from './logEventsSession';
 
 // 설정·UI 계측 도메인 — logEventsUi.ts.
