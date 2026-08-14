@@ -2794,12 +2794,33 @@ export function useVoiceSession() {
     const cellWaitPrompt = (name: string) => `${name} 기록값입니다. 수정이라고 말하세요.`;
 
     /** '확인'(추세 알림 밖) — 상태 변경 없이 짧은 재안내만(v0.7.0 B4, 무음 금지 REVIEW-4).
-     *  trendConfirm 중의 '확인'은 resolveFinal이 trendResolve로 먼저 처리한다. */
+     *  trendConfirm 중의 '확인'은 resolveFinal이 trendResolve로 먼저 처리한다.
+     *
+     *  🔴 v0.49 r7 #4(codex r6#15) — **꼬리는 국면이 정한다.** 종전 갈래는 `cellWait`/그 외
+     *   **둘**뿐이었고, 그 「그 외」에 값을 **받을 수 없는** 두 국면이 들어 있었다.
+     *   `atEnd`·`reviewWait`은 resolver가 일반 값을 전부 흡수하는 **명령 전용** 상태다
+     *   (voiceFinalResolver). 거기서 「{항목} 말씀해 주세요」는 **실행 불가능한 지시**다 —
+     *   시킨 대로 값을 말하면 흡수 안내가 되받고, 화면을 못 보는 음성 전용 사용자는 그 사이에서
+     *   반복 실패 루프에 들어간다(PRINCIPLES §2).
+     *   👉 저신뢰 명령 거절이 Y5에서 이미 닫은 것과 **같은 결함의 형제**다. 그래서 새 문구를
+     *      만들지 않고 **그 국면별 꼬리 계약을 그대로 재사용한다**(§2 쌍 상수 규율 — 확정표 밖
+     *      문구를 늘리지 않는다):
+     *     · `cellWait`   → `cellWaitPrompt`(이미 그랬다)
+     *     · `reviewWait` → 흡수 안내와 같은 조작 어휘(`REVIEW_WAIT_COMMANDS_TTS` SSOT)
+     *     · `atEnd`      → **사유 단독**. 그 국면의 흡수 안내(`endReachedTts`)에 조작 어휘가
+     *       없기 때문이다(W2가 「종료 수단은 상시 노출」로 꼬리를 삭제했다).
+     *   오라클: tests/v049-r7-04-confirm-tail.spec.ts */
     async function cmdConfirm(a: AwaitingField): Promise<void> {
       cancelTts();
-      const msg = a.kind === 'cellWait'
-        ? `확인할 알림이 없습니다. ${cellWaitPrompt(a.name)}`
-        : `확인할 알림이 없습니다. ${a.name} 말씀해 주세요.`;
+      const head = '확인할 알림이 없습니다.';
+      const tail = a.kind === 'cellWait'
+        ? cellWaitPrompt(a.name)
+        : a.kind === 'reviewWait'
+          ? REVIEW_WAIT_COMMANDS_TTS
+          : a.kind === 'atEnd'
+            ? undefined
+            : `${a.name} 말씀해 주세요.`;
+      const msg = tail ? `${head} ${tail}` : head;
       useSessionStore.getState().setLastTts(msg);
       await say(msg);
     }
