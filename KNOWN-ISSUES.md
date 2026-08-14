@@ -567,7 +567,7 @@
 ### [ENV-12] ESLint max-lines(500) 예외 목록 — GL-006 헌장 §5 도입 시점의 기존 초과 파일
 - **배경:** 공통 개발 헌장(GL-006, 민구 채택 2026-07-16) §5 — 파일 크기는 책임 크기의 신호(권장 150~250줄, 300줄 분리 검토, **500줄 리팩토링 대상**). v0.35.1 Stage 1-8에서 ESLint `max-lines`(500, `src/` 한정)를 오류 게이트로 도입(`npm run lint`, predeploy에 포함).
 - **예외(파일 상단 `eslint-disable max-lines`, 해소 시 주석 제거 + 이 목록에서 삭제):**
-  0. `src/lib/useDataActions.ts` (**531** — 2026-08-05, v0.44.0 F23 동기화 상태기계 유입 +31줄) — 해소 계획: export(handleExport/runZipExport)·recover 절을 서브 훅으로 분리. 🔴 기존 초과 파일이 아니라 **v0.44.0이 넘긴 파일**이다 — 다음 코드 회차에서 우선 해소.
+  0. ~~`src/lib/useDataActions.ts`~~ — ✅ v0.49 R1 리팩토링 P2에서 해소(2026-08-14, 기재된 계획 그대로 export 절 `useExportActions`·recover 절 `useRecoverActions` 서브 훅 분리, 531→400줄 + disable 제거)
   1. `src/lib/useVoiceSession.ts` (**3,236** — 2026-07-26 실측; v0.38.0 시점 3,112에서 v0.38.1~v0.39.0 기능 유입으로 재증가) — **Stage 3(v0.35.3)에서 코어
      재설계 완료**(판별 유니온·resolveFinal 결정표·clipPointer/trendEvaluate 모듈·logCell·
      proceedAfterCommit — 무효 상태 조합은 이제 컴파일이 차단). 줄수 해소는 후속 서브 훅 시리즈

@@ -1,23 +1,25 @@
-/* eslint-disable max-lines -- [ENV-12] v0.44.0 F23(동기화 상태기계) 유입으로 530줄 — 해소 계획: export/recover 절을 서브 훅으로 분리(백로그). 해소 시 이 주석 제거 + KNOWN-ISSUES 목록에서 삭제. */
 /**
  * v0.35.2 Stage 2 — 데이터탭 액션 오케스트레이션 훅 (DataScreen에서 순수 이동, GL-006 §7~8 UI/로직 분리).
- * 시트 동기화·Drive 로그 백업·내보내기·세션 복구·삭제·재로그인 resume의 상태와 핸들러를 소유한다.
+ * 시트 동기화·Drive 로그 백업·삭제·재로그인 resume의 상태와 핸들러를 소유한다.
  * 화면(DataScreen)은 표현만 담당하고 이 훅의 반환값을 배선한다. 로직·계측(extra 문자열)은 이동 전과
  * 바이트 동일(SOP-003 파서 계약).
+ *
+ * v0.49 R1 리팩토링 P2 — [ENV-12] #0 해소(531줄 → 500 미만). 기재된 분리 계획 그대로
+ * export 절(useExportActions)·recover 절(useRecoverActions)을 서브 훅으로 옮기고 이 훅이 조립한다
+ * (반환 형태 불변 — DataScreen 수정 0). busy/msg·loginPrompt는 동기화 절과 공유라 여기 남는다.
  */
 import { useCallback, useRef, useState } from 'react';
 import { useDataStore } from '../stores/dataStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { syncSelected, type SyncReport } from './sync';
-import { downloadCsv, csvToBlob, sessionsToCsv, sessionsToCsvZip } from './csv';
-import { deleteSession as dbDeleteSession, saveSession, resetDb } from './db';
+import { deleteSession as dbDeleteSession, saveSession } from './db';
 import type { Session } from '../types';
-import { exportLogZip, exportLogZipsPerSession, downloadZip } from './exportLog';
+import { exportLogZipsPerSession } from './exportLog';
 import { uploadLogToBothDrives } from './driveUpload';
-import { hydrateSessions } from './hydrate';
-import { getAccessToken, signIn } from './googleAuth';
-import { restoreSelectedSessions, type ZipCache } from './recoverFromDrive';
+import { signIn } from './googleAuth';
+import { useExportActions } from './useExportActions';
+import { useRecoverActions } from './useRecoverActions';
 import { logger } from './logger';
 import { clipPlayer } from './clipPlayer';
 import { sessionTargetFromSettings } from './sheetConnection';
@@ -33,12 +35,8 @@ import {
   type LegacySyncPrompt,
 } from './legacySyncFlow';
 
-/** 내보내기 결과 — 완료 팝업(ExportDoneModal)이 보관해 클릭 시 공유/재다운로드에 재사용한다. */
-export interface ExportResult {
-  blob: Blob;
-  filename: string;
-  kind: 'csv' | 'zip';
-}
+// 내보내기 결과 타입 — 소비처(ExportDoneModal)의 import 경로 호환(정의는 useExportActions.ts).
+export type { ExportResult } from './useExportActions';
 
 /** v0.44.0 §C8 F23 — 시트 동기화 상태 대형 팝업(SyncStatusModal)의 상태.
  *  uploading = 업로드 중(자동 표시) · failed = 사유 + [재시도]/[나중에] · null = 팝업 없음(성공 포함).
@@ -66,7 +64,6 @@ export function useDataActions() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [syncModalOpen, setSyncModalOpen] = useState(false);
-  const [exportModalOpen, setExportModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [failureReport, setFailureReport] = useState<SyncReport | null>(null);
   // v0.44.0 §C8 F23 — 동기화 상태 대형 팝업(업로드 중/실패). 성공은 null(자동 닫힘).
@@ -74,18 +71,16 @@ export function useDataActions() {
   // F23 — 세션별 실패 상세(FailureModal)는 이제 자동 마운트가 아니라 배너 '자세히'로만 연다.
   const [failureDetailOpen, setFailureDetailOpen] = useState(false);
   const [legacySyncPrompt, setLegacySyncPrompt] = useState<LegacySyncPrompt | null>(null);
-  // 다중 세션 로그 ZIP 내보내기 확인 대상 (v0.12 Codex MEDIUM): 여러 세션의 클립을 한 번에 압축하면
-  // 용량/지연이 커질 수 있어 2개 이상일 때 확인 단계를 거친다. CSV는 가벼우니 확인 없이 즉시 진행.
-  const [pendingZipIds, setPendingZipIds] = useState<string[] | null>(null);
-  const [recoverModalOpen, setRecoverModalOpen] = useState(false);
-  // v0.13.0 R6 — 내보내기 결과(완료 팝업용). 작은 줄 배너(msg) 대신 큰 모달로 띄우고, 보관한 Blob으로
-  // 클릭 시 공유시트/재다운로드를 제공한다. 모달을 닫을 때 null로 비워 Blob 참조를 해제(메모리 회수).
-  const [exportResult, setExportResult] = useState<ExportResult | null>(null);
 
   // v0.20.0 Phase 2 — 범용 "로그인 필요" 팝업 상태. 토큰 만료/미로그인이 감지되는 모든 지점(시트
   // 동기화·Drive 백업·세션 복구)에서 reason 문구와 함께 마운트한다. `resume`은 재로그인 성공 직후
   // 다시 실행할 직전 동작 클로저 — 사용자가 하던 일을 잃지 않고 이어가게 한다(graceful resume).
   const [loginPrompt, setLoginPrompt] = useState<{ reason: string; resume: () => void } | null>(null);
+
+  // v0.49 R1 P2 — 내보내기·복구 절은 서브 훅으로 분리([ENV-12] #0 계획). busy/msg·loginPrompt는
+  // 동기화 절과 공유 상태라 이 훅이 소유하고 setter만 배선한다.
+  const exportActions = useExportActions({ setBusy, setMsg });
+  const recoverActions = useRecoverActions({ setBusy, setMsg, setLoginPrompt });
 
   const lastSelectedIdsRef = useRef<string[]>([]);
   const excludeInProgress = (ids: string[]) => {
@@ -120,69 +115,6 @@ export function useDataActions() {
         setMsg('로그인 실패: ' + ((e as Error)?.message ?? '다시 시도해 주세요.'));
       });
   }, [loginPrompt]);
-
-  // 선택 세션을 로그 ZIP으로 압축해 다운로드 (직접 경로 + 확인 후 경로 공용).
-  // 압축 중 busy='로그 압축 중...' 표시 — 액션바 내보내기 버튼이 busy일 때 비활성화되어 중복 클릭 차단.
-  const runZipExport = useCallback(async (ids: string[]) => {
-    setBusy('로그 압축 중...');
-    setMsg(null); // v0.13.0 R6 — 성공 시 완료 팝업만 띄우므로, 직전 실패/동기화 배너를 먼저 지운다.
-    try {
-      const blob = await exportLogZip(ids);
-      const filename = `growth-log_${new Date().toISOString().slice(0, 10)}_${Date.now()}.zip`;
-      downloadZip(blob, filename);
-      // v0.13.0 R6 — 작은 줄 배너(setMsg) 대신 큰 완료 팝업 + 보관 Blob으로 공유/재다운로드.
-      setExportResult({ blob, filename, kind: 'zip' });
-    } catch (err) {
-      setMsg('로그 다운로드 실패: ' + (err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, []);
-
-  // 통합 내보내기: 선택한 세션을 CSV 또는 로그 ZIP으로 기기에 다운로드 (v0.12).
-  // 기존 doCsv(전체 세션 CSV) + doSessionLogDownload(개별 세션 ZIP)를 하나로 흡수.
-  const handleExport = useCallback(async (ids: string[], format: 'csv' | 'zip') => {
-    setExportModalOpen(false);
-    const targets = useDataStore.getState().sessions.filter((s) => ids.includes(s.id));
-    if (targets.length === 0) {
-      setMsg('내보낼 세션을 선택하세요.');
-      return;
-    }
-    if (format === 'csv') {
-      // CSV는 가벼우니 확인 없이 즉시 생성.
-      // 단일 세션 → 평문 .csv. 다중 세션 → 세션별 CSV 1개씩을 ZIP으로 묶음(병합 안 함, v0.12 D1)
-      // — 세션마다 컬럼 스키마가 달라 한 표로 합치면 열이 union되며 의미가 흐려지기 때문.
-      const today = new Date().toISOString().slice(0, 10);
-      setBusy('CSV 생성 중...');
-      setMsg(null); // v0.13.0 R6 — 성공 시 완료 팝업만 띄우므로, 직전 실패/동기화 배너를 먼저 지운다.
-      try {
-        if (targets.length > 1) {
-          const blob = await sessionsToCsvZip(targets);
-          const filename = `survey_${today}.zip`;
-          downloadZip(blob, filename);
-          // v0.13.0 R6 — 완료 팝업 + 보관 Blob(공유/재다운로드). kind는 묶음 CSV라도 컨테이너가 zip.
-          setExportResult({ blob, filename, kind: 'zip' });
-        } else {
-          const csv = sessionsToCsv(targets);
-          const filename = `survey_${today}.csv`;
-          const blob = csvToBlob(csv);
-          downloadCsv(filename, csv);
-          setExportResult({ blob, filename, kind: 'csv' });
-        }
-      } catch (err) {
-        setMsg('CSV 내보내기 실패: ' + (err as Error).message);
-      } finally {
-        setBusy(null);
-      }
-    } else {
-      // 로그 ZIP: 다중 세션이면 용량/지연 경고 확인을 거친 뒤 압축. 단일 세션은 기존처럼 즉시 진행.
-      if (targets.length > 1) {
-        setPendingZipIds(ids);
-        return;
-      }
-      await runZipExport(ids);
-    }
-  }, [runZipExport]);
 
   const handleCellSave = async (sessionId: string, rowIndex: number, colId: string, value: string) => {
     // v0.33.0 B-8 — 데이터탭 셀 수동 편집 계측(음성탭 touch_commit :2256과 대칭 — 이전엔 무로깅이라
@@ -447,85 +379,22 @@ export function useDataActions() {
     setMsg('세션 삭제됨');
   };
 
-  // 세션 복구: 앱 업데이트/새로고침으로 목록에서 사라져 보이는 세션을 IDB에서 다시 불러온다.
-  // (v0.4.4: 입력은 값 커밋마다 증분 저장되므로 진행 중이던 행도 함께 복구됨.)
-  // (v0.4.5 D1: resetDb()로 stale/끊긴 IDB 연결을 버리고 새로 열어 재시도 — 앱 업데이트 후 복구 실패 방지.)
-  // (v0.5.0 W8: 2단계 — 로그인 상태면 Drive의 로그 zip(sessions.json + clips/)에서
-  //  로컬에 없는 세션+클립까지 복원. 다운로드는 이 버튼을 눌렀을 때만 발생.)
-  const handleRecoverClick = async () => {
-    setMsg(null);
-    setBusy('세션 복구 중...');
-    // v0.5.0 W7(T-19): 복구 버튼 계측 — 사용자가 복구에 의존하는 빈도/성패를 로그로 확인.
-    logger.log({ type: 'app', extra: 'recover_clicked' });
-    try {
-      // ── 1단계: 로컬 IDB 재하이드레이션 (현행) ──
-      const before = useDataStore.getState().sessions.length;
-      resetDb();
-      await hydrateSessions();
-      const after = useDataStore.getState().sessions.length;
-      const err = useDataStore.getState().hydrationError;
-      logger.log({
-        type: 'app',
-        extra: err ? `recover_result:error:${err}` : `recover_result:ok:${before}->${after}`,
-      });
-      if (err) {
-        setMsg('복구 실패: ' + err);
-      } else if (after > before) {
-        setMsg(`✓ 세션 ${after - before}개를 복구했습니다.`);
-      } else {
-        setMsg(`✓ 저장된 세션 ${after}개를 모두 불러왔습니다.`);
-      }
-
-      // ── 2단계: 로그인 상태면 RecoverModal(기간 조회 + 세션 선택) 오픈. DB가 깨진 상태(1단계
-      //    실패)에 덮어쓰는 것을 피하기 위해 1단계 성공 시에만 진행한다. 미로그인이면 안내만. ──
-      if (!err) {
-        if (getAccessToken()) {
-          setRecoverModalOpen(true);
-        } else {
-          // v0.20.0 Phase 2 — 미로그인/토큰 만료면 안내 텍스트만 남기던 것을 로그인 팝업으로 승격.
-          // 재로그인 성공 시 Drive 복구 모달을 바로 연다(graceful resume). 로컬 IDB 재하이드레이션
-          // (1단계)은 이미 끝났으므로 여기서는 Drive 2단계만 이어가면 된다.
-          setLoginPrompt({
-            reason: 'Drive에서 세션을 복구하려면 로그인이 필요합니다.',
-            resume: () => { setRecoverModalOpen(true); },
-          });
-        }
-      }
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  // RecoverModal "선택 복구" 완료 콜백 — 선택 세션을 IDB에 저장한 뒤 재하이드레이션해 카드로 노출.
-  const handleRecoverRestore = useCallback(async (
-    selectedIds: Set<string>,
-    cache: ZipCache,
-    onProgress: (msg: string) => void,
-  ) => {
-    const localIds = new Set(useDataStore.getState().sessions.map((s) => s.id));
-    const r = await restoreSelectedSessions(selectedIds, localIds, cache, onProgress);
-    if (r.sessions > 0) {
-      await hydrateSessions();
-    }
-    return r;
-  }, []);
-
   return {
     busy, msg,
     syncModalOpen, setSyncModalOpen,
-    exportModalOpen, setExportModalOpen,
+    exportModalOpen: exportActions.exportModalOpen, setExportModalOpen: exportActions.setExportModalOpen,
     deleteTarget, setDeleteTarget,
     failureReport, setFailureReport,
     syncStatus, setSyncStatus,
     failureDetailOpen, setFailureDetailOpen,
     legacySyncPrompt, setLegacySyncPrompt,
-    pendingZipIds, setPendingZipIds,
-    recoverModalOpen, setRecoverModalOpen,
-    exportResult, setExportResult,
+    pendingZipIds: exportActions.pendingZipIds, setPendingZipIds: exportActions.setPendingZipIds,
+    recoverModalOpen: recoverActions.recoverModalOpen, setRecoverModalOpen: recoverActions.setRecoverModalOpen,
+    exportResult: exportActions.exportResult, setExportResult: exportActions.setExportResult,
     loginPrompt, setLoginPrompt,
     handleLoginPromptLogin,
-    runZipExport, handleExport, handleCellSave,
+    runZipExport: exportActions.runZipExport, handleExport: exportActions.handleExport, handleCellSave,
     handleSyncConfirm, confirmLegacySync, handleRetry, handleDeleteConfirm,
-    handleRecoverClick, handleRecoverRestore,
+    handleRecoverClick: recoverActions.handleRecoverClick, handleRecoverRestore: recoverActions.handleRecoverRestore,
   };
 }
