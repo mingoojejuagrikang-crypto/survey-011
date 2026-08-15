@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { inferColumns, preserveInferredColumnIds } from '../src/lib/sheets';
+import { inferColumns, preserveInferredColumnIds } from '../src/lib/sheetsInfer';
 import {
   effectiveSampleKey,
   mergeInferredColumnsForSheet,

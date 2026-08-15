@@ -939,8 +939,8 @@
 
 ### [SETTINGS-1] 재로그인 자동 재연결이 사용자 컬럼 설정을 덮어써 과거값 인덱스까지 무효화
 
-- **무엇:** 재로그인은 이전 시트를 자동 재연결(v0.13.0 R1 `onGoogleClick` → `onUrlConfirmWithUrl`)하는데, `loadHeaders`가 `inferColumns`로 컬럼을 **처음부터 다시 유추해 통째로 교체**했다. `preserveInferredColumnIds`는 **`id`만** 보존한다(`sheets.ts:306-313`).
-- **왜 위험한가:** `inferColumns`는 숫자 컬럼의 **고유값이 1개뿐이면 `input='auto'`**(고정값 컬럼)로 본다(`sheets.ts:216`). 따라서 **데이터 행이 1~4개뿐인 시즌 첫 회차 시트**에서는 사용자가 '음성'으로 둔 측정 컬럼(횡경·종경)이 **매 로그인마다 '자동'으로 되돌아갔다**. 회차가 쌓여 값이 다양해지면 재유추가 같은 값을 내므로 증상이 사라진다 — **그래서 오래 안 잡혔다.**
+- **무엇:** 재로그인은 이전 시트를 자동 재연결(v0.13.0 R1 `onGoogleClick` → `onUrlConfirmWithUrl`)하는데, `loadHeaders`가 `inferColumns`로 컬럼을 **처음부터 다시 유추해 통째로 교체**했다. `preserveInferredColumnIds`는 **`id`만** 보존한다(`sheetsInfer.ts` — 2026-08-15 [ENV-12] 분리 전 `sheets.ts`).
+- **왜 위험한가:** `inferColumns`는 숫자 컬럼의 **고유값이 1개뿐이면 `input='auto'`**(고정값 컬럼)로 본다(`sheetsInfer.ts`의 `inferColumns`). 따라서 **데이터 행이 1~4개뿐인 시즌 첫 회차 시트**에서는 사용자가 '음성'으로 둔 측정 컬럼(횡경·종경)이 **매 로그인마다 '자동'으로 되돌아갔다**. 회차가 쌓여 값이 다양해지면 재유추가 같은 값을 내므로 증상이 사라진다 — **그래서 오래 안 잡혔다.**
 - **파생 피해(v0.38.0 #1이 안 되던 근인):** `input`이 바뀌면 `effectiveSampleKey`가 뒤집히고, 그게 과거값 인덱스의 **설정 지문(fp)** 에 들어간다(`pastValues.loadContext`). 로그인 직후 강제 갱신(#1)이 만든 인덱스가 **캐시·폴백 동시에 fp 검사 탈락** → 화면은 "과거값 준비: 미준비" 고착. **데이터 계층은 정상 동작(GET·IDB 갱신됨)인데 화면만 안 바뀌는** 형태라 오진하기 쉽다.
 - **진단법:** `getPastIndexStatus()`가 `none`인데 `cached`가 방금 만들어졌으면(fp 불일치) 지문 두 개를 덤프해 **어느 필드가 다른지** 본다. 이번 건은 `["c3","횡경","float",false→true]` 단 한 칸 차이였다.
 - **해결(v0.38.0, `001327e`·`cf8c9d0`):** ①`columnFlags.preserveUserColumnSettings` — **시트가 정하는 값은 `name`·`type`뿐**, 나머지(입력방식·샘플키·자동값·추세)는 보존. `type`이 바뀌면 컬럼 의미가 달라진 것이라 재유추값 사용(structural-change 규칙과 동일). ②컬럼을 교체하는 `loadHeaders`에서 `resetPastIndexRetries()`+`prefetchPastIndex()`로 **정착 설정 기준 재생성**(`ensurePastIndex`가 유효 캐시면 no-op이라 추가 조회 없음).

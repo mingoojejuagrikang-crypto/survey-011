@@ -7,7 +7,7 @@
  * DOM 의존이 없는 순수 함수라 Node에서 직접 import한다(sheets-infer-columns.spec.ts 패턴).
  */
 import { test, expect } from '@playwright/test';
-import { inferColumns, uniqueValuesRecentFirst } from '../src/lib/sheets';
+import { inferColumns, uniqueValuesRecentFirst } from '../src/lib/sheetsInfer';
 import {
   applyExclusions,
   enrichOptionColumns,
@@ -18,7 +18,7 @@ import type { Column } from '../src/types';
 
 // ─── J-1 정렬: 최근 등장 우선 ────────────────────────────────────────────────
 
-// 🔑 이 스펙의 핵심. **빈도순(종전 sheets.ts:161)으로 되돌아가면 반드시 실패한다** —
+// 🔑 이 스펙의 핵심. **빈도순(종전 구현)으로 되돌아가면 반드시 실패한다** —
 // '이원창'이 3회로 최다지만 마지막에 쓴 값은 '위미리3407'이다.
 test('J-1 — 고유값은 최근 등장 우선. 빈도순으로 되돌아가면 깨진다', () => {
   const column = ['이원창', '이원창', '강남호', '이원창', '강남호', '위미리3407'];

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { inferColumns } from '../src/lib/sheets';
+import { inferColumns } from '../src/lib/sheetsInfer';
 import {
   isCycling,
   isUserInputColumn,
