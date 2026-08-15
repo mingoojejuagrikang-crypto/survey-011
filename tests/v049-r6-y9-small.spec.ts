@@ -64,7 +64,8 @@ test('[node] Y11 unqueryable dedupe 키가 effectiveSampleKey를 쓴다', async 
     .toContain('effectiveSampleKey(c)');
   expect(keyLine!, '원시 플래그 사용이 남아 있다').not.toContain('c.sampleKey');
   // 판정 쪽 SSOT가 바뀌면 이 계약의 전제도 바뀐다 — 함께 갱신하라는 신호.
-  expect(await read('src/lib/pastValues.ts'), '판정 술어가 더 이상 effectiveSampleKey가 아니다')
+  // R2 분리(57ec9fd): keyColumns 정본이 pastValuesIndex.ts로 이동 — read 경로만 재표적(단언 불변).
+  expect(await read('src/lib/pastValuesIndex.ts'), '판정 술어가 더 이상 effectiveSampleKey가 아니다')
     .toContain('columns.filter((c) => effectiveSampleKey(c))');
 });
 
