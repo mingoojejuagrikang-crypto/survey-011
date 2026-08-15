@@ -27,7 +27,7 @@ import {
 /** [ENV-12] 분리 전 호출부의 import 경로를 그대로 보존하는 재수출. **단방향**이다 —
  *  leaf 3파일은 이 파일을 import하지 않으므로 `[LOGEVENTS-CYCLE-1]` 형태의 배럴 순환이 아니다.
  *  새 코드는 `./settingsState`에서 직접 가져오는 쪽이 낫다. */
-export { inputSettingsResetPatch, makeSettingsDefaults, minConfidenceForTolerance } from './settingsState';
+export { inputSettingsResetPatch, minConfidenceForTolerance } from './settingsState';
 
 /** v0.35.1 — 인터페이스에서 제거돼 더는 존재하지 않는 영속 키. 하이드레이션 merge에서 걷어낸다
  *  (아래 persist 옵션 merge 참조). 새 필드를 폐기할 땐 여기 추가만 하면 된다.

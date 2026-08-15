@@ -22,7 +22,7 @@ export { inferColumns, preserveInferredColumnIds } from './sheetsInfer';
 
 const API = 'https://sheets.googleapis.com/v4/spreadsheets';
 
-export interface SheetInfo {
+interface SheetInfo {
   title: string;
   sheetId: number;
   index: number;
@@ -182,7 +182,7 @@ export async function fetchColumnUniqueValues(
 }
 
 /** Fetch all data rows of a sheet (header + body). Used for import. */
-export async function fetchAllRows(
+async function fetchAllRows(
   spreadsheetId: string,
   sheetTitle: string,
   maxRows = 2000,
@@ -254,7 +254,7 @@ export interface AppendResult {
  * Parse the 1-based first row from an A1 updatedRange like "Sheet1!A5:J7" or "'My Tab'!A5".
  * Returns null when the range can't be parsed (caller treats append as not-yet-tracked).
  */
-export function parseUpdatedRangeFirstRow(updatedRange: string | undefined): number | null {
+function parseUpdatedRangeFirstRow(updatedRange: string | undefined): number | null {
   if (!updatedRange) return null;
   // Strip the sheet-name prefix (everything up to and including the last '!').
   const bang = updatedRange.lastIndexOf('!');
@@ -344,7 +344,7 @@ function rowA1Range(sheetTitle: string, sheetRow: number, colCount: number): str
  * case a future caller genuinely wants a dense contiguous-range overwrite; not removed as dead
  * code because removing an exported helper is out of scope for this fix.
  */
-export async function updateRow(
+async function updateRow(
   spreadsheetId: string,
   sheetTitle: string,
   sheetRow: number,

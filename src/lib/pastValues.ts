@@ -209,7 +209,7 @@ export function getPastIndexStatus(): PastIndexStatus {
  * 과거값 인덱스 로드. 캐시 히트면 fetch 없이 반환, 동일 지문 in-flight면 그 promise 공유.
  * 미설정/미로그인/네트워크·HTTP 오류는 **null로 resolve**(throw 안 함) — 호출자는 조용히 skip.
  */
-export async function loadPastIndex(opts?: { force?: boolean }): Promise<PastIndex | null> {
+async function loadPastIndex(opts?: { force?: boolean }): Promise<PastIndex | null> {
   const ctx = loadContext();
   if (!opts?.force) {
     const hit = getCachedIndex();
