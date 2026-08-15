@@ -593,7 +593,11 @@
      - **순서 계약(불변):** 캡처 그래프 `detach()`는 **항상 `stream.stop()`보다 먼저**다
        (source가 stream을 참조 — 뒤집히면 그래프 누수).
   6. `src/lib/pastValues.ts` (650 — 2026-07-26 실측) — 과거값 인덱스 도메인, 분리 경계 검토 후 해소
-  7. `src/lib/sheets.ts` (546 — 2026-07-26 실측) — Sheets API 도메인, 분리 경계 검토 후 해소
+  7. ~~`src/lib/sheets.ts`~~ — ✅ v0.49 R2 리팩토링(2026-08-15)에서 해소. 경계는 **네트워크 경계**:
+     컬럼 유추 순수 함수(`inferColumns`·`preserveInferredColumnIds`·`uniqueValuesRecentFirst`·
+     `guessType`·`stableColumnId`·`OPTIONS_MIN_REPEAT`)를 `src/lib/sheetsInfer.ts`(229줄)로 이동,
+     622→414줄 + disable 제거. 호출부 수정 0 — `sheets.ts`가 **단방향 재수출**로 import 경로를 보존한다
+     (leaf는 `sheets.ts`를 역import하지 않는다 → `[LOGEVENTS-CYCLE-1]` 형태의 순환 아님).
   8. `src/stores/settingsStore.ts` (558 — 2026-07-26 실측) — persist migrate 이력 포함, 분리 경계 검토 후 해소
   9. `src/lib/speech.ts` (614 — 2026-07-26 실측) — STT 컨트롤러, 분리 경계 검토 후 해소
 - **규칙:** 신규 파일은 예외 금지(500 초과 = lint 실패). 기존 예외 파일에 코드를 얹기 전에 분리를 먼저 검토한다(GL-006 AI 행동 규칙 #4). 기계적 part1/part2 분할 금지 — 경계는 항상 책임 단위.
