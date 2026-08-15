@@ -20,7 +20,7 @@ import type { TypeReviewState } from './useSettingsTableGeneration';
  *  종전 components/settings/helpCopy.ts 소유였으나 유일 소비자가 이 훅이라 여기로 이동
  *  (v0.35.2 리뷰 r1 공통 지적 — lib→components 역참조 해소. v0.49 R1 P1-2에서
  *  useSettingsActions.ts → 이 서브 훅으로 재이동). */
-export const SETTINGS_TIP_SEEN_KEY = 'survey-011-settings-tip-seen';
+const SETTINGS_TIP_SEEN_KEY = 'survey-011-settings-tip-seen';
 
 export function useSettingsReset(deps: {
   shared: SettingsActionsShared;

@@ -40,10 +40,10 @@
 export const CHIP_SWEEP_LEVEL_MAX = 10;
 
 /** 단계 10 = **읽을 수 있는 가장 빠른** 편도 초(민구 정의). */
-export const CHIP_SWEEP_FASTEST_SECONDS = 12;
+const CHIP_SWEEP_FASTEST_SECONDS = 12;
 
 /** 단계 1 = 가장 느린 편도 초. 이보다 느리면 "원하는 칩을 기다려야 한다"(민구가 경계한 축). */
-export const CHIP_SWEEP_SLOWEST_SECONDS = 40;
+const CHIP_SWEEP_SLOWEST_SECONDS = 40;
 
 /** 기본 단계. **눈금 중앙(5 ≈ 편도 26초)** 에서 시작한다 —
  *  종전 8초가 "읽기 힘들다"였으므로 확실히 느린 쪽에 두고, 민구가 실기기에서 올리게 한다. */

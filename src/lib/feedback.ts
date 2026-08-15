@@ -40,10 +40,10 @@ import { captureScreenshot } from './screenshot';
 
 /** 캡처 상한 — html2canvas가 느린 기기/거대 DOM에서 hang하면 모달이 영영 안 뜨므로 캡처를
  *  포기(null)하고 텍스트만으로 진행한다(캡처는 언제나 best-effort). */
-export const CAPTURE_TIMEOUT_MS = 4_000;
+const CAPTURE_TIMEOUT_MS = 4_000;
 
 /** 개선요청 zip 파일명: feedback_<date>_<ts>.zip (수확 컨벤션과 동형). */
-export function feedbackFilename(now: number = Date.now()): string {
+function feedbackFilename(now: number = Date.now()): string {
   const date = new Date(now).toISOString().slice(0, 10);
   return `feedback_${date}_${now}.zip`;
 }
@@ -63,7 +63,7 @@ export function feedbackFilename(now: number = Date.now()): string {
  *  기반이라 같은 소스면 같은 값이고, 한 글자만 달라도 갈린다.
  *  🟡 dev(`vite`)에는 그 자산이 없다 — `'dev'`를 낸다. 실패는 삼키고 `'unknown'`을 낸다:
  *  캡처와 마찬가지로 **best-effort**이고, 이것 때문에 개선요청 자체가 실패하면 본말전도다. */
-export function readBundleId(): string {
+function readBundleId(): string {
   try {
     const scripts = Array.from(document.querySelectorAll('script[src]')) as HTMLScriptElement[];
     for (const s of scripts) {
@@ -100,7 +100,7 @@ export interface FeedbackContext {
  *  - events.json / sessions.json: exportLog.ts와 동일 소스(IDB 전체) — 전후 맥락 분석용.
  *    clips/·screens/는 담지 않는다(용량 지배 방지 — 상세 로그는 기존 growth-log zip 경로가 담당).
  */
-export async function buildFeedbackZip(input: {
+async function buildFeedbackZip(input: {
   text: string;
   screenshot: Blob | null;
   context: FeedbackContext;
@@ -260,7 +260,7 @@ let flushInFlight = false;
 
 /** 큐를 1패스 재전송. 레그별 성공은 즉시 반영(부분 성공 보존), 두 레그 완료 시 삭제.
  *  반복 호출에 안전(in-flight 가드) — 실패 항목은 다음 트리거(온라인/토큰/부팅)까지 대기. */
-export async function flushFeedbackQueue(): Promise<void> {
+async function flushFeedbackQueue(): Promise<void> {
   if (flushInFlight) return;
   if (!navigator.onLine || !getAccessToken()) return;
   flushInFlight = true;

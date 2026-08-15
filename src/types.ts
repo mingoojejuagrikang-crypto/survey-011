@@ -3,7 +3,7 @@ export type DataType = 'date' | 'text' | 'int' | 'float' | 'options' | 'name';
 /** Legacy mode kept for migration only. New code uses input + ttsAnnounce. */
 export type LegacyInputMode = 'auto' | 'voice' | 'silent';
 
-export type AutoValue =
+type AutoValue =
   | { kind: 'fixed'; value: string }
   | { kind: 'seq'; from: number; to: number }
   | { kind: 'options'; available: string[]; selected: string[] };
@@ -11,7 +11,7 @@ export type AutoValue =
 /** v0.8.0 — 이상치 알람 방향(의미 반전). increase = 직전 조사보다 **커지면** 알람,
  *  decrease = 직전 조사보다 **작아지면** 알람. Column.trendRule이 없으면(undefined) 방향 알람 off.
  *  (telemetry 키 'trend'/trend_alert_* 는 로그 연속성을 위해 유지 — 사용자 노출 문자열만 변경.) */
-export type TrendRule = 'increase' | 'decrease';
+type TrendRule = 'increase' | 'decrease';
 
 export interface Column {
   id: string;

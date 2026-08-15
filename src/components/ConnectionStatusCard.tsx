@@ -28,7 +28,7 @@ import {
 import { logger } from '../lib/logger';
 
 /** epoch ms → "방금" / "N분 전" / "N시간 전" / "N일 전". */
-export function formatAge(builtAt: number, now: number): string {
+function formatAge(builtAt: number, now: number): string {
   const diff = Math.max(0, now - builtAt);
   if (diff < 60_000) return '방금';
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}분 전`;

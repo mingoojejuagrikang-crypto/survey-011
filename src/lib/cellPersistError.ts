@@ -18,7 +18,7 @@
  */
 import { create } from 'zustand';
 
-export interface FailedCellCommit {
+interface FailedCellCommit {
   row: number;
   colId: string;
   value: string;

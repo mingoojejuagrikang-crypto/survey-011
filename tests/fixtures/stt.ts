@@ -30,7 +30,7 @@ import type { Page } from '@playwright/test';
  *    `preserveAnimations:true`로 이 전역 오버라이드를 반드시 끈다([TEST-ANIMATION-ZERO-1]).
  *  - SpeechRecognition/webkitSpeechRecognition → MockSTT. 인스턴스는 window.__mockSTT로 노출되고
  *    fireResult(단일)·fireResultWithAlts(대안 포함, [STT-15] 재현)를 제공한다. */
-export const VOICE_MOCK_INIT_SCRIPT = `
+const VOICE_MOCK_INIT_SCRIPT = `
 (function() {
   window.__ttsLog = [];
   window.__ttsInFlight = 0;

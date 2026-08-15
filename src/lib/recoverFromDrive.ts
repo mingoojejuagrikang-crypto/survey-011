@@ -43,7 +43,7 @@ export interface ZipSessionMeta {
 /** zipId → 다운로드한 zip blob + 파싱한 스냅샷 + legacy 여부. restore 단계에서 재사용. */
 export type ZipCache = Map<string, CachedZip>;
 
-export interface ListRecoverResult {
+interface ListRecoverResult {
   /** ok: 목록 조회까지 성공. not_signed_in: 미로그인/토큰 만료. no_folder: 백업 이력 없음.
    *  failed: 폴더 검색/목록 조회 자체 실패(오프라인 등). */
   status: 'ok' | 'not_signed_in' | 'no_folder' | 'failed';

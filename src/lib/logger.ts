@@ -68,7 +68,7 @@ export interface LogEntry {
 }
 
 /** Snapshot of session-level context, emitted on the `session` start/stop events. */
-export interface SessionMeta {
+interface SessionMeta {
   appVersion: string;
   /** epoch ms; mirrors the sessionId timestamp for convenience */
   startedAt?: number;

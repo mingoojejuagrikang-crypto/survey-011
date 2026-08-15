@@ -21,7 +21,7 @@ import { T } from '../tokens';
 
 export const CAPTURE_THROTTLE_MS = 2000;
 export const CAPTURE_SESSION_CAP = 100;
-export const CAPTURE_JPEG_QUALITY = 0.45;
+const CAPTURE_JPEG_QUALITY = 0.45;
 
 export type CaptureTrigger =
   | 'commit'        // 값 커밋 echo (type:'value')

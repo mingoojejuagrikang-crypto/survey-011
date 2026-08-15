@@ -60,7 +60,7 @@ export function anomalyAlarmLabel(a: {
  *  - v0.25.0 기능3(WS-3, 민구 요청): 추세·범위 동시 발동(trigger:'both')은 범위 우선 —
  *    순수 'direction'만 추세, 'pct'·'both'는 범위.
  *  - self-confirm 환각 방어(v0.13.0 R7): 문구가 명령어로 끝나지 않는다('확인해주세요' 없음). */
-export function buildAnomalyDisplay(col: Column | null, v: TrendViolation): {
+function buildAnomalyDisplay(col: Column | null, v: TrendViolation): {
   alertKind: 'trend' | 'range';
   changeText: string;
   alertText: string;

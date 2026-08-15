@@ -35,7 +35,7 @@ export interface TrendViolation {
 
 /** 숫자 파싱 — trim + 콤마 제거 후 유한수만. 비숫자/빈 값은 null.
  *  시트 값 숫자 해석의 SSOT. */
-export function parseNumeric(raw: string | null | undefined): number | null {
+function parseNumeric(raw: string | null | undefined): number | null {
   if (raw === null || raw === undefined) return null;
   const s = String(raw).trim().replace(/,/g, '');
   if (!s) return null;

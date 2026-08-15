@@ -123,7 +123,7 @@ export function combineWithPreroll(
 /** v0.14.0 B-2 — transient에 둔감한 기준 피크(상위 PEAK_PERCENTILE 백분위의 |sample|).
  *  max(|sample|)는 단일 클릭에 끌려가 thr를 부풀리지만, 백분위 피크는 소수 이상치에 강건하다.
  *  비용 절감 위해 최대 ~20k개로 균일 서브샘플 후 정렬(클립당 수 ms, 정확도 충분). */
-export function robustPeak(mono: Float32Array): number {
+function robustPeak(mono: Float32Array): number {
   const n = mono.length;
   if (!n) return 0;
   const MAX_SAMPLES = 20000;

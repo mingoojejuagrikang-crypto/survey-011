@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 
 /** 오버레이 dim 토큰(v0.35.2 Stage 2 — 모달 셸 SSOT). 기존 셸들의 실측값을 이름으로 고정한다(시각 불변). */
-export const OVERLAY_DIM = 'rgba(0,0,0,0.6)';        // 표준(대부분의 모달)
+const OVERLAY_DIM = 'rgba(0,0,0,0.6)';        // 표준(대부분의 모달)
 export const OVERLAY_DIM_SOFT = 'rgba(0,0,0,0.55)';  // 데이터탭 Backdrop
 export const OVERLAY_DIM_STRONG = 'rgba(0,0,0,0.68)'; // 종료 확인(주의 집중)
 

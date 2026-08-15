@@ -43,7 +43,7 @@ const TRACKED_SELECTORS = [
   'button[aria-label="다음행"]',
 ] as const;
 
-export interface NodePrint {
+interface NodePrint {
   text: string;
   fontSize: string;
   lineHeight: string;

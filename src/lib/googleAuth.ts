@@ -75,7 +75,7 @@ function loadGisScript(): Promise<void> {
   return scriptPromise;
 }
 
-export function getClientId(): string | null {
+function getClientId(): string | null {
   return (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) || null;
 }
 

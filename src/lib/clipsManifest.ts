@@ -39,7 +39,7 @@ export interface ManifestSourceEvent {
   extra?: unknown;
 }
 
-export interface ClipManifestEntry {
+interface ClipManifestEntry {
   /** zip 내 경로 (예: `clips/sess_1:1:c8.wav`). */
   file: string;
   sessionId: string;

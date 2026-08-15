@@ -19,7 +19,7 @@ import type { Column } from '../types';
 /** colId → 그 컬럼에서 사용자가 지운 값들. */
 export type OptionExclusions = Record<string, string[]>;
 
-export function excludedFor(map: OptionExclusions, colId: string): string[] {
+function excludedFor(map: OptionExclusions, colId: string): string[] {
   return map[colId] ?? [];
 }
 

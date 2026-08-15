@@ -5,18 +5,18 @@
 /** UI-a 타이포 하한과 scale=1 기준값. 최소 가독값은 미확정이라 현행값을 한 상수에 보존한다. */
 export const HERO_MIN_FONT_PX = { name: 22, value: 26, interim: 24 } as const;
 export const HERO_BASE_FONT_PX = { name: 34, value: 64, interim: 44 } as const;
-export const COMPLETE_SUMMARY_MIN_FONT_PX = 24;
+const COMPLETE_SUMMARY_MIN_FONT_PX = 24;
 export const COMPLETE_SUMMARY_BASE_FONT_PX = 40;
 /** 알람 중 실시간 인식값의 이진탐색 첫 probe 유도값(상한이 아니다 — `STATE_TYPE.alarmInterim` 참조). */
 export const STATE_ALARM_INTERIM_BASE_PX = 44;
 /** 완료 화면 커밋 영수증(`✓ 항목명 값`). 종전 `clamp(17px, …, 26px)`의 하한·기준을 이어받는다
  *  — 🔴 **26px 상한은 v0.46.0 WP-B가 삭제했다**(`STATE_TYPE.completeReceipt` 참조). */
-export const COMPLETE_RECEIPT_MIN_FONT_PX = 15;
+const COMPLETE_RECEIPT_MIN_FONT_PX = 15;
 export const COMPLETE_RECEIPT_BASE_FONT_PX = 17;
 
 /** 🔴 프로덕션 라벨 예약용 잠정 하한 — ui-standard §7-2의 민구 확정값이 오면 이 한 곳을 대체한다.
  *  ba87426 402px 실측 61.67px의 90%를 보존하며, 상한이 아니므로 fit은 더 커질 수 있다. */
-export const HERO_LABEL_PROVISIONAL_RESERVE_PX = 55;
+const HERO_LABEL_PROVISIONAL_RESERVE_PX = 55;
 
 /** 회귀 대조용 실측 기준선. compact는 테스트 오라클 전용이며 fit 기제 입력이 아니다. */
 export const HERO_LABEL_BASELINE_PX = {

@@ -7,7 +7,7 @@ import { FILES_API, escapeDriveQ, ensureEmailSubFolder, cachedFolderIdFor } from
  * 환경변수 VITE_ADMIN_LOGS_FOLDER_ID로 설정. 미설정 시 admin 업로드 단계 건너뜀.
  * 팀원들은 이 폴더에 Editor 권한으로 공유받아야 함.
  */
-export const LOG_FOLDER_ID =
+const LOG_FOLDER_ID =
   import.meta.env.VITE_ADMIN_LOGS_FOLDER_ID || '123Qag3EJK2R4imt0vfeZwvJyvQ3yL-lw';
 
 /**
@@ -156,7 +156,7 @@ async function ensureUserLogFolder(email: string | null, headers: Record<string,
  *  v0.35.1(리뷰 라운드3 Codex High): 이메일·토큰을 작업 시작 시 1회 스냅샷해 폴더 탐색·생성·zip
  *  업로드·캐시 기록 전 과정에 주입 — 응답 대기 중 A→B 재로그인이 끼어도 폴더는 B에, 캐시는
  *  {A, B폴더}로 갈라지는 혼입이 생기지 않는다(admin 레그와 동일 방어). */
-export async function uploadLogToUserDrive(zipBlob: Blob, filename: string, auth?: UploadAuth): Promise<string> {
+async function uploadLogToUserDrive(zipBlob: Blob, filename: string, auth?: UploadAuth): Promise<string> {
   const { email, headers } = auth ?? { email: getCurrentEmail(), headers: await authHeader() };
   const folderId = await ensureUserLogFolder(email, headers);
   return uploadZip(zipBlob, filename, folderId, headers);
@@ -231,7 +231,7 @@ export async function downloadDriveFile(fileId: string): Promise<Blob> {
  *  v0.35.1(리뷰 라운드2 Codex High, TOCTOU): 이메일·토큰을 작업 시작 시 **한 번만** 확정해 폴더
  *  ensure와 zip 업로드 양쪽에 주입 — 네트워크 대기 중 A→B 재로그인이 끼어도 B 토큰으로 A 폴더에
  *  올리는 혼입이 생기지 않는다(양쪽 다 A 인증으로 완결되거나 A 토큰 만료로 실패). */
-export async function uploadLogToAdminTeamFolder(zipBlob: Blob, filename: string, auth?: UploadAuth): Promise<string> {
+async function uploadLogToAdminTeamFolder(zipBlob: Blob, filename: string, auth?: UploadAuth): Promise<string> {
   if (!LOG_FOLDER_ID) throw new Error('관리자 폴더 ID 미설정');
   const resolved = auth ?? { email: getCurrentEmail(), headers: await authHeader() };
   const verifiedEmail = resolved.email;

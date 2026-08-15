@@ -6,7 +6,7 @@ import { ReaskCue, type ReaskReason } from './ReaskCue';
 
 /** 마지막 커밋 영수증을 완료 화면에 띄워 두는 시간(민구 확정 2026-07-25).
  *  이후에는 와이어프레임 §[4] 그대로(요약 + 종료 버튼)로 정착한다. */
-export const COMPLETE_RECEIPT_MS = 3000;
+const COMPLETE_RECEIPT_MS = 3000;
 
 /** 조사 전체가 끝났을 때 중앙 요약.
  *

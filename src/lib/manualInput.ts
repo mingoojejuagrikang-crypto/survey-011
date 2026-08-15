@@ -16,9 +16,9 @@
 import type { Column } from '../types';
 
 /** seq 범위 버튼으로 펼치는 최대 개수 — 초과하면 키패드로 폴백(그리드가 화면을 넘지 않게). */
-export const SEQ_BUTTON_MAX = 24;
+const SEQ_BUTTON_MAX = 24;
 
-export type ManualChoiceKind = 'options' | 'seq' | 'int' | 'float' | 'text' | 'date';
+type ManualChoiceKind = 'options' | 'seq' | 'int' | 'float' | 'text' | 'date';
 
 export interface ManualChoices {
   kind: ManualChoiceKind;

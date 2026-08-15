@@ -33,7 +33,7 @@ import {
 import type { Column } from '../types';
 
 /** 컬럼 단위 파싱 결과 — 값과 **그 값이 안 나온 이유**를 함께 돌려준다(v0.43.0 #3-2 B층). */
-export interface ColParseResult {
+interface ColParseResult {
   value: string | null;
   /** 실패 사유(기계 판독). 성공이면 null. koreanNum 사유 + 컬럼층 사유 4종. */
   failReason: string | null;
@@ -46,7 +46,7 @@ export interface ColParseResult {
 }
 
 /** 호출자가 **파싱 성공 시에만** 방출하는 지연 로그. 순서 그대로 방출한다(바이트 계약 보존). */
-export type ParseAttemptEvent =
+type ParseAttemptEvent =
   /** logCell({type:'stt', extra:'decimal_fraction_recovered', text, originalText}) */
   | { kind: 'decimal_fraction_recovered'; text: string; originalText: string }
   /** logCell({type:'stt_alt_used', altIdx, text, originalText, extra?}) */
@@ -235,7 +235,7 @@ export function attemptParseValue(input: {
  *  - 'empty_text'           — text/name/date가 트림 후 비었다. alts는 계속 돈다
  *  - 'int_decimal_rejected' — int 컬럼에 소수를 말했다. 🔴 **alts를 전부 건너뛴다**
  */
-export function parseValueForColWithReason(col: Column | null, raw: string): ColParseResult {
+function parseValueForColWithReason(col: Column | null, raw: string): ColParseResult {
   if (!col) return { value: null, failReason: 'no_column', failWhole: null, salvageCandidate: null };
   if (col.type === 'options' && col.auto.kind === 'options') {
     const v = matchOption(raw, col.auto.selected.length ? col.auto.selected : col.auto.available);

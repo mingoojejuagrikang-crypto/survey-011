@@ -34,7 +34,7 @@ export interface LegacySyncPrompt {
 }
 
 /** 팝업 본문에 쓰는 세션 식별 라벨 — 어느 세션의 대상을 고르는지 사용자가 알아야 한다. */
-export function legacySessionLabel(s: Session): string {
+function legacySessionLabel(s: Session): string {
   return `${s.date} 세션 · ${s.completedRows}행${s.label ? ` (${s.label})` : ''}`;
 }
 

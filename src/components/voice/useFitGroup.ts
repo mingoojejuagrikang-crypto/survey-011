@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, type DependencyList } from 'react';
 import { fitGroups, type FitGroupElements } from './fitGroup';
 
-export interface FitMemberRef {
+interface FitMemberRef {
   readonly current: HTMLElement | null;
 }
 

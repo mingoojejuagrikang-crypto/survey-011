@@ -10,7 +10,7 @@
 
 export type BeepPolarity = 'positive' | 'negative';
 
-export interface BeepSegment {
+interface BeepSegment {
   /** 세그먼트 시작 시점(변형 원점 대비 ms) */
   atMs: number;
   /** 세그먼트 길이(ms) */
