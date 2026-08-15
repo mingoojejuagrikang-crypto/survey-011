@@ -17,7 +17,9 @@
  * (`string | null | undefined`) 여기서 non-null을 **타입으로 증명할 수 없다**. 본체는 값 게이트
  * 직후 이미 그것을 확인했으므로 그 값을 그대로 넘겨 컴파일러가 계약을 강제하게 한다 —
  * 스테이지 안에서 다시 좁히면 **도달 불가 분기**가 하나 더 생긴다.
- * 🔑 **산출물 3종을 반환도 하는 이유.** ctx에도 싣지만(구획 간 선언 계약), 이번 회차의 직접
+ * 🔑 **산출물 3종을 반환하는 이유.** (E3 원문은 *"반환도 한다 — ctx에도 싣지만"*이었다.
+ * 🔴 E5 정리로 ctx 쓰기는 제거됐다 — E4가 인자 경로를 골라 그 사본의 독자가 0이 됐기 때문이다.
+ * 반환값이 **유일한 인계 경로**다.) 이번 회차의 직접
  * 소비자는 **아직 본체에 있는 블록 G+H**다. ctx의 선택 필드로 넘기면 본체가 도달 불가 가드를
  * 하나 더 쓰거나 캐스트해야 하고, 그 가드가 침범당하면 「값은 커밋됐는데 착지(echo·advance)만
  * 증발」이라는 **가장 나쁜 형상**이 된다. 반환값은 그 상태를 계약이 아니라 **구성으로** 막는다.
@@ -329,12 +331,12 @@ export function useValueCommit(deps: ValueCommitDeps) {
     savePromiseSelf = savePromise;
     clipCapture.trackSave(savePromise);
 
-    // 착지(블록 G+H)가 받아 갈 산출물. ctx에도 싣는다 — ctx는 **선언된 구획 간 계약**이고
-    // 반환값은 **이번 회차의 직접 소비자**(아직 본체에 있는 G+H)를 위한 타입 안전 인계다
-    // (헤더 🔑 두 번째). E4가 어느 쪽을 읽을지는 그 회차가 정한다.
-    ctx.myEpoch = myEpoch;
-    ctx.commitLatencyMs = commitLatencyMs;
-    ctx.runCorrectedPersistCheck = runCorrectedPersistCheck;
+    // 착지(블록 G+H = `useCommitLanding`)가 받아 갈 산출물.
+    // 🔴 [ENV-12] E5 정리 — **E4가 인자 경로를 골랐다.** E3 시점에는 「ctx = 선언된 구획 간 계약 /
+    //   반환값 = 이번 회차 소비자를 위한 타입 안전 인계」로 둘 다 채우고 *"E4가 어느 쪽을 읽을지는
+    //   그 회차가 정한다"*로 미뤘는데, E4는 `CommitLandingInput`(= 이 반환 타입의 확장)을 **인자로**
+    //   받는 쪽을 택했다. 그래서 ctx 쓰기 3줄은 그 순간부터 **독자가 0**이었다(E5 실측 확인).
+    //   죽은 쓰기를 남기면 「ctx가 이 값을 나른다」는 거짓 계약이 타입에 박힌 채로 남는다.
     return { myEpoch, commitLatencyMs, runCorrectedPersistCheck };
   }, []);
 

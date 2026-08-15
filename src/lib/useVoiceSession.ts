@@ -1,44 +1,39 @@
 /* eslint-disable max-lines -- [ENV-12] 기존 초과 파일(GL-006 §5 도입 시점), Stage 3(음성 코어 재설계)에서 해소. 해소 시 이 주석 제거. */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useSettingsStore, minConfidenceForTolerance } from '../stores/settingsStore';
+import { useSettingsStore } from '../stores/settingsStore';
 import { useSessionStore, isSessionLive } from '../stores/sessionStore';
 import { useDataStore } from '../stores/dataStore';
 import { recountSynced } from './sessionSync';
-import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingleSyllable, isBareResponseWord } from './koreanNum';
+import { parseKoreanNumber, detectCommand } from './koreanNum';
 // [ENV-12] v0.43.0 #3 — 값 파싱 시도는 순수 모듈이 소유한다(부수효과 없음). 이 파일은 호출만.
-import { attemptParseValue, parseValueForCol } from './valueParseAttempt';
-import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceCommand, type VoiceUiCommandSignal } from './voiceCommands';
-import { cellWaitPrompt, decimalReaskPrompt, REASK_TTS, relistenPrompt, reviewWaitAbsorbTts, REVIEW_WAIT_COMMANDS_TTS } from './voicePrompts';
+import { parseValueForCol } from './valueParseAttempt';
+import { VOICE_COMMANDS, type VoiceCommand, type VoiceUiCommandSignal } from './voiceCommands';
+import { decimalReaskPrompt, REASK_TTS } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, setBargeInEnabled, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColumn } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
-import { saveSession, saveAudioClip, loadAudioClip, loadSession } from './db';
+import { saveSession } from './db';
 import { playBeep, unlockAudioPlayback } from './beep';
 import { useModifyPhase } from './modifyPhase';
 import { useSessionCommitMarks } from '../components/voice/useVoiceCommitMark';
 import { useCellPersistError } from './cellPersistError';
-import { AudioRecorder, type AudioTrackState, type ClipResult } from './audioRecorder';
+import { AudioRecorder, type AudioTrackState } from './audioRecorder';
 import { logger } from './logger';
 import {
   anomalyAlertCleared,
   audioInputClass,
   audioRouteRevalidate,
-  bargeInTextSource,
   bgKeep,
   bgMicAction,
   clipArmBlocked,
-  lowConfidenceParsed,
   manualHoldGuide,
   micAutoReconnect,
   micInitFailed,
   notifyPerm,
-  wouldSalvage,
 } from './logEvents';
 import { shouldKeepInBackground, LONG_BACKGROUND_OFF_MS } from './backgroundSessionPolicy';
 import { requestNotifyPermissionOnce, showBackgroundOffNotification } from './backgroundNotify';
 import { resolveForegroundReturnEvent } from './foregroundReturnTelemetry';
-import { resolveFinal } from './voiceFinalResolver';
-import { unlinkClipPointer, relinkClipPointer } from './clipPointer';
 import { hydratePastIndexFallback, prefetchPastIndex, resetPastIndexRetries } from './pastValues';
 import { checkAnomaly, type TrendViolation } from './trendCheck';
 import { buildAnomalyAlert } from './anomalyAlert';
@@ -47,7 +42,7 @@ import { withoutPendingCandidate } from './pendingValidation';
 import { isSheetSourceBlocked, sessionTargetFromSettings } from './sheetConnection';
 import { ensureUniqueSessionLabel } from './sessionLabel';
 // [ENV-12] Stage 3 — 클립 캡처·보존 장부는 useClipCapture가 소유한다(이 파일은 호출만).
-import { useClipCapture, EMPTY_CLIP_BYTES, type PendingCommandClip } from './useClipCapture';
+import { useClipCapture, type PendingCommandClip } from './useClipCapture';
 // [ENV-12] Stage 3 — 세션 영속화(persistSession)는 usePersistSession이 소유한다(이 파일은 호출만).
 import { usePersistSession } from './usePersistSession';
 // [ENV-12] Stage 3 — 행 이동 계열 내비게이션은 useRowNav가, 항목 한 칸 이동(F-1)은 useFieldNav가
@@ -149,8 +144,17 @@ export type AwaitingField =
  * 채우는 주체(= 소유자):
  *  · 블록 A(본체 셸)  — `handleFinalAt` `text` `alts` `confidence` `awaiting` `cmd`
  *  · 명령 스테이지     — `awaiting` **재대입**(trendConfirm → modify 강등. 이 구획의 유일한 변이)
- *  · 값 게이트 스테이지 — `col` `fractionWhole` `parsed` `lowConfParsedExtra`
- *  · 값 커밋 스테이지   — `myEpoch` `commitLatencyMs` `runCorrectedPersistCheck`
+ *  · 값 게이트 스테이지 — `col` `parsed` `lowConfParsedExtra`
+ *  · 값 커밋 스테이지   — **없다.** 그 산출물(`myEpoch`·`commitLatencyMs`·
+ *    `runCorrectedPersistCheck`)은 ctx가 아니라 **반환값 → 인자**로 착지에 간다.
+ *
+ * 🔴 [ENV-12] E5 정리 — E1이 선언한 13필드 중 **4개를 지웠다**(`fractionWhole` `myEpoch`
+ *   `commitLatencyMs` `runCorrectedPersistCheck`). 넷 다 **쓰기만 있고 독자가 0**이었다.
+ *   원인은 하나다: E3·E4가 그 값들을 ctx의 **선택 필드**로 넘기면 non-null을 타입으로 증명할 수
+ *   없다는 이유로 **명시 인자 경로**(`runValueCommit(ctx, parsed)` ·
+ *   `runCommitLanding(ctx, committed)`)를 택했고, 그러자 ctx 사본이 아무도 읽지 않는 배관이 됐다.
+ *   👉 **남은 필드의 기준은 「실제 독자가 있는가」다.** 「나중에 읽을지도 모른다」로 필드를
+ *   남기지 마라 — E2가 정확히 그 근거로 `fractionWhole`을 실었고 아무도 읽지 않았다.
  *
  * ⚠️ 이 상자는 **한 번의 final 처리 동안만** 산다(handleFinal 진입 시 생성 · 종료 시 폐기).
  *   렌더를 가로질러 살아남는 상태는 여전히 ref가 소유한다 — 여기에 옮기지 마라.
@@ -165,15 +169,10 @@ export interface FinalCtx {
   /** 🔴 유일한 가변 필드 — 명령 스테이지의 `demoteTrendConfirm` 강등이 여기 기록된다. */
   awaiting: AwaitingField;
   readonly cmd: VoiceCommand;
+  /** 값 게이트가 채우고 **본체 셸이 되받아** 착지 인자로 넘긴다(그 셋만 실제 독자가 있다). */
   col?: Column | null;
-  fractionWhole?: string;
   parsed?: string | null;
   lowConfParsedExtra?: string | null;
-  /** 레이스 가드용 스냅샷(값 커밋의 `++epochRef`) — 착지가 끼어듦을 판정한다. */
-  myEpoch?: number;
-  commitLatencyMs?: number;
-  /** 값 커밋이 **정의**하고 착지(추세 알람 · 정상 착지)가 부른다. */
-  runCorrectedPersistCheck?: () => void;
 }
 
 /** 수정 의미론 보유 여부 — 종전 `awaiting.isModify`(trendConfirm은 isModify를 겸장했다). */

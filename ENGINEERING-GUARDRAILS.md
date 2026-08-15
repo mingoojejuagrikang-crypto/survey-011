@@ -202,7 +202,7 @@
   (`await say(...)` 뒤 재무장 지점마다 필요하다), 국면 가드는 **종료·일시정지**를 닫는다.
   실측: 음성 축은 `handleFinal` 파이프라인이 epoch를 올리므로 epoch가 닫고, 국면 가드는 그 위의
   구조적 backstop이다. 둘 중 하나로 다른 하나를 대신할 수 없다.
-  🔴 **bump 지점은 두 파일에 흩어져 있다**([ENV-12] E단계 2026-08-15 분리 이후):
+  🔴 **bump·재확인 지점은 네 파일에 흩어져 있다**([ENV-12] E단계 2026-08-15 분리 이후):
   명령 bump(`if (cmd) epochRef.current++`)와 paused 분기 bump는 `useFinalCommands.ts`,
   barge-in bump는 `useFinalValueGate.ts`, 값 커밋 bump(`++epochRef.current`)는
   `useValueCommit.ts`다. 착지의 재확인(`epochRef.current !== myEpoch`)은 `useCommitLanding.ts`.

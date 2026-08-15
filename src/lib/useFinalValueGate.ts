@@ -452,9 +452,11 @@ export function useFinalValueGate(deps: FinalValueGateDeps) {
     // 값으로 설 자격을 통과했다 = 본체의 커밋 경로로 폴스루. 산출물을 ctx에 싣는다
     // (블록 F~H가 종전 지역변수 이름으로 되받는다 — 본체의 되받기 주석 참조).
     ctx.col = col;
-    ctx.fractionWhole = fractionWhole;
     ctx.parsed = parsed;
     ctx.lowConfParsedExtra = lowConfParsedExtra;
+    // 🔴 [ENV-12] E5 정리 — `ctx.fractionWhole`은 여기서 뺐다. E2가 「F~H 소비 0」을 실측하고도
+    //   *"E3/E4가 읽게 될 수 있다"*는 근거로 실었는데, 두 회차 다 읽지 않았다(E4는 인자 경로).
+    //   소수 문맥은 이 구획 **안에서만** 산다 — 지역 `fractionWhole`과 `awaitingFieldRef`가 소유한다.
     return false;
   }, []);
 
