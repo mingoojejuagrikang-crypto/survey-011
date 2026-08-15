@@ -246,7 +246,10 @@ test('[node] ①c 행 완료 부기 배선 6곳(advance 2 · 커밋 종단 · �
   // 호출은 0이고 개수 6은 불변이지만, 합산에서 빠지면 새 커밋 경로가 **가장 들어오기 쉬운 곳**이
   // 감시망 밖이 된다.
     'src/lib/useFinalCommands.ts', 'src/lib/useFinalValueGate.ts',
-    'src/lib/useValueCommit.ts'].flatMap((p) => {
+  // uvs-e4(ENV-12 #10) — handleFinal의 **착지**(블록 G+H)가 useCommitLanding.ts로 갈렸다.
+  // 이것으로 handleFinal 4스테이지가 전부 분리됐고, 이 계약의 합산 목록이 그 넷을 모두 덮는다.
+  // 현재 그 파일의 호출은 0이고 개수 6은 불변이다.
+    'src/lib/useValueCommit.ts', 'src/lib/useCommitLanding.ts'].flatMap((p) => {
     const navCode = fs.readFileSync(p, 'utf-8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');

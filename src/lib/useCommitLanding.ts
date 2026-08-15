@@ -181,7 +181,8 @@ export function useCommitLanding(deps: CommitLandingDeps) {
       playBeep('alert');
       useSessionStore.getState().setLastTts(alertText);
       // 🔴 v0.48.1 U1(리뷰 F1/HIGH, claude+codex 독립일치) — `myEpoch`는 이 값 커밋 시작 시점
-      //   (:2298)에 이미 캡처돼 있다 — 재사용한다(같은 handleFinal 호출, 같은 스코프).
+      //   (useValueCommit의 `++epochRef.current`)에 이미 캡처돼 본체가 넘겨준다 — 재사용한다
+      //   (같은 handleFinal 호출, 같은 파이프라인).
       // 🔴 v0.48.1 r3 U1 4절 — 직접수정 경로(:1338 부근)와 동일 이유로, 이 alertText 재생 전
       //   구간에 우연히 같은(방금 bump된) epoch로 기록된 낡은 barge-in 흔적을 지운다.
       bargeInEpochRef.current = -1;
@@ -219,7 +220,7 @@ export function useCommitLanding(deps: CommitLandingDeps) {
       // v0.34.0 O1 — 재위반(정정값이 또 위반) 커밋도 검사 대상(이전 .then 무조건 실행과 동등) —
       // 단 알람 TTS까지 끝난 지금 시점에 스케줄한다.
       runCorrectedPersistCheck();
-      return; // advance 중단 — 해소는 handleFinal 상단의 trendConfirm 분기
+      return; // advance 중단 — 해소는 명령 스테이지(useFinalCommands)의 trendConfirm 분기
     }
 
     // ── v0.13.0 R2(민구 요청): 추세 알림에 새 값으로 응답한 정정이 '정상'으로 판명된 경우 ──

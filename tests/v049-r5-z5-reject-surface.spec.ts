@@ -248,7 +248,8 @@ test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 �
   // uvs-e3(ENV-12 #9) — 값 커밋 구획이 useValueCommit.ts로 갈렸다. 커밋 경로는 거절의 반대편이라
   // 호출 0이 정상이고 개수 1은 불변 — 같은 우발 커버를 유지한다(R1 C-1 전례).
     'src/lib/useAnnouncements.ts', 'src/lib/useFinalCommands.ts', 'src/lib/useFinalValueGate.ts',
-    'src/lib/useValueCommit.ts']
+  // uvs-e4(ENV-12 #10) — 착지 구획이 useCommitLanding.ts로 갈렸다(사슬 완료). 호출 0·개수 1 불변.
+    'src/lib/useValueCommit.ts', 'src/lib/useCommitLanding.ts']
     .map((p) => fs.readFileSync(p, 'utf-8')
       .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n'))
     .reduce((n, navCode) => n + navCode.split('armRejectCue(').length - 1, 0);

@@ -103,6 +103,7 @@ ActiveControlBar    상태별 좌/우 버튼 — active·complete `이전`/`다�
 | `useFinalCommands.ts` | `handleFinal`의 **명령 경로** — 경로 판정 → 명령 핸들러 5종 dispatch ([ENV-12] Stage 3 서브 훅) |
 | `useFinalValueGate.ts` | `handleFinal`의 **값 자격 판정** — barge-in·STT 계측·흡수 3종 → 값 가드 4종·파싱·거절 ([ENV-12] Stage 3 서브 훅) |
 | `useValueCommit.ts` | `handleFinal`의 **값 커밋** — store 커밋·영수증·증분 영속화 + 클립 종결([CLIP-VAL-1]) ([ENV-12] Stage 3 서브 훅) |
+| `useCommitLanding.ts` | `handleFinal`의 **착지** — 추세 위반 알람·재무장 / 정정 정상화·확인음·echo·advance ([ENV-12] Stage 3 서브 훅) |
 | `koreanNum.ts` | 한글 수사 파서(모호성 판정·실패 사유 계측) · `detectCommand` · `extractModifyValue` |
 | `koreanNumTokens.ts` | 수사 표 + 정수/소수부 원시 파싱 — 사유 없이 수 또는 null만 |
 | `voiceCommands.ts` | **명령어 SSOT** — 기능당 한 단어, prefix 불변식 |
@@ -168,7 +169,7 @@ GL-006 §5 — 권장 150~250줄, 300줄 분리 검토, **500줄이 ESLint `max-
 (`eslint.config.js`). 도입 시점의 기존 초과 파일만 파일 상단 `eslint-disable`로 예외이며
 KNOWN-ISSUES `[ENV-12]`가 목록을 관리한다. 현재 예외 **3개**(2026-08-15 실측):
 
-`useVoiceSession.ts`(3721) · `speech.ts`(939) · `audioRecorder.ts`(919)
+`useVoiceSession.ts`(3535) · `speech.ts`(939) · `audioRecorder.ts`(919)
 
 > 종전 6개 중 `pastValues.ts`·`settingsStore.ts`·`sheets.ts` 3개는 v0.49 R2에서 해소됐다
 > (2026-08-15 — 위 표의 leaf 모듈들). 예외 여부의 진짜 SSOT는 각 파일 상단의 주석이다:
