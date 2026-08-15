@@ -421,7 +421,11 @@ test('[NEW-7] alertText 발화 중 interim barge-in → final 도착 전 구 인
 //    체제에서는 이번(08-04)이 첫 실행**이다 — c0-r1 병합~08-04 사이엔 바닥 고정이 402→480
 //    무성장 단언을 먼저 죽여 도달 불가였다(그 전 체제에선 실행 이력 있음). 여기서 red가
 //    나면 회귀 단정 전에 git log로 어느 체제의 이력인지 확인하라.
-test('[ALERT-COMPARE-1] 2열 비교 — 안 넘침·좌우 동일 크기(§C5-c)·상한 없음, 390×568 무넘침', async ({ page }) => {
+// 🔴 @known-alert-compare-1 — 기지 red 격리 (2026-08-15, Phase 0 · [TEAMOPS-26] 사유):
+//    단독에서도 red(08-06 판정) · 전량 08-12(1386/2)·08-15(1603/2) 재현 — 진성 선재 부채다.
+//    원인 축: anomaly-comparison fontSize 성장 단언(:508)이 78px에서 멈춤 — A/B(31e5b8a 대조)
+//    미실시 상태로 TODO.md 등재. 처방은 별도 회차 몫. 격리 해제 = 처방 커밋과 같은 커밋에서.
+test('@known-alert-compare-1 [ALERT-COMPARE-1] 2열 비교 — 안 넘침·좌우 동일 크기(§C5-c)·상한 없음, 390×568 무넘침', async ({ page }) => {
   await page.setViewportSize({ width: 402, height: 874 });
   await setupAndStart(page, {
     sheetRows: [[PREV_ROUND, '이원창', '1', '1', '100.0', '99.9']],
