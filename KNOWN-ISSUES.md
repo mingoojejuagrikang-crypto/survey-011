@@ -603,7 +603,17 @@
      `guessType`·`stableColumnId`·`OPTIONS_MIN_REPEAT`)를 `src/lib/sheetsInfer.ts`(229줄)로 이동,
      622→414줄 + disable 제거. 호출부 수정 0 — `sheets.ts`가 **단방향 재수출**로 import 경로를 보존한다
      (leaf는 `sheets.ts`를 역import하지 않는다 → `[LOGEVENTS-CYCLE-1]` 형태의 순환 아님).
-  8. `src/stores/settingsStore.ts` (558 — 2026-07-26 실측) — persist migrate 이력 포함, 분리 경계 검토 후 해소
+  8. ~~`src/stores/settingsStore.ts`~~ — ✅ v0.49 R2 리팩토링(2026-08-15)에서 해소. 경계는
+     **「zustand를 아는가」**: `settingsState.ts`(279 — `SettingsState`·기본값 SSOT·입력값 설정
+     초기화 패치) · `settingsStorage.ts`(65 — localStorage/IDB 미러 + 하이드레이션 게이트) ·
+     `settingsMigrate.ts`(223 — persist 버전 이력) · `settingsStore.ts`(729→223 — create/persist
+     옵션·액션). disable 제거. 호출부 수정 0(`makeSettingsDefaults`·`inputSettingsResetPatch`·
+     `minConfidenceForTolerance` **단방향** 재수출).
+     - 🔴 **migrate 이력은 본문 무수정으로 옮겼다**(들여쓰기 6칸 제거만 — 167줄 대조 확인).
+       `version < N` 게이트 등장 순서 `6→7→9→10→12` 보존. 근거: 순서가 바뀌면 기존 사용자
+       저장본의 치유 결과가 달라진다(v6 블록은 위쪽 `reconcileColumnFlags`가 이미 정규화한
+       columns를 전제한다). 오라클 `tests/settings-migration.spec.ts` 10건 green(v4·v5·v6·v8·
+       v11·v12 저장본 + 다운그레이드 라운드트립).
   9. `src/lib/speech.ts` (614 — 2026-07-26 실측) — STT 컨트롤러, 분리 경계 검토 후 해소
 - **규칙:** 신규 파일은 예외 금지(500 초과 = lint 실패). 기존 예외 파일에 코드를 얹기 전에 분리를 먼저 검토한다(GL-006 AI 행동 규칙 #4). 기계적 part1/part2 분할 금지 — 경계는 항상 책임 단위.
 - **출처:** GL-006 채택 + v0.35.1 리팩토링 (2026-07-16)
