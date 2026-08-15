@@ -54,9 +54,18 @@ test('[node] ① `totalRows`의 쓰기 주체는 하나이고 그 값은 compute
   // 두 번째 쓰기 주체가 생기면 이 불변식이 깨진다 — 그 순간 무효화는 진짜로 과잉이 된다.
   const writers = (await Promise.all(
     // v0.49 R1 P1-2 — 설정탭 훅이 4파일로 갈렸다. 쓰기 주체 스캔은 그 전부를 덮는다.
+    // r2-nearcap(ENV-12) — 화면에서 액션바·푸터가 분리됐다. 분리 전에는 그 파일 전역이 이 개수
+    // 계약의 우발 커버 안이었으므로 분리 파일도 합산해 커버를 유지한다(R1 C-1 전례 — 부정
+    // 단언만 확장). 현재 두 파일의 쓰기는 0이고 결과 목록 `['totalRows: total']`은 불변이다.
+    // 🔴 생성 버튼이 액션바로 갔으니 **거기에** 두 번째 쓰기가 생기는 것이 가장 그럴듯한
+    // 미래다 — 그래서 먼저 넣는다.
+    // ⚠️ 같은 회차에 `settingsStore.ts`도 3갈래로 갈렸다(r2-large 소유). 그 leaf 3개를 이
+    //    목록에 넣는 것은 **그쪽 레인의 재표적 몫**이다 — 여기서 대신 넣지 않는다.
     ['src/lib/useSettingsActions.ts', 'src/lib/useSettingsSheetConnection.ts',
       'src/lib/useSettingsTableGeneration.ts', 'src/lib/useSettingsReset.ts',
-      'src/stores/settingsStore.ts', 'src/screens/SettingsScreen.tsx']
+      'src/stores/settingsStore.ts', 'src/screens/SettingsScreen.tsx',
+      'src/components/settings/SettingsActionBar.tsx',
+      'src/components/settings/SettingsFooter.tsx']
       .map(read),
   )).join('\n').match(/totalRows:\s*(?!d\.totalRows|state\.totalRows)[A-Za-z0-9_(.]+/g) ?? [];
   expect(

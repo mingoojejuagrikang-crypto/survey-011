@@ -314,7 +314,13 @@ test('W3-6(r2 B1) — 이상치 규칙 0개 스키마: 팝업을 여는 순간 �
  */
 test('[node] W3-7(r2 A9) — 「이전 조사」 계산의 소유자는 팝업이고 useMemo로 잠겨 있다', async () => {
   const fs = await import('node:fs');
-  const screen = fs.readFileSync('src/screens/SettingsScreen.tsx', 'utf-8');
+  // r2-nearcap(ENV-12) — 화면에서 액션바·푸터가 분리됐다. 분리 전에는 이 파일 전역이 아래 부정
+  // 단언의 우발 커버였으므로 분리 파일도 합산한다(R1 C-1 전례 — 부정 단언만 확장). 자식이
+  // 렌더 중에 스캔해도 결함(설정 쓰기마다 전수 스캔)은 똑같이 재발한다.
+  const screen = ['src/screens/SettingsScreen.tsx',
+    'src/components/settings/SettingsActionBar.tsx',
+    'src/components/settings/SettingsFooter.tsx']
+    .map((p) => fs.readFileSync(p, 'utf-8')).join('\n');
   const modal = fs.readFileSync('src/components/settings/SettingsSummaryModal.tsx', 'utf-8');
 
   expect(
