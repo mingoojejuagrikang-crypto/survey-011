@@ -49,6 +49,35 @@ const bootR7 = (page: Page, totalRows: number) => boot(page, PHONE_402, {
 const FAIL_TTS = '저장하지 못했습니다. 다시 저장 버튼을 눌러 주세요.';
 const banner = (page: Page) => page.locator('[data-testid="cell-persist-error-banner"]');
 
+/** 🔴 fixc(2026-08-15) — **배너 소멸은 착지 완료가 아니다.**
+ *
+ *  배너를 내리는 것은 `persistCellValue` 성공(`useVoiceSession.ts` `clearIfMatches`)이고, 완료
+ *  낭독은 그 **뒤** `finalizeRowCompletion`(IDB await) → `proceedAfterCommit`에서 나온다. 그
+ *  사이에 TTS가 하나도 없는 유휴 창이 있는데, 실측 **51~56ms**에 `waitForTtsIdle`의 재확인
+ *  간격이 **50ms**라 마진이 1~5ms였다 — 배너 소멸을 착지 완료의 프록시로 쓰면 스케줄링 지터
+ *  한 번에 `waitForTtsIdle`이 조기 반환해 낭독을 통째로 놓친다. 08-14 stage B 게이트 ② red ·
+ *  08-15 stage C 게이트 ① red · 같은 날 단독 재판정 ①③ red가 전부 이것이고, **커밋과 무관**하다
+ *  (분리 이전 tip에서도 같은 수치로 재현 — KNOWN-ISSUES [TEST-LANDING-PROXY-1]).
+ *
+ *  ⚠️ 여기서는 **동기화만** 한다. 낭독이 실제로 났는지의 **판정은 호출부의 원 단언**이 그대로
+ *  한다 — 대기가 타임아웃해도 삼키는 이유다(여기서 red를 내면 원 오라클의 실패 메시지가 죽는다).
+ *
+ *  ⚠️ 헤더 「두 축」 계약에 붙는 각주: 이 대기가 기다리는 '완료'는 ③이 재는 제품 결함의 증상과
+ *  같다(좌표가 갈리면 `ownsFlow=false`라 착지가 빠지고 완료 낭독이 없다). 그 결함이 되돌아오면
+ *  여기서 5s 타임아웃을 채운 뒤 삼켜지고 **원 단언이 red를 낸다** — 되돌림 실패가 축당 ~5s
+ *  느려질 뿐 **판정은 불변**이다(축 분리도 그대로). */
+async function waitForLandingTts(page: Page, sinceLen: number): Promise<void> {
+  await page
+    .waitForFunction(
+      (n) => ((window as unknown as { __ttsLog?: string[] }).__ttsLog ?? []).slice(n)
+        .some((t) => t.includes('완료')),
+      sinceLen,
+      { timeout: 5000 },
+    )
+    .catch(() => { /* 판정은 호출부 단언 몫 */ });
+  await waitForTtsIdle(page);
+}
+
 async function failAll(page: Page, v: boolean) {
   await page.evaluate((f) => {
     (window as unknown as { __survey011FailSessionPut?: boolean }).__survey011FailSessionPut = f;
@@ -94,7 +123,7 @@ test('① 재시도 성공이 원 음성 착지를 재개한다 — 행 완료 �
   await failAll(page, false);
   await page.locator('[data-testid="cell-persist-retry-btn"]').click();
   await expect(banner(page), 'durable 성공이 배너를 내린다').toHaveCount(0, { timeout: 5000 });
-  await waitForTtsIdle(page);
+  await waitForLandingTts(page, before);
 
   const after = (await ttsLog(page)).slice(before);
   expect(
@@ -113,10 +142,13 @@ test('② 재시도 뒤 다음 발화가 실제 대상에 커밋된다 — 무�
   await voiceRowThenFail(page);
 
   await failAll(page, false);
+  const beforeRetry = (await ttsLog(page)).length;
   await page.locator('[data-testid="cell-persist-retry-btn"]').click();
   await expect(banner(page)).toHaveCount(0, { timeout: 5000 });
-  await waitForTtsIdle(page);
+  await waitForLandingTts(page, beforeRetry);
 
+  // 🔴 fixc — 기준점이 **착지 낭독 뒤**로 굳었다(위 waitForLandingTts). 아래 「TTS 증가 0이 아니다」는
+  //   이제 완료 낭독을 세지 않고 **이 발화가 낸 안내만** 센다 — 원 계약(무음 흡수 없음)을 더 좁게 잰다.
   const before = (await ttsLog(page)).length;
   await fireStt(page, '십일 점 일', 1800);
   await waitForTtsIdle(page);
@@ -155,7 +187,7 @@ test('③ gap-fill 완성 — 배너 좌표는 흐름 소유자를 따르고, �
   const before = (await ttsLog(page)).length;
   await page.locator('[data-testid="cell-persist-retry-btn"]').click();
   await expect(banner(page)).toHaveCount(0, { timeout: 5000 });
-  await waitForTtsIdle(page);
+  await waitForLandingTts(page, before);
 
   expect(
     (await ttsLog(page)).slice(before).some((t) => t.includes('완료')),
