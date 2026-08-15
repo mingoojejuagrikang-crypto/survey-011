@@ -65,6 +65,9 @@ import { useFinalCommands } from './useFinalCommands';
 // [ENV-12] E단계 — handleFinal의 값 자격 판정(흡수·가드·파싱·거절)은 useFinalValueGate가
 // 소유한다(이 파일은 호출만).
 import { useFinalValueGate } from './useFinalValueGate';
+// [ENV-12] E단계 — handleFinal의 값 커밋(store 커밋·증분 영속화·클립 종결)은 useValueCommit이
+// 소유한다(이 파일은 호출만).
+import { useValueCommit } from './useValueCommit';
 import {
   INITIAL_FOREGROUND_RETURN_STATE,
   reduceForegroundReturn,
@@ -1670,6 +1673,26 @@ export function useVoiceSession() {
     awaitingFieldRef,
   });
 
+  // [ENV-12] Stage 3 서브 훅 #9 — handleFinal의 **값 커밋**(블록 F: store 커밋·✓집합·영수증·
+  // burst + 증분 영속화 발사 + 클립 stop/저장/포인터 복구)은 useValueCommit이 소유한다
+  // (이 파일은 호출만). 주입 심볼의 선언이 전부 그 앞이다(clipCapture:594 · persistSession:636 ·
+  // maybeAutoRecoverOrLatch · refs).
+  const { runValueCommit } = useValueCommit({
+    logCell,
+    persistSession,
+    archiveCellClip,
+    clipCapture,
+    maybeAutoRecoverOrLatch,
+    isModifyLike,
+    epochRef,
+    awaitingFieldRef,
+    sessionIdRef,
+    recorderRef,
+    activeClipRef,
+    pendingClipsRef,
+    brokenClipKeysRef,
+  });
+
   // ── final result handler ───────────────────────────────────
   const handleFinal = useCallback(async (textArg: string, alts: string[], confidence: number) => {
     // v0.20.0 Phase 5 #4 — 반응속도(발화 확정→값 커밋) 측정 시작점. STT final이 handleFinal에
@@ -1723,232 +1746,13 @@ export function useVoiceSession() {
     //   깨지면 증상이 크래시가 아니라 **무음 값 유실**(빈 값 커밋)이라 아무도 모른다.
     if (parsed == null) return;
 
-    const myEpoch = ++epochRef.current;
-    const sess = useSessionStore.getState();
-    sess.setRowValue(awaiting.row, awaiting.colId, parsed);
-    // v0.47.0 W4(FB-E) — 음성 확정 커밋의 ✓ 집합 등록(value·modify·trendConfirm 정정 공통.
-    //   아래 추세위반 분기도 "커밋된 값은 그대로 선다"이므로 이 지점이 맞다).
-    useSessionCommitMarks.getState().add(awaiting.row, awaiting.colId);
-    // v0.37.0 리뷰#1 — 검토 영수증(모든 커밋 경로 공통). trendConfirm(정정)도 **무조건** 발행한다:
-    //   valueBurst는 아래에서 중복 팝업 억제로 정정 커밋을 건너뛰지만(불변), 검토 화면은 정정된
-    //   실제 커밋값을 보여야 하므로 영수증은 정정 여부와 무관하게 발행한다.
-    sess.pushCommitReceipt(awaiting.row, awaiting.colId, awaiting.name, parsed);
-    sess.setRecognized(parsed);
-    sess.setReaskReason(null); // v0.23.0 입력탭#2 — 성공 커밋 시 재질문 사유 큐 해제.
-    // v0.20.0 Phase 5 #4 — 반응속도: final 진입→값 store 커밋까지 앱 파이프라인 경과ms(파싱·가드·
-    // 동음이의/소수 합성 포함). 아래 value 이벤트(정상·추세위반 둘 다)에 durationMs로 싣는다 — echo
-    // TTS 대기 전에 캡처해 TTS 길이가 섞이지 않게 한다(순수 커밋 지연).
-    const commitLatencyMs = Date.now() - handleFinalAt;
-    // v0.15.0 A4 — 이상치→정정→정상 흐름 중복 팝업 억제. 추세 알림에 새 값으로 응답한 정정 커밋
-    // (trendConfirm)은 아래에서 anomalyAlert 팝업을 초록(corrected)으로 전환해 이미 같은 값을 크게
-    // 보여준다. 그 뒤 진행 착지점의 clearAnomalyAlert가 팝업을 닫으면, VoiceScreen의
-    // `valueBurst && !anomalyAlert` 조건이 참이 되며 같은 값이 CenterValueBurst로 한 번 더 떠
-    // "정상 입력 내용이 한 번 더 팝업"되던 중복(민구 제보)이 발생한다. 정정-출처 커밋에선 burst를
-    // 건너뛰어 중앙 팝업이 1회(초록 corrected)만 뜨게 한다. 일반(비-정정) 커밋의 burst는 그대로 유지.
-    //
-    // 🔴 v0.46.1 FB-10 — **이 억제는 그대로 둔다. 여기서 고치려 하지 마라.**
-    //  FB-10(정정 완료도 확정 표시를 받아야 한다)은 이 줄을 푸는 방식으로는 안 고쳐진다 —
-    //  **실측으로 확인했다**: burst를 여기서 밀면 그 시점의 중앙은 아직 알람 카드라 `VoiceHero`가
-    //  언마운트 상태이고, corrected 전환과 burst push는 같은 React 배치에 들어가 hero가 붙는
-    //  렌더에서 `useConfirmFlash`의 *마운트 시점 burst 미재생* 가드(VoiceHero의 `seenSeqRef===null`,
-    //  v0.35.0 FIX-3)에 **조용히 삼켜진다**. 프로브 실측: 알람 카드는 사라졌는데 `hero=listening`,
-    //  확정 플래시 0회(`tests/_probe-fb10-transition.spec.ts`, 402×513).
-    //  👉 그래서 표시 계층에서 푼다 — `CenterStage`가 corrected를 hero 브랜치로 보내며 값을
-    //  `confirmBurst` prop으로 직접 넘긴다. store 흐름(억제 포함)은 **한 줄도 안 바뀐다.**
-    if (awaiting.kind !== 'trendConfirm') {
-      sess.pushValueBurst(awaiting.name, parsed, awaiting.colId); // I-3: 중앙 버스트 + 칩 V(UI③)
-    }
-    awaitingFieldRef.current = null;
-
-    // v0.7.0 B4: 추세 알림에 새 값으로 응답한 재커밋 — 정정 기록(오알림률 분모) + 이전 값 발화
-    // 클립 보존. 새 저장이 같은 bare key(`sess:row:colId`)를 덮어쓰므로 :a<n>로 먼저 보관한다
-    // (RACE-4 보존 원칙 — enterModifyMode의 archive 패턴과 동일, 백그라운드).
-    if (awaiting.kind === 'trendConfirm') {
-      logCell({
-        type: 'trend', extra: 'trend_alert_corrected',
-        row: awaiting.row, colId: awaiting.colId,
-        text, parsed,
-        ...(awaiting.previousValue != null ? { previousValue: awaiting.previousValue } : {}),
-      });
-      archiveCellClip(awaiting.row, awaiting.colId);
-    }
-
-    // v0.10 클립 누락 수정: stopClip을 echo TTS 이전에 시작 (병렬 실행)
-    // 이전 버그: await speak(echo) 동안 마이크 stream이 idle → 다음 startClip이 호출되면 이전 슬롯 손실
-    const clipKey = `${sessionIdRef.current}:${awaiting.row}:${awaiting.colId}`;
-    const clipAwaitingRow = awaiting.row;
-    const clipAwaitingColId = awaiting.colId;
-    // [CLIP-VAL-1]②: whether this commit is a modify re-record — on a failed capture the cell's
-    // pointer is re-linked to the modify-command clip (`…:cmd<n>`) instead of being left on the
-    // canonical key (which still holds the PREVIOUS value's audio — the "155.5 cell plays 177.7"
-    // defect) or silently unlinked.
-    const wasModify = isModifyLike(awaiting);
-    pendingClipsRef.current[clipAwaitingRow] = {
-      ...pendingClipsRef.current[clipAwaitingRow],
-      [clipAwaitingColId]: clipKey,
-    };
-    // v0.4.4 증분 영속화: 값 커밋 직후(행이 완료되기 전이라도) 진행 행을 IDB에 저장한다. advance()가
-    // 행 완료 시 다시 저장하므로 중복이지만, 마지막 필드 입력 전 새로고침/앱 업데이트로 부분 입력이
-    // 유실되는 것을 막는 핵심 보호다. (fire-and-forget — echo TTS/진행을 막지 않음.)
-    // v0.24.0 데이터-3 진단 — 이상치 교정 커밋이면 persist 후 dataStore 값이 교정값과 일치하는지
-    // 가시화(불일치=옛값 잔존, 단조 가드가 막아야 함). 다음 실기기 세션에서 재현 시 근인 즉시 포착.
-    // v0.34.0 O1 — 검사 **시점 이동**: 이전엔 persist resolve 직후 즉시 검사해, 커밋 경로가 아직
-    // 진행 중(echo/알람 TTS·후속 persist 정착 전)에 dataStore를 읽어 mismatch 오탐 ×2를 기록했다
-    // (07-14 실기기 r8c8 — 정정 09:23:38 검사 vs value 09:23:40, 실피해 0). persist는 그대로
-    // fire-and-forget으로 발사하되, 검사는 커밋 경로 종단(value 이벤트 이후 — 알람 분기는 알람 TTS
-    // 이후)에 스케줄해 durable 반영이 정착한 뒤 1회만 판정한다(로직 최소 변경 — 비교식 동일).
-    const wasTrendCorrected = awaiting.kind === 'trendConfirm';
-    const persistPromise = persistSession();
-    void persistPromise.catch(() => {});
-    const runCorrectedPersistCheck = () => {
-      if (!wasTrendCorrected) return;
-      void persistPromise.then(async (durable) => {
-        // dataStore는 IDB 실패 뒤에도 과거 코드에서 갱신될 수 있어 검증 근거가 아니다. save 성공
-        // 결과를 먼저 요구하고 같은 레코드를 IDB에서 재조회해 재시작 후에도 남을 값을 판정한다.
-        let persisted: string | undefined;
-        let readFailed = false;
-        if (durable) {
-          try {
-            const saved = await loadSession(sessionIdRef.current);
-            persisted = saved?.rows.find((r) => r.index === clipAwaitingRow)?.values[clipAwaitingColId];
-          } catch (err) {
-            readFailed = true;
-            logCell({
-              type: 'error', extra: `trend_corrected_persist_read_failed:${String((err as Error)?.message ?? err)}`,
-              row: clipAwaitingRow, colId: clipAwaitingColId,
-            });
-          }
-        }
-        logCell({
-          type: 'trend',
-          extra: !durable
-            ? 'trend_corrected_persist_check:write_failed'
-            : readFailed
-              ? 'trend_corrected_persist_check:read_failed'
-            : persisted === parsed
-              ? 'trend_corrected_persist_check:ok'
-              : 'trend_corrected_persist_check:mismatch',
-          row: clipAwaitingRow, colId: clipAwaitingColId, parsed,
-          ...(persisted !== parsed ? { previousValue: String(persisted ?? '') } : {}),
-        });
-      });
-    };
-    // Codex MEDIUM-4: clip for this field is being committed (stopped) — no longer active.
-    // The next announceField will re-set it after its own startClip().
-    activeClipRef.current = null;
-    const clipStopPromise: Promise<ClipResult> =
-      recorderRef.current?.stopClip()
-      ?? Promise.resolve({ blob: null, raw: null, prerollMs: 0 });
-    // 포인터 정리/재연결은 clipPointer 모듈(Stage 3-3 순수 이동)이 담당 — 소유권 가드 계약 포함.
-    // 여기서는 이 커밋의 좌표(clipKey·row·colId)를 고정 인자로 묶는다.
-    const pointerArgs = {
-      sessionId: sessionIdRef.current,
-      row: clipAwaitingRow, colId: clipAwaitingColId, clipKey,
-      pendingClips: pendingClipsRef.current,
-    };
-    // 지연 재개 방어(v0.35.3 리뷰 s3r2 Codex Medium) — 이 커밋의 세션·cmd 인덱스도 **캡처 시점에
-    // 고정**한다. 클립 저장이 stop() 유예(5s)를 넘긴 뒤 다음 세션이 시작되면 pendingClipsRef는 새
-    // 객체로 재할당되지만 pointerArgs는 옛 세션의 맵을 계속 보므로 소유권 가드가 통과하는데, 이때
-    // cmdKey를 라이브 sessionIdRef(새 세션)로 조립하면 옛 세션 행이 새 세션 클립 키를 참조하는
-    // provenance 오염이 생긴다. 캡처 고정으로 지연 콜백은 이 커밋의 문맥만 본다.
-    const sessionIdAtCommit = sessionIdRef.current;
-    const cmdIdxAtCommit = clipCapture.commandClipIndex(clipAwaitingRow, clipAwaitingColId);
-    // [CLIP-VAL-1]②③ — a capture under the canonical key failed. Tombstone the key FIRST (so an
-    // in-flight persistSession can never re-persist it), then: if this was a modify re-record and
-    // its command clip (`…:cmd<n>` — for "수정 <값>" it carries the NEW value's utterance) actually
-    // saved, re-link the cell's playback pointer to it (06-11 row8: the correct audio WAS on disk
-    // as `8:c7:cmd1`); otherwise unlink so no stale previous-value audio remains canonical.
-    const resolveFailedCapture = async (savePromiseSelf: Promise<unknown> | null) => {
-      brokenClipKeysRef.current.add(clipKey);
-      if (wasModify) {
-        const n = cmdIdxAtCommit;
-        if (n) {
-          const cmdKey = `${sessionIdAtCommit}:${clipAwaitingRow}:${clipAwaitingColId}:cmd${n}`;
-          // The cmd-clip save may still be in flight — flush other pending saves (not ourselves)
-          // before the existence check (archiveCellClip's flush pattern, bounded).
-          await clipCapture.flushSaves(1500, { exclude: savePromiseSelf });
-          const cmdBlob = await loadAudioClip(cmdKey).catch(() => null);
-          if (cmdBlob && relinkClipPointer(pointerArgs, cmdKey)) {
-            // 지연 재개 시 라이브 sessionId(다음 세션)로 오귀속되지 않게 캡처된 세션으로 기록.
-            logger.log({
-              type: 'clip', extra: 'clip_relink_cmd', kind: 'command', clipKey: cmdKey,
-              sessionId: sessionIdAtCommit, row: clipAwaitingRow, colId: clipAwaitingColId,
-            });
-            return;
-          }
-        }
-      }
-      unlinkClipPointer(pointerArgs);
-    };
-    // Holder for the savePromise's own identity (assigned right after creation, before the
-    // IIFE's first await resumes) so resolveFailedCapture can exclude itself from the flush.
-    let savePromiseSelf: Promise<unknown> | null = null;
-    const savePromise = (async () => {
-      try {
-        logCell({ type: 'clip', extra: 'clip_stop_await', row: clipAwaitingRow, colId: clipAwaitingColId });
-        const { blob: clipBlob, raw: rawBlob, trimFailed, trimFailReason } = await clipStopPromise;
-        logCell({ type: 'clip', extra: `clip_stop_resolved:${clipBlob ? clipBlob.size : 'null'}`, row: clipAwaitingRow, colId: clipAwaitingColId });
-        // v0.20.0 BL-2 — 트림이 예외(decodeAudioData 등)로 생략됐으면(저장본=미트림 원본 webm) 가시화한다.
-        // 이전엔 무이벤트 침묵 폴백이라 "음성클립 편집 실패"(이원창 c7 3·4·5 = 비고 3행)가 로그에 안 보였다.
-        // 클립 자체는 저장되어 재생 가능(capture 플로우 불깨짐) — 이건 순수 관측용 신호다(보수적).
-        if (trimFailed) {
-          logCell({
-            type: 'clip', extra: `clip_trim_failed:${trimFailReason ?? 'unknown'}`,
-            row: clipAwaitingRow, colId: clipAwaitingColId, clipKey,
-          });
-        }
-        if (!clipBlob) {
-          // v0.20.0 Phase 5 #5 — clip_empty에 직전 입력장치 전이(있으면)를 컨텍스트로 동봉한다.
-          // BT clip_empty는 내장↔블루투스 thrash 직후 트랙 사망으로 발생 — 전이를 같은 이벤트에 붙여
-          // 다음 분석이 BT 라우팅 원인을 즉시 잇게 한다(이전엔 별도 input_device_changed와 ts로만 상관).
-          const lic = recorderRef.current?.getLastInputChange();
-          logCell({
-            type: 'error',
-            extra: lic ? `clip_empty:after:${lic.reason}:${lic.transition}` : 'clip_empty',
-            row: clipAwaitingRow, colId: clipAwaitingColId,
-          });
-          // v0.22.0 P0 — 빈 클립 자동 재시도 폭주 차단. 자동 recoverStream은 iOS에서 **제스처 밖
-          // getUserMedia**라 NotAllowedError로 거부되어 살아있던 스트림까지 잃고 매 빈 클립마다
-          // 재시도가 폭주했다(실기기: clip_empty×41). → 스트림이 실제로 죽었으면 자동 재시도를 멈추고
-          // micLost로 표시(once 가드) → 사용자 제스처(reconnectMic)로만 복구. 스트림이 멀쩡하면
-          // no-op(다음 클립이 자가 치유). 자동 recoverStream은 더 이상 부르지 않는다(수칙 3).
-          maybeAutoRecoverOrLatch('clip_empty');
-          await resolveFailedCapture(savePromiseSelf);
-          return;
-        }
-        if (clipBlob.size <= EMPTY_CLIP_BYTES) {
-          logCell({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, row: clipAwaitingRow, colId: clipAwaitingColId });
-          maybeAutoRecoverOrLatch('clip_too_small');
-          await resolveFailedCapture(savePromiseSelf);
-          return;
-        }
-        // v0.11.0 Codex HIGH: pendingClipsRef로 stale save 차단.
-        // restart/modify가 pendingMap[colId]를 정리하거나 새 키로 교체하면, 옛 savePromise는
-        // m[colId] !== clipKey가 되어 폐기됨. epoch 가드보다 정밀해서 정상 클립을 차단하지 않음.
-        const guard = pendingClipsRef.current[clipAwaitingRow];
-        if (!guard || guard[clipAwaitingColId] !== clipKey) {
-          logCell({ type: 'error', extra: 'clip_stale_pending', row: clipAwaitingRow, colId: clipAwaitingColId });
-          return;
-        }
-        await saveAudioClip(clipKey, clipBlob);
-        // [CLIP-VAL-1]③: fresh bytes landed under this key — lift the tombstone so the pointer
-        // may persist again (a previous failed attempt on the same cell reuses the same key).
-        brokenClipKeysRef.current.delete(clipKey);
-        logCell({ type: 'clip', extra: `clip_saved:${clipBlob.size}`, row: clipAwaitingRow, colId: clipAwaitingColId });
-        // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
-        // pendingClips에는 등록하지 않으므로 데이터탭 재생 UI에는 노출되지 않고, 로그 zip의
-        // clips/(prefix 매칭)과 deleteSession cascade에만 따라간다. 분석 전용.
-        if (rawBlob) {
-          await saveAudioClip(`${clipKey}:raw`, rawBlob);
-          logCell({ type: 'clip', extra: `clip_raw_saved:${rawBlob.size}`, clipKey: `${clipKey}:raw`, row: clipAwaitingRow, colId: clipAwaitingColId });
-        }
-      } catch (e) {
-        logCell({ type: 'error', extra: `clip_save_failed:${String((e as Error)?.message ?? e)}`, row: clipAwaitingRow, colId: clipAwaitingColId });
-        await resolveFailedCapture(savePromiseSelf);
-      }
-    })();
-    savePromiseSelf = savePromise;
-    clipCapture.trackSave(savePromise);
+    // [ENV-12] E단계 — 블록 F(store 커밋·✓집합·영수증·burst + 증분 영속화 + 클립 종결)는
+    //   useValueCommit이 소유한다. 조기 종료가 없는 **직선 커밋**이라 handled 신호가 없다.
+    //   🔑 `parsed`를 인자로 넘기는 이유: ctx의 선택 필드로는 non-null을 타입으로 증명할 수
+    //   없는데 그 확인은 바로 위(값 게이트 뒤)에서 이미 했다. 산출물 3종을 **반환으로** 받는
+    //   이유: ctx로 받으면 여기서 도달 불가 가드를 하나 더 써야 하고, 그 가드가 침범당하면
+    //   「값은 커밋됐는데 착지만 증발」이 된다 — 반환값은 그 상태를 구성으로 막는다.
+    const { myEpoch, commitLatencyMs, runCorrectedPersistCheck } = await runValueCommit(ctx, parsed);
 
     // ── v0.7.0 B4: 추세 검증 — 값 커밋 직후 · echo/advance 전 ──
     // 값↔클립 매핑은 위에서 이미 확정됐고 커밋된 값은 위반이어도 그대로 선다(롤백 없음 — 민구
@@ -2175,7 +1979,12 @@ export function useVoiceSession() {
     //   `runValueGate`가 들어왔다. `say`는 잔류다(G의 알람 TTS 2곳). 스테이지 둘은 전부
     //   `useCallback([])`+`depsRef`라 영구 고정 — 남은 7개를 E3(F)·E4(G+H)가 걷어내면
     //   §5-1 ③이 요구한 「정확히 스테이지 함수만」에 도달한다.
-  }, [runCommandStage, runValueGate, proceedAfterCommit, say, persistSession, evaluateTrend, getAnomalyAlertData, archiveCellClip, armClipForCell]);
+    // 🔴 [ENV-12] E단계 E3 — **9 → 8.** 값 커밋이 나가면서 `persistSession`·`archiveCellClip`이
+    //   소멸했다(그 구획이 handleFinal 안의 **유일 콜러**였다 — 잔류 G+H 호출 0 실측).
+    //   `runValueCommit`이 들어와 스테이지가 셋이 됐고, 남은 5개(`proceedAfterCommit` `say`
+    //   `evaluateTrend` `getAnomalyAlertData` `armClipForCell`)는 전부 블록 G+H 소유다 —
+    //   E4가 그것을 가져가면 §5-1 ③의 「정확히 스테이지 함수만」에 도달한다.
+  }, [runCommandStage, runValueGate, runValueCommit, proceedAfterCommit, say, evaluateTrend, getAnomalyAlertData, armClipForCell]);
 
   // ── v0.9.0 interim(중간) 결과 처리: EOS 계측 마킹 + (빠른 인식 ON 시) 조기확정 ──
   const handleInterim = useCallback((text: string, confidence?: number) => {
