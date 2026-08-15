@@ -592,7 +592,12 @@
        AudioContext 재개 1곳뿐이라 경계가 깨끗했다. 다음 분리는 **별도 설계 필요**.
      - **순서 계약(불변):** 캡처 그래프 `detach()`는 **항상 `stream.stop()`보다 먼저**다
        (source가 stream을 참조 — 뒤집히면 그래프 누수).
-  6. `src/lib/pastValues.ts` (650 — 2026-07-26 실측) — 과거값 인덱스 도메인, 분리 경계 검토 후 해소
+  6. ~~`src/lib/pastValues.ts`~~ — ✅ v0.49 R2 리팩토링(2026-08-15)에서 해소. 경계는 **브라우저 경계**
+     (파일이 이미 자기 안에 구획 주석으로 선언해 두었던 그 선): 순수 로직 → `src/lib/pastValuesIndex.ts`
+     (421줄), 영속 직렬화 → `src/lib/pastValuesPersist.ts`(104줄), fetch·캐시·세대·백오프는
+     `pastValues.ts`(885→397줄)에 남았다. disable 제거. 호출부 수정 0 — `pastValues.ts`가
+     `keyColumns`·`buildSampleKey`·`previousRound`·`pastValue`·`previousSurveyRound`·`PrevSurveyRound`를
+     **단방향** 재수출한다. 인용 스펙 5건은 leaf로 재표적했다.
   7. ~~`src/lib/sheets.ts`~~ — ✅ v0.49 R2 리팩토링(2026-08-15)에서 해소. 경계는 **네트워크 경계**:
      컬럼 유추 순수 함수(`inferColumns`·`preserveInferredColumnIds`·`uniqueValuesRecentFirst`·
      `guessType`·`stableColumnId`·`OPTIONS_MIN_REPEAT`)를 `src/lib/sheetsInfer.ts`(229줄)로 이동,
@@ -903,7 +908,8 @@
   대조 — 이미 로그에 `past_index_ready` 계측이 있다) ② 부분 키 인덱스로 바꿀 때의 마이그레이션
   경로 ③ 이상치 비교선(`previousRound`)에도 같은 누락이 있는지(같은 인덱스를 공유한다).
 - 🔴 **확장(2026-08-13 v0.49 r4 · claude r3 #7 — R 등재, 수정 없음): 같은 인덱스의 두 번째 구멍
-  = 공백 포함 키의 join 버킷 충돌.** `KEY_SEP`이 **공백**이고(`pastValues.ts:36`)
+  = 공백 포함 키의 join 버킷 충돌.** `KEY_SEP`이 **공백**이고(`pastValuesIndex.ts` —
+  2026-08-15 [ENV-12] 분리 전 `pastValues.ts`)
   `buildSampleKey`가 값들을 그 구분자로 join한다(`:48-60`). 그래서 값 자체에 공백이 있으면
   **다른 샘플이 같은 버킷 문자열**을 만든다: 예를 들어 키가 `농가명+라벨`일 때
   `('강 남호','A')`와 `('강','남호 A')`는 둘 다 `"강 남호 A"`다.

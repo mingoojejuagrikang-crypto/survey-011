@@ -16,11 +16,13 @@ import {
   resolveRoundCol,
   previousRound,
   pastValue,
+} from '../src/lib/pastValuesIndex';
+import {
   serializePastIndexEntry,
   deserializePastIndexEntry,
   isFallbackFresh,
   FALLBACK_TTL_MS,
-} from '../src/lib/pastValues';
+} from '../src/lib/pastValuesPersist';
 // v0.38.0 — withTimeout은 계층 중립 유틸(lib/async)로 이동. 검증 내용은 그대로 여기서 유지한다.
 import { withTimeout } from '../src/lib/async';
 import type { Column } from '../src/types';

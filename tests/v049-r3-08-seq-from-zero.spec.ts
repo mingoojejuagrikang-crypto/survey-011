@@ -19,7 +19,7 @@
 
 import { test, expect } from '@playwright/test';
 import { autoValue, nestedAutoValue, computeTotalRows } from '../src/lib/autoValue';
-import { buildPastIndex, previousSurveyRound, resolveRoundCol } from '../src/lib/pastValues';
+import { buildPastIndex, previousSurveyRound, resolveRoundCol } from '../src/lib/pastValuesIndex';
 import type { Column } from '../src/types';
 
 const col = (id: string, name: string, over: Partial<Column> = {}): Column => ({

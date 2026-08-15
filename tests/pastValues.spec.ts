@@ -26,9 +26,11 @@ import {
   sessionFixedKeyColumns,
   previousSurveyRound,
   fixedKeyCellMatches,
+} from '../src/lib/pastValuesIndex';
+import {
   serializePastIndexEntry,
   deserializePastIndexEntry,
-} from '../src/lib/pastValues';
+} from '../src/lib/pastValuesPersist';
 import type { Column } from '../src/types';
 
 const col = (id: string, name: string, over: Partial<Column> = {}): Column => ({

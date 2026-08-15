@@ -20,13 +20,12 @@
  * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다(수동 기동 불필요, [ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
+import { buildPastIndex, resolveRoundCol } from '../src/lib/pastValuesIndex';
 import {
-  buildPastIndex,
-  resolveRoundCol,
   serializePastIndexEntry,
   FALLBACK_TTL_MS,
   type PersistedPastIndexRecord,
-} from '../src/lib/pastValues';
+} from '../src/lib/pastValuesPersist';
 import { effectiveSampleKey } from '../src/lib/columnFlags';
 import type { Column } from '../src/types';
 import { BASE } from './baseUrl';
