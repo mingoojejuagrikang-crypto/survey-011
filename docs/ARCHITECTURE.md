@@ -123,10 +123,13 @@ ActiveControlBar    상태별 좌/우 버튼 — active·complete `이전`/`다�
 |------|------|
 | `db.ts` | IndexedDB — 스키마 SSOT(`applyAppSchema`), 클립은 `{buf,type}` 분해 저장 |
 | `sync.ts` · `sessionSync.ts` | 시트 append/update · 행 단위 동기화 상태 |
-| `sheets.ts` | Sheets API · `inferColumns` |
+| `sheets.ts` | Sheets API (HTTP 경계 — 토큰/API key 폴백·읽기·append·sparse update) |
+| `sheetsInfer.ts` | 시트 표본 → `Column[]` 유추(순수) — `inferColumns` · 리스트 승격 판정 |
 | `sheetConnection.ts` | 연결 상태 판정(순수 술어) |
 | `legacySyncFlow.ts` · `legacyTargetApply.ts` | target 없는 legacy 세션의 명시 결합 |
-| `pastValues.ts` | 과거값 인덱스 — 이상치 경보의 기준값 (IDB 폴백 포함) |
+| `pastValues.ts` | 과거값 인덱스의 브라우저 사이드 — fetch·모듈 캐시·IDB 폴백·백오프 |
+| `pastValuesIndex.ts` | 그 순수 로직 — 샘플키·회차 정규화·인덱스 빌드·직전 회차 조회 |
+| `pastValuesPersist.ts` | 그 영속 직렬화 — `PastIndex` ↔ JSON-호환 평면 레코드 |
 | `trendCheck.ts` · `trendEvaluate.ts` · `anomalyAlert.ts` | 추세 판정 · **경보 문구 SSOT** |
 | `pendingValidation.ts` | 확인 전 값 staging (확정 전 값은 시트로 새지 않는다) |
 | `csv.ts` · `exportLog.ts` | 내보내기 |
@@ -146,7 +149,10 @@ PRINCIPLES §4) · `wakeLock.ts` · `pwaUpdate.ts` · `inputDevice.ts` ·
 
 | 스토어 | 담는 것 | 영속화 |
 |--------|---------|--------|
-| `settingsStore.ts` | 컬럼 설정·시트 연결·음성/경보 옵션 | localStorage persist + IDB 미러 |
+| `settingsStore.ts` | 컬럼 설정·시트 연결·음성/경보 옵션 (create·persist 배선·액션) | localStorage persist + IDB 미러 |
+| ├ `settingsState.ts` | `SettingsState` 형태 · 기본값 SSOT · 입력값 설정 초기화 패치 | — |
+| ├ `settingsStorage.ts` | 저장 매체 — localStorage 1차 + IDB 미러 + 하이드레이션 게이트 | — |
+| └ `settingsMigrate.ts` | persist 버전 이력 (🔴 **문장 순서가 계약**) | — |
 | `sessionStore.ts` | 진행 중 세션·`VoicePhase` | IDB (`saveSession`) |
 | `dataStore.ts` | 열람용 세션 목록 | IDB에서 로드 |
 
@@ -157,10 +163,13 @@ persist 스키마를 바꾸면 마이그레이션이 함께 간다.
 
 GL-006 §5 — 권장 150~250줄, 300줄 분리 검토, **500줄이 ESLint `max-lines` 오류 상한**
 (`eslint.config.js`). 도입 시점의 기존 초과 파일만 파일 상단 `eslint-disable`로 예외이며
-KNOWN-ISSUES `[ENV-12]`가 목록을 관리한다. 현재 예외 6개:
+KNOWN-ISSUES `[ENV-12]`가 목록을 관리한다. 현재 예외 **3개**(2026-08-15 실측):
 
-`useVoiceSession.ts`(3236) · `audioRecorder.ts`(868) · `pastValues.ts`(650) ·
-`speech.ts`(614) · `settingsStore.ts`(558) · `sheets.ts`(546)
+`useVoiceSession.ts`(4474) · `speech.ts`(939) · `audioRecorder.ts`(919)
+
+> 종전 6개 중 `pastValues.ts`·`settingsStore.ts`·`sheets.ts` 3개는 v0.49 R2에서 해소됐다
+> (2026-08-15 — 위 표의 leaf 모듈들). 예외 여부의 진짜 SSOT는 각 파일 상단의 주석이다:
+> `grep -rln "eslint-disable.*max-lines" src/`
 
 **새 파일은 예외 대상이 아니다.** 예외 파일을 분해하면 `eslint-disable` 주석을 함께 지운다.
 
