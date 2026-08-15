@@ -200,8 +200,15 @@
   같은 형태의 결함이 남는다.
 - **⚠️ epoch 재확인과 혼동하지 마라 — 다른 축이다.** epoch는 **barge-in/타 명령** 경쟁을 닫고
   (`await say(...)` 뒤 재무장 지점마다 필요하다), 국면 가드는 **종료·일시정지**를 닫는다.
-  실측: 음성 명령은 `handleFinal`이 전부 epoch를 올리므로(:2665) 음성 축은 epoch가 닫고,
-  국면 가드는 그 위의 구조적 backstop이다. 둘 중 하나로 다른 하나를 대신할 수 없다.
+  실측: 음성 축은 `handleFinal` 파이프라인이 epoch를 올리므로 epoch가 닫고, 국면 가드는 그 위의
+  구조적 backstop이다. 둘 중 하나로 다른 하나를 대신할 수 없다.
+  🔴 **bump 지점은 두 파일에 흩어져 있다**([ENV-12] E단계 2026-08-15 분리 이후):
+  명령 bump(`if (cmd) epochRef.current++`)와 paused 분기 bump는 `useFinalCommands.ts`,
+  barge-in bump는 `useFinalValueGate.ts`, 값 커밋 bump(`++epochRef.current`)는
+  `useValueCommit.ts`다. 착지의 재확인(`epochRef.current !== myEpoch`)은 `useCommitLanding.ts`.
+  ⚠️ **여기 줄 번호를 다시 적지 마라.** 종전 이 자리에 있던 `:2665`는 참조 시점부터 어긋나
+  있었고(2026-08-15 실측: 기준 sha에서 그 줄은 무관한 v0.47.0 주석), 그것이 이 문단이
+  파일 앵커로 바뀐 이유다. 찾을 때는 `grep -rn "epochRef.current++\|++epochRef.current" src/lib/`.
 - **당시 상태:** ✅수정(v0.49 r5 Z2) + 반증 사다리 3단 실측 —
   ①둘 다 있음 green ②경계 epoch 가드만 제거 → `landing_refused:stopping:*`가 잡는다
   ③둘 다 제거 → `review_wait`가 `stop` 뒤에 찍히고 「입력을 종료합니다.」가 TTS에서 사라진다.

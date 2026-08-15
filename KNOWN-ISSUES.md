@@ -576,6 +576,26 @@
      않고 릴리스당 1개 서브 훅씩 검증하며 진행.
      - ✅ **v0.38.0: `useClipCapture` 분리 완료**(서브 훅 #1 — 셀별 재시도·명령 클립 인덱스,
        in-flight 저장 장부). 다음은 **persist**(`persistSession`), 그다음 내비게이션.
+     - 🔴 **2026-08-15 실측 갱신 — 위 「3,236@07-26」은 그 시점 스냅샷이다. 현재 3,535.**
+       (07-26 이후 기능 유입으로 5,816까지 갔다가 아래 서브 훅 시리즈로 내려온 값이다 —
+       숫자만 보면 300줄 늘어난 것처럼 보이지만 실제로는 **−2,281**이다. 원장의 규율대로
+       *왜 바뀌었는지*를 적는다.)
+     - ✅ **서브 훅 시리즈 현행 — #1~#10 분리 완료**(2026-08-15):
+       #1 `useClipCapture`(v0.38.0) · #2 `usePersistSession` · #3 `useRowNav` ·
+       #4 `useFieldNav` · #5 `useTrendGate` · #6 `useAnnouncements`(uvs A~D) ·
+       #7 `useFinalCommands` · #8 `useFinalValueGate` · #9 `useValueCommit` ·
+       #10 `useCommitLanding`(E단계 — `handleFinal` 1,192줄 구획을 4스테이지 파이프라인으로).
+       `useRowNav`에서 `useRowLanding`이 추가로 갈렸다(r2-nearcap).
+       👉 **`handleFinal`의 dep 배열은 이제 정확히 스테이지 함수 4개다**(아래 identity 계약의
+       기계적 완성형). 다섯 번째가 생기면 그 자체가 리뷰 대상이다.
+     - ⚠️ **신규 4파일은 `eslint-disable` 예외가 아니다**(전부 500 미만) — 이 예외 목록은
+       무접촉이다(r2-nearcap의 「가진 적이 없으면 등재/삭제 대상 아님」 판정과 같은 형태).
+       🔴 다만 **헤드룸이 얇은 둘은 기억해 둬야 한다**(민구 Q1-ⓐ 처분, 2026-08-15):
+       `useFinalCommands.ts`(478 · 여유 22) · `useFinalValueGate.ts`(462 · 여유 38).
+       둘 다 계획서가 스스로 세운 「여유 50줄 미만은 위험」 선 아래다 — 원인은 주입 심볼이
+       28·15개라 `Deps` interface가 크기 때문이고, 이동 본문은 주석 비중 46%의 계약 문서라
+       줄일 수 없다. **주석 한 줄을 더하기 전에 `wc -l`을 먼저 봐라.**
+       (`useValueCommit` 342 · `useCommitLanding` 321은 여유 충분 — 대상 아님.)
      - ⚠️ **분리 시 identity 계약 주의:** 노출 함수를 `useCallback(..., [])`로 고정해야 한다.
        호출부 `logCell`이 비메모이즈라 의존성에 그대로 넣으면 매 렌더 새 identity가 되고, 그
        함수들이 `handleFinal`의 의존성 배열에 있어 **매 렌더 handleFinal 재생성 → STT 배선이
