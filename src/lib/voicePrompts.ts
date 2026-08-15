@@ -77,6 +77,28 @@ export function relistenPrompt(name: string): string {
  *  ⚠️ 늘리지 마라([TTS-WATCHDOG-1] 긴 발화일수록 절단률이 단조 증가). */
 export const REVIEW_WAIT_COMMANDS_TTS = '수정 또는 다음행.';
 
+/** 🔴 v0.49 fix49b(max 리뷰 #9) — **셀 검토 대기가 값을 요구하지 않는다는 것의 SSOT.**
+ *
+ *  이 상태는 bare 값을 **흡수**한다(덮어쓰기 금지 — B-1). 그런데 값 대기(`kind:'value'`)
+ *  문맥에서 쓰던 재질문 문구("○○ 다시 말씀해 주세요")가 이 상태에서도 그대로 나갔다:
+ *  앱이 값을 말하라고 시키고, 시킨 대로 하면 흡수가 "수정이라고 말하세요"로 되받는다 —
+ *  서로를 부정하는 두 문장 사이에 음성 전용 사용자가 갇힌다.
+ *  화면을 끄고 2~3m 떨어져 쓰는 사용자에게 TTS는 **유일한 조작 설명서**다(v0.47.0 V-FIX4).
+ *
+ *  흡수 안내(useVoiceSession의 cellWait 흡수)와 **같은 문구**를 쓴다 — 같은 상태에 두 이름을
+ *  주지 않는다.
+ *  ⚠️ 늘리지 마라([TTS-WATCHDOG-1] 긴 발화일수록 절단률이 단조 증가).
+ *
+ *  🔴 [ENV-12] E단계 E1(2026-08-15) — 종전 선언 위치는 `useVoiceSession.handleFinal` **안**
+ *  (블록 B)이었다. 그 함수를 스테이지 훅으로 가르면 이 문구를 소비하는 세 지점이 **파일 경계를
+ *  가로지른다**(명령 스테이지의 `cmdConfirm`·`cmdCancel`·저신뢰 명령 거절 꼬리 → `useFinalCommands`,
+ *  cellWait 흡수 → 본체 잔류). 훅 간 주입 심볼로 넘기면 같은 문장의 소유자가 흐려지므로,
+ *  이 파일(문구 SSOT)로 올린다 — 위 `REVIEW_WAIT_COMMANDS_TTS` 헤더가 이미 이 함수를 「같은
+ *  상태에 두 이름을 주지 않는다」 계약의 전례로 인용하고 있었다. **바이트는 그대로 옮겼다.** */
+export function cellWaitPrompt(name: string): string {
+  return `${name} 기록값입니다. 수정이라고 말하세요.`;
+}
+
 export function reviewWaitAbsorbTts(row: number): string {
   return `${row}행 완료됨. ${REVIEW_WAIT_COMMANDS_TTS}`;
 }

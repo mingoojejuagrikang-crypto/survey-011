@@ -8,7 +8,7 @@ import { parseKoreanNumber, detectCommand, extractModifyValue, isAmbiguousSingle
 // [ENV-12] v0.43.0 #3 — 값 파싱 시도는 순수 모듈이 소유한다(부수효과 없음). 이 파일은 호출만.
 import { attemptParseValue, parseValueForCol } from './valueParseAttempt';
 import { VOICE_COMMANDS, extractModifyColumn, isVoiceUiCommand, type VoiceUiCommandSignal } from './voiceCommands';
-import { decimalReaskPrompt, REASK_TTS, relistenPrompt, reviewWaitAbsorbTts, REVIEW_WAIT_COMMANDS_TTS } from './voicePrompts';
+import { cellWaitPrompt, decimalReaskPrompt, REASK_TTS, relistenPrompt, reviewWaitAbsorbTts, REVIEW_WAIT_COMMANDS_TTS } from './voicePrompts';
 import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, warmupTts, setActiveController, setPreferredVoiceName, setBargeInEnabled, refreshVoices, resumeTtsEngine } from './speech';
 import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColumn } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
@@ -339,6 +339,17 @@ export function useVoiceSession() {
   // Ref to resume() — breaks the circular dependency between handleFinal and resume.
   // v0.20.0 Phase 5 #3 — resume이 해제 방식(source)을 받도록 시그니처 확장.
   const resumeRef = useRef<(source?: 'voice' | 'touch') => Promise<void>>(async () => {});
+  // 🔴 [ENV-12] E단계(2026-08-15) — `resumeRef`와 **같은 매듭**을 stop/pause에도 푼다.
+  //   handleFinal은 `stop(true)`(cmdEnd·pausedEnd)와 `pause('voice')`를 부르는데, 선언 순서는
+  //   handleFinal → start → stop → pause다. 오늘 동작하는 이유는 handleFinal **본문**이 렌더
+  //   이후에만 실행되고 dep 배열에도 그 둘이 없기 때문이다. 그러나 명령 구획을 서브 훅으로
+  //   가르면 훅 호출부(= handleFinal 자리)의 주입 객체 리터럴이 **렌더 시점에 평가**되어
+  //   첫 렌더에 `ReferenceError`가 난다. 순서를 바꿔 피할 수도 없다 — `start`의 dep 배열이
+  //   `handleFinal`을 담으므로 handleFinal은 stop/pause보다 앞서야 한다(구조적 매듭).
+  //   ⚠️ 동기화는 아래 `resumeRef` effect와 **같은 effect**에 둔다(실행 순서를 새 변수로
+  //   만들지 않는다). 첫 STT final은 사용자 클릭 이후에만 도착하므로 채워짐이 보장된다.
+  const stopRef = useRef<(announce?: boolean) => Promise<boolean>>(async () => false);
+  const pauseRef = useRef<(source?: 'voice' | 'touch') => Promise<void>>(async () => {});
   // UI modal hard-suspend. This is deliberately narrower than pause(): it stops STT delivery
   // while a full-screen UI modal is open, but it does not change session phase or recorder state.
   // v0.37.0 리뷰(3모델 공통, 민구 인가) — **소스 집합(reference-count) 래치**. 종전 단일 boolean
@@ -1635,18 +1646,6 @@ export function useVoiceSession() {
       await say(msg);
     }
 
-    /** 🔴 v0.49 fix49b(max 리뷰 #9) — **셀 검토 대기가 값을 요구하지 않는다는 것의 SSOT.**
-     *
-     *  이 상태는 bare 값을 **흡수**한다(덮어쓰기 금지 — B-1). 그런데 값 대기(`kind:'value'`)
-     *  문맥에서 쓰던 재질문 문구("○○ 다시 말씀해 주세요")가 이 상태에서도 그대로 나갔다:
-     *  앱이 값을 말하라고 시키고, 시킨 대로 하면 흡수가 "수정이라고 말하세요"로 되받는다 —
-     *  서로를 부정하는 두 문장 사이에 음성 전용 사용자가 갇힌다.
-     *  화면을 끄고 2~3m 떨어져 쓰는 사용자에게 TTS는 **유일한 조작 설명서**다(v0.47.0 V-FIX4).
-     *
-     *  흡수 안내(:2370)와 **같은 문구**를 쓴다 — 같은 상태에 두 이름을 주지 않는다.
-     *  ⚠️ 늘리지 마라([TTS-WATCHDOG-1] 긴 발화일수록 절단률이 단조 증가). */
-    const cellWaitPrompt = (name: string) => `${name} 기록값입니다. 수정이라고 말하세요.`;
-
     /** '확인'(추세 알림 밖) — 상태 변경 없이 짧은 재안내만(v0.7.0 B4, 무음 금지 REVIEW-4).
      *  trendConfirm 중의 '확인'은 resolveFinal이 trendResolve로 먼저 처리한다.
      *
@@ -2050,8 +2049,9 @@ export function useVoiceSession() {
         extra: `cell_wait_absorb:${awaiting.colId}`, text,
         row: awaiting.row, colId: awaiting.colId,
       });
-      // ⚠️ 문구는 `cellWaitPrompt`(위 #9 SSOT)를 쓴다 — 이 문장이 그 SSOT의 **원본**이지만,
-      //   여기 리터럴을 남겨 두면 「선언은 하나인데 사본이 있는」 [PAST-2] 형태가 된다.
+      // ⚠️ 문구는 `cellWaitPrompt`(#9 SSOT — voicePrompts.ts)를 쓴다. 이 흡수 안내가 그 문장의
+      //   **의미상 원본**이지만, 여기 리터럴을 남겨 두면 「선언은 하나인데 사본이 있는」
+      //   [PAST-2] 형태가 된다. ([ENV-12] E1 — 선언은 handleFinal 안에서 voicePrompts로 올랐다.)
       await say(cellWaitPrompt(awaiting.name));
       return;
     }
@@ -3680,7 +3680,13 @@ export function useVoiceSession() {
   }, [announceEndReached, announceField, armClipForCell, enterCellWait, enterReviewWait, handleFinal, handleInterim, say, buildReturnBriefing]);
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
-  useEffect(() => { resumeRef.current = resume; }, [resume]);
+  // [ENV-12] E단계 — stop/pause도 같은 매듭(선언 순서: handleFinal → start → stop → pause)이라
+  // 같은 effect에서 채운다. 명령 스테이지 훅이 이 셋을 ref로 주입받는다(그 선언부 주석 참조).
+  useEffect(() => {
+    resumeRef.current = resume;
+    stopRef.current = stop;
+    pauseRef.current = pause;
+  }, [resume, stop, pause]);
 
   // hydrateSessions가 IDB의 pendingValidation을 sessionStore에 복구한 뒤 VoiceScreen이 마운트된다.
   // 팝업만 복원하고 이 내부 포인터를 비워 두면 [확인]이 advance 문맥을 잃으므로 같은 셀/검토대기를
