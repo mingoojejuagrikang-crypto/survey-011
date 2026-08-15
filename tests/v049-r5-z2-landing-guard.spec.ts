@@ -194,8 +194,11 @@ test('[node] ③ 착지 리셋 4종은 armLanding 한 곳이 소유한다 — �
   // uvs-d(ENV-12 #6) — 남은 둘(소유자 `armLanding`과 `announceField`)도 useAnnouncements.ts로
   // 갔다. 형제 순서(armLanding → announceField)가 보존돼 armLanding 본문 종료 마커
   // (`const announceField = useCallback(`)도 그대로다 — 소스 경로만 재표적한다.
+  // r2-nearcap(ENV-12) — 착지 셋이 useRowNav.ts 안에서 다시 useRowLanding.ts로 갈렸다(착지 계열
+  // 대 행 이동). ④의 gotoAdjacentRow·goNextRow는 **useRowNav.ts 잔류**라 그쪽 `src`는 안 바뀐다 —
+  // 한 파일에 소스 상수가 둘이니 경로를 일괄 치환하지 마라. 마커·계약 바이트는 이동 전과 동일하다.
   const src = fs.readFileSync('src/lib/useAnnouncements.ts', 'utf-8');
-  const navSrc = fs.readFileSync('src/lib/useRowNav.ts', 'utf-8');
+  const navSrc = fs.readFileSync('src/lib/useRowLanding.ts', 'utf-8');
 
   /** `const <name> = useCallback(` 부터 다음 착지/함수 경계까지 — 주석 줄은 제거한다
    *  (근거 주석이 옛 코드를 인용하므로, 주석을 보면 이 계약은 영영 red다). */

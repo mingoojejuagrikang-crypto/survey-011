@@ -232,7 +232,10 @@ test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 �
   // 유지한다(부정 단언만 확장). 현재 두 파일의 호출은 0이다.
   // uvs-d(ENV-12 #6) — 안내 구획이 useAnnouncements.ts로 갔다. 같은 우발 커버를 유지한다
   // (부정 단언만 확장). 현재 그 파일의 호출은 0이다.
-  const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useFieldNav.ts', 'src/lib/useAnnouncements.ts']
+  // r2-nearcap(ENV-12) — useRowNav의 착지 계열이 useRowLanding.ts로 갈렸다. 같은 우발 커버를
+  // 유지한다(부정 단언만 확장). 현재 그 파일의 호출은 0이고, 개수 1은 불변이다.
+  const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useRowLanding.ts', 'src/lib/useFieldNav.ts',
+    'src/lib/useAnnouncements.ts']
     .map((p) => fs.readFileSync(p, 'utf-8')
       .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n'))
     .reduce((n, navCode) => n + navCode.split('armRejectCue(').length - 1, 0);

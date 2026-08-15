@@ -230,8 +230,10 @@ test('[node] ①c 행 완료 부기 배선 6곳(advance 2 · 커밋 종단 · �
   // 프로퍼티 표기라 위 정규식에 걸리지 않는다.
   // uvs-d(ENV-12 #6) — 안내 구획이 useAnnouncements.ts로 분리됐다. 같은 우발 커버를 유지한다
   // (R1 C-1 전례 — 부정 단언만 확장). 현재 그 파일의 호출은 0이고, 개수 6은 불변이다.
-  const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useFieldNav.ts', 'src/lib/useTrendGate.ts',
-    'src/lib/useAnnouncements.ts'].flatMap((p) => {
+  // r2-nearcap(ENV-12) — useRowNav의 착지 계열이 useRowLanding.ts로 갈렸다. 같은 우발 커버를
+  // 유지한다(R1 C-1 전례 — 부정 단언만 확장). 현재 그 파일의 호출은 0이고, 개수 6은 불변이다.
+  const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useRowLanding.ts', 'src/lib/useFieldNav.ts',
+    'src/lib/useTrendGate.ts', 'src/lib/useAnnouncements.ts'].flatMap((p) => {
     const navCode = fs.readFileSync(p, 'utf-8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');

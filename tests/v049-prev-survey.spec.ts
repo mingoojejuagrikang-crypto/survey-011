@@ -445,7 +445,9 @@ test('[node] W3-10(r4 M8 → r5 Z2) — 값을 여는 착지가 phase를 스스�
   ).toContain("phase: 'active'");
 
   // uvs-b(ENV-12 #3) — enterCellWait이 useRowNav.ts로 분리됐다(announceField는 본체 잔류).
-  const navSrc = fs.readFileSync('src/lib/useRowNav.ts', 'utf-8');
+  // r2-nearcap(ENV-12) — 그 착지 계열이 다시 useRowLanding.ts로 갈렸다. 계약(값을 여는 착지는
+  // phase를 호출부에 맡기지 않는다)과 마커 바이트는 불변 — 소스 경로만 재표적.
+  const navSrc = fs.readFileSync('src/lib/useRowLanding.ts', 'utf-8');
   const enterCellWait = navSrc.slice(navSrc.indexOf('const enterCellWait = useCallback('));
   expect(
     enterCellWait.slice(0, enterCellWait.indexOf('awaitingFieldRef.current = {')),
