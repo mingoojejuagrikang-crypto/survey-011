@@ -232,8 +232,14 @@ test('[node] ①c 행 완료 부기 배선 6곳(advance 2 · 커밋 종단 · �
   // (R1 C-1 전례 — 부정 단언만 확장). 현재 그 파일의 호출은 0이고, 개수 6은 불변이다.
   // r2-nearcap(ENV-12) — useRowNav의 착지 계열이 useRowLanding.ts로 갈렸다. 같은 우발 커버를
   // 유지한다(R1 C-1 전례 — 부정 단언만 확장). 현재 그 파일의 호출은 0이고, 개수 6은 불변이다.
+  // uvs-e1(ENV-12 #7) — handleFinal의 **명령 경로**(블록 B+C)가 useFinalCommands.ts로 갈렸다.
+  // 그 구획의 `finalizeRowCompletion` 호출은 분리 전에도 0이었으므로(실측) 개수 6은 불변이지만,
+  // 종전 이 파일 전역이 갖던 우발 커버를 유지하기 위해 합산 대상에 넣는다(R1 C-1 전례).
+  // ⚠️ 이 경로는 명령이 행을 옮기는 곳(end/nextRow/prevRow dispatch)이라 「새 커밋 경로가 조용히
+  // 추가되는」 이 계약의 감시 대상으로 특히 값이 있다.
   const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useRowLanding.ts', 'src/lib/useFieldNav.ts',
-    'src/lib/useTrendGate.ts', 'src/lib/useAnnouncements.ts'].flatMap((p) => {
+    'src/lib/useTrendGate.ts', 'src/lib/useAnnouncements.ts',
+    'src/lib/useFinalCommands.ts'].flatMap((p) => {
     const navCode = fs.readFileSync(p, 'utf-8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');

@@ -210,8 +210,12 @@ test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 �
   const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
   // uvs-c(ENV-12 #5) — 거절 종단(armRejectCue·rejectValue)이 useTrendGate.ts로 분리됐다(이동 커밋).
   // 형제 순서(armRejectCue → rejectValue → relistenInContext)가 그대로 보존돼 판정 로직은 불변 —
-  // 소스 경로만 재표적한다. handleFinal은 여전히 본체에 있으므로 「호출 1곳」 개수 계약(아래)은
-  // 두 파일을 합산해 그대로 잰다.
+  // 소스 경로만 재표적한다. 「호출 1곳」 개수 계약(아래)은 분리 파일 전량을 합산해 그대로 잰다.
+  // 🔴 uvs-e1(ENV-12 #7) — **이 테스트 제목의 「handleFinal」은 더 이상 한 파일에 있지 않다.**
+  //   handleFinal의 명령 경로(블록 B+C)가 useFinalCommands.ts로 갈렸고, **저신뢰 명령 거절**
+  //   (M11이 이 계약 안으로 끌고 들어온 바로 그 분기)이 그 파일에 있다. 종전 주석의
+  //   *"handleFinal은 여전히 본체에 있으므로"*는 이 시점부터 사실이 아니다 — 아래 합산 목록에
+  //   그 파일을 넣어야 계약이 성립한다(넣지 않으면 그 파일의 직접 호출이 감시망 밖이 된다).
   const gateSrc = fs.readFileSync('src/lib/useTrendGate.ts', 'utf-8');
 
   const from = gateSrc.indexOf('const armRejectCue = useCallback(');
@@ -234,8 +238,10 @@ test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 �
   // (부정 단언만 확장). 현재 그 파일의 호출은 0이다.
   // r2-nearcap(ENV-12) — useRowNav의 착지 계열이 useRowLanding.ts로 갈렸다. 같은 우발 커버를
   // 유지한다(부정 단언만 확장). 현재 그 파일의 호출은 0이고, 개수 1은 불변이다.
+  // uvs-e1(ENV-12 #7) — handleFinal의 명령 경로(위 🔴). 저신뢰 명령 거절이 이 파일에 있고,
+  // 그 분기는 `rejectValue` 종단을 경유하므로 직접 호출은 0이다 — 개수 1은 불변.
   const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useRowLanding.ts', 'src/lib/useFieldNav.ts',
-    'src/lib/useAnnouncements.ts']
+    'src/lib/useAnnouncements.ts', 'src/lib/useFinalCommands.ts']
     .map((p) => fs.readFileSync(p, 'utf-8')
       .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n'))
     .reduce((n, navCode) => n + navCode.split('armRejectCue(').length - 1, 0);
