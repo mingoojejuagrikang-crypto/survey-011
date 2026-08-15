@@ -606,7 +606,7 @@
   8. ~~`src/stores/settingsStore.ts`~~ — ✅ v0.49 R2 리팩토링(2026-08-15)에서 해소. 경계는
      **「zustand를 아는가」**: `settingsState.ts`(279 — `SettingsState`·기본값 SSOT·입력값 설정
      초기화 패치) · `settingsStorage.ts`(65 — localStorage/IDB 미러 + 하이드레이션 게이트) ·
-     `settingsMigrate.ts`(223 — persist 버전 이력) · `settingsStore.ts`(729→223 — create/persist
+     `settingsMigrate.ts`(223 — persist 버전 이력) · `settingsStore.ts`(729→230 — create/persist
      옵션·액션). disable 제거. 호출부 수정 0(`makeSettingsDefaults`·`inputSettingsResetPatch`·
      `minConfidenceForTolerance` **단방향** 재수출).
      - 🔴 **migrate 이력은 본문 무수정으로 옮겼다**(들여쓰기 6칸 제거만 — 167줄 대조 확인).
