@@ -241,7 +241,11 @@ test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 �
   // uvs-e1(ENV-12 #7) — handleFinal의 명령 경로(위 🔴). 저신뢰 명령 거절이 이 파일에 있고,
   // 그 분기는 `rejectValue` 종단을 경유하므로 직접 호출은 0이다 — 개수 1은 불변.
   const navCalls = ['src/lib/useRowNav.ts', 'src/lib/useRowLanding.ts', 'src/lib/useFieldNav.ts',
-    'src/lib/useAnnouncements.ts', 'src/lib/useFinalCommands.ts']
+  // uvs-e2(ENV-12 #8) — **값 거절 여섯 분기가 통째로 useFinalValueGate.ts로 갔다.** r3 #6이
+  // 하나의 종단으로 모은 그 분기들이고, 이 계약(`armRejectCue` 호출 1곳)이 감시하는 본체다.
+  // 전부 `rejectValue` 종단 경유라 직접 호출은 0 — 개수 1은 불변이되, 합산에서 빠지면
+  // 이 계약의 감시망이 **가장 중요한 파일을 놓친다**.
+    'src/lib/useAnnouncements.ts', 'src/lib/useFinalCommands.ts', 'src/lib/useFinalValueGate.ts']
     .map((p) => fs.readFileSync(p, 'utf-8')
       .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n'))
     .reduce((n, navCode) => n + navCode.split('armRejectCue(').length - 1, 0);
