@@ -100,7 +100,8 @@ ActiveControlBar    상태별 좌/우 버튼 — active·complete `이전`/`다�
 | `speech.ts` | `SpeechController` — STT 수명주기 · TTS · 뮤트/재시작 보장 |
 | `useVoiceSession.ts` | 세션 오케스트레이션 (가장 큰 모듈 — 아래 §크기 참조) |
 | `voiceFinalResolver.ts` | `resolveFinal` — final 결과 → 행동을 정하는 **순수 결정표** |
-| `koreanNum.ts` | 한글 수사 파서 · `detectCommand` · `extractModifyValue` |
+| `koreanNum.ts` | 한글 수사 파서(모호성 판정·실패 사유 계측) · `detectCommand` · `extractModifyValue` |
+| `koreanNumTokens.ts` | 수사 표 + 정수/소수부 원시 파싱 — 사유 없이 수 또는 null만 |
 | `voiceCommands.ts` | **명령어 SSOT** — 기능당 한 단어, prefix 불변식 |
 | `voicePrompts.ts` · `announceColumns.ts` | TTS 문구 조립 |
 | `beep.ts` · `beepVariants.ts` | 비프음 |

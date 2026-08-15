@@ -9,139 +9,16 @@
  *  - Comma noise / leading garbage stripped via shortest-clean-number heuristic
  *
  * Returns numeric string or null.
+ *
+ * [ENV-12 · r2-nearcap] 수사 표와 정수/소수부 원시 파싱은 `koreanNumTokens.ts`가 소유한다.
+ * 이 파일에 남은 것은 **정책**이다 — 모호성 판정(잡토큰·다중 숫자·소수부 유실)과 실패 사유
+ * 계측(`fail`), 그리고 그 위에 얹힌 음성 명령 판별. 경계는 「왜 안 읽혔는지를 말하는가」다:
+ * 토큰 계층은 null만 돌려주고, 여기서만 사유가 붙는다.
  */
-
-const SINO: Record<string, number> = {
-  영: 0, 공: 0, 일: 1, 이: 2, 삼: 3, 사: 4, 오: 5, 육: 6, 륙: 6, 칠: 7, 팔: 8, 구: 9,
-};
-
-const NATIVE: Record<string, number> = {
-  하나: 1, 한: 1, 둘: 2, 두: 2, 셋: 3, 세: 3, 넷: 4, 네: 4,
-  다섯: 5, 여섯: 6, 일곱: 7, 여덟: 8, 아홉: 9, 열: 10,
-};
-
-const SMALL_UNIT: Record<string, number> = { 십: 10, 백: 100, 천: 1000 };
-const BIG_UNIT: Record<string, number> = { 만: 10000, 억: 100000000 };
-
-/** Max sensible integer part for measurement domain (mm / g / Brix etc.) */
-const OVERFLOW_THRESHOLD = 9999;
-
-function tryArabic(s: string): number | null {
-  const cleaned = s.replace(/[,\s]/g, '');
-  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return null;
-  // Reject obvious STT noise (e.g. "10,000,000,000,000,199.9")
-  const intPart = cleaned.split('.')[0].replace('-', '');
-  if (intPart.length > 4 || parseFloat(intPart) > OVERFLOW_THRESHOLD) return null;
-  return parseFloat(cleaned);
-}
-
-/**
- * Parse a sino-korean compound integer like "이천이십육" → 2026.
- * Walks left to right accumulating digits with unit multipliers.
- */
-function parseSinoInt(text: string): number | null {
-  if (!text) return null;
-  let total = 0;       // accumulator across 만/억 boundaries
-  let section = 0;     // accumulator within current 만-section
-  let digit = 0;       // last unmultiplied digit
-  let consumed = false;
-
-  for (const ch of text) {
-    if (SINO[ch] !== undefined) {
-      digit = SINO[ch];
-      consumed = true;
-      continue;
-    }
-    if (SMALL_UNIT[ch] !== undefined) {
-      const u = SMALL_UNIT[ch];
-      section += (digit === 0 ? 1 : digit) * u;
-      digit = 0;
-      consumed = true;
-      continue;
-    }
-    if (BIG_UNIT[ch] !== undefined) {
-      const u = BIG_UNIT[ch];
-      const localValue = section + digit;
-      total += (localValue === 0 ? 1 : localValue) * u;
-      section = 0;
-      digit = 0;
-      consumed = true;
-      continue;
-    }
-    return null;
-  }
-  if (!consumed) return null;
-  return total + section + digit;
-}
-
-/** Native korean digits: 다섯 → 5, 열다섯 → 15 */
-function parseNativeInt(text: string): number | null {
-  if (NATIVE[text] !== undefined) return NATIVE[text];
-  if (text.startsWith('열')) {
-    const rest = text.slice(1);
-    if (!rest) return 10;
-    const r = NATIVE[rest];
-    if (r !== undefined && r < 10) return 10 + r;
-  }
-  return null;
-}
-
-function parseKoreanInt(token: string): number | null {
-  if (!token) return null;
-  const a = tryArabic(token);
-  if (a !== null) return a;
-  const native = parseNativeInt(token);
-  if (native !== null) return native;
-  return parseSinoInt(token);
-}
-
-/** Full Korean-spoken parse including decimal (used by per-token loop). */
-function parseKoreanSpokenAll(token: string): number | null {
-  if (!token) return null;
-  const parts = splitDecimal(token);
-  if (parts.length === 1) return parseKoreanInt(parts[0]);
-  if (parts.length === 2) {
-    const w = parseKoreanInt(parts[0]);
-    if (w === null) return null;
-    const frac = parseFractionDigits(parts[1]);
-    if (!frac) return w;
-    const c = parseFloat(`${w}.${frac}`);
-    return Number.isFinite(c) ? c : null;
-  }
-  return null;
-}
-
-function splitDecimal(text: string): string[] {
-  // "점" / "쩜" / "." can all act as decimal separator when surrounded by Korean digits
-  return text.split(/[\s]*[점쩜.][\s]*/);
-}
-
-/** Parse fraction digits one symbol at a time (sino > native > arabic). */
-function parseFractionDigits(text: string): string {
-  let out = '';
-  let i = 0;
-  while (i < text.length) {
-    const c = text[i];
-    if (SINO[c] !== undefined) {
-      out += String(SINO[c]);
-      i++;
-      continue;
-    }
-    if (/\d/.test(c)) {
-      out += c;
-      i++;
-      continue;
-    }
-    const three = text.slice(i, i + 3);
-    const two = text.slice(i, i + 2);
-    const n3 = NATIVE[three];
-    const n2 = NATIVE[two];
-    if (n3 !== undefined && n3 < 10) { out += String(n3); i += 3; continue; }
-    if (n2 !== undefined && n2 < 10) { out += String(n2); i += 2; continue; }
-    break;
-  }
-  return out;
-}
+import {
+  OVERFLOW_THRESHOLD, SINO, parseFractionDigits, parseKoreanInt, parseKoreanSpokenAll,
+  splitDecimal, tryArabic,
+} from './koreanNumTokens';
 
 /** v0.5.0 W4/W5: machine-readable reason for the most recent parseKoreanNumber() null.
  *  Set fresh on every call; read by the caller (handleFinal) to tag stt_parse_failed.
