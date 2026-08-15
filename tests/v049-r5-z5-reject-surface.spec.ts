@@ -245,7 +245,10 @@ test('[node] ⑤ 거절 종단은 하나다 — handleFinal이 armRejectCue를 �
   // 하나의 종단으로 모은 그 분기들이고, 이 계약(`armRejectCue` 호출 1곳)이 감시하는 본체다.
   // 전부 `rejectValue` 종단 경유라 직접 호출은 0 — 개수 1은 불변이되, 합산에서 빠지면
   // 이 계약의 감시망이 **가장 중요한 파일을 놓친다**.
-    'src/lib/useAnnouncements.ts', 'src/lib/useFinalCommands.ts', 'src/lib/useFinalValueGate.ts']
+  // uvs-e3(ENV-12 #9) — 값 커밋 구획이 useValueCommit.ts로 갈렸다. 커밋 경로는 거절의 반대편이라
+  // 호출 0이 정상이고 개수 1은 불변 — 같은 우발 커버를 유지한다(R1 C-1 전례).
+    'src/lib/useAnnouncements.ts', 'src/lib/useFinalCommands.ts', 'src/lib/useFinalValueGate.ts',
+    'src/lib/useValueCommit.ts']
     .map((p) => fs.readFileSync(p, 'utf-8')
       .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n'))
     .reduce((n, navCode) => n + navCode.split('armRejectCue(').length - 1, 0);

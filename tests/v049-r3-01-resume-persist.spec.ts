@@ -241,7 +241,12 @@ test('[node] ①c 행 완료 부기 배선 6곳(advance 2 · 커밋 종단 · �
     'src/lib/useTrendGate.ts', 'src/lib/useAnnouncements.ts',
   // uvs-e2(ENV-12 #8) — handleFinal의 **값 게이트**(블록 D+E)가 useFinalValueGate.ts로 갈렸다.
   // 그 구획의 호출은 0이므로 개수 6은 불변이지만, 같은 우발 커버를 유지한다(R1 C-1 전례).
-    'src/lib/useFinalCommands.ts', 'src/lib/useFinalValueGate.ts'].flatMap((p) => {
+  // uvs-e3(ENV-12 #9) — handleFinal의 **값 커밋 종단**(블록 F)이 useValueCommit.ts로 갈렸다.
+  // 🔴 이 계약이 감시하는 「커밋 종단」이 바로 그 파일이다(#1 근인의 무대). 현재 그 파일의
+  // 호출은 0이고 개수 6은 불변이지만, 합산에서 빠지면 새 커밋 경로가 **가장 들어오기 쉬운 곳**이
+  // 감시망 밖이 된다.
+    'src/lib/useFinalCommands.ts', 'src/lib/useFinalValueGate.ts',
+    'src/lib/useValueCommit.ts'].flatMap((p) => {
     const navCode = fs.readFileSync(p, 'utf-8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
