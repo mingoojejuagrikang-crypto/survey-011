@@ -10,7 +10,8 @@ import { logger } from '../lib/logger';
 import { useSettingsActions } from '../lib/useSettingsActions';
 import { HelpButton, SettingsHelpModal } from '../components/settings/SettingsHelp';
 import { COLUMN_HELP, DATA_TYPE_HELP, FIRST_ENTRY_TIP } from '../components/settings/helpCopy';
-import { UpdateControl } from '../components/settings/UpdateControl';
+import { SettingsFooter } from '../components/settings/SettingsFooter';
+import { SettingsActionBar } from '../components/settings/SettingsActionBar';
 import { ColumnCard } from '../components/settings/ColumnCard';
 import { SheetConnectSection } from '../components/settings/SheetConnectSection';
 import { SessionOptionsSection } from '../components/settings/SessionOptionsSection';
@@ -218,59 +219,7 @@ export function SettingsScreen() {
             🔴 v0.45.0 UI① 갱신 — 상단 '설정 요약' 버튼도 삭제됐다(민구 재지적). 이제 요약 팝업
             진입점은 하단 액션바의 '설정요약'(settings-summary-shortcut) **하나뿐**이다. */}
 
-        {/* Footer: version + build date */}
-        <div
-          style={{
-            marginTop: 18, padding: '12px 16px 8px',
-            textAlign: 'center',
-            fontFamily: 'JetBrains Mono, ui-monospace, monospace',
-          }}
-        >
-          <div style={{ fontSize: 14, fontWeight: 700, color: T.text }}>
-            v{__APP_VERSION__}{' '}
-            {/* 🔴 v0.46.0 (민구 지시 08-06) — **테스트 배포본은 버전 옆에 「프리뷰」라고 적는다.**
-                프리뷰는 bump를 안 하므로 프로덕션과 버전 숫자가 같아진다(08-06 실측: 둘 다 0.45.0).
-                숫자만 보고는 어느 빌드인지 알 수 없어 제보 판정이 번들 grep까지 갔다. 이 배지가
-                **민구가 화면에서 즉시 구분**하게 하고, 짝이 되는 로그 표식(logger.ts)이
-                **분석자가 로그에서 구분**하게 한다. */}
-            {__PREVIEW_BUILD__ && (
-              <span
-                data-testid="preview-build-badge"
-                style={{
-                  color: T.amber,
-                  border: `1px solid ${T.amber}`,
-                  borderRadius: 6, padding: '1px 6px',
-                  fontSize: 11, fontWeight: 800, marginRight: 6,
-                  letterSpacing: -0.2,
-                }}
-              >
-                프리뷰
-              </span>
-            )}
-            <span style={{ color: T.textMute, fontWeight: 500, fontSize: 12 }}>({__BUILD_DATE__})</span>
-          </div>
-          <div style={{ fontSize: 11, color: T.textMute, marginTop: 4 }}>
-            survey-011 · mingoo.jejuagri.kang@gmail.com
-          </div>
-          {/* v0.18.0 1f — 수동 업데이트 확인/새로고침. 새 버전이 대기 중이면 바로 적용, 아니면
-              능동 체크만 트리거(설치형에서 새 버전 반영 경로를 사용자가 직접 호출). */}
-          {/* 🔴 v0.46.0 — 프리뷰 빌드는 **서비스워커가 없다**(VitePWA disable). `UpdateControl`은
-              전부 SW의 `needRefresh`에 걸려 있어 **영원히 「최신」만 답한다** — 민구가 08-06에
-              *"프리뷰는 홈 화면 설치 시 업데이트 점검이 안 되니?"* 로 정확히 짚었다.
-              👉 없는 기능을 있는 척 보이지 않게 **버튼 대신 실제 갱신법을 적는다.** */}
-          {__PREVIEW_BUILD__ ? (
-            <div
-              data-testid="preview-update-note"
-              style={{ fontSize: 11, color: T.textMute, marginTop: 10, lineHeight: 1.5 }}
-            >
-              테스트본은 자동 업데이트 확인이 없습니다.
-              <br />
-              <b style={{ color: T.textDim }}>화면을 아래로 당겨 새로고침</b>하면 최신이 됩니다.
-            </div>
-          ) : (
-            <UpdateControl />
-          )}
-        </div>
+        <SettingsFooter />
 
         {/* 🔴 v0.46.0 WP-H(민구 지시 08-05) — '설정 초기화'는 **스크롤 영역의 맨 아래**다.
             액션바 상시 행(v0.45.0 UI①)에서 여기로 내렸다 — 근거는 액션바 쪽 주석에 있다.
@@ -296,113 +245,12 @@ export function SettingsScreen() {
         </div>
       </div>
 
-      {/* Action bar */}
-      <div
-        style={{
-          padding: '12px 16px 12px',
-          borderTop: `1px solid ${T.line}`,
-          background: 'rgba(255,255,255,0.02)',
-          display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0,
-        }}
-      >
-        {!s.tableGenerated && s.columns.length > 0 && previewRowCount > 0 && (
-          <div style={{ textAlign: 'center', fontSize: 13, color: T.textMute }}>
-            현재 설정으로 <span style={{ color: T.blue, fontWeight: 700 }}>{previewRowCount}행</span> 생성 예정
-          </div>
-        )}
-        {/* v0.44.0 §C7 F26 — 생성 완료 액션바는 3버튼 한 행: 설정요약 · 생성 테이블 보기 · 재생성.
-            종전 "총 N행 생성됨 (미리보기)"/"재생성" 2버튼 행을 여기로 재배치했다(같은 기능 버튼
-            중복 금지) — 행수·생성 상태 수치는 설정 요약 팝업("생성됨 · 총 N행")과 미리보기 팝업이
-            갖는다. '설정요약'은 무공백 표기가 계약.
-            🔴 v0.45.0 UI① 갱신(리뷰 C14) — 종전 "정확 문구 '설정 요약' 상단 진입점 1개" 계약은
-            **폐기**됐다: 상단 버튼 삭제로 정확 문구 진입점은 0개가 계약이다(v0440-c7-cleanup·
-            settings-ux가 0개로 잰다). 이 무공백 버튼이 유일 진입점이다.
-            '생성' 부분문자열은 액션바에선 종전에도 허용(hasText:'생성' .last() 헬퍼는 게이트가
-            열린 동안만 쓰이고, 모달이 액션바보다 DOM 뒤에 마운트되므로 여전히 게이트 확인 버튼을
-            가리킨다). */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {s.tableGenerated ? (
-            <>
-              <button
-                type="button"
-                data-testid="settings-summary-shortcut"
-                onClick={() => {
-                  // v0.33.0 B-10 — 설정 요약 팝업 열림 계측(상단 버튼과 동일 extra).
-                  logger.log({ type: 'command', parsed: 'ui_open', extra: 'settings_summary' });
-                  setSummaryOpen(true);
-                }}
-                style={{
-                  flex: 1, height: 56, borderRadius: 28,
-                  border: `1px solid ${T.lineStrong}`, background: 'transparent',
-                  color: T.textDim, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
-                  whiteSpace: 'nowrap', cursor: 'pointer',
-                }}
-              >
-                설정요약
-              </button>
-              <button
-                type="button"
-                data-testid="settings-open-preview"
-                onClick={() => {
-                  // v0.33.0 B-10 — 미리보기 팝업 열림 계측(생성 후 버튼 경로, extra 불변).
-                  logger.log({ type: 'command', parsed: 'ui_open', extra: 'table_preview' });
-                  setTablePreviewOpen(true);
-                }}
-                style={{
-                  flex: 1, height: 56, borderRadius: 28,
-                  border: '1px solid rgba(57,255,20,0.35)', background: 'rgba(57,255,20,0.12)',
-                  color: T.green, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
-                  whiteSpace: 'nowrap', cursor: 'pointer',
-                }}
-              >
-                생성 테이블 보기
-              </button>
-              <button
-                type="button"
-                onClick={onGenerate}
-                style={{
-                  flex: 1, height: 56, borderRadius: 28,
-                  border: `1px solid ${T.lineStrong}`, background: 'transparent',
-                  color: T.textDim, fontSize: 13, fontWeight: 800, letterSpacing: -0.2,
-                  whiteSpace: 'nowrap', cursor: 'pointer',
-                }}
-              >
-                {/* 🔴 v0.46.0 WP-H — '재생성' → '테이블 재생성'(민구 지시 08-05). 무엇을 재생성하는지
-                    버튼이 말한다. 같은 회차에 '초기화' → '설정 초기화'로 짝을 맞췄다 — 둘 다
-                    "무엇에 대한 동작인가"를 이름에 넣는 정정이고, 초기화를 스크롤 맨 아래로 내린
-                    배치 변경과 한 묶음이다. 게이트 모달 제목('재생성 — 설정값 확인')은 불변. */}
-                테이블 재생성
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={onGenerate}
-              style={{
-                flex: 1, height: 56, borderRadius: 28, border: 'none',
-                background: T.blue, color: '#fff',
-                fontSize: 18, fontWeight: 800, letterSpacing: -0.2,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                cursor: 'pointer',
-                boxShadow: `0 6px 18px ${T.blueGlow}`,
-              }}
-            >
-              {I.table(20, '#fff')} 입력 테이블 생성
-            </button>
-          )}
-        </div>
-        {/* 🔴 v0.46.0 WP-H(민구 지시 08-05) — '초기화' 상시 행을 **철회**했다. 액션바에서 빠지고
-            스크롤 영역 맨 아래(Footer 아래)로 내려갔다. v0.45.0 UI①의 "스크롤과 무관하게 상시"
-            배치를 무르는 것이므로 되살리기 전에 아래 근거를 읽어라.
-            근거(민구): *"하루에 세션 여러개를 만들어서 음성입력"* — **재생성은 일상, 초기화는 예외**다.
-            상시 노출은 그 빈도를 거꾸로 반영했고, 실측이 대가를 보여줬다: 08-05 하루에
-            `settings_reset` **6회**(07:07:25 · 07:07:51 · 09:15:26 · 09:46:28 · 16:29:01 · 17:12:03)
-            — 07:07 두 건은 **26초 간격**이다. 초기화는 기본 컬럼 템플릿을 되돌려 리스트 선택지를
-            통째로 날린다(v0.46.0 §3-J). 즉 상시 배치가 파괴적 동작의 오탭 비용을 키웠다.
-            👉 파괴적 동작은 **찾아가서** 누르게 한다. 확인 모달은 종전 그대로 2단계로 남는다. */}
-        {/* v0.44.0 §C7 F25: v0.32.0 B4 결정 폐기(민구 08-02) — 되살리려면 §4-b를 먼저 읽어라.
-            여기 있던 "생성 완료 — 입력 탭에서 [음성 입력 시작]을 누르세요" 안내문구와
-            "입력탭으로 이동 →" 버튼(settings-go-input)을 삭제했다(F26이 3버튼 행으로 대체). */}
-      </div>
+      <SettingsActionBar
+        previewRowCount={previewRowCount}
+        onGenerate={onGenerate}
+        setSummaryOpen={setSummaryOpen}
+        setTablePreviewOpen={setTablePreviewOpen}
+      />
 
       {/* v0.19.0 W3 — '최종 설정값 확인' 게이트. 요약은 현재 columns에서 파생(stale 방지).
           v0.32.0 B1 — 게이트는 무스크롤 요약 전용으로 재설계(테이블 본문 제거). 표가 필요하면
