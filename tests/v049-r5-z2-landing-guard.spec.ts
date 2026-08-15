@@ -188,10 +188,13 @@ test('②-b 과잉 거절 반증 — 보류는 국면 전이만이다. 문맥은
 // ── ③ 구조 — 착지 리셋의 소유자는 하나다 ────────────────────────────────────────
 test('[node] ③ 착지 리셋 4종은 armLanding 한 곳이 소유한다 — 사본이 다시 생기면 red', async () => {
   const fs = await import('node:fs');
-  const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
   // uvs-b(ENV-12 #3) — 착지 셋(enterCellWait·enterReviewWait·announceEndReached)이 useRowNav.ts로
-  // 분리됐다(소유자 armLanding과 announceField는 본체 잔류). 착지별로 읽는 소스만 갈린다 —
-  // 마커·계약 바이트는 이동 전과 동일하다(ref 주입이 형태를 보존).
+  // 분리됐다. 착지별로 읽는 소스만 갈린다 — 마커·계약 바이트는 이동 전과 동일하다(ref 주입이
+  // 형태를 보존).
+  // uvs-d(ENV-12 #6) — 남은 둘(소유자 `armLanding`과 `announceField`)도 useAnnouncements.ts로
+  // 갔다. 형제 순서(armLanding → announceField)가 보존돼 armLanding 본문 종료 마커
+  // (`const announceField = useCallback(`)도 그대로다 — 소스 경로만 재표적한다.
+  const src = fs.readFileSync('src/lib/useAnnouncements.ts', 'utf-8');
   const navSrc = fs.readFileSync('src/lib/useRowNav.ts', 'utf-8');
 
   /** `const <name> = useCallback(` 부터 다음 착지/함수 경계까지 — 주석 줄은 제거한다

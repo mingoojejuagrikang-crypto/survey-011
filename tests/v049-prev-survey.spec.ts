@@ -432,7 +432,9 @@ test('W3-9(r4 M8) — 「미확인」의 사유가 로그에 남는다(6사유 �
  */
 test('[node] W3-10(r4 M8 → r5 Z2) — 값을 여는 착지가 phase를 스스로 active로 연다(이제 armLanding 경유)', async () => {
   const fs = await import('node:fs');
-  const src = fs.readFileSync('src/lib/useVoiceSession.ts', 'utf-8');
+  // uvs-d(ENV-12 #6) — announceField가 소유자 armLanding과 함께 useAnnouncements.ts로 분리됐다
+  // (이동 커밋). 마커·계약 바이트는 이동 전과 동일하다 — 소스 경로만 재표적한다.
+  const src = fs.readFileSync('src/lib/useAnnouncements.ts', 'utf-8');
 
   // r4 M8은 이 두 함수 안에 `setPhase('active')`를 **손으로** 넣어 닫았다. r5 Z2가 그 네 줄을
   // `armLanding`으로 모았으므로 계약의 **표현**이 바뀐다 — 계약 자체(값을 여는 착지는 phase를

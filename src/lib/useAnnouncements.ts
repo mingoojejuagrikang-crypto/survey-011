@@ -40,11 +40,11 @@ export interface AnnouncementsDeps {
   clearAnomalyAlert: (reason: string) => void;
   getSessionColumns: () => Column[];
   voiceColsList: () => Column[];
+  getRecorder: () => AudioRecorder | null;
   /** 모달 suspend 래치(읽기 전용) — 소유자는 본체다(헤더 ③). */
   uiSuspendRef: { current: { hadController: boolean; reasons: Set<string> } };
   /** suspend·레코더 부재로 보류된 무장 좌표 — 재획득 완료·suspend 해제가 소비한다(헤더 ②). */
   uiBlockedClipArmRef: { current: { row: number; colId: string } | null };
-  recorderRef: { current: AudioRecorder | null };
   clipStartRowRef: { current: number };
   clipStartColIdRef: { current: string };
   activeClipRef: { current: { row: number; colId: string } | null };
@@ -56,17 +56,11 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
   // 반환 함수들이 본체 handleFinal 의존성에 들어가므로 identity가 흔들리면 STT 배선이 요동친다).
   const depsRef = useRef(deps);
   depsRef.current = deps;
-  // ⚠️ 이 커밋 한정 임시 — 본문 바이트 동일 이동을 위한 상단 일괄 destructure다. 다음 수정
-  //   커밋에서 콜백 내부 depsRef destructure + deps 배열 `[]` 고정으로 전환한다.
-  const {
-    logCell, say, clearAnomalyAlert, getSessionColumns, voiceColsList,
-    uiSuspendRef, uiBlockedClipArmRef, recorderRef, clipStartRowRef, clipStartColIdRef,
-    activeClipRef, awaitingFieldRef,
-  } = deps;
 
   /** Announce only auto+ttsAnnounce columns whose value differs between rows. */
   const announceRowDiff = useCallback(
     async (fromRow: number | null, toRow: number) => {
+      const { getSessionColumns, say } = depsRef.current;
       const cols = getSessionColumns();
       const toAuto = buildCyclingValues(cols, toRow);
       const fromAuto = fromRow != null ? buildCyclingValues(cols, fromRow) : null;
@@ -80,12 +74,13 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
       }
       if (parts.length) await say(parts.join(', ') + '.', false);
     },
-    [say],
+    [],
   );
 
   /** Announce row completion: only auto+ttsAnnounce columns that differ from the previous row. */
   const announceRowComplete = useCallback(
     async (row: number) => {
+      const { getSessionColumns, say } = depsRef.current;
       const cols = getSessionColumns();
       const curAuto = buildCyclingValues(cols, row);
       const prevAuto = row > 1 ? buildCyclingValues(cols, row - 1) : null;
@@ -101,7 +96,7 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
       if (parts.length) await say(parts.join(', ') + ' 완료.', false);
       else await say('완료.', false);
     },
-    [say],
+    [],
   );
 
   /** v0.45.0 WP-3 (F14, Q5 민구 확정) — 복귀·재시작 브리핑 텍스트.
@@ -116,6 +111,7 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
    *  - 읽을 것이 없으면 null — 억지 발화로 STT 무장을 지연시키지 않는다(barge-in OFF에선
    *    낭독 길이만큼 인식이 죽는 창이다, speech.ts half-duplex 계약). */
   const buildReturnBriefing = useCallback((includeNextName: boolean): string | null => {
+    const { uiSuspendRef, getSessionColumns, voiceColsList } = depsRef.current;
     const sess = useSessionStore.getState();
     if (sess.phase !== 'active') return null;
     // 리뷰 C3·C5·C11 — 모달 suspend 중(STT 정지)·알람 응답 대기 중에는 브리핑을 내지 않는다.
@@ -148,6 +144,10 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
    *  the latter two used to re-ask via say() WITHOUT restarting the slot, so the re-spoken
    *  value was deterministically never recorded (06-11 v0.6.0 row8: "155.5" → clip_empty). */
   const armClipForCell = useCallback((row: number, colId: string) => {
+    const {
+      uiSuspendRef, uiBlockedClipArmRef, logCell, getRecorder,
+      clipStartRowRef, clipStartColIdRef, activeClipRef,
+    } = depsRef.current;
     const suspendReasons = uiSuspendRef.current.reasons;
     if (suspendReasons.size > 0) {
       uiBlockedClipArmRef.current = { row, colId };
@@ -166,14 +166,17 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
     // 리뷰 C6 — 레코더가 없으면(임계 정지 직후 복귀·재획득 init 대기 창) activeClipRef를 세우지
     // 않는다. 세우면 커밋 시 stopClip이 "시작한 적 없는" 새 레코더에 걸려 clip_empty가 난다.
     // 좌표는 보류 슬롯에 남겨 재획득 완료(resumeFromBackground init.then)가 소비한다.
-    if (!recorderRef.current) {
+    // ⚠️ getter 전환(stage A 규범)으로 `recorderRef.current` 2회 참조가 지역 `rec` 1회 취득으로
+    //   바뀌었다 — 가드와 startClip 사이에 레코더가 갈리지 않게 **같은 인스턴스**를 쓴다.
+    const rec = getRecorder();
+    if (!rec) {
       uiBlockedClipArmRef.current = { row, colId };
       logCell({ type: 'clip', extra: clipArmBlocked({ reason: 'no_recorder', row, col: colId }), row, colId });
       return;
     }
     clipStartRowRef.current = row;
     clipStartColIdRef.current = colId;
-    recorderRef.current.startClip();
+    rec.startClip();
     activeClipRef.current = { row, colId };
   }, []);
 
@@ -236,6 +239,7 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
     /** 살아 있는 소수부 재질문의 정수부. 있으면 큐를 **다시 그린다**. */
     decimalReason?: string | null;
   }): boolean => {
+    const { logCell, clearAnomalyAlert } = depsRef.current;
     const sess = useSessionStore.getState();
     if (sess.phase === 'stopping') {
       // 새 이름으로 계측한다(PRINCIPLES §4) — 기존 착지 이벤트에 얹으면 「착지했다」와
@@ -266,7 +270,7 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
     sess.setPhase(opts.phase);
     if (opts.endReached !== undefined) sess.setEndReached(opts.endReached);
     return true;
-  }, [clearAnomalyAlert]);
+  }, []);
 
   const announceField = useCallback(
     // v0.47.0 C-FIX1b — opts.fractionWhole: 재개(resume) 재안내가 소수부 재질문 문맥(정수부)을
@@ -276,6 +280,7 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
     // 대기 상태에 실어 보내는 전달로. 이게 없으면 재발화 커밋 종단이 출신을 알 수 없어
     // `advance()`로 빠진다([NAV-FILLED-CELL-1] 불변식 위반 — resumeCellOf 주석).
     async (col: Column, opts?: { isModify?: boolean; previousValue?: string; fractionWhole?: string; resumeCell?: ResumeCell }) => {
+      const { awaitingFieldRef, say } = depsRef.current;
       const row = useSessionStore.getState().activeRow;
       // 🔴 v0.49 r5 Z2 — 착지 리셋 4종(알람 해제 · 거절 큐 · 수정 표식 · phase)은 `armLanding`이
       //   소유한다. 종전엔 이 자리에 그 넷이 손으로 적혀 있었고, 형제 착지 셋과의 **사본 차이**가
@@ -320,7 +325,9 @@ export function useAnnouncements(deps: AnnouncementsDeps) {
       useSessionStore.getState().setLastTts(hint);
       await say(opts?.isModify ? `수정. ${col.name}.` : `${col.name}.`, false);
     },
-    [armClipForCell, armLanding, say],
+    // 동일-훅 상호 참조(armLanding·armClipForCell)는 `[]`-고정 const의 클로저 캡처라 identity가
+    // 불변이다 — deps 배열에 넣지 않아도 낡은 참조가 생기지 않는다(useTrendGate와 같은 판단).
+    [],
   );
 
   return {
