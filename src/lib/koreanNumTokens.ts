@@ -11,7 +11,7 @@
  *  - 소수 구조 분해(`splitDecimal`) + 소수부 한 글자씩 읽기(`parseFractionDigits`)
  *
  * 🔴 `export`를 늘리지 마라 — 파일 밖 이용자 없는 export는 knip 신규 검출이 된다.
- * 현재 노출은 `koreanNum.ts`가 실제로 쓰는 8개뿐이고, 나머지(NATIVE·SMALL_UNIT·BIG_UNIT·
+ * 현재 노출은 `koreanNum.ts`가 실제로 쓰는 7개뿐이고, 나머지(NATIVE·SMALL_UNIT·BIG_UNIT·
  * parseSinoInt·parseNativeInt)는 모듈 내부 전용이다.
  */
 

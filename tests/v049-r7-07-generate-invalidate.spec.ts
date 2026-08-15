@@ -59,11 +59,14 @@ test('[node] ① `totalRows`의 쓰기 주체는 하나이고 그 값은 compute
     // 단언만 확장). 현재 두 파일의 쓰기는 0이고 결과 목록 `['totalRows: total']`은 불변이다.
     // 🔴 생성 버튼이 액션바로 갔으니 **거기에** 두 번째 쓰기가 생기는 것이 가장 그럴듯한
     // 미래다 — 그래서 먼저 넣는다.
-    // ⚠️ 같은 회차에 `settingsStore.ts`도 3갈래로 갈렸다(r2-large 소유). 그 leaf 3개를 이
-    //    목록에 넣는 것은 **그쪽 레인의 재표적 몫**이다 — 여기서 대신 넣지 않는다.
+    // r2-fix U2(리뷰 합집합) — settingsStore 3갈래 leaf도 합산한다. 분리 전엔 store 전역이
+    //    이 계약의 우발 커버 안이었다(revc #2·revx C2 동시 지적 — 커버 원복).
+    //    실측: leaf의 totalRows는 전부 기존 제외식에 걸려 기대 목록 불변.
     ['src/lib/useSettingsActions.ts', 'src/lib/useSettingsSheetConnection.ts',
       'src/lib/useSettingsTableGeneration.ts', 'src/lib/useSettingsReset.ts',
-      'src/stores/settingsStore.ts', 'src/screens/SettingsScreen.tsx',
+      'src/stores/settingsStore.ts', 'src/stores/settingsState.ts',
+      'src/stores/settingsStorage.ts', 'src/stores/settingsMigrate.ts',
+      'src/screens/SettingsScreen.tsx',
       'src/components/settings/SettingsActionBar.tsx',
       'src/components/settings/SettingsFooter.tsx']
       .map(read),
