@@ -335,6 +335,25 @@ export function useVoiceSession() {
   const [sessionColumns, setSessionColumns] = useState<Column[] | null>(null);
   const awaitingFieldRef = useRef<AwaitingField | null>(null);
   const epochRef = useRef(0);
+  /**
+   * 🔴 v0.50 fixdc U1 — **`epochRef`는 단조가 아니다.** 두 곳이 0으로 **리셋**한다:
+   * `start()`(새 세션) · `resume()`(일시정지 해제). 나머지 14곳은 전부 `++`다.
+   *
+   * 그 비대칭이 v0.50 C의 신규 착지 가드에서 **회귀**를 냈다(리뷰 양측이 서로 다른 진입로로
+   * 독립 재현). 「낡은 착지인가」를 `!== startEpoch`로만 재면 **정상 재개가 경합자로 잡힌다** —
+   * 그리고 그 거절이 치명적인 이유는 **재개와 이동이 다르기 때문**이다:
+   *   · `jumpToRow`류(bump 14곳)는 커서를 옮긴 뒤 **자기 착지로 `awaiting`을 새로 무장**한다.
+   *     그래서 낡은 착지를 거절해도 상태가 빈 채로 남지 않는다 — 거절이 **옳다.**
+   *   · `resume()`은 **epoch만 바꾸고 `awaiting`은 기존 것을 읽어 복원**한다. 거절하면 그 착지가
+   *     갱신하려던 것이 통째로 유실되고, 재개가 **확정값이 든 셀을 다시 연다**
+   *     (`[CELL-OVERWRITE-1]` 재개방 → 이어지는 발화가 확정값을 덮는다 = 값 손상).
+   *
+   * 🔴 **리셋 자체는 건드리지 않는다**(`resetEpoch` 안에 그대로 산다). 전수 조사 결과 리셋
+   * **고유**의 소비자는 코드로 특정되지 않았다 — 모든 읽기 지점이 「값이 달라졌는가」만 보므로
+   * `= 0`과 `++`는 동일하게 작동한다. 그래서 리셋을 **해석하지 않고 「사실」만 기록**한다:
+   * 의미를 몰라도 처방이 성립하는 설계다.
+   */
+  const epochResetRef = useRef({ gen: 0, value: 0 });
   // 🔴 v0.48.1 r3 U1 4절 — interim barge-in이 일어난 시점의 epoch를 기록한다. speech.ts:353는
   //   TTS가 뮤트 중일 때 비어있지 않은 interim만 오면 즉시 cancel()하지만, epochRef는 건드리지
   //   않는다(final에서만 bump) — 그래서 알람 2차 발화 가드의 「epoch 불변」 절이 이 경로를 못
@@ -457,6 +476,24 @@ export function useVoiceSession() {
   const getTtsRate = () => useSettingsStore.getState().ttsRate || 1.05;
   const getSessionColumns = (): Column[] =>
     sessionColumnsRef.current ?? useSettingsStore.getState().columns;
+  /** 🔴 v0.50 fixdc U1 — `epochRef` 리셋의 **단일 소유자**. 리셋 지점이 둘(`start`·`resume`)이라
+   *  사본을 만들지 않는다(Z2의 교훈: 사본을 늘리는 대신 소유자를 하나 만든다).
+   *  리셋 값 자체는 **바꾸지 않는다** — 착지 가드가 읽을 「리셋 사실」만 함께 남긴다. */
+  const resetEpoch = (): void => {
+    epochRef.current = 0;
+    epochResetRef.current = { gen: epochResetRef.current.gen + 1, value: epochRef.current };
+  };
+  /** 착지 가드의 진입 스냅샷. `epochRef` 값 하나로는 재개를 이동과 구별할 수 없다(그 헤더). */
+  const snapLandingEpoch = (): { epoch: number; resetGen: number } =>
+    ({ epoch: epochRef.current, resetGen: epochResetRef.current.gen });
+  /** 스냅샷이 아직 「이 착지의 것」인가.
+   *  재개가 끼었으면 **리셋 직후 값**이 기준선이다 — 재개는 사용자 이동이 아니므로 경합자로 세지
+   *  않는다. 🔑 **판별력은 그대로다**: 재개 *이후*에 들어온 진짜 이동은 그 기준선 위에서 다시
+   *  `++`되므로 여전히 잡힌다(반증으로 실측). */
+  const landingEpochHeld = (snap: { epoch: number; resetGen: number }): boolean => {
+    const reset = epochResetRef.current;
+    return epochRef.current === (reset.gen !== snap.resetGen ? reset.value : snap.epoch);
+  };
   /** v0.35.3 Stage 3-4 — 세션 컨텍스트 로거. 이 훅의 모든 계측은 현재 세션 id를 동봉하므로
    *  sessionId 고정 인자를 여기서 1회 주입한다. 나머지 필드(extra 문자열 포함)는 호출부 그대로
    *  전개 — SOP-003 파서 계약 불변. */
@@ -754,6 +791,10 @@ export function useVoiceSession() {
   /** Move to next voice col in current row, or finalize row + jump to next target. */
   const advance = useCallback(async () => {
     const startEpoch = epochRef.current;
+    // 🔴 v0.50 fixdc U1 — 아래 **신규** 가드(부기 뒤·파괴적 쓰기 앞)만 이 스냅샷을 쓴다.
+    //   형제 셋(안내 뒤 재확인)은 `startEpoch` 그대로다 — 이 묶음이 만든 것이 아니고, 그쪽은
+    //   재개 중 도달이 실측되지 않았다(산출물 미결).
+    const landingSnap = snapLandingEpoch();
     const sess = useSessionStore.getState();
     // 리뷰 라운드1(Codex+Flash, 수용) — 필드/행 이동 시 미확정 interim 표시 정리(표시 전용).
     sess.setInterimValue(null);
@@ -761,7 +802,15 @@ export function useVoiceSession() {
     const row = sess.activeRow;
     const total = computeTotalRows(getSessionColumns());
 
-    // 🔴 v0.50 C #4(claude r2 #4) — **advance의 국면 전이도 `armLanding`과 같은 계약을 진다.**
+    // 🔴 v0.50 C #4(claude r2 #4) — **advance의 국면 전이도 `armLanding`의 일시정지 계약을 진다.**
+    //   ⚠️ v0.50 fixdc U2 정정 — *"같은 계약을 진다"*는 **`stopping` 축에서는 사실이 아니다.**
+    //     `armLanding`은 `stopping`에서 `false`를 돌려 **착지 전체를 거절**하고(R4-F2 — phase만
+    //     막으면 awaiting·클립이 recorder dispose와 경쟁한다), 이 헬퍼는 **phase만 보류**한다 —
+    //     `advance`의 나머지(커서 이동 · `awaitingFieldRef` null화 · TTS)는 그대로 간다.
+    //     그래서 아래 진입 가드(`phase === 'stopping'`이면 즉시 return)가 **여전히 유일한 방어**다.
+    //     🔴 **그 진입 가드를 지우지 마라** — 이 헬퍼가 대신 막아 주지 않는다.
+    //     본체 정합화(착지 전체 거절로 맞출지)는 **B 묶음(#5·#6) 몫**이다: B가 `stop()`과
+    //     `finalizeRowCompletion` 롤백을 다루므로 같은 자리를 두 번 열지 않는다.
     //   이 함수는 Z2가 모은 착지 넷의 호출부이면서 그 넷에 **속하지 않는 전이를 스스로 한다**
     //   (아래 4곳). 그래서 `armLanding`의 문을 안 지나고, 그 결과 **일시정지가 조용히 풀렸다**:
     //   일시정지 중 음성 칩을 탭해 수동 커밋하면 `proceedAfterCommit` → 여기 →
@@ -859,7 +908,7 @@ export function useVoiceSession() {
       //     커서 경합과 무관하고, 건너뛰면 그 행이 `persistSession`의 rows에서 통째로 떨어진다(Z8).
       //   ⚠️ 아래 기존 재확인은 **그대로 둔다** — 저건 안내(`announceRowComplete`) 중의 barge-in을
       //     막는 별개 창이다. 두 창은 겹치지 않는다.
-      if (epochRef.current !== startEpoch) return;
+      if (!landingEpochHeld(landingSnap)) return;
       setLandingPhase('complete', 'row_complete');
       awaitingFieldRef.current = null;
       await announceRowComplete(row);
@@ -961,7 +1010,7 @@ export function useVoiceSession() {
     //   아래 awaited IDB 쓰기를 지난 뒤 모든 착지 분기는 호출 시점에 캡처된 `awaiting`을 그대로
     //   소비한다. 경합자는 실재한다 — `jumpToRow`가 **첫 await 이전에** 커서 이동 + epoch bump를
     //   동기로 끝낸다. 재확인 지점은 부기 **뒤**·착지 **앞**이다(그 사이 근거는 그 자리 주석).
-    const startEpoch = epochRef.current;
+    const landingSnap = snapLandingEpoch();
     // 🔴 v0.49 r3 #1(claude r2 크리티컬) — **행 완료 부기는 착지와 무관하다.** 아래 재무장/예약
     //   복귀 분기는 전부 `advance()`를 타지 않고 return하므로, 부기가 advance 안에만 있으면
     //   그 경로에서 통째로 빠진다(값 되돌림 — `finalizeRowCompletion` 헤더). 분기마다 배선하면
@@ -1004,7 +1053,7 @@ export function useVoiceSession() {
     //     같은 경로다. 정상 착지를 막으면 [NAV-FILLED-CELL-1]의 「모든 탈출은 재진입」이 깨진다.
     //   ⚠️ 거절을 로그에 남긴다(형제 `advance_refused:stopping`·`jump_refused:stopping`과 같은
     //     계약) — 무음 return은 분석에서 「착지가 원래 없었다」와 구별되지 않는다.
-    if (epochRef.current !== startEpoch) {
+    if (!landingEpochHeld(landingSnap)) {
       logCell({ type: 'session', extra: 'proceed_refused:epoch', row: awaiting?.row });
       return;
     }
@@ -2399,7 +2448,7 @@ export function useVoiceSession() {
     // v0.5.0 W1: 세션 시작 시 음성 목록 재조회 1회 — iOS가 늦게 채운 한국어 음성을
     // 이 세션의 TTS가 바로 쓸 수 있게 하고, tts_voices_loaded 텔레메트리(개수 변화 시)도 남긴다.
     refreshVoices();
-    epochRef.current = 0;
+    resetEpoch();
     pendingClipsRef.current = {};
     clipCapture.resetCounters();
     brokenClipKeysRef.current = new Set();
@@ -2708,7 +2757,7 @@ export function useVoiceSession() {
     // 경로로 풀렸는지를 정량화해 "분투→해제" 패턴(강남호 13/14 churn)을 다음 세션부터 분해한다.
     logCell({ type: 'command', parsed: 'resume', extra: `phase:${source}`, row: sess.activeRow });
     sess.setPhase('active');
-    epochRef.current = 0;
+    resetEpoch();
     // Controller stays alive during pause (pause() no longer stops it).
     // Recreate only if it was somehow stopped (e.g., programmatic stop from outside).
     if (!ctrlRef.current) {

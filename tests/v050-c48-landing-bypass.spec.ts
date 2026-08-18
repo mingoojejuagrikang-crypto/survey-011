@@ -46,6 +46,8 @@ const SOLO_COLUMNS = [
   { id: 'c0', name: '조사나무', type: 'int', input: 'auto', ttsAnnounce: true, auto: { kind: 'seq', from: 1, to: 2 }, sampleKey: true },
   { id: 'm1', name: '측정항목01', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
 ];
+// ── 픽스처 A′: A와 같되 m1에 추세 규칙 — ⑦(알람 [확인] 터치)이 쓴다 ──
+const ALERT_COLUMNS = SOLO_COLUMNS.map((c) => (c.id === 'm1' ? { ...c, trendRule: 'increase' } : c));
 const SOLO_HEADERS = ['조사일자', '농가명', '조사나무', '측정항목01'];
 const SOLO_ROWS = [[PREV_ROUND, '이원창', '1', '100.0']];
 
@@ -206,13 +208,13 @@ test('① 일시정지 중 음성 칩 수동 커밋이 일시정지를 조용히
   // 🔴 비공허 증명은 **advance 고유 사유 전체 문자열**로 잰다. 접두(`landing_phase_held:paused:`)로
   //   재면 `armLanding`이 같은 흐름에서 찍는 `announce_field` 보류에 걸려 **가드가 없어도 green**이
   //   된다(형제 이벤트와 이름을 갈라 둔 이유가 그것이다).
-  const extras = await logExtras(page);
+  // 🔴 부하 회차에서는 이 조회가 **착지보다 이를 수 있다**(스위트 동시 실행 1회 red, 단독 3/3
+  //   green — `[TEAMOPS-91]`). 「아직 안 왔다」와 「영영 안 온다」는 다르므로 폴링으로 기다린다.
+  await expect
+    .poll(async () => logExtras(page), { timeout: 8000 })
+    .toContain('advance_phase_held:paused:row_complete');
   expect(
-    extras,
-    '행 완료 전이가 보류된 흔적이 없다 — 그 착지가 아예 안 왔다면 이 오라클은 공허하다',
-  ).toContain('advance_phase_held:paused:row_complete');
-  expect(
-    extras,
+    await logExtras(page),
     '다음 행 전이가 보류된 흔적이 없다 — 4곳 중 한 곳만 막으면 나머지가 같은 구멍이다',
   ).toContain('advance_phase_held:paused:next_row');
 });
@@ -253,12 +255,17 @@ test('② 과잉 수정 반증 — 일시정지 중 커밋한 값은 살아 있�
 
   await fireStt(page, '사십이 점 삼', 1800);
   await waitForTtsIdle(page);
-  const log = await ttsLog(page);
-  expect(log, '전제: 재개 후 이동한 행에서 안내가 있었다').toContain('측정항목01.');
+  // 🔴 v0.50 fixdc U3 훑기 — 종전 전제 `toContain('측정항목01.')`은 **공허했다**(부팅 안내가
+  //   이미 그 문구를 남긴다). 전제는 「이 커밋이 2행에 들어갔다」이므로 **IDB로** 잰다.
+  await expect
+    .poll(async () => (await persistedRow(page, 2))?.values.m1, { timeout: 8000 })
+    .toBe('42.3');
   expect(
-    log,
+    await ttsLog(page),
     '재개 후 값이 다음 행(2행)에 들어가지 않았다 — 보류가 국면뿐 아니라 문맥까지 버렸다',
   ).toContain('조사나무 2 완료.');
+  // 1행의 확정값은 그대로다 — 재개가 확정 셀을 재개방하면 여기가 42.3으로 덮인다(U1의 형상).
+  expect((await persistedRow(page, 1))?.values.m1, '재개가 확정된 1행 값을 덮었다').toBe('95.5');
 });
 
 // ── ③ #8 — 착지 await 중 행 이동이 끼어들면 커서를 되끌지 않는다 ──────────────────────
@@ -361,18 +368,162 @@ test('④ 과잉 수정 반증 — 경합자가 없는 정정은 셀 검토 대�
 
   // [NAV-FILLED-CELL-1] 「cellWait에서의 모든 탈출은 cellWait 재진입」 — epoch 가드가 이걸 먹으면
   //   정정이 문맥 밖으로 튀어 나간다. 그게 이 과제가 경계한 과잉 수정의 얼굴이다.
+  //
+  // 🔴 v0.50 fixdc U3 — **여기가 false-green이었다.** 종전 단언 셋은 전부 **정정 «전»에 이미
+  //   성립**한다: `active-row=1`·m2 활성 칩은 선행 '다음'의 착지가 만든 상태고, 그 착지가
+  //   이미 `측정항목02 기록값 88.8.`을 TTS 로그에 남긴다 — 그래서 사후 `toContain('기록값')`이
+  //   **갱신값 66.6의 재착지 없이도** 만족했다. codex가 반증까지 냈다: `proceedAfterCommit`의
+  //   `cellWait` 분기를 **즉시 return으로 바꿔도 통과**한다.
+  //   👉 ③에서 쓴 것과 같은 **순서 판정**으로 바꾼다 — 「커밋 뒤에 새 착지가 왔는가」를 잰다.
+  //   (같은 회차에서 한 번 배운 것을 나머지에 전파하지 않은 형태였다. ①②⑤도 함께 훑었다.)
+  const trace4 = await logTrace(page);
+  const valueAt4 = lastIndexWhere(trace4, (e) => e.startsWith('value/66.6'));
+  expect(valueAt4, '전제: 정정값이 실제로 커밋됐다').toBeGreaterThanOrEqual(0);
+  expect(
+    trace4.slice(valueAt4).filter((e) => e.includes('command/cell_wait cell_wait:m2')),
+    '정정 커밋 뒤에 셀 검토 대기 재착지가 없다 — 예약 복귀가 통째로 막혔다'
+      + '([NAV-FILLED-CELL-1] 「모든 탈출은 cellWait 재진입」 위반)',
+  ).not.toEqual([]);
+  // 낭독도 **갱신값**을 요구한다 — 선행 착지가 남긴 `기록값 88.8`로는 만족되지 않는다.
+  expect(
+    await ttsLog(page),
+    '갱신값 재낭독이 없다 — 옛 값의 낭독이 남아 있어도 그건 이 정정의 착지가 아니다',
+  ).toContain('측정항목02 기록값 66.6.');
   await expect(page.locator('[data-testid="active-row"]')).toHaveText('1');
   expect(await activeChipName(page), '정상 착지가 거절돼 셀 검토 문맥이 증발했다').toContain('측정항목02');
-  expect(
-    (await ttsLog(page)).join(' | '),
-    '갱신값 재낭독(기록값)이 없다 — 예약 복귀 착지가 통째로 막혔다',
-  ).toContain('기록값');
 
   const extras = await logExtras(page);
   expect(
     extras.filter((e) => e === 'proceed_refused:epoch'),
     '경합자가 없는데 착지를 거절했다 — 가드가 정상 흐름을 먹는다',
   ).toEqual([]);
+});
+
+// ── ⑥ U1 회귀 — 정상 재개(resume)를 착지 가드가 「경합자」로 잡으면 안 된다 ──────────────
+/** 🔴 v0.50 fixdc U1 — **이 묶음의 #8 처방이 만든 회귀**다. 리뷰 양측(revc·codex)이 서로 다른
+ *  진입로로 독립 재현했다.
+ *
+ *  기제: `resume()`은 `epochRef`를 **0으로 리셋**한다(`start()`도 같다). 신규 착지 가드는
+ *  「진입 때 잡은 값과 다른가」만 보므로 **정상 재개를 사용자 이동과 구별하지 못한다.**
+ *  `jumpToRow`류가 안전한 이유는 커서를 옮긴 뒤 **자기 착지로 `awaiting`을 새로 무장**하기
+ *  때문인데, `resume()`은 **epoch만 바꾸고 `awaiting`은 기존 것을 읽어 복원**한다 —
+ *  그 비대칭이 결함의 정체다.
+ *
+ *  피해(실측): 착지가 거절돼 전진이 사라지고, 재개가 **확정값이 든 셀을 다시 연다**
+ *  (`[CELL-OVERWRITE-1]` 재개방). 이어지는 발화가 **확정값을 덮는다** — 값 손상이다.
+ *
+ *  🔴 **창을 실제로 열어야 한다.** 오라클 ②가 이 결함을 놓친 이유는 중간의 `waitForTtsIdle`이
+ *  `proceedAfterCommit`을 **완주시킨 뒤에** 재시작을 보냈기 때문이다(창이 닫힌 채로 돈다).
+ *  여기서는 `__survey011DelaySessionPutMs`로 부기 put을 붙잡아 둔 채 pause→resume을 끼운다.
+ *  ⚠️ `finalizeRowCompletion`은 **멱등**이라 창은 「그 커밋이 행을 완성시키는 **첫** 부기」인
+ *  호출부에서만 열린다(선행 부기가 있는 `commitManualValue` 경유는 no-op이라 창이 없다 — 실측).
+ *  그래서 ⑥은 **음성 커밋 종단**, ⑦은 **알람 [확인] 터치**를 쓴다. 둘 다 선행 부기가 없다. */
+test('⑥ U1 — 착지 부기 중의 정상 재개가 착지를 죽이고 확정값을 덮게 하지 않는다', async ({ page }) => {
+  await bootWith(page, SOLO_COLUMNS, SOLO_HEADERS, SOLO_ROWS, 'c48-6');
+
+  await page.evaluate(() => {
+    (window as unknown as { __survey011DelaySessionPutMs?: number }).__survey011DelaySessionPutMs = 4000;
+  });
+  // 음성 컬럼이 하나뿐 → 이 커밋이 1행을 완성시키고, `proceedAfterCommit`의 부기가 **첫 put**이다.
+  await fireStt(page, '95.5', 0);
+  // 🔴 `waitForTtsIdle`을 쓰지 않는다 — 그게 ②가 창을 닫아 이 결함을 놓친 이유다.
+  await page.waitForTimeout(900); // echo TTS + 호출부 진입 가드를 지나 부기 await 안으로
+
+  await page.locator('[data-testid="voice-status-control"]').click(); // 터치 일시정지
+  await expect(page.locator('[data-testid="paused-card"]'), '전제: 부기 중에 일시정지가 걸렸다')
+    .toBeVisible({ timeout: 6000 });
+  await page.locator('[data-testid="voice-control-toggle-pause"]').click(); // 터치 재시작
+  await expect(page.locator('[data-testid="paused-card"]'), '전제: 재개됐다').toHaveCount(0, { timeout: 6000 });
+
+  await page.evaluate(() => {
+    delete (window as unknown as { __survey011DelaySessionPutMs?: number }).__survey011DelaySessionPutMs;
+  });
+  // 🔴 레이스 창은 **위 seam 해제로 닫혔다.** 아래 대기는 「창 닫기」가 아니라 **관측 안정화**다 —
+  //   붙잡아 둔 put이 결말나고 착지 체인(행 완료 낭독 → 다음 행 이동 → 항목 안내)이 완주해야
+  //   「착지가 살았는가」를 잴 수 있다. ⚠️ 이걸 빼면 이어지는 발화가 **안내 TTS 중 barge-in**으로
+  //   들어가 값이 어디에도 안 앉는다(실측: 3/3 재현).
+  await page.waitForTimeout(2500);
+  await waitForTtsIdle(page);
+
+  const extras = await logExtras(page);
+  expect(
+    extras.filter((e) => e === 'proceed_refused:epoch'),
+    '정상 재개를 「경합자」로 잡아 착지를 거절했다 — resume은 커서를 옮기지 않고 '
+      + '기존 awaiting을 읽어 복원하므로, 거절하면 그 착지가 갱신하려던 상태가 통째로 유실된다(U1)',
+  ).toEqual([]);
+
+  // 착지 생존의 **직접 증거** — 죽었으면 커서가 1행 m1에 그대로 남는다(처방 전 실측: `1`).
+  await expect(
+    page.locator('[data-testid="active-row"]'),
+    '착지가 죽어 다음 행으로 전진하지 못했다 — 재개가 경합자로 잡혔다는 뜻이다',
+  ).toHaveText('2');
+
+  // 🔴 피해의 본체 — 재개 뒤 **다음 발화가 어디로 가는가**. 착지가 죽으면 커서가 1행 m1에
+  //   그대로 남고 재개가 그 확정 셀을 `kind:'value'`로 다시 열어 다음 값이 95.5를 덮는다.
+  await fireStt(page, '42.3', 1800);
+  await waitForTtsIdle(page);
+  expect(
+    (await persistedRow(page, 1))?.values.m1,
+    '재개가 확정된 1행 값을 다시 열어 다음 발화가 그것을 덮었다 — [CELL-OVERWRITE-1] 재개방(값 손상)',
+  ).toBe('95.5');
+  await expect
+    .poll(async () => (await persistedRow(page, 2))?.values.m1, { timeout: 8000 })
+    .toBe('42.3');
+});
+
+// ── ⑦ U1 두 번째 진입로 — 알람 [확인] 터치의 착지도 같은 창을 갖는다 ────────────────────
+test('⑦ U1 — 알람 [확인] 터치의 착지 부기 중 재개도 착지를 죽이지 않는다', async ({ page }) => {
+  await bootWith(page, ALERT_COLUMNS, SOLO_HEADERS, SOLO_ROWS, 'c48-7');
+
+  // 직전 회차 100.0 대비 과도 증가 → 이상치 응답 대기(trendConfirm). 값은 이미 커밋돼 있고
+  //   행 완료 부기는 **아직**이다 — 그래서 [확인]의 `proceedAfterCommit`이 첫 부기를 탄다.
+  await fireStt(page, '120.5', 1500);
+  const popup = page.locator('[data-testid="anomaly-alert"]');
+  await expect(popup, '전제: 이상치 응답 대기가 섰다').toBeVisible({ timeout: 8000 });
+
+  await page.evaluate(() => {
+    (window as unknown as { __survey011DelaySessionPutMs?: number }).__survey011DelaySessionPutMs = 4000;
+  });
+  await page.locator('[data-testid="anomaly-confirm-btn"]').click(); // confirmAnomalyTouch
+  await page.waitForTimeout(700);
+
+  await page.locator('[data-testid="voice-status-control"]').click();
+  await expect(page.locator('[data-testid="paused-card"]'), '전제: 부기 중에 일시정지가 걸렸다')
+    .toBeVisible({ timeout: 6000 });
+  await page.locator('[data-testid="voice-control-toggle-pause"]').click();
+  await expect(page.locator('[data-testid="paused-card"]'), '전제: 재개됐다').toHaveCount(0, { timeout: 6000 });
+
+  await page.evaluate(() => {
+    delete (window as unknown as { __survey011DelaySessionPutMs?: number }).__survey011DelaySessionPutMs;
+  });
+  // 🔴 레이스 창은 **위 seam 해제로 닫혔다.** 아래 대기는 「창 닫기」가 아니라 **관측 안정화**다 —
+  //   붙잡아 둔 put이 결말나고 착지 체인(행 완료 낭독 → 다음 행 이동 → 항목 안내)이 완주해야
+  //   「착지가 살았는가」를 잴 수 있다. ⚠️ 이걸 빼면 이어지는 발화가 **안내 TTS 중 barge-in**으로
+  //   들어가 값이 어디에도 안 앉는다(실측: 3/3 재현).
+  await page.waitForTimeout(2500);
+  await waitForTtsIdle(page);
+
+  expect(
+    (await logExtras(page)).filter((e) => e === 'proceed_refused:epoch'),
+    '알람 [확인] 경로에서도 정상 재개가 「경합자」로 잡혔다 — 진입로마다 막으면 다음 진입로가 남는다',
+  ).toEqual([]);
+
+  // 🔑 이 케이스의 판정축은 **「착지가 살았는가」**다 — 값 귀속의 상세(다음 발화가 어디로 가는가)는
+  //   ⑥이 같은 기제로 이미 잰다. 여기서 후속 발화까지 얹으면 알람 해제 뒤 TTS 체인이 길어
+  //   **발화가 간헐적으로 씹혀 1/2 flaky**가 됐다(실측) — 같은 축을 두 번 재면서 안정성만 잃는다.
+  //   아래 셋으로 비공허하게 잠근다: 거절 없음 · 전진했음 · 착지 체인이 실제로 완주했음.
+  await expect(
+    page.locator('[data-testid="active-row"]'),
+    '착지가 죽어 다음 행으로 전진하지 못했다 — 재개가 경합자로 잡혔다는 뜻이다(처방 전 실측: 1)',
+  ).toHaveText('2');
+  expect(
+    await ttsLog(page),
+    '행 완료 낭독이 없다 — 착지 체인이 아예 안 돌았다면 위 두 단언은 공허하다',
+  ).toContain('조사나무 1 완료.');
+  expect(
+    (await persistedRow(page, 1))?.values.m1,
+    '확정된 1행 값이 바뀌었다',
+  ).toBe('120.5');
 });
 
 // ── ⑤ 구조 — 우회 지점이 다시 생기면 red ────────────────────────────────────────────
@@ -419,16 +570,16 @@ test('[node] ⑤ advance의 국면 전이 4곳은 한 헬퍼를 지나고, 두 �
   expect(
     advance.slice(finalizeGate, rowComplete),
     '부기와 파괴적 쓰기 사이에 epoch 재확인이 없다 — 방금 무장된 남의 awaiting을 지운다(claude r2 #8)',
-  ).toContain('if (epochRef.current !== startEpoch) return;');
+  ).toContain('if (!landingEpochHeld(landingSnap)) return;');
 
   // ⓔ #8 본체 — 진입 스냅샷 + 재확인이 부기 **뒤**·착지 **앞**이다.
   expect(
     proceed,
-    'proceedAfterCommit이 진입 시점 epoch를 잡지 않는다 — 함수 안의 await 구간이 무방비다',
-  ).toContain('const startEpoch = epochRef.current;');
+    'proceedAfterCommit이 진입 시점 스냅샷을 잡지 않는다 — 함수 안의 await 구간이 무방비다',
+  ).toContain('const landingSnap = snapLandingEpoch();');
   const bookkeeping = proceed.indexOf('if (awaiting && !(await finalizeRowCompletion(awaiting.row))) {');
   const firstLanding = proceed.indexOf("if (awaiting?.kind === 'reviewWait') {");
-  const recheck = proceed.indexOf('if (epochRef.current !== startEpoch) {');
+  const recheck = proceed.indexOf('if (!landingEpochHeld(landingSnap)) {');
   expect(bookkeeping, '커밋 종단의 부기를 찾지 못했다').toBeGreaterThan(0);
   expect(firstLanding, '첫 착지 분기를 찾지 못했다').toBeGreaterThan(bookkeeping);
   expect(
@@ -441,4 +592,29 @@ test('[node] ⑤ advance의 국면 전이 4곳은 한 헬퍼를 지나고, 두 �
   ).toBeLessThan(firstLanding);
   expect(proceed, '착지 거절을 로그에 남기지 않으면 분석에서 「착지가 없었다」와 구별되지 않는다')
     .toContain('proceed_refused:epoch');
+
+  // ── ⓕ v0.50 fixdc U1 — 재개는 「경합자」가 아니다. 그 구별이 사라지면 값 손상이 재개방된다. ──
+  const whole = strip(src);
+  // 리셋의 **소유자는 하나**다. 사본이 생기면 그 지점의 리셋만 착지 가드에 안 보인다.
+  expect(
+    whole.match(/epochRef\.current = 0;/g) ?? [],
+    'epochRef 리셋이 여러 곳에 흩어졌다 — resetEpoch() 하나가 소유해야 착지 가드가 전부를 본다',
+  ).toHaveLength(1);
+  expect(
+    whole.match(/resetEpoch\(\);/g) ?? [],
+    '리셋 호출부가 둘(start·resume)이 아니다 — 하나가 빠지면 그 경로의 재개가 다시 경합자로 잡힌다',
+  ).toHaveLength(2);
+  // 🔴 `resume()`이 리셋 소유자를 지난다 — U1의 진앙이다.
+  const resumeFrom = src.indexOf('const resume = useCallback(');
+  expect(resumeFrom, 'resume을 찾지 못했다').toBeGreaterThan(0);
+  expect(
+    strip(src.slice(resumeFrom, resumeFrom + 900)),
+    'resume이 epochRef를 직접 리셋한다 — 착지 가드가 그 리셋을 「사용자 이동」으로 오인한다(U1)',
+  ).toContain('resetEpoch();');
+  // 가드는 **값 하나**가 아니라 리셋 세대를 함께 본다.
+  const helper = strip(src.slice(src.indexOf('const landingEpochHeld ='), src.indexOf('const logCell =')));
+  expect(
+    helper,
+    '착지 가드가 리셋 세대를 안 본다 — 정상 재개와 사용자 이동을 구별할 수 없다(U1 회귀의 형태)',
+  ).toContain('reset.gen !== snap.resetGen');
 });
