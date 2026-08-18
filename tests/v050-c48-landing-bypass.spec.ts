@@ -437,6 +437,16 @@ test('⑥ U1 — 착지 부기 중의 정상 재개가 착지를 죽이고 확�
   await page.locator('[data-testid="voice-control-toggle-pause"]').click(); // 터치 재시작
   await expect(page.locator('[data-testid="paused-card"]'), '전제: 재개됐다').toHaveCount(0, { timeout: 6000 });
 
+  // 🔴 v0.50 fixdc2 RD-4 — **창이 열렸음을 단언한다.** 종전엔 「echo onend 200ms < pause 900ms」라는
+  //   mock 타이밍 «수치»만이 창을 열고 있었다 — TTS 지연이 바뀌거나 부팅 안내가 길어지면 재개가
+  //   스냅샷보다 **앞서** 들어가 가드가 자명하게 통과하고, **처방을 되돌려도 green**이 된다
+  //   (1회전이 ②에서 당한 그 형태다). 여기서 잰다: 이 시점에 행 완료 낭독이 아직 «없다» =
+  //   붙잡힌 put이 결말나지 않았다 = `proceedAfterCommit`의 await 구간 «안»에서 재개했다.
+  expect(
+    await ttsLog(page),
+    '재개 시점에 이미 행 완료 낭독이 났다 — 착지가 완주한 «뒤»라 창이 닫힌 채로 도는 것이다(RD-4)',
+  ).not.toContain('조사나무 1 완료.');
+
   await page.evaluate(() => {
     delete (window as unknown as { __survey011DelaySessionPutMs?: number }).__survey011DelaySessionPutMs;
   });
@@ -453,6 +463,18 @@ test('⑥ U1 — 착지 부기 중의 정상 재개가 착지를 죽이고 확�
     '정상 재개를 「경합자」로 잡아 착지를 거절했다 — resume은 커서를 옮기지 않고 '
       + '기존 awaiting을 읽어 복원하므로, 거절하면 그 착지가 갱신하려던 상태가 통째로 유실된다(U1)',
   ).toEqual([]);
+
+  // RD-4 두 번째 축(③과 같은 형태) — 재개가 커밋 착지 «진입 뒤»에 들어왔다. `value` 로그는
+  //   `useCommitLanding`의 `proceedAfterCommit` 직전에, `command/resume`은 `resetEpoch()` 직전에
+  //   찍힌다 — 두 지점이 정확히 창의 양 끝이다.
+  const trace6 = await logTrace(page);
+  const valueAt6 = lastIndexWhere(trace6, (e) => e.startsWith('value/95.5'));
+  const resumeAt6 = lastIndexWhere(trace6, (e) => e.startsWith('command/resume'));
+  expect(valueAt6, '전제: 값이 실제로 커밋됐다').toBeGreaterThanOrEqual(0);
+  expect(
+    resumeAt6,
+    '재개가 착지 진입보다 앞에 들어갔다 — 스냅샷 자체가 재개 뒤라 가드가 자명하게 통과한다(RD-4)',
+  ).toBeGreaterThan(valueAt6);
 
   // 착지 생존의 **직접 증거** — 죽었으면 커서가 1행 m1에 그대로 남는다(처방 전 실측: `1`).
   await expect(
@@ -495,6 +517,12 @@ test('⑦ U1 — 알람 [확인] 터치의 착지 부기 중 재개도 착지를
   await page.locator('[data-testid="voice-control-toggle-pause"]').click();
   await expect(page.locator('[data-testid="paused-card"]'), '전제: 재개됐다').toHaveCount(0, { timeout: 6000 });
 
+  // 🔴 v0.50 fixdc2 RD-4 — ⑥과 같은 축. 창이 안 열려도 green이 되던 것을 여기서 막는다.
+  expect(
+    await ttsLog(page),
+    '재개 시점에 이미 행 완료 낭독이 났다 — 착지가 완주한 «뒤»라 창이 닫힌 채로 도는 것이다(RD-4)',
+  ).not.toContain('조사나무 1 완료.');
+
   await page.evaluate(() => {
     delete (window as unknown as { __survey011DelaySessionPutMs?: number }).__survey011DelaySessionPutMs;
   });
@@ -509,6 +537,16 @@ test('⑦ U1 — 알람 [확인] 터치의 착지 부기 중 재개도 착지를
     (await logExtras(page)).filter((e) => e === 'proceed_refused:epoch'),
     '알람 [확인] 경로에서도 정상 재개가 「경합자」로 잡혔다 — 진입로마다 막으면 다음 진입로가 남는다',
   ).toEqual([]);
+
+  // RD-4 두 번째 축 — 재개가 [확인] 터치(=착지 진입)보다 뒤다.
+  const trace7 = await logTrace(page);
+  const confirmAt7 = lastIndexWhere(trace7, (e) => e.startsWith('command/confirm touch'));
+  const resumeAt7 = lastIndexWhere(trace7, (e) => e.startsWith('command/resume'));
+  expect(confirmAt7, '전제: [확인] 터치가 실제로 접수됐다').toBeGreaterThanOrEqual(0);
+  expect(
+    resumeAt7,
+    '재개가 [확인]보다 앞에 들어갔다 — 스냅샷 자체가 재개 뒤라 가드가 자명하게 통과한다(RD-4)',
+  ).toBeGreaterThan(confirmAt7);
 
   // 🔑 이 케이스의 판정축은 **「착지가 살았는가」**다 — 값 귀속의 상세(다음 발화가 어디로 가는가)는
   //   ⑥이 같은 기제로 이미 잰다. 여기서 후속 발화까지 얹으면 알람 해제 뒤 TTS 체인이 길어
