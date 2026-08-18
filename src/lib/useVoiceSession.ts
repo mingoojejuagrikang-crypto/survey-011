@@ -761,6 +761,34 @@ export function useVoiceSession() {
     const row = sess.activeRow;
     const total = computeTotalRows(getSessionColumns());
 
+    // 🔴 v0.50 C #4(claude r2 #4) — **advance의 국면 전이도 `armLanding`과 같은 계약을 진다.**
+    //   이 함수는 Z2가 모은 착지 넷의 호출부이면서 그 넷에 **속하지 않는 전이를 스스로 한다**
+    //   (아래 4곳). 그래서 `armLanding`의 문을 안 지나고, 그 결과 **일시정지가 조용히 풀렸다**:
+    //   일시정지 중 음성 칩을 탭해 수동 커밋하면 `proceedAfterCommit` → 여기 →
+    //   `setPhase('complete')`/`setPhase('active')`가 `paused`를 덮는다. 그러면
+    //   `resolveFinal`의 paused 방어(`pausedIgnore`)가 통째로 꺼져 **주변 발화가 값이 되고**,
+    //   recorder는 `pause()`가 dispose한 채라(`resume()`만 재생성한다) **클립만 죽는다** —
+    //   사용자는 「멈춰 있다」고 믿는 동안 값이 들어간다.
+    //   🔑 형제 `jumpToRow`가 이미 이 계약을 지킨다(`useRowNav.ts` — *"'paused' 등 다른 phase는
+    //     건드리지 않는다, 일시정지 해제는 `resume()`만의 소관"*). 그 모양을 그대로 쓴다.
+    //   🔴 **allowlist다**(GL-004 [ORCH-25] — "무엇을 막을까"가 아니라 "무엇만 허용할까"). 「paused면
+    //     막는다」로 적으면 await 구간에 `stop()`이 끼었을 때 `stopping` 위에 `active`를 쓴다.
+    //   🔴 **막지 않는 것**: 값 커밋·내구성 부기·문맥 재무장(`awaiting`)·커서 이동·안내는 전부
+    //     그대로 간다. 착지 **전체**를 거절하면 `awaiting`이 빈 채 남아 `resume`의 폴스루가
+    //     [CELL-OVERWRITE-1]을 새 경로로 재개방한다(`armLanding` 헤더의 실측 · 오라클 z2 ②-b).
+    //   ⚠️ 진입 스냅샷(`sess`)이 아니라 **매번 새로 읽는다**(zustand `set`은 새 객체를 만든다) —
+    //     이 함수는 await 뒤에도 phase를 쓰고, `pause()`는 epoch를 올리지 않아 그 창은 아래
+    //     epoch 가드에 안 잡힌다([LANDING-OWNER-1] *"둘 중 하나로 다른 하나를 대신할 수 없다"*).
+    //   오라클: tests/v050-c48-landing-bypass.spec.ts
+    const setLandingPhase = (next: 'active' | 'complete', reason: string): void => {
+      const live = useSessionStore.getState();
+      if (live.phase !== 'active' && live.phase !== 'complete') {
+        logCell({ type: 'session', extra: `advance_phase_held:${live.phase}:${reason}`, row });
+        return;
+      }
+      live.setPhase(next);
+    };
+
     // 🔴 v0.49 r6 Y3(claude #3) — **종료 중에는 진행하지 않는다. 단 내구성 부기는 남긴다.**
     //   이 함수는 Z2가 모은 착지 넷의 호출부이면서, 그 넷에 **속하지 않는 전이를 스스로 한다**:
     //   아래 `sess.setPhase('complete')`(행 완료 표시)와 행 이동이 그것이다. 종료 중 커밋
@@ -822,7 +850,17 @@ export function useVoiceSession() {
         notifyRowPersistFailed(row, awaitingFieldRef.current);
         return;
       }
-      sess.setPhase('complete');
+      // 🔴 v0.50 C #8(claude r2 #8 "형제 창") — 재확인을 **파괴적 쓰기 앞으로** 당긴다.
+      //   종전 순서는 `setPhase` → `awaitingFieldRef = null` → 안내 → **그제서야** epoch였다.
+      //   그 사이 `jumpToRow`는 **첫 await 이전에** 커서 이동 + epoch bump를 동기로 끝내므로
+      //   (`useRowNav.ts`), 느린 IDB 쓰기 중 barge-in이 들어오면 **방금 무장된 남의 awaiting을
+      //   여기가 지운다** — 값도 소리도 없이 입력 불능이 되는 형상이다.
+      //   ⚠️ 부기(`finalizeRowCompletion`)는 **이 위에서 이미 끝났다** — 좌표가 커밋된 행이라
+      //     커서 경합과 무관하고, 건너뛰면 그 행이 `persistSession`의 rows에서 통째로 떨어진다(Z8).
+      //   ⚠️ 아래 기존 재확인은 **그대로 둔다** — 저건 안내(`announceRowComplete`) 중의 barge-in을
+      //     막는 별개 창이다. 두 창은 겹치지 않는다.
+      if (epochRef.current !== startEpoch) return;
+      setLandingPhase('complete', 'row_complete');
       awaitingFieldRef.current = null;
       await announceRowComplete(row);
       if (epochRef.current !== startEpoch) return;
@@ -843,7 +881,7 @@ export function useVoiceSession() {
         sess.setActiveRow(ret.row);
         sess.setActiveCol(targetCol);
         sess.setRecognized('');
-        sess.setPhase('active');
+        setLandingPhase('active', 'return_landing');
         awaitingFieldRef.current = null;
         await announceRowDiff(row, ret.row);
         if (epochRef.current !== startEpoch) return;
@@ -888,7 +926,7 @@ export function useVoiceSession() {
         });
         sess.setActiveCol(gapIdx);
         sess.setRecognized('');
-        sess.setPhase('active');
+        setLandingPhase('active', 'row_gap_return');
         awaitingFieldRef.current = null;
         await announceField(vc[gapIdx]);
         return;
@@ -902,7 +940,7 @@ export function useVoiceSession() {
     const targetCol = firstIncompleteColIdx(next, vc);
     sess.setActiveCol(targetCol);
     sess.setRecognized('');
-    sess.setPhase('active');
+    setLandingPhase('active', 'next_row');
     awaitingFieldRef.current = null;
     await announceRowDiff(row, next);
     if (epochRef.current !== startEpoch) return;
@@ -918,6 +956,12 @@ export function useVoiceSession() {
     awaiting: AwaitingField | null,
     opts?: { echoValue?: string },
   ) => {
+    // 🔴 v0.50 C #8(claude r2 #8) — **진입 시점의 epoch를 잡아 둔다.** 이 함수 전체에 epoch
+    //   참조가 한 줄도 없었다: 호출부(`useCommitLanding`)의 재확인은 **진입 직전 1회**이고,
+    //   아래 awaited IDB 쓰기를 지난 뒤 모든 착지 분기는 호출 시점에 캡처된 `awaiting`을 그대로
+    //   소비한다. 경합자는 실재한다 — `jumpToRow`가 **첫 await 이전에** 커서 이동 + epoch bump를
+    //   동기로 끝낸다. 재확인 지점은 부기 **뒤**·착지 **앞**이다(그 사이 근거는 그 자리 주석).
+    const startEpoch = epochRef.current;
     // 🔴 v0.49 r3 #1(claude r2 크리티컬) — **행 완료 부기는 착지와 무관하다.** 아래 재무장/예약
     //   복귀 분기는 전부 `advance()`를 타지 않고 return하므로, 부기가 advance 안에만 있으면
     //   그 경로에서 통째로 빠진다(값 되돌림 — `finalizeRowCompletion` 헤더). 분기마다 배선하면
@@ -947,6 +991,21 @@ export function useVoiceSession() {
     if (awaiting && !(await finalizeRowCompletion(awaiting.row))) {
       awaitingFieldRef.current = awaiting;
       notifyRowPersistFailed(awaiting.row, awaiting);
+      return;
+    }
+    // 🔴 v0.50 C #8 — **여기부터가 착지다. 낡은 예약은 착지하지 않는다.**
+    //   위 부기까지는 좌표가 `awaiting.row`(커밋된 셀의 행)라 커서 경합과 무관하고, 건너뛰면
+    //   값이 `persistSession`의 rows에서 통째로 떨어진다(Z8). 반면 아래 분기들은 전부 **커서·
+    //   대기 상태를 쓴다** — 특히 예약 복귀 분기는 `setActiveRow`/`setActiveCol`로 커서를
+    //   **명시로 끌어온다**. 그 사이 사용자가 행을 옮겼다면 사용자가 이미 떠난 셀로 되끌려
+    //   **다음 값이 화면·귀와 다른 컬럼에 기록된다**(유실이 아니라 「틀린 자리에 맞는 값」이라
+    //   사후 발견이 어렵다).
+    //   🔴 **막는 것은 낡은 착지뿐이다** — 경합자가 없으면(epoch 동일) 아래는 종전과 완전히
+    //     같은 경로다. 정상 착지를 막으면 [NAV-FILLED-CELL-1]의 「모든 탈출은 재진입」이 깨진다.
+    //   ⚠️ 거절을 로그에 남긴다(형제 `advance_refused:stopping`·`jump_refused:stopping`과 같은
+    //     계약) — 무음 return은 분석에서 「착지가 원래 없었다」와 구별되지 않는다.
+    if (epochRef.current !== startEpoch) {
+      logCell({ type: 'session', extra: 'proceed_refused:epoch', row: awaiting?.row });
       return;
     }
     if (awaiting?.kind === 'reviewWait') {
