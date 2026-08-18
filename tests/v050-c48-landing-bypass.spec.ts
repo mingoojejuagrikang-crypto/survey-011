@@ -235,9 +235,21 @@ test('② 과잉 수정 반증 — 일시정지 중 커밋한 값은 살아 있�
 
   // ⓑ 문맥이 재무장됐다 — 커서·안내는 그대로 진행했으므로 재시작이 그것을 이어받는다.
   //    (막았다면 `awaiting`이 빈 채 남아 `resume` 폴스루가 값 있는 셀에 kind:'value'를 연다.)
-  await fireStt(page, '재시작', 2000);
-  await waitForTtsIdle(page);
-  await expect(page.locator('[data-testid="paused-card"]')).toHaveCount(0);
+  // 🔴 `재시작`은 **STT 발화**라 부하 지연에서 통째로 유실될 수 있다(`[TEAMOPS-91]` 실측:
+  //   게이트 동시부하 회차에서 이 한 발화가 씹혀 red, 조용한 환경 4/4 green). 이 케이스가 재는
+  //   것은 「보류가 문맥을 버리지 않았다」이지 **인식률이 아니다** — 그래서 해제가 설 때까지
+  //   재발화한다. 🔑 **판별력은 안 무뎌진다**: 처방이 정말로 재개를 막으면(과잉 수정 = 착지 전체
+  //   거절 → `awaiting`이 빈 채 남는다) 몇 번을 말해도 안 풀려 red 그대로다(반증 C에서 실측).
+  let released = false;
+  for (let i = 0; i < 3 && !released; i++) {
+    await fireStt(page, '재시작', 2000);
+    await waitForTtsIdle(page);
+    released = (await page.locator('[data-testid="paused-card"]').count()) === 0;
+  }
+  expect(
+    released,
+    '재시작이 일시정지를 풀지 못했다 — 보류가 문맥(awaiting)까지 버려 해제 발화가 소유자를 못 찾는다',
+  ).toBe(true);
 
   await fireStt(page, '사십이 점 삼', 1800);
   await waitForTtsIdle(page);
