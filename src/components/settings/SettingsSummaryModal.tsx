@@ -145,7 +145,7 @@ function usePrevSurvey(columns: Column[], roundDateColId: string | null): PrevSu
     const ageH = builtAt == null ? -1 : Math.round((Date.now() - builtAt) / 3_600_000);
     logger.log({ type: 'app', extra: `past_index_used_stale:summary,age_h=${ageH}` });
   }, [staleKey]);
-  // 🔴 v0.49 r4 M8(claude r3 #11) — **조회 불가 사유를 남긴다.** 순수층이 6사유를 갈라 두고도
+  // 🔴 v0.49 r4 M8(claude r3 #11) — **조회 불가 사유를 남긴다.** 순수층이 7사유를 갈라 두고도
   //   (A5 + r3 #3 + M8) 이 소비자가 전부 「미확인」으로 접어 버려, 화면이 영구 고정된 스키마를
   //   다음 회차가 어느 축(샘플키·헤더·회차·인덱싱)에서 고쳐야 하는지 로그로 알 수 없었다.
   //   ⚠️ 이벤트 이름은 **새로 만든다**(PRINCIPLES §4) — `past_index_skip:*`은 로더의 진입 스킵
