@@ -336,24 +336,42 @@ export function useVoiceSession() {
   const awaitingFieldRef = useRef<AwaitingField | null>(null);
   const epochRef = useRef(0);
   /**
-   * 🔴 v0.50 fixdc U1 — **`epochRef`는 단조가 아니다.** 두 곳이 0으로 **리셋**한다:
-   * `start()`(새 세션) · `resume()`(일시정지 해제). 나머지 14곳은 전부 `++`다.
+   * 🔴 v0.50 fixdc U1 / fixdc2 RD-1·RD-3 — **`epochRef`는 단조가 아니다.** 두 곳이 0으로
+   * **리셋**한다: `start()`(새 세션) · `resume()`(일시정지 해제). 나머지 **17곳**은 전부 `++`다.
+   * ⚠️ 이 수를 믿고 완전성을 판단하는 사람이 있으므로 **실측 절차를 남긴다**:
+   * `grep -rn "epochRef.current++\|++epochRef.current" src/` 히트 18 − `useCommitLanding.ts`의
+   * 주석 인용 1 = **17**. (fixdc2 RD-5 — 종전 이 주석은 `14`였다. 그 수로는 조사가 빠진다.)
    *
    * 그 비대칭이 v0.50 C의 신규 착지 가드에서 **회귀**를 냈다(리뷰 양측이 서로 다른 진입로로
-   * 독립 재현). 「낡은 착지인가」를 `!== startEpoch`로만 재면 **정상 재개가 경합자로 잡힌다** —
+   * 독립 재현). 「낡은 착지인가」를 **값 하나의 차이**로만 재면 **정상 재개가 경합자로 잡힌다** —
    * 그리고 그 거절이 치명적인 이유는 **재개와 이동이 다르기 때문**이다:
-   *   · `jumpToRow`류(bump 14곳)는 커서를 옮긴 뒤 **자기 착지로 `awaiting`을 새로 무장**한다.
+   *   · `jumpToRow`류(bump 17곳)는 커서를 옮긴 뒤 **자기 착지로 `awaiting`을 새로 무장**한다.
    *     그래서 낡은 착지를 거절해도 상태가 빈 채로 남지 않는다 — 거절이 **옳다.**
    *   · `resume()`은 **epoch만 바꾸고 `awaiting`은 기존 것을 읽어 복원**한다. 거절하면 그 착지가
    *     갱신하려던 것이 통째로 유실되고, 재개가 **확정값이 든 셀을 다시 연다**
    *     (`[CELL-OVERWRITE-1]` 재개방 → 이어지는 발화가 확정값을 덮는다 = 값 손상).
    *
-   * 🔴 **리셋 자체는 건드리지 않는다**(`resetEpoch` 안에 그대로 산다). 전수 조사 결과 리셋
-   * **고유**의 소비자는 코드로 특정되지 않았다 — 모든 읽기 지점이 「값이 달라졌는가」만 보므로
-   * `= 0`과 `++`는 동일하게 작동한다. 그래서 리셋을 **해석하지 않고 「사실」만 기록**한다:
-   * 의미를 몰라도 처방이 성립하는 설계다.
+   * 🔴 **리셋 «값»은 여전히 건드리지 않는다** — `resetEpoch` 안의 `epochRef.current = 0` 한 줄이
+   * 그대로 산다. 바뀐 것은 **리셋이 지우는 것을 잃지 않는다**는 점이다. 1회전 처방은 리셋을
+   * 「기준선 교체」(기준선 ← 리셋 직후 값 0)로 다뤘는데, 그러면 **리셋 «이전»의 bump가 흔적 없이
+   * 사라져** 「이동 → 재개」가 낡은 착지를 통과시켰다(fixdc2 RD-3(a) — #8이 닫으려던 「틀린 자리에
+   * 맞는 값」의 재개방). 그래서 리셋이 버리는 bump를 **누계(`carried`)로 이월**한다:
+   *   `landingMoves() = carried + epochRef.current` — **리셋을 건너 단조 증가**하는 소유권 이동 수.
+   *
+   * 🔴 누계«만»으로는 **음성 '재시작'이 즉시 깨진다**: `pausedResume`이 `epochRef.current++`를
+   * **먼저** 하고 `resume('voice')`를 부르기 때문이다(`useFinalCommands.ts:294` · 명령 공통 bump
+   * `:370` → `:440` — 둘 다 그 사이에 await가 없어 **정확히 1회**다). 그 자기 bump는 경합자가
+   * 아니므로 리셋이 **흡수**한다(`ownBumps`). 즉 이 설계는 **순서(누계)와 출처(흡수·세션 배리어)를
+   * 함께** 본다 — 어느 한쪽만으로는 판별력(bump 17곳 거절)과 U1 해소(재개 통과)를 **동시에**
+   * 만족할 수 없다. 🔑 한쪽을 지우려는 사람은 그 둘이 서로를 대신하지 못한다는 것부터 확인해라.
+   *
+   * 🔴 `start()`는 **무조건 배리어**다(`sessionGen`). 새 세션이 시작됐는데 옛 세션의 착지가 살아
+   * 돌면 `awaitingFieldRef`를 비워 **새 세션의 첫 셀 무장을 지운다**(입력 불능 — RD-3(b)).
+   * 종전 값 비교는 `startEpoch === 0`인 창에서 그것을 오히려 통과시켰다.
+   * ⚠️ `stop()`은 배리어가 **아니다** — `stop()` 뒤 `start()` 전의 창은 `advance`의 `stopping`
+   * 진입 가드와 `armLanding`의 거절이 받는다(B 묶음이 `stop()`을 열 때 함께 볼 값).
    */
-  const epochResetRef = useRef({ gen: 0, value: 0 });
+  const epochResetRef = useRef({ carried: 0, sessionGen: 0 });
   // 🔴 v0.48.1 r3 U1 4절 — interim barge-in이 일어난 시점의 epoch를 기록한다. speech.ts:353는
   //   TTS가 뮤트 중일 때 비어있지 않은 interim만 오면 즉시 cancel()하지만, epochRef는 건드리지
   //   않는다(final에서만 bump) — 그래서 알람 2차 발화 가드의 「epoch 불변」 절이 이 경로를 못
@@ -478,22 +496,33 @@ export function useVoiceSession() {
     sessionColumnsRef.current ?? useSettingsStore.getState().columns;
   /** 🔴 v0.50 fixdc U1 — `epochRef` 리셋의 **단일 소유자**. 리셋 지점이 둘(`start`·`resume`)이라
    *  사본을 만들지 않는다(Z2의 교훈: 사본을 늘리는 대신 소유자를 하나 만든다).
-   *  리셋 값 자체는 **바꾸지 않는다** — 착지 가드가 읽을 「리셋 사실」만 함께 남긴다. */
-  const resetEpoch = (): void => {
+   *  리셋 «값»은 **바꾸지 않는다** — 리셋이 지우는 bump를 `carried`로 이월할 뿐이다(그 헤더).
+   *  @param ownBumps 이 리셋 «자신»이 만든 bump 수. `pausedResume`의 선행 `++`가 그것이며,
+   *    경합자가 아니므로 누계에서 뺀다(fixdc2 RD-3). ⚠️ `Math.max(0, …)`은 방어다: 흡수가 실제
+   *    bump보다 크면 누계가 **줄어** 낡은 착지가 뒤늦은 진짜 bump와 상쇄돼 통과한다 —
+   *    이 가드의 근거는 `landingMoves()`의 **단조성**이므로 그것부터 깨진다.
+   *  @param newSession 세션 경계(`start`). 옛 세션의 착지는 값과 무관하게 거절한다(RD-3(b)). */
+  const resetEpoch = (opts?: { ownBumps?: number; newSession?: boolean }): void => {
+    const prev = epochResetRef.current;
+    epochResetRef.current = {
+      carried: prev.carried + Math.max(0, epochRef.current - (opts?.ownBumps ?? 0)),
+      sessionGen: prev.sessionGen + (opts?.newSession ? 1 : 0),
+    };
     epochRef.current = 0;
-    epochResetRef.current = { gen: epochResetRef.current.gen + 1, value: epochRef.current };
   };
+  /** 착지 소유권을 남에게 넘긴 **이동의 누계**. 리셋이 `epochRef`를 0으로 되돌려도 여기 남는다 —
+   *  「내 스냅샷 이후 이동이 있었는가」가 리셋을 건너 판정 가능해지는 것이 이 값의 존재 이유다. */
+  const landingMoves = (): number => epochResetRef.current.carried + epochRef.current;
   /** 착지 가드의 진입 스냅샷. `epochRef` 값 하나로는 재개를 이동과 구별할 수 없다(그 헤더). */
-  const snapLandingEpoch = (): { epoch: number; resetGen: number } =>
-    ({ epoch: epochRef.current, resetGen: epochResetRef.current.gen });
-  /** 스냅샷이 아직 「이 착지의 것」인가.
-   *  재개가 끼었으면 **리셋 직후 값**이 기준선이다 — 재개는 사용자 이동이 아니므로 경합자로 세지
-   *  않는다. 🔑 **판별력은 그대로다**: 재개 *이후*에 들어온 진짜 이동은 그 기준선 위에서 다시
-   *  `++`되므로 여전히 잡힌다(반증으로 실측). */
-  const landingEpochHeld = (snap: { epoch: number; resetGen: number }): boolean => {
-    const reset = epochResetRef.current;
-    return epochRef.current === (reset.gen !== snap.resetGen ? reset.value : snap.epoch);
-  };
+  const snapLandingEpoch = (): { moves: number; sessionGen: number } =>
+    ({ moves: landingMoves(), sessionGen: epochResetRef.current.sessionGen });
+  /** 스냅샷이 아직 「이 착지의 것」인가. 🔑 **판별력과 U1 해소를 동시에** 만족한다:
+   *  · bump 17곳은 누계를 올리므로 여전히 거절된다 — **뒤따라 리셋이 와도 지워지지 않는다**(RD-3a).
+   *  · 재개는 자기 bump가 흡수돼 누계가 불변이라 통과한다(U1 — 터치·음성 두 경로 모두).
+   *  · 세션 경계(`start`)는 값과 무관한 배리어다(RD-3b).
+   *  오라클: v050-c48-landing-bypass ③(거절) · ④⑥⑦(통과) · ⑨(advance 안의 리셋) · ⑪(bump 뒤 리셋). */
+  const landingEpochHeld = (snap: { moves: number; sessionGen: number }): boolean =>
+    landingMoves() === snap.moves && epochResetRef.current.sessionGen === snap.sessionGen;
   /** v0.35.3 Stage 3-4 — 세션 컨텍스트 로거. 이 훅의 모든 계측은 현재 세션 id를 동봉하므로
    *  sessionId 고정 인자를 여기서 1회 주입한다. 나머지 필드(extra 문자열 포함)는 호출부 그대로
    *  전개 — SOP-003 파서 계약 불변. */
@@ -790,10 +819,16 @@ export function useVoiceSession() {
 
   /** Move to next voice col in current row, or finalize row + jump to next target. */
   const advance = useCallback(async () => {
-    const startEpoch = epochRef.current;
-    // 🔴 v0.50 fixdc U1 — 아래 **신규** 가드(부기 뒤·파괴적 쓰기 앞)만 이 스냅샷을 쓴다.
-    //   형제 셋(안내 뒤 재확인)은 `startEpoch` 그대로다 — 이 묶음이 만든 것이 아니고, 그쪽은
-    //   재개 중 도달이 실측되지 않았다(산출물 미결).
+    // 🔴 v0.50 fixdc2 RD-1(blocker) — **안내 뒤 재확인 셋도 이 스냅샷을 쓴다.** 종전엔 그 셋만
+    //   `epochRef.current` 생값(`startEpoch`)을 비교했는데, 리셋이 이 함수 «안»에서 일어나면
+    //   `0 !== startEpoch`가 되어 **정상 재개를 경합자로 잡았다.** 도달한다: 이 함수는 일시정지
+    //   중에도 끝까지 돌고(`setLandingPhase`가 phase만 보류한다 — 오라클 ①이 `row_complete`와
+    //   `next_row` 보류를 **둘 다** 남기는 것이 관통의 증명이다), 그 사이 「…완료.」 낭독은
+    //   phase 게이트가 없는 **≈1.095초**(`commitManualValue`의 P-2 실측 인용 — 「행완료 1.095s」)라
+    //   **행 완료마다 창이 열린다.** 피해는 갈린다 — **행 완료 낭독 뒤**의 트립은 커서를 완료 행에
+    //   고착시켜 `[CELL-OVERWRITE-1]` 재개방을 **영구**로 만들고(회복 불가), 안내 뒤 둘(예약 복귀·
+    //   다음 행)은 마지막 안내를 스킵한다.
+    //   오라클: tests/v050-c48-landing-bypass.spec.ts ⑨.
     const landingSnap = snapLandingEpoch();
     const sess = useSessionStore.getState();
     // 리뷰 라운드1(Codex+Flash, 수용) — 필드/행 이동 시 미확정 interim 표시 정리(표시 전용).
@@ -906,13 +941,15 @@ export function useVoiceSession() {
       //   여기가 지운다** — 값도 소리도 없이 입력 불능이 되는 형상이다.
       //   ⚠️ 부기(`finalizeRowCompletion`)는 **이 위에서 이미 끝났다** — 좌표가 커밋된 행이라
       //     커서 경합과 무관하고, 건너뛰면 그 행이 `persistSession`의 rows에서 통째로 떨어진다(Z8).
-      //   ⚠️ 아래 기존 재확인은 **그대로 둔다** — 저건 안내(`announceRowComplete`) 중의 barge-in을
-      //     막는 별개 창이다. 두 창은 겹치지 않는다.
+      //   ⚠️ 아래 재확인은 **지우지 마라** — 저건 안내(`announceRowComplete`) 중의 barge-in을
+      //     막는 별개 창이다. 두 창은 겹치지 않는다(fixdc2 RD-1로 같은 스냅샷을 쓰게 됐을 뿐이다).
       if (!landingEpochHeld(landingSnap)) return;
       setLandingPhase('complete', 'row_complete');
       awaitingFieldRef.current = null;
       await announceRowComplete(row);
-      if (epochRef.current !== startEpoch) return;
+      // 🔴 fixdc2 RD-1 — 여기가 **영구 피해**의 자리다: 트립하면 `awaiting`은 이미 null인데
+      //   커서가 완료 행에 고착해 아무도 옮겨 주지 않는다(재개 폴스루가 그 확정 셀을 다시 연다).
+      if (!landingEpochHeld(landingSnap)) return;
     }
 
     // If a return reservation is set (came from modify/jump), go back.
@@ -933,7 +970,8 @@ export function useVoiceSession() {
         setLandingPhase('active', 'return_landing');
         awaitingFieldRef.current = null;
         await announceRowDiff(row, ret.row);
-        if (epochRef.current !== startEpoch) return;
+        // 🔴 fixdc2 RD-1 — 트립하면 커서는 옮겨졌는데 마지막 안내가 스킵된다(아래 「다음 행」 형제와 동형).
+        if (!landingEpochHeld(landingSnap)) return;
         // 🔴 v0.49 fix49b(max 리뷰 #3) — `ret.colIdx`는 `jumpToRow`가 **떠날 때의 activeColIdx**를
         //   그대로 적어 둔 것이다. F-1 이전엔 그 값이 언제나 빈 칸을 가리켰지만(기록자 전량이
         //   그랬다), 항목 이동이 커서를 **filled 셀에 주차**시킬 수 있게 되면서 예약에 채워진
@@ -992,7 +1030,8 @@ export function useVoiceSession() {
     setLandingPhase('active', 'next_row');
     awaitingFieldRef.current = null;
     await announceRowDiff(row, next);
-    if (epochRef.current !== startEpoch) return;
+    // 🔴 fixdc2 RD-1 — 위 예약 복귀 분기의 형제. 트립하면 항목 안내 없이 멈춘다.
+    if (!landingEpochHeld(landingSnap)) return;
     if (vc[targetCol]) await announceField(vc[targetCol]);
   }, [announceField, announceOrCellWait, announceRowComplete, announceRowDiff, announceEndReached, finalizeRowCompletion, notifyRowPersistFailed, say]);
 
@@ -2448,7 +2487,9 @@ export function useVoiceSession() {
     // v0.5.0 W1: 세션 시작 시 음성 목록 재조회 1회 — iOS가 늦게 채운 한국어 음성을
     // 이 세션의 TTS가 바로 쓸 수 있게 하고, tts_voices_loaded 텔레메트리(개수 변화 시)도 남긴다.
     refreshVoices();
-    resetEpoch();
+    // 🔴 fixdc2 RD-3(b) — 세션 경계는 **배리어**다. 붙잡힌 put이 `stop()` 해체를 넘겨 살아 있으면
+    //   옛 세션의 착지가 여기서 되살아나 `awaitingFieldRef`를 비운다(새 세션 첫 셀 = 입력 불능).
+    resetEpoch({ newSession: true });
     pendingClipsRef.current = {};
     clipCapture.resetCounters();
     brokenClipKeysRef.current = new Set();
@@ -2757,7 +2798,14 @@ export function useVoiceSession() {
     // 경로로 풀렸는지를 정량화해 "분투→해제" 패턴(강남호 13/14 churn)을 다음 세션부터 분해한다.
     logCell({ type: 'command', parsed: 'resume', extra: `phase:${source}`, row: sess.activeRow });
     sess.setPhase('active');
-    resetEpoch();
+    // 🔴 fixdc2 RD-3 — 재개 «자신»의 bump를 흡수한다. 음성 '재시작'은 `pausedResume`이
+    //   `epochRef.current++` 뒤 **동기로**(사이에 `cancelTts()`뿐, await 없음) 이 함수를 부르므로
+    //   **정확히 1회**다(`useFinalCommands.ts:294` · 명령 공통 bump `:370`→`:440`도 같은 형태).
+    //   터치 재개(마이크 버튼 → `VoiceScreen.tsx`)는 선행 bump가 **없다**.
+    //   흡수하지 않으면 음성 재시작이 스스로를 경합자로 만들어 진행 중인 착지를 죽인다(U1 재개방).
+    //   ⚠️ 그 인접성이 이 인자의 유일한 근거다 — `useFinalCommands`가 그 형태를 바꾸면 여기가
+    //     조용히 틀어진다. 그래서 오라클 ⑤가 그 형태를 **구조로** 잠근다.
+    resetEpoch({ ownBumps: source === 'voice' ? 1 : 0 });
     // Controller stays alive during pause (pause() no longer stops it).
     // Recreate only if it was somehow stopped (e.g., programmatic stop from outside).
     if (!ctrlRef.current) {
