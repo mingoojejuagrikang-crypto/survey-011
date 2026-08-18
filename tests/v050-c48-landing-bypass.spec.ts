@@ -35,6 +35,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { boot, PHONE_402, PREV_ROUND, SETTINGS as AZ_SETTINGS } from './fixtures/activeZones';
 import { fireStt, ttsLog, waitForTtsIdle } from './fixtures/stt';
+import { buildPastIndex } from '../src/lib/pastValuesIndex';
+import type { Column } from '../src/types';
 
 test.setTimeout(120_000);
 
@@ -617,4 +619,39 @@ test('[node] ⑤ advance의 국면 전이 4곳은 한 헬퍼를 지나고, 두 �
     helper,
     '착지 가드가 리셋 세대를 안 본다 — 정상 재개와 사용자 이동을 구별할 수 없다(U1 회귀의 형태)',
   ).toContain('reset.gen !== snap.resetGen');
+});
+
+// ── ⑧ U4 — 소비 불가한 프루닝 행은 담지 않는다(단, 대조군은 그대로 담긴다) ─────────────
+test('[node] ⑧ U4 — 키 후보가 0이면 prunedKeyRows를 담지 않고, 후보가 있으면 그대로 담는다', async () => {
+  const HDR = ['조사일자', '농가명', '조사나무', '측정항목01'];
+  // 두 행 다 키 컬럼(농가명)이 비어 **전체-키 프루닝**에 걸린다 — `prunedKeyRows`의 대상 형상.
+  const ROWS_ = [['2026-08-01', '', '1', '10.0'], ['2026-08-08', '', '2', '20.0']];
+  const col = (id: string, name: string, input: string, sampleKey: boolean): Column => ({
+    id, name, type: 'text', input, ttsAnnounce: false, auto: { kind: 'fixed', value: '' }, sampleKey,
+  } as unknown as Column);
+
+  // ⓐ 키 «후보»가 있는 스키마 — 대조군. 담겨야 한다(#10이 닫은 「기록 없음 오진」의 유일한 증거).
+  const cd = col('cd', '조사일자', 'auto', false);
+  const withCandidates = buildPastIndex(HDR, ROWS_, [
+    cd, col('cf', '농가명', 'auto', true),
+    col('c0', '조사나무', 'auto', true), col('m1', '측정항목01', 'voice', false),
+  ], cd);
+  expect(
+    withCandidates.prunedKeyRows.length,
+    '키 후보가 있는데도 프루닝 행을 안 담았다 — v0.50 D(#10)가 닫은 「기록 없음」 오진이 되살아난다',
+  ).toBe(2);
+
+  // ⓑ 키 «후보»가 0인 스키마(auto+sampleKey 컬럼이 없다) — 담아도 `rec`이 언제나 `{}`라
+  //    어떤 세션에서도 대조에 못 쓴다. 14일 폴백 레코드에 시트 전량이 실리는 낭비만 남는다.
+  const noCandidates = buildPastIndex(HDR, ROWS_, [
+    cd, col('cf', '농가명', 'voice', true),
+    col('c0', '조사나무', 'voice', true), col('m1', '측정항목01', 'voice', false),
+  ], cd);
+  expect(
+    noCandidates.prunedKeyRows,
+    '소비 불가한(키 후보 0) 프루닝 행을 여전히 담는다 — 저장 낭비(U4)',
+  ).toEqual([]);
+  // 🔴 과잉 축소 반증 — 축소는 **프루닝 보관**에만 걸린다. 회차 계측은 그대로여야 한다
+  //   (그게 M8이 「키 붙은 행 0줄」과 「회차를 못 읽었다」를 가르는 근거다).
+  expect(noCandidates.roundParsedRows, '회차 계측까지 함께 죽였다 — M8의 오진 판별 근거가 사라진다').toBe(2);
 });

@@ -160,6 +160,14 @@ export function buildPastIndex(
   const keyCandidateIds = columns
     .filter((c) => c.input === 'auto' && effectiveSampleKey(c))
     .map((c) => c.id);
+  // 🔴 v0.50 fixdc U4 — 키 후보가 **하나도 없으면** 아래 `keyRec`은 언제나 `{}`이고, 그런 레코드는
+  //   `previousSurveyRound`의 대조(`want.every(fixedKeyCellMatches)`)에서 **어떤 세션에서도**
+  //   매치될 수 없다. 담는 것은 순수 저장 낭비다 — 14일 폴백 레코드에 시트 전량이 그대로 실린다.
+  //   ⚠️ **「지금 이 세션에서 안 읽힌다」로 좁히지 않는다.** 인덱스는 auto 값이 다른 세션에
+  //     14일까지 재사용되므로(위 `keyCandidateIds` 헤더), 세션 의존 조건을 빌드 시점에 구우면
+  //     재사용 세션의 답을 죽인다. 이 조건은 **컬럼 스키마만** 본다 — 스키마가 같으면 재사용
+  //     세션에서도 같은 값이고, 후보가 0이면 담더라도 빈 `keyRec`이 실려 **결과가 동일**하다.
+  const keyRowsUsable = keyCandidateIds.length > 0;
   const samples = new Map<string, Map<string, Record<string, string>>>();
   const roundsSet = new Set<string>();
   const prunedKeyRows: { round: string; rec: Record<string, string> }[] = [];
@@ -181,7 +189,7 @@ export function buildPastIndex(
     if (!key) {
       // v0.50 D(#10) — 회차가 없는 행은 담지 않는다: 날짜로 답할 후보가 애초에 못 된다
       //   (시트 말미의 빈 행이 여기 걸려 「미확인」을 남발하는 것도 이 조건이 막는다).
-      if (round) {
+      if (round && keyRowsUsable) {
         const keyRec: Record<string, string> = {};
         for (const id of keyCandidateIds) if (id in rec) keyRec[id] = rec[id];
         prunedKeyRows.push({ round, rec: keyRec });
