@@ -20,8 +20,9 @@
  * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다([ORCH-27])
  */
 import { test, expect, type Page } from '@playwright/test';
-import { buildPastIndex, resolveRoundCol } from '../src/lib/pastValuesIndex';
+import { buildPastIndex, previousSurveyRound, resolveRoundCol } from '../src/lib/pastValuesIndex';
 import {
+  deserializePastIndexEntry,
   serializePastIndexEntry,
   type PersistedPastIndexRecord,
 } from '../src/lib/pastValuesPersist';
@@ -60,6 +61,22 @@ const SHEET_ROWS = [
   [PREV_ROUND, '이원창', 'A', '2', '110.0'],
 ];
 
+/**
+ * 🔴 v0.50 D(#10) 전용 시트 — **부분 회차만 키 탈락**. `SHEET_ROWS`를 건드리지 않는 이유는
+ * [TEAMOPS-84]다: 이 전제를 공용 픽스처에 넣으면 W3-1~W3-9가 전부 이 전제 위에 서 버려,
+ * 「이 픽스처를 안 쓰는 스펙」(특히 W3-3 정상 「기록 없음」)이 사라진다.
+ *
+ * 형상: 조사나무(seq·샘플키)가 **나중에 추가된 컬럼**이라 과거 두 회차에만 공란이다. 전체
+ * 샘플키 프루닝(`buildPastIndex` `if (!key) continue`)이 그 두 행을 통째로 버리는데, 오늘
+ * 회차는 키가 완전해 `rounds`를 채우므로 M8 가드(`rounds.length === 0`)가 침묵한다.
+ * 오늘 회차는 strictly-< 로 답에서 빠지므로 이중 루프는 0건 → `{kind:'none'}`.
+ */
+const PARTIAL_KEY_ROWS = [
+  [OLDER_ROUND, '이원창', 'A', '', '90.0'],   // 조사나무 공란 → 프루닝
+  [PREV_ROUND, '이원창', 'A', '', '100.0'],   // ← 진실은 여기다. 이 회차가 통째로 안 보인다
+  [daysAgoLocal(0), '이원창', 'A', '1', '110.0'], // 완전 키 → rounds를 채워 M8을 침묵시킨다
+];
+
 function settingsFor(farmName: string, signedIn = false) {
   return {
     state: {
@@ -91,16 +108,17 @@ function computeFp(): string {
   ]);
 }
 
-function buildRecord(headers: string[] = HEADERS): PersistedPastIndexRecord {
+/** 기본값은 `SHEET_ROWS` — 기존 케이스의 전제는 하나도 안 바뀐다([TEAMOPS-84]). */
+function buildRecord(headers: string[] = HEADERS, rows: string[][] = SHEET_ROWS): PersistedPastIndexRecord {
   const cols = COLUMNS as unknown as Column[];
-  const index = buildPastIndex(headers, SHEET_ROWS, cols, resolveRoundCol(cols, null));
+  const index = buildPastIndex(headers, rows, cols, resolveRoundCol(cols, null));
   return serializePastIndexEntry({ fp: computeFp(), builtAt: Date.now() - 2 * 3_600_000, index });
 }
 
 /** 설정 시드(+선택적 IDB 폴백 주입) → 설정탭 → 설정요약 팝업 오픈. */
 async function openSummary(
   page: Page,
-  opts: { farmName: string; withRecord: boolean; headers?: string[]; withSheet?: boolean },
+  opts: { farmName: string; withRecord: boolean; headers?: string[]; rows?: string[][]; withSheet?: boolean },
 ): Promise<void> {
   await page.setViewportSize(PHONE_375);
   // B1 전용: 신선 조회 경로(토큰 + 시트 stub). 기본 경로는 종전대로 폴백만 쓴다.
@@ -142,7 +160,7 @@ async function openSummary(
       });
       db.close();
     }, {
-      rec: buildRecord(opts.headers) as unknown as Record<string, unknown>,
+      rec: buildRecord(opts.headers, opts.rows) as unknown as Record<string, unknown>,
       idb: IDB,
       schemaSrc: APPLY_APP_SCHEMA_SOURCE,
     });
@@ -188,8 +206,8 @@ test('W3-2 — IDB 폴백 + 세션 고정 키 일치: 직전 조사일 표시', 
 });
 
 
-/** `past_index_used_stale:summary` 로그 전량(순서 보존). W3-5/W3-3b/W3-5b가 공유한다. */
-async function staleSummaryLogs(page: Page): Promise<string[]> {
+/** IDB `logEvents`의 `extra` 전량(순서 보존). 아래 두 필터가 공유한다. */
+async function readLogExtras(page: Page): Promise<string[]> {
   const extras = await page.evaluate(async () => {
     const db: IDBDatabase = await new Promise((resolve) => {
       const req = indexedDB.open('survey-011');
@@ -204,7 +222,18 @@ async function staleSummaryLogs(page: Page): Promise<string[]> {
     db.close();
     return rows.map((e) => String(e.extra ?? ''));
   });
-  return extras.filter((x) => x.startsWith('past_index_used_stale:summary'));
+  return extras;
+}
+
+/** `past_index_used_stale:summary` 로그 전량(순서 보존). W3-5/W3-3b/W3-8이 공유한다. */
+async function staleSummaryLogs(page: Page): Promise<string[]> {
+  return (await readLogExtras(page)).filter((x) => x.startsWith('past_index_used_stale:summary'));
+}
+
+/** v0.50 D(#10) — 조회 불가 사유 로그 전량. W3-11이 쓴다(W3-9는 자기 인라인 판독을 유지한다 —
+ *  그쪽은 `past_index_skip:*`의 **공존**까지 같은 배열에서 봐야 해서 필터가 다르다). */
+async function unqueryableSummaryLogs(page: Page): Promise<string[]> {
+  return (await readLogExtras(page)).filter((x) => x.startsWith('past_index_unqueryable:summary'));
 }
 
 test('W3-3 — IDB 폴백 + 일치 기록 0건(다른 농가): 「이전 조사 · 기록 없음 (백업)」', async ({ page }) => {
@@ -383,13 +412,14 @@ test('W3-8(r4 M6) — 신선 TTL만 지난 자기 조회는 「(백업)」이 �
  * 🔴 W3-9(r4 M8 · claude r3 #11) — **조회 불가 사유를 로그에 남긴다.**
  *
  * 순수층은 6사유를 갈라 두었는데(A5 2 + r3 #3 3 + M8 1) 이 소비자가 전부 「미확인」으로 접어
- * 버려, 사유가 **한 건도 기록되지 않았다.** 화면 문구는 사용자에게 하나여야 맞지만(A5), 그
+ * 버려, 사유가 **한 건도 기록되지 않았다.**
+ * (v0.50 D(#10)에서 `partial_keyed_rows`가 붙어 **지금은 7종**이다 — W3-11.) 화면 문구는 사용자에게 하나여야 맞지만(A5), 그
  * 화면이 영구 고정된 스키마를 다음 회차가 고치려면 「어느 축이 무너졌는가」가 유일한 단서다.
  *
  * 여기서 만드는 상태는 W3-4와 같다(고정 키 컬럼 헤더 개명 → `headers_unmapped`).
  * 반증(사유 계측 제거 시): red.
  */
-test('W3-9(r4 M8) — 「미확인」의 사유가 로그에 남는다(6사유 무로깅 해소)', async ({ page }) => {
+test('W3-9(r4 M8) — 「미확인」의 사유가 로그에 남는다(r4 당시 6사유 무로깅 해소)', async ({ page }) => {
   const RENAMED = ['조사일자', '농가명(구)', '라벨', '조사나무', '횡경'];
   await openSummary(page, { farmName: '이원창', withRecord: true, headers: RENAMED });
   const modal = page.locator('[data-testid="settings-summary-modal"]');
@@ -459,4 +489,105 @@ test('[node] W3-10(r4 M8 → r5 Z2) — 값을 여는 착지가 phase를 스스�
     enterCellWait.slice(0, enterCellWait.indexOf('awaitingFieldRef.current = {')),
     'enterCellWait 헤더가 선언한 「phase는 active」를 집행하지 않는다',
   ).toContain("phase: 'active'");
+});
+
+/**
+ * 🔴 W3-11(v0.50 D · claude r6 #10) — **부분 회차만 키 탈락한 상태를 「기록 없음」이라 단정하지 않는다.**
+ *
+ * 결함: `buildPastIndex`는 **전체 샘플키**로 행을 프루닝하는데(`if (!key) continue` — 키 셀
+ * 하나라도 비면 행 통째 폐기) 대조는 **행 불변 부분집합**(`sessionFixedKeyColumns`)으로만 한다.
+ * 그래서 나중에 추가된 키 컬럼(조사나무)이 과거 회차에만 공란이면 그 과거 행들이 전부 버려지는데,
+ * **이후의 완전-키 회차가 `rounds`를 채워** M8 가드(`rounds.length === 0`)가 안 뜬다. 이중 루프는
+ * 0건을 돌고 마지막 줄이 `{kind:'none'}`을 낸다 → 화면이 「기록 없음」이라고 **단정**한다.
+ *
+ * 🔴 이게 W3-4(A5)와 다른 축인 이유: W3-4는 `no_fixed_key`/`headers_unmapped` — 조회 **입구**가
+ * 막힌 형상이다. 여기는 입구가 다 열려 있고(고정 키 있음·헤더 매핑됨·회차 인덱싱됨) **데이터가
+ * 실재하는데도** 0건이 나온다. A5(r2)·#3(r3)·M8(r4)이 세 회차에 걸쳐 없애온 「거짓 단언」의
+ * 마지막 구멍이다.
+ *
+ * 계약선(민구 08-14): *"과거값 비교도 컬럼명 불일치 시 **비교 불가** 처리로 충분"* —
+ * `unqueryable`(「미확인」)은 계약이 허용한 결말이고, `none`(「기록 없음」)은 적극 단언이다.
+ * 그래서 이 케이스는 **날짜를 요구하지 않는다.** 요구하는 것은 「없다고 말하지 말 것」이다.
+ *
+ * 반증([TEAMOPS-30]): 처방(`prunedKeyRows` 보관 + `partial_keyed_rows` 가드)을 빼면 다시 red.
+ * 과잉 교정 대조군([TEAMOPS-97]): W3-3(정상 「기록 없음」)이 green으로 남아야 한다 — 진짜
+ * 0건까지 「미확인」으로 바꾸면 이 처방은 A5가 세운 구분을 반대 방향으로 무너뜨린 것이다.
+ */
+test('W3-11(v0.50 D) — 과거 회차만 키 컬럼 공란: 「기록 없음」이 아니라 「미확인」이다', async ({ page }) => {
+  // ① 전제를 Node에서 고정한다 — 이 형상이 **M8 가드에 안 걸린다**는 것이 결함의 핵심이다.
+  const cols = COLUMNS as unknown as Column[];
+  const idx = buildPastIndex(HEADERS, PARTIAL_KEY_ROWS, cols, resolveRoundCol(cols, null));
+  expect(idx.rowCount, '전제: 행은 세 줄 다 읽혔다').toBe(3);
+  expect(idx.roundParsedRows, '전제: 회차 축은 세 줄 다 멀쩡하다').toBe(3);
+  expect(idx.rounds, '전제: 오늘 회차가 rounds를 채운다 → M8 가드가 침묵한다').toEqual([daysAgoLocal(0)]);
+  expect(idx.samples.size, '전제: 과거 두 회차는 전체키 프루닝으로 통째로 사라졌다').toBe(1);
+
+  await openSummary(page, { farmName: '이원창', withRecord: true, rows: PARTIAL_KEY_ROWS });
+  const modal = page.locator('[data-testid="settings-summary-modal"]');
+  await expect(modal).toContainText('이전 조사');
+
+  // ② 조회 입구는 다 열려 있는데도 답이 0건이다 — 그걸 「없다」고 말하면 안 된다.
+  await expect(modal, '데이터가 실재하는데 「기록 없음」이라고 단정했다').not.toContainText('기록 없음');
+  await expect(modal).toContainText('미확인');
+  // ③ 프루닝된 진짜 직전 조사일을 **날짜로 답하지도 않는다**(계약: 비교 불가로 충분).
+  await expect(modal).not.toContainText(PREV_ROUND);
+
+  // ④ W3-9 축 — 사유가 로그에 남아야 다음 회차가 어느 축을 고칠지 안다. 이 형상의 수리는
+  //    「과거 회차의 빈 키 칸을 채운다」이지 헤더·회차 축이 아니다.
+  const unq = await unqueryableSummaryLogs(page);
+  expect(unq, '조회 불가 사유가 무로깅이다').toHaveLength(1);
+  expect(unq[0], '기존 사유를 재사용하면 M8이 고친 오진(수리 방향 오도)을 재생산한다')
+    .toBe('past_index_unqueryable:summary,reason=partial_keyed_rows');
+});
+
+/**
+ * 🔴 W3-11b(v0.50 D) — **처방이 대신 깨뜨릴 수 있는 것 ①: 구버전 백업 폐기**([TEAMOPS-97]).
+ *
+ * `prunedKeyRows`는 `PersistedPastIndexRecord`의 신규 필드다. 이걸 `deserializePastIndexEntry`의
+ * **형태 검증 목록에 넣으면** 이 필드 이전에 저장된 백업이 통째로 폐기되고(`null`), 14일 폴백이
+ * 끊긴다 — 오프라인 농가 현장에서 「이전 조사」가 통째로 「미확인」이 된다. M8(`roundParsedRows`)이
+ * `pastValuesPersist.ts:96-98` 주석에 이미 적어 둔 학습이고, 이 처방은 그 선례를 문자 그대로 따랐다.
+ *
+ * 여기서 고정하는 것은 둘이다: ⓐ구버전 레코드가 **살아남는다** ⓑ복원값은 `[]`라서 판정이
+ * **종전 그대로**다(구버전 백업이 이 결함까지 고쳐 주지는 않는다 — 정직하게 그렇게 적는다).
+ *
+ * ⚠️ 이 파일에 사는 이유: 브리핑 §2가 준 소유 파일이 여기다. 순수/영속층 단언이지만 W3-11의
+ * **반증 잠금**이라 같은 자리에 두는 편이 다음 사람에게 읽힌다.
+ */
+test('[node] W3-11b(v0.50 D) — 구버전 백업(prunedKeyRows 없음)은 폐기되지 않고 종전 판정으로 복원된다', () => {
+  const cols = COLUMNS as unknown as Column[];
+  const index = buildPastIndex(HEADERS, PARTIAL_KEY_ROWS, cols, resolveRoundCol(cols, null));
+  expect(index.prunedKeyRows.length, '전제: 신선 인덱스는 프루닝된 두 행을 들고 있다').toBe(2);
+
+  const legacy = { ...serializePastIndexEntry({ fp: 'fp-old', builtAt: 1, index }) } as Record<string, unknown>;
+  delete legacy.prunedKeyRows;
+  const restored = deserializePastIndexEntry(legacy);
+  expect(restored, '구버전 백업이 통째로 폐기되면 14일 폴백이 끊긴다').not.toBeNull();
+  expect(restored!.index.prunedKeyRows, '없으면 빈 배열 = 종전 판정').toEqual([]);
+  // 정직한 기록: 구버전 백업으로는 이 결함이 안 고쳐진다(고칠 근거가 레코드에 없다).
+  expect(previousSurveyRound(restored!.index, cols, null, daysAgoLocal(0)))
+    .toEqual({ kind: 'none' });
+});
+
+/**
+ * 🔴 W3-11c(v0.50 D) — **처방이 대신 깨뜨릴 수 있는 것 ②: 정상 날짜 답의 「미확인」화**([TEAMOPS-97]).
+ *
+ * 가드는 *"프루닝된 회차가 답을 **바꿀 때만** 접는다"*(`prunedBest > best`)로 좁혀져 있다.
+ * 이 좁힘이 없으면 — 즉 `prunedKeyRows`에 일치 행이 하나라도 있으면 접는 식으로 넓히면 —
+ * **직전 조사일을 정상적으로 답할 수 있는 세션까지 「미확인」이 된다.** 시트 어딘가에 키 칸이
+ * 빈 과거 행이 한 줄 섞여 있는 것은 흔한 일이라, 넓히면 이 기능이 사실상 죽는다.
+ *
+ * 형상: 프루닝된 행이 **고정 키와 일치하지만 더 과거**다(8일 전) — 답은 여전히 어제다.
+ * 반증: 가드 조건에서 `(best === null || prunedBest > best)`를 빼면 red.
+ */
+test('[node] W3-11c(v0.50 D) — 프루닝된 회차가 답을 바꾸지 않으면 날짜를 계속 답한다(과잉 접힘 차단)', () => {
+  const cols = COLUMNS as unknown as Column[];
+  const rows = [
+    [OLDER_ROUND, '이원창', 'A', '', '90.0'],    // 프루닝 + 고정 키 일치, 그러나 best보다 과거
+    [PREV_ROUND, '이원창', 'A', '1', '100.0'],   // 인덱싱됨 → 이게 답이다
+  ];
+  const index = buildPastIndex(HEADERS, rows, cols, resolveRoundCol(cols, null));
+  expect(index.prunedKeyRows.map((r) => r.round), '전제: 프루닝된 행이 실재한다').toEqual([OLDER_ROUND]);
+  expect(previousSurveyRound(index, cols, null, daysAgoLocal(0)))
+    .toEqual({ kind: 'date', iso: PREV_ROUND });
 });

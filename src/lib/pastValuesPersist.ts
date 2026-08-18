@@ -32,6 +32,10 @@ export interface PersistedPastIndexRecord {
   rowCount: number;
   /** M8(#11) — 구버전 레코드에는 없다. 복원 시 0(= 종전 판정)으로 떨어진다. */
   roundParsedRows?: number;
+  /** v0.50 D(#10) — 전체 샘플키 프루닝으로 버려진 행들(회차 파싱분). M8과 **같은 이유로**
+   *  optional이다: 이 필드 이전 백업이 폐기되면 14일 폴백이 끊긴다. 없으면 `[]`(= 종전 판정).
+   *  Map이 아니라 이미 평면 배열이라 펴고 접을 것이 없다. */
+  prunedKeyRows?: { round: string; rec: Record<string, string> }[];
 }
 
 export function serializePastIndexEntry(entry: {
@@ -52,6 +56,7 @@ export function serializePastIndexEntry(entry: {
     duplicateCount: index.duplicateCount,
     rowCount: index.rowCount,
     roundParsedRows: index.roundParsedRows,
+    prunedKeyRows: index.prunedKeyRows,
   };
 }
 
@@ -96,6 +101,17 @@ export function deserializePastIndexEntry(
         // M8(#11) — **형태 검증에 넣지 않는다.** 필수로 만들면 이 필드 이전에 저장된 백업이
         //   통째로 폐기돼(deserialize가 null) 14일 폴백이 끊긴다. 없으면 0 = 종전 판정.
         roundParsedRows: typeof r.roundParsedRows === 'number' ? r.roundParsedRows : 0,
+        // v0.50 D(#10) — M8과 같다: **형태 검증에 넣지 않는다.** 항목별로 걸러 담아
+        //   이형 엔트리 하나가 레코드 전체를 폐기시키지 않게 한다(폴백은 best-effort).
+        prunedKeyRows: Array.isArray(r.prunedKeyRows)
+          ? r.prunedKeyRows.filter(
+              (x): x is { round: string; rec: Record<string, string> } =>
+                typeof x === 'object' && x !== null &&
+                typeof (x as { round?: unknown }).round === 'string' &&
+                typeof (x as { rec?: unknown }).rec === 'object' &&
+                (x as { rec?: unknown }).rec !== null,
+            )
+          : [],
       },
     };
   } catch {

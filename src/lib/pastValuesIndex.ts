@@ -116,6 +116,16 @@ export interface PastIndex {
    *  ⚠️ `rounds`의 의미는 건드리지 않는다 — 조회탭의 `recentTwoRounds`가 「샘플 데이터가 있는
    *  회차」로 읽는다(키 탈락 행의 회차를 섞으면 값이 전부 '—'인 회차가 화면에 선다). */
   roundParsedRows: number;
+  /** 🔴 v0.50 D(claude r6 #10) — **전체 샘플키 프루닝으로 버려진 행** 중 회차가 파싱된 것들.
+   *  프루닝은 `keyColumns`(샘플키 **전량**)로 하는데 `previousSurveyRound`의 대조는 행 불변
+   *  **부분집합**(`sessionFixedKeyColumns`)이라, 나중에 추가된 키 컬럼이 과거 회차에만 공란이면
+   *  그 회차가 통째로 사라진다. `rounds`는 이후 완전-키 회차가 채우므로 M8 가드(:369)도 침묵하고
+   *  마지막 줄이 「기록 없음」을 **단정**했다. 그 행들이 실재했다는 유일한 증거다.
+   *  ⚠️ `samples`·`rounds`에는 **절대 섞지 않는다** — 조회탭의 `latestTwoRounds`가 「샘플 데이터가
+   *  있는 회차」로 읽으므로(그 필드 주석) 값이 전부 '—'인 회차가 화면에 선다.
+   *  ⚠️ `rec`는 **키 후보 컬럼만** 담는다(아래 `keyCandidateIds`) — 이 구조의 용도가 키 대조뿐임을
+   *  형태로 못박고, 영속 레코드에 측정값 사본이 한 벌 더 실리는 것을 막는다. */
+  prunedKeyRows: { round: string; rec: Record<string, string> }[];
 }
 
 /** 시트 전체 행에서 과거값 인덱스를 빌드한다. roundCol이 null이면 회차 구분 불가 → samples 빈 인덱스. */
@@ -141,8 +151,18 @@ export function buildPastIndex(
   }
 
   const keyCols = keyColumns(columns);
+  // 🔴 v0.50 D(#10) — 프루닝된 행에서 **보관할 셀**의 상한. `sessionFixedKeyColumns`가 요구하는
+  //   조건 중 **스키마만 보는 두 개**다(나머지 넷 — 불변성·회차 배제·동적 오늘·빈 값 — 은 이
+  //   집합을 더 좁히기만 한다). 그래서 이건 어떤 세션의 고정 키든 반드시 포함하는 **상위집합**이다.
+  //   🔴 세션 값(`autoValue`)이나 대조 자체를 여기서 굽지 않는 이유: 인덱스 지문(`loadContext`)은
+  //   컬럼의 id·name·type·sampleKey만 보므로 **auto 값이 다른 세션에 14일까지 재사용된다**.
+  //   빌드 시점에 매치를 구우면 재사용 세션에서 남의 답을 낸다 — 대조는 query-time에만 있어야 한다.
+  const keyCandidateIds = columns
+    .filter((c) => c.input === 'auto' && effectiveSampleKey(c))
+    .map((c) => c.id);
   const samples = new Map<string, Map<string, Record<string, string>>>();
   const roundsSet = new Set<string>();
+  const prunedKeyRows: { round: string; rec: Record<string, string> }[] = [];
   let duplicateCount = 0;
 
   let roundParsedRows = 0;
@@ -158,7 +178,16 @@ export function buildPastIndex(
     if (round) roundParsedRows++;
     // 키 컬럼이 미매핑이면 rec에 값이 없어 키가 null → 행 skip (unmappedColumns가 원인 설명).
     const key = buildSampleKey(keyCols, rec);
-    if (!key) continue;
+    if (!key) {
+      // v0.50 D(#10) — 회차가 없는 행은 담지 않는다: 날짜로 답할 후보가 애초에 못 된다
+      //   (시트 말미의 빈 행이 여기 걸려 「미확인」을 남발하는 것도 이 조건이 막는다).
+      if (round) {
+        const keyRec: Record<string, string> = {};
+        for (const id of keyCandidateIds) if (id in rec) keyRec[id] = rec[id];
+        prunedKeyRows.push({ round, rec: keyRec });
+      }
+      continue;
+    }
     if (!round) continue;
     roundsSet.add(round);
     let byRound = samples.get(key);
@@ -178,6 +207,7 @@ export function buildPastIndex(
     duplicateCount,
     rowCount: rows.length,
     roundParsedRows,
+    prunedKeyRows,
   };
 }
 
@@ -265,7 +295,13 @@ export type PrevSurveyRound =
         /** 🔴 v0.49 r4 M8(#11) — 회차는 읽혔는데 **샘플키가 붙은 행이 0줄**이다(키 컬럼이
          *  전량 공백 등). 종전엔 `round_unindexed`로 오진돼 다음 회차의 조사 방향이 시간축
          *  수리로 갔다 — 실제로 고쳐야 하는 것은 샘플키 축이다. */
-        | 'no_keyed_rows';
+        | 'no_keyed_rows'
+        /** 🔴 v0.50 D(claude r6 #10) — 회차도 읽혔고 샘플키가 붙은 행도 **있는데**, 전체 샘플키
+         *  프루닝으로 버려진 행 하나가 세션 고정 키와 일치하고 그 회차가 답을 바꾼다.
+         *  `no_keyed_rows`를 재사용하지 않는 이유: 그건 **키 붙은 행이 0줄**이라는 뜻이라
+         *  수리 방향이 「샘플키 축이 통째로 죽었다」로 간다. 이 형상의 수리는 **과거 회차의 빈 키
+         *  칸을 채우는 것**이다 — 사유를 겹치면 M8이 없앤 오진(수리 방향 오도)을 재생산한다. */
+        | 'partial_keyed_rows';
     };
 
 /** 🔴 v0.49 r4 M9 — 수치 2차 대조를 허용하는 **엄격한** 십진 형태. 지수(`1e3`)·16진(`0x10`)·
@@ -385,6 +421,25 @@ export function previousSurveyRound(
       // #4 — 날짜 컬럼은 서식 차이를 넘어서 대조한다(`fixedKeyCellMatches` 헤더).
       if (want.every(([c, v]) => fixedKeyCellMatches(c, rec[c.id], v))) best = round;
     }
+  }
+  // 🔴 v0.50 D(claude r6 #10) — **「없다」고 말하기 전에 「못 봤다」를 확인한다.** 위 루프는
+  //   `samples`만 보는데, 전체-키 프루닝이 버린 행은 거기 없다. 그 행들을 **같은 규칙으로**
+  //   (같은 `fixedKeyCellMatches`·같은 strictly-<) 다시 재는 이유는, 대조 키셋과 프루닝 키셋이
+  //   갈린 것이 이 결함의 원인이기 때문이다 — 여기서 다른 규칙을 쓰면 같은 비대칭을 새로 만든다.
+  //   🔴 `date`로 답하지 않고 `unqueryable`로 접는 것이 계약이다(민구 08-14: *"컬럼명 불일치 시
+  //   비교 불가 처리로 충분"*). 프루닝은 「이 행을 쓸 수 있는가」의 SSOT이고, 한 소비자만 그걸
+  //   우회해 값을 만들면 #10을 낳은 이중 규칙이 되살아난다. 그리고 그 행들은 조회탭·추세에서도
+  //   여전히 안 보이므로, 「미확인」이라야 진짜 수리(빈 키 칸 채우기)로 사용자를 보낸다.
+  let prunedBest: string | null = null;
+  for (const { round, rec } of index.prunedKeyRows) {
+    if (round >= beforeDate) continue;
+    if (prunedBest !== null && round <= prunedBest) continue;
+    if (want.every(([c, v]) => fixedKeyCellMatches(c, rec[c.id], v))) prunedBest = round;
+  }
+  // 답을 **바꾸는** 경우에만 접는다. 프루닝된 회차가 `best`보다 과거면 직전 조사일은 그대로
+  // `best`이므로 날짜를 계속 답한다 — 여기서 넓히면 정상 답까지 「미확인」이 된다.
+  if (prunedBest !== null && (best === null || prunedBest > best)) {
+    return { kind: 'unqueryable', reason: 'partial_keyed_rows' };
   }
   return best === null ? { kind: 'none' } : { kind: 'date', iso: best };
 }
