@@ -44,22 +44,15 @@ export function SettingsFooter() {
           </div>
           {/* v0.18.0 1f — 수동 업데이트 확인/새로고침. 새 버전이 대기 중이면 바로 적용, 아니면
               능동 체크만 트리거(설치형에서 새 버전 반영 경로를 사용자가 직접 호출). */}
-          {/* 🔴 v0.46.0 — 프리뷰 빌드는 **서비스워커가 없다**(VitePWA disable). `UpdateControl`은
-              전부 SW의 `needRefresh`에 걸려 있어 **영원히 「최신」만 답한다** — 민구가 08-06에
-              *"프리뷰는 홈 화면 설치 시 업데이트 점검이 안 되니?"* 로 정확히 짚었다.
-              👉 없는 기능을 있는 척 보이지 않게 **버튼 대신 실제 갱신법을 적는다.** */}
-          {__PREVIEW_BUILD__ ? (
-            <div
-              data-testid="preview-update-note"
-              style={{ fontSize: 11, color: T.textMute, marginTop: 10, lineHeight: 1.5 }}
-            >
-              테스트본은 자동 업데이트 확인이 없습니다.
-              <br />
-              <b style={{ color: T.textDim }}>화면을 아래로 당겨 새로고침</b>하면 최신이 됩니다.
-            </div>
-          ) : (
-            <UpdateControl />
-          )}
+          {/* 🔴 v0.50 (2026-08-19) — **프리뷰에서도 `UpdateControl`을 렌더한다.**
+              종전엔 프리뷰에 SW가 없어(v0.46.0 `disable`) 이 컴포넌트를 숨기고 *"화면을 아래로
+              당겨 새로고침"* 을 안내했는데, **standalone에는 새로고침 자체가 없다** —
+              민구 제보: *"프리뷰앱은 새로 고침을 할 수가 없어… 지금 보니 08-14에 만든 버전이야."*
+              그 안내는 **틀린 문장**이었고 갱신 경로는 0개였다.
+              👉 이제 ①프리뷰도 SW를 켜고(`vite.config.ts`) ②`UpdateControl`이 **SW에 묻지 않고**
+              배포본 번들 해시와 직접 대조한다(`liveVersionProbe`) — 그래서 **빌드 종류와 무관하게**
+              같은 컨트롤이 선다. 프리뷰 표식(`__PREVIEW_BUILD__`)은 위 버전 배지가 계속 쓴다. */}
+          <UpdateControl />
         </div>
     </>
   );
