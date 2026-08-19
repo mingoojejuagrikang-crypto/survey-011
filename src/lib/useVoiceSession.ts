@@ -1616,6 +1616,22 @@ export function useVoiceSession() {
    *     reconnectMic을 자동 1회만 호출하고, 실패 후에는 사용자 제스처에 맡긴다.
    *   - 스트림이 멀쩡하면(트랙 살아있음) **no-op**. 복구가 필요 없다 — 다음 startClip()이 살아있는
    *     스트림 위에 새 MediaRecorder를 만들어 자가 치유한다(transient 빈 클립의 자연 회복). */
+  /** 🔴 v0.50 r2 — **마이크 소실 래치 시 화면부터 연다**(사유 무관 · 공통).
+   *
+   *  왜 고지 훅이 아니라 여기인가: 고지 TTS는 **클립 연속 실패 전용**이다([CF-4] — init 실패 등엔
+   *  이미 고유 안내가 있어 같은 뜻이 두 번 나갔다). 그러나 **화면을 여는 것은 사유와 무관하게
+   *  필요하다** — `BlackoutOverlay`(z-9999)가 `MicReconnectBanner`(z-60)를 완전히 가리므로,
+   *  화면이 꺼진 채 래치되면 **복구 진입로 자체가 사용자에게 보이지 않는다**(2026-08-19 이원창
+   *  세션의 형상 그대로다).
+   *  🔴 특히 트랙 `ended`로 먼저 래치되면 `micLostLatchedRef`가 서서 이후 클립 연속 실패가
+   *  `force` 분기에 **못 들어가고**, 그러면 고지 훅도 안 돌아 화면이 영영 안 열린다 —
+   *  그 좁은 경로를 이 헬퍼가 덮는다. 이미 켜져 있지 않으면 no-op이라 정상 세션엔 무영향이다. */
+  const releaseBlackoutOnMicLost = useCallback(() => {
+    if (!useSessionStore.getState().blackout) return;
+    useSessionStore.getState().setBlackout(false);
+    logCell({ type: 'clip', extra: 'mic_lost_blackout:released' });
+  }, []);
+
   const maybeAutoRecoverOrLatch = useCallback((reason: string, opts?: { force?: boolean }) => {
     const rec = recorderRef.current;
     if (!rec) return;
@@ -1628,6 +1644,7 @@ export function useVoiceSession() {
       logCell({
         type: 'clip', extra: `mic_lost:${reason}`,
       });
+      releaseBlackoutOnMicLost();
       // 🔴 v0.50 r2 [CF-2·CF-4] — 고지는 **클립 연속 실패(force)로 선 래치에만**, 그리고
       //   **세션당 정확히 1회**다.
       //   · CF-4: `micLost`는 init 실패·복귀 시 트랙 ended에서도 선다. 그 경로엔 이미 고유 안내가
@@ -3123,6 +3140,8 @@ export function useVoiceSession() {
           micLostLatchedRef.current = true;
           setMicLost(true);
           logCell({ type: 'clip', extra: `mic_track:ended:${evt}` });
+          // v0.50 r2 — 이 경로에도 화면을 연다(위 헬퍼 주석: 배너가 블랙아웃에 가린다).
+          releaseBlackoutOnMicLost();
         }
       } else if (trackState === 'muted') {
         // UA 일시 정지(통화/Siri/라우트 변경) — 분리로 오판해 래치하지 않고 unmute를 기다린다.
