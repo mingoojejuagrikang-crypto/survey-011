@@ -152,6 +152,14 @@ interface SessionState {
    *
    *  retrying=재시도 IDB 쓰기 진행 중(버튼 잠금). 성공하면 stop()이 null로 지우고 ready로 전환. */
   persistError: { retrying: boolean } | null;
+  /** v0.50 [CLIP-SILENT-1] — **직전 세션의 음성 클립 결산 경고.** null=경고 없음.
+   *
+   *  2026-08-19 실기기 사고: 값은 시트까지 정상으로 갔는데 음성 클립만 전량(60/60)·부분(9/60)
+   *  소실됐고, **세션이 끝난 뒤 업로드 탭을 열어보기 전까지 아무도 몰랐다.** 값이 멀쩡하니
+   *  화면에도 시트에도 이상이 없었기 때문이다. 종료 화면에 이 한 줄을 남겨 그 침묵을 깬다.
+   *  🔴 `persistError`와 달리 **진행을 막지 않는다** — 이미 끝난 세션의 사후 통지이고, 잃은 것은
+   *  값이 아니라 「값을 확인할 수단」이다(막을 대상이 없다). 다음 세션 start의 resetAll이 지운다. */
+  clipWarning: string | null;
   /** v0.23.0 입력탭#2(재질문 사유, Mack) — 직전 음성 입력이 왜 재질문됐는지. 'low_confidence'=신뢰도가
    *  허용범위 미만, 'parse_failed'=인식은 됐으나 숫자/값으로 파싱 불가(항목명·잡음 거부 포함). null=정상.
    *  VoiceScreen(Vance)의 ReaskCue가 이 값으로 "소리가 불확실" vs "숫자로 인식 실패"를 구분 표시한다.
@@ -208,6 +216,7 @@ interface SessionState {
   /** v0.37.0 리뷰#2 — 열린 오버레이 닫기 요청(탭 전환 직전). nonce를 1 증가시킨다. */
   requestOverlayClose: () => void;
   setPersistError: (e: SessionState['persistError']) => void;
+  setClipWarning: (w: SessionState['clipWarning']) => void;
   setModifyIndicator: (m: SessionState['modifyIndicator']) => void;
   setReaskReason: (r: SessionState['reaskReason']) => void;
   /** v0.36.0 FB#4 — 소수 재질문 진입: reason='parse_failed' + 정수부를 함께 세운다(원자적). */
@@ -252,6 +261,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   blackout: false,
   startProgress: null,
   persistError: null,
+  clipWarning: null,
   modifyIndicator: null,
   reaskReason: null,
   reaskDecimalWhole: null,
@@ -287,6 +297,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setStartProgress: (startProgress) => set({ startProgress }),
   requestOverlayClose: () => set((s) => ({ overlayCloseSeq: s.overlayCloseSeq + 1 })),
   setPersistError: (persistError) => set({ persistError }),
+  setClipWarning: (clipWarning) => set({ clipWarning }),
   setModifyIndicator: (modifyIndicator) => set({ modifyIndicator }),
   // reaskReason의 모든 일반 갱신은 소수 정수부를 함께 정리한다(스테일 방지). 소수 재질문만
   //   setDecimalReason이 이 뒤에 정수부를 다시 세운다(호출 순서: 일반 setReaskReason → setDecimalReason).
@@ -376,6 +387,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       //   phase가 'ready'여야 하고(start 버튼), 저장 실패 중엔 phase가 'ready'가 되지 않으므로
       //   실패 상태를 모르고 덮어쓰는 일은 없다(uiModalOpen과 달리 단일 작성자 = useVoiceSession).
       persistError: null,
+      // v0.50 [CLIP-SILENT-1] — 직전 세션 경고는 **새 세션이 시작될 때** 사라진다(사후 통지의 수명).
+      clipWarning: null,
       modifyIndicator: null,
       reaskReason: null,
       reaskDecimalWhole: null,

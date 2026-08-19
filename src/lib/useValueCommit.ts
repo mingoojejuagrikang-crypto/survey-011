@@ -41,6 +41,7 @@ import { relinkClipPointer, unlinkClipPointer } from './clipPointer';
 import { loadAudioClip, loadSession, saveAudioClip } from './db';
 import { logger } from './logger';
 import { EMPTY_CLIP_BYTES } from './useClipCapture';
+import type { ClipHealth } from './clipHealth';
 import type { AudioRecorder, ClipResult } from './audioRecorder';
 import type { Session } from '../types';
 import type { AwaitingField, FinalCtx } from './useVoiceSession';
@@ -60,7 +61,12 @@ export interface ValueCommitDeps {
     flushSaves: (graceMs: number, opts?: { exclude?: Promise<unknown> | null }) => Promise<void>;
     trackSave: (savePromise: Promise<unknown>) => void;
   };
-  maybeAutoRecoverOrLatch: (reason: string) => void;
+  /** v0.50 [CLIP-SILENT-1] — `force`는 「연속 실패가 임계에 닿았으니 `isStreamLost()`가 false여도
+   *  마이크 소실로 봐라」다. 무음 트랙은 `ended`가 아니라 종전 판정이 **영원히 no-op**이었다. */
+  maybeAutoRecoverOrLatch: (reason: string, opts?: { force?: boolean }) => void;
+  /** v0.50 [CLIP-SILENT-1] — 세션 단위 클립 건강도 장부(연속 실패 카운터 + 결산).
+   *  🔴 리셋은 **`clip_saved`에서만**이다 — 근거는 `clipHealth.ts` 헤더. */
+  clipHealth: ClipHealth;
   /** 🔴 모듈 레벨 비-export 헬퍼 — 값 import는 순환이다(§5-3). */
   isModifyLike: (a: AwaitingField) => boolean;
   epochRef: { current: number };
@@ -96,7 +102,7 @@ export function useValueCommit(deps: ValueCommitDeps) {
     parsed: string,
   ): Promise<ValueCommitResult> => {
     const {
-      logCell, persistSession, archiveCellClip, clipCapture, maybeAutoRecoverOrLatch, isModifyLike,
+      logCell, persistSession, archiveCellClip, clipCapture, maybeAutoRecoverOrLatch, clipHealth, isModifyLike,
       epochRef, awaitingFieldRef, sessionIdRef, recorderRef, activeClipRef, pendingClipsRef,
       brokenClipKeysRef,
     } = depsRef.current;
@@ -293,13 +299,16 @@ export function useValueCommit(deps: ValueCommitDeps) {
           // 재시도가 폭주했다(실기기: clip_empty×41). → 스트림이 실제로 죽었으면 자동 재시도를 멈추고
           // micLost로 표시(once 가드) → 사용자 제스처(reconnectMic)로만 복구. 스트림이 멀쩡하면
           // no-op(다음 클립이 자가 치유). 자동 recoverStream은 더 이상 부르지 않는다(수칙 3).
-          maybeAutoRecoverOrLatch('clip_empty');
+          // v0.50 [CLIP-SILENT-1] — 연속 실패가 임계에 닿으면 스트림이 `live`여도 소실로 래치한다.
+          maybeAutoRecoverOrLatch('clip_empty', { force: clipHealth.recordFailure() });
           await resolveFailedCapture(savePromiseSelf);
           return;
         }
         if (clipBlob.size <= EMPTY_CLIP_BYTES) {
           logCell({ type: 'error', extra: `clip_too_small:${clipBlob.size}`, row: clipAwaitingRow, colId: clipAwaitingColId });
-          maybeAutoRecoverOrLatch('clip_too_small');
+          // v0.50 [CLIP-SILENT-1] — 위 clip_empty와 **같은 카운터**를 쓴다(사유가 섞여 나오므로 —
+          // 2026-08-19 양혁진 실측: 5B 6건 + chunk-0 3건이 한 구간에서 뒤섞였다).
+          maybeAutoRecoverOrLatch('clip_too_small', { force: clipHealth.recordFailure() });
           await resolveFailedCapture(savePromiseSelf);
           return;
         }
@@ -316,6 +325,9 @@ export function useValueCommit(deps: ValueCommitDeps) {
         // may persist again (a previous failed attempt on the same cell reuses the same key).
         brokenClipKeysRef.current.delete(clipKey);
         logCell({ type: 'clip', extra: `clip_saved:${clipBlob.size}`, row: clipAwaitingRow, colId: clipAwaitingColId });
+        // v0.50 [CLIP-SILENT-1] — **여기가 유일한 리셋 지점이다.** `clip_started`로 리셋하면
+        // 재질문이 잦은 세션에서 래치가 영영 안 걸린다(clipHealth.ts 헤더 🔴).
+        clipHealth.recordSaved();
         // v0.5.0 W6 원본 보존(민구 결정): 트림 전 전체본(프리롤 포함)을 `…:raw`로 함께 보관.
         // pendingClips에는 등록하지 않으므로 데이터탭 재생 UI에는 노출되지 않고, 로그 zip의
         // clips/(prefix 매칭)과 deleteSession cascade에만 따라간다. 분석 전용.

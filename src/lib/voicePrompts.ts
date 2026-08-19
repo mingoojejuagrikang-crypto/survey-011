@@ -117,3 +117,26 @@ export function endReachedTts(completedRows: number, emptyRowsPhrase: string | n
   const head = `마지막행 입력. 이번 세션에 완료된 행은 ${completedRows}행.`;
   return emptyRowsPhrase ? `${head} ${emptyRowsPhrase}이 비어 있습니다.` : head;
 }
+
+// ─── v0.50 [CLIP-SILENT-1] 클립 캡처 실패 고지 ────────────────────────────────
+
+/** 클립이 연속으로 비어 나올 때의 고지 — **TTS본**(축약).
+ *
+ *  🔑 **왜 귀로 말하는가**: 2026-08-19 이원창 세션에서 민구는 세션 시작 14초 뒤 화면 끄기를
+ *  켰고, 그 뒤 40분간 60개 클립이 전부 죽는 동안 **어떤 시각 표면도 도달할 수 없었다**
+ *  (`BlackoutOverlay` z-9999 > `MicReconnectBanner` z-60). 같은 날 양혁진 세션은 화면 끄기를
+ *  **쓰지 않았는데도** 몰랐다 — 애초에 띄울 표면이 없었기 때문이다.
+ *  👉 이 앱의 사용자는 폰을 2~3m 떨어뜨려 두고 장갑을 낀 채 일한다(PRINCIPLES §2).
+ *  **눈이 아니라 귀가 유일하게 열려 있는 채널**이다. 조사 중 말이 끼어드는 대가는 민구가
+ *  알고 고른 것이다(2026-08-19 결정).
+ *
+ *  세션당 1회만 나간다(`useClipFailureAlert`의 상승 에지 가드) — 반복 고지는 그 자체가 방해다. */
+export const CLIP_FAIL_ALERT_TTS = '음성 클립이 저장되지 않고 있습니다. 마이크를 재연결해 주세요.';
+
+/** 같은 사실의 **화면본**(상세) — `MicReconnectBanner`가 이미 「클립 녹음 끊김」 + 재연결 버튼을
+ *  띄운다. 여기서는 종료 화면 결산에 쓰는 문구를 소유한다(§2 「의미 동등 + 구조적 분리」:
+ *  두 표면이 같은 사실을 말하되 화면 쪽이 상세하다).
+ *  @param failed 이번 세션에서 저장에 실패한 클립 수 @param total 시도한 클립 수 */
+export function clipFailSummaryScreen(failed: number, total: number): string {
+  return `이번 세션의 음성 클립 ${total}건 중 ${failed}건이 저장되지 않았습니다. 값은 정상 기록됐지만 음성 확인은 할 수 없습니다.`;
+}

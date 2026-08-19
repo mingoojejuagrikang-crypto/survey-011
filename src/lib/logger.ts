@@ -65,6 +65,14 @@ export interface LogEntry {
    *  startClip (or dispose) truncated it gracefully. Set on `clip_duration` events whose clip
    *  had a stop requested; absent on clips that were never stop-requested. */
   postrollMs?: number;
+  /** v0.50 [CLIP-SILENT-1]: 이 클립이 끝난 시점의 마이크 트랙 상태(`AudioRecorder.getTrackState()`).
+   *  2026-08-19 사고에서 트랙은 **살아 있는 채 무음**이었는데, 그 상태를 읽는 유일한 경로가
+   *  포그라운드 복귀 훅 안에 있어 **한 번도 관측되지 않았다.** 클립마다 붙여 그 구멍을 닫는다. */
+  trackState?: 'none' | 'ended' | 'muted' | 'live';
+  /** v0.50 [CLIP-SILENT-1]: 이 클립 **구간**의 마이크 입력 레벨 peak(0~1). null/미동봉 = 프리롤 탭
+   *  미가용(관측 수단 없음)이고, **0은 「관측했고 무음이었다」**로 서로 다른 사실이다.
+   *  세션 단위 `wave_stats`만으로는 어느 클립이 죽었는지 가릴 수 없어 클립 단위로 내린다. */
+  clipPeak?: number;
 }
 
 /** Snapshot of session-level context, emitted on the `session` start/stop events. */

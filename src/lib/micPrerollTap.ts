@@ -27,6 +27,20 @@ export type PrerollCtxState = 'none' | 'suspended' | 'running' | 'closed' | 'int
 //    RMS를 지수평활한 0~1 레벨을 만든다. 캡처 미가용 기기는 push가 아예 안 불려 레벨 0 고정
 //    = 파동 무동작이 자연 폴백(no-op 원칙). ──
 /** RMS→레벨 정규화 기준(대화 발화 RMS ~0.02-0.15, echoCancellation·AGC-off 기준). 이 값에서 1.0. */
+/** v0.50 [CLIP-SILENT-1] — 클립 한 건의 입력 레벨 관측 창.
+ *  `count === 0`이면 그 구간에 워크릿 콜백이 **한 번도 안 돈 것**이다 — 「무음」이 아니라
+ *  「관측 못 함」이고, 둘을 섞으면 다음 사고에서 판독이 죽는다([MIC-B2]의 `mic_teardown` 0건 곤란). */
+export interface ClipWindow {
+  peak: number;
+  count: number;
+}
+
+/** 창의 peak를 판독값으로 바꾼다 — 관측 못 했으면 null. */
+export function clipWindowPeak(w: ClipWindow | null): number | null {
+  if (!w || w.count === 0) return null;
+  return w.peak;
+}
+
 const LEVEL_REF_RMS = 0.1;
 /** 지수평활 계수 — 상승(attack)은 빠르게(발화 반응성), 하강(release)은 느리게(파동 잔향). */
 const LEVEL_ATTACK = 0.55;
@@ -95,6 +109,8 @@ export class MicPrerollTap {
   /** v0.34.0 D11b — 세션 파동 통계 누적(min/max/avg/활성비율용 카운터만 — **고빈도 로깅 절대
    *  금지**, ring buffer 2000 보호). 로깅은 useVoiceSession이 세션 stop 직전 1건으로 요약한다. */
   private waveStats = { peak: 0, sum: 0, count: 0, active: 0 };
+  /** v0.50 [CLIP-SILENT-1] — 현재 클립 구간의 peak. `beginClipWindow()`가 새 창을 연다. */
+  private clipWindow: ClipWindow = { peak: 0, count: 0 };
 
   /** AudioContext + Worklet(폴백 ScriptProcessor)으로 PCM 링버퍼를 구성. 실패 시 프리롤 없이 진행.
    *  이미 붙어 있으면 no-op(원본 `if (this.preroll || !this.stream) return` 계약 그대로). */
@@ -178,6 +194,11 @@ export class MicPrerollTap {
         st.sum += this.inputLevel;
         if (this.inputLevel > st.peak) st.peak = this.inputLevel;
         if (this.inputLevel >= LEVEL_ACTIVE_MIN) st.active++;
+        // v0.50 [CLIP-SILENT-1] — 클립 **구간** peak. 세션 누적(waveStats.peak)과 별개로 센다:
+        // 2026-08-19 양혁진 세션은 세션 peak가 1.00인데 그 안의 9개 클립만 무음이었다.
+        const cw = this.clipWindow;
+        cw.count++;
+        if (this.inputLevel > cw.peak) cw.peak = this.inputLevel;
       };
 
       try {
@@ -349,6 +370,17 @@ export class MicPrerollTap {
       avg: st.sum / st.count,
       activePct: Math.round((st.active / st.count) * 100),
     };
+  }
+
+  /** v0.50 [CLIP-SILENT-1] — 클립 구간 peak 창을 연다(클립 시작마다).
+   *
+   *  🔑 **창 객체를 돌려주는 이유**: 호출자(`AudioRecorder`)가 그것을 자기 슬롯에 들고 있으면,
+   *  늦게 발화한 stale 슬롯의 `onstop`도 **자기 구간의 값**을 읽는다. 여기서 `this.clipWindow`를
+   *  읽게 하면 그 시점의 창(=다음 클립)을 읽어 계측이 뒤섞인다. 새 창이 열리는 순간 옛 객체는
+   *  갱신을 멈추므로 값이 그대로 얼어붙는다. */
+  beginClipWindow(): ClipWindow {
+    this.clipWindow = { peak: 0, count: 0 };
+    return this.clipWindow;
   }
 
   /** v0.34.0 D11b — 통계 리셋(세션 시작 시). prewarm(입력탭 마운트)이 세션 전부터 캡처를 돌리므로

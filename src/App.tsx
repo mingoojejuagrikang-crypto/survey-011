@@ -19,6 +19,7 @@ import {
 import { useSettingsStore } from './stores/settingsStore';
 import { initAutoCapture } from './lib/screenshot';
 import { installAudioInterruptionProbe } from './lib/audioInterruption';
+import { installFocusInterruptionProbe } from './lib/focusInterruption';
 import { captureForFeedback, initFeedbackQueueFlush, submitFeedback } from './lib/feedback';
 import { FeedbackModal } from './components/FeedbackModal';
 import { logger } from './lib/logger';
@@ -62,6 +63,9 @@ export default function App() {
    *    (08-06 실측: 오라클 ②가 expected 1 / received 2로 red). 해제 함수를 안 쓰는 것은
    *    dev 전용 잡음이 아니라 **구독 누수** 그 자체다 — 테스트를 느슨하게 하지 말고 여기를 고친다. */
   useEffect(() => installAudioInterruptionProbe(), []);
+  // v0.50 [CLIP-SILENT-1] — 포커스 인터럽션(알람 배너 등, `vis`는 그대로 `visible`) 지속시간 프로브.
+  // 위 오디오 세션 프로브와 **같은 이유로 자기 effect다**(StrictMode 이중 구독 방지).
+  useEffect(() => installFocusInterruptionProbe(), []);
 
   // Hydrate data store from IndexedDB once on mount. Errors are logged + recorded as
   // `hydrationError` (D-1) so DataScreen can offer a retry instead of a misleading empty state.

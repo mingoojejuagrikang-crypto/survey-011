@@ -20,7 +20,7 @@ import { TimeoutError, withTimeout } from './async';
 import { audioInputClass, micTeardown, recoverTimeout, type ForegroundReturnTeardownResult } from './logEvents';
 import { processClip, type PrerollPcm } from './audioTrim';
 // [ENV-12] 마이크 PCM 캡처(링버퍼·레벨·파형)는 MicPrerollTap이 소유한다 — 이 클래스는 위임만.
-import { MicPrerollTap, PREROLL_MS } from './micPrerollTap';
+import { MicPrerollTap, PREROLL_MS, clipWindowPeak, type ClipWindow } from './micPrerollTap';
 import { classifyInputDevice, classifyAudioInputClass } from './inputDevice';
 
 interface ClipSlot {
@@ -44,6 +44,11 @@ interface ClipSlot {
   /** B5: performance.now() at stopClip request — onstop logs postrollMs = actualStop − this.
    *  null = this clip was never stop-requested (e.g. replaced by a re-ask restart). */
   stopRequestedAt: number | null;
+  /** v0.50 [CLIP-SILENT-1] — 이 슬롯이 녹음한 스트림. **콜백이 `this.stream`을 읽으면 안 되므로**
+   *  (슬롯 격리 계약) 여기 캡처해 두고 종료 계측에서 자기 시점의 트랙 상태를 판정한다. */
+  stream: MediaStream | null;
+  /** v0.50 [CLIP-SILENT-1] — 이 클립 구간의 입력 레벨 관측 창(`MicPrerollTap.beginClipWindow`). */
+  prerollWindow: ClipWindow | null;
 }
 
 /** stopClip()이 호출자에게 돌려주는 결과 — 트림본 + 트림 전 원본(다르면) + 프리롤 길이. */
@@ -88,6 +93,30 @@ const RECOVER_ACQUIRE_TIMEOUT_MS = 7000;
  *  막아 — 고치려던 증상과 똑같은 "재연결 불가"를 우리가 만든다. 초과해도 실패로 끝내지 않고
  *  `closed=timeout`을 남기고 진행한다(정리는 best-effort, 획득이 본체다). */
 const TEARDOWN_CLOSE_TIMEOUT_MS = 1500;
+
+/** v0.50 [CLIP-SILENT-1] — 스트림의 오디오 트랙 상태 판정(모듈 함수).
+ *
+ *  🔑 **모듈 함수인 이유**: 클립 콜백은 `this.*`를 건드리지 않는 것이 계약이다(슬롯 격리 —
+ *  아래 `startClip` 주석). 그래서 콜백은 **자기 슬롯에 캡처된 스트림**을 이 함수에 넘겨
+ *  자기 시점의 상태를 읽는다. 인스턴스 메서드 `getTrackState()`도 같은 판정을 이걸로 한다. */
+function trackStateOf(stream: MediaStream | null): AudioTrackState {
+  const track = stream?.getAudioTracks()[0] ?? null;
+  if (!track) return 'none';
+  if (track.readyState === 'ended') return 'ended';
+  if (track.muted) return 'muted';
+  return 'live';
+}
+
+/** v0.50 [CLIP-SILENT-1] — 클립 종료 계측에 동봉하는 관측 조각.
+ *  `clipPeak`은 **관측된 경우에만** 실린다(미동봉 = 프리롤 탭 미가용 ≠ 무음). */
+function clipObservation(stream: MediaStream | null, window: ClipWindow | null): {
+  trackState: AudioTrackState;
+  clipPeak?: number;
+} {
+  const trackState = trackStateOf(stream);
+  const peak = clipWindowPeak(window);
+  return peak === null ? { trackState } : { trackState, clipPeak: peak };
+}
 
 /** 스트림의 모든 트랙을 멈춘다(마이크 인디케이터 해제). 실패해도 호출부를 막지 않는다. */
 function stopAllTracks(stream: MediaStream | null): void {
@@ -149,7 +178,7 @@ export class AudioRecorder {
    *  정책 + 진행 중 클립 손실 회귀 방지). dispose에서 반드시 해제(리스너 누수·좀비 콜백 방지). */
   private deviceChangeHandler: (() => void) | null = null;
   private listenedTrack: MediaStreamTrack | null = null;
-  private trackChangeHandler: (() => void) | null = null;
+  private trackChangeHandler: ((e: Event) => void) | null = null;
   /** v0.14.0 B-1/D — 스트림 재획득(recoverStream) 동시성/쿨다운 가드. */
   private recovering = false;
   /** dispose 뒤 새 복구를 허용하되, 폐기 전 복구의 finally가 새 가드를 풀지 못하게 한다. */
@@ -299,11 +328,7 @@ export class AudioRecorder {
    *  배너가 뜬다 — refreshActiveInputLabel 주석의 동일 원칙). 'none'은 레코더 미초기화/해제
    *  (일시정지 등 의도된 상태)로 판정 대상이 아니다. */
   getTrackState(): AudioTrackState {
-    const track = this.stream?.getAudioTracks()[0] ?? null;
-    if (!track) return 'none';
-    if (track.readyState === 'ended') return 'ended';
-    if (track.muted) return 'muted';
-    return 'live';
+    return trackStateOf(this.stream);
   }
 
   /** 계측 H — 백그라운드 진입 순간 실제 MediaRecorder 슬롯이 녹음 중인지 읽는 관찰 전용 getter. */
@@ -556,7 +581,14 @@ export class AudioRecorder {
       const track = this.stream?.getAudioTracks()[0] ?? null;
       if (track && !this.trackChangeHandler) {
         this.listenedTrack = track;
-        this.trackChangeHandler = () => { this.handleDeviceChange(); };
+        this.trackChangeHandler = (e: Event) => {
+          // v0.50 [CLIP-SILENT-1] — **이 리스너는 종전에 아무것도 남기지 않았다.** 그래서
+          // 2026-08-19 사고에서 트랙이 muted로 빠졌는지조차 확인할 수 없었다(`mic_track:*`는
+          // 포그라운드 복귀 훅에서만 찍히는데 그 경로가 안 돌았다). 전이 자체를 여기서 남긴다.
+          // 동작은 종전 그대로 — 라벨 갱신만 하고 **재획득은 하지 않는다**([IOS-5]).
+          if (e?.type) logger.log({ type: 'clip', extra: `mic_track_evt:${e.type}` });
+          this.handleDeviceChange();
+        };
         track.addEventListener('ended', this.trackChangeHandler);
         track.addEventListener('mute', this.trackChangeHandler);
         track.addEventListener('unmute', this.trackChangeHandler); // BT 재연결 등 회복도 반영
@@ -743,6 +775,8 @@ export class AudioRecorder {
             durationMs: Math.round(performance.now() - prev.startedAt),
             prerollMs: prev.preroll ? Math.round((prev.preroll.pcm.length / prev.preroll.sampleRate) * 1000) : 0,
             postrollMs: Math.max(0, Math.round(performance.now() - prev.stopRequestedAt)),
+            // v0.50 [CLIP-SILENT-1] — 이 클립이 무음이었는지·트랙이 어떤 상태였는지.
+            ...clipObservation(prev.stream, prev.prerollWindow),
           });
         }
         prev.resolveStop(blob);
@@ -772,6 +806,9 @@ export class AudioRecorder {
         preroll: this.prerollTap.snapshot(PREROLL_MS),
         delayedStopTimer: null,
         stopRequestedAt: null,
+        // v0.50 [CLIP-SILENT-1] — 종료 계측용 자기 시점 참조 2개(슬롯 격리 계약 유지).
+        stream: this.stream,
+        prerollWindow: this.prerollTap.beginClipWindow(),
       };
 
       // Callbacks close over `slot` exclusively — no `this.*` access, so a stale recorder
@@ -791,6 +828,7 @@ export class AudioRecorder {
         // W6: prerollMs 동봉 — 이 클립에 결합될 프리롤 길이(0 = 프리롤 없음).
         // B5: postrollMs 동봉 — stop 요청 → 실제 stop까지 실측(≈POSTROLL_MS = 후반 보강 작동,
         // <POSTROLL_MS = 다음 클립 시작으로 절단). stop 요청이 없던 클립엔 미동봉.
+        const observation = clipObservation(slot.stream, slot.prerollWindow);
         logger.log({
           type: 'clip',
           extra: 'clip_duration',
@@ -799,7 +837,15 @@ export class AudioRecorder {
           ...(slot.stopRequestedAt != null
             ? { postrollMs: Math.max(0, Math.round(performance.now() - slot.stopRequestedAt)) }
             : {}),
+          // v0.50 [CLIP-SILENT-1] — 이 클립이 무음이었는지·트랙이 어떤 상태였는지.
+          ...observation,
         });
+        // v0.50 [CLIP-SILENT-1] — **관측된 무음**만 별도 1건으로 세운다(peak가 미관측이면 안 남긴다).
+        // 정상 세션에서는 발생하지 않으므로 링버퍼(2000)를 잠식하지 않는다 — 2026-08-19 사고에서는
+        // 이 한 줄이 「트랙이 muted였나 live였나」를 즉시 답했을 것이다.
+        if (observation.clipPeak === 0) {
+          logger.log({ type: 'clip', extra: `clip_silent:track=${observation.trackState}` });
+        }
         slot.resolveStop?.(blob);
         slot.resolveStop = null;
       };

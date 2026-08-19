@@ -14,6 +14,9 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
   // 🔴 v0.46.1 WP-1c — 시작 준비 **진행 상태**. `useVoiceSession.start()`가 단계마다 채우고,
   //    어느 경로로 빠져나가도 finally에서 null로 지운다.
   const progress = useSessionStore((st) => st.startProgress);
+  // v0.50 [CLIP-SILENT-1] — 직전 세션에서 음성 클립이 저장 실패했으면 그 사실을 남긴다.
+  // 값은 정상이라 화면·시트 어디에도 이상이 없다 — 여기가 유일한 사후 표면이다.
+  const clipWarning = useSessionStore((st) => st.clipWarning);
   const counting = progress != null;
   // v0.45.0 WP-1① — 시작 전 입·출력 상태 프로브(F15 근원 판정용). 스로틀·계약은 readyProbe.ts.
   useEffect(() => { emitReadyProbe(); }, []);
@@ -60,6 +63,25 @@ export function ReadyState({ totalRows, onStart }: { totalRows: number; onStart:
             }}
           >
             {ttsHint}
+          </div>
+        )}
+        {/* v0.50 [CLIP-SILENT-1] — 직전 세션 클립 결산 경고. `ttsHint`(기능 안내)와 **독립**이고
+            둘 다 뜰 수 있다 — 서로 다른 사실이라 하나가 다른 하나를 가리면 안 된다.
+            빨강이 아니라 앰버인 이유: 값은 안전하고 잃은 것은 확인 수단이다(진행을 막지 않는다). */}
+        {clipWarning && (
+          <div
+            role="alert"
+            data-testid="clip-warning"
+            style={{
+              width: '100%', maxWidth: 320,
+              padding: '12px 16px', borderRadius: 12,
+              background: 'rgba(255,234,0,0.10)', border: `1px solid ${T.amber}`,
+              color: T.amber, fontSize: VOICE_TYPE.bodySm, fontWeight: 600,
+              lineHeight: 1.5, letterSpacing: -0.1, textAlign: 'center',
+              wordBreak: 'keep-all', overflowWrap: 'anywhere',
+            }}
+          >
+            {clipWarning}
           </div>
         )}
         <div style={{ position: 'relative' }}>

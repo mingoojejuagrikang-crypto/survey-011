@@ -43,6 +43,9 @@ import { isSheetSourceBlocked, sessionTargetFromSettings } from './sheetConnecti
 import { ensureUniqueSessionLabel } from './sessionLabel';
 // [ENV-12] Stage 3 — 클립 캡처·보존 장부는 useClipCapture가 소유한다(이 파일은 호출만).
 import { useClipCapture, type PendingCommandClip } from './useClipCapture';
+import { createClipHealth, clipSummaryExtra, type ClipHealth } from './clipHealth';
+import { useClipFailureAlert } from './useClipFailureAlert';
+import { clipFailSummaryScreen } from './voicePrompts';
 // [ENV-12] Stage 3 — 세션 영속화(persistSession)는 usePersistSession이 소유한다(이 파일은 호출만).
 import { usePersistSession } from './usePersistSession';
 // [ENV-12] Stage 3 — 행 이동 계열 내비게이션은 useRowNav가, 항목 한 칸 이동(F-1)은 useFieldNav가
@@ -494,6 +497,10 @@ export function useVoiceSession() {
   // clip_empty 자동 재시도 once 가드(세션당). 스트림이 죽어 micLost로 전환되면 더 이상 자동
   // recoverStream을 부르지 않는다(제스처 밖이라 어차피 실패). start()에서 리셋.
   const micLostLatchedRef = useRef(false);
+  // v0.50 [CLIP-SILENT-1] — 클립 건강도 장부(연속 실패 카운터 + 세션 결산). 무음 트랙은
+  // `isStreamLost()`로 안 잡히므로(트랙이 `ended`가 아니다) **결과**로 판정한다. start()에서 리셋,
+  // stop()에서 결산 1건. 근거·임계 근거는 clipHealth.ts 헤더.
+  const clipHealthRef = useRef<ClipHealth>(createClipHealth());
   /** React state가 아닌 순수 정책 상태 — 복귀 이벤트가 phase와 무관하게 hiddenAt을 소비한다. */
   const foregroundReturnRef = useRef<ForegroundReturnState>(INITIAL_FOREGROUND_RETURN_STATE);
 
@@ -1605,10 +1612,13 @@ export function useVoiceSession() {
    *     reconnectMic을 자동 1회만 호출하고, 실패 후에는 사용자 제스처에 맡긴다.
    *   - 스트림이 멀쩡하면(트랙 살아있음) **no-op**. 복구가 필요 없다 — 다음 startClip()이 살아있는
    *     스트림 위에 새 MediaRecorder를 만들어 자가 치유한다(transient 빈 클립의 자연 회복). */
-  const maybeAutoRecoverOrLatch = useCallback((reason: string) => {
+  const maybeAutoRecoverOrLatch = useCallback((reason: string, opts?: { force?: boolean }) => {
     const rec = recorderRef.current;
     if (!rec) return;
-    if (rec.isStreamLost() && !micLostLatchedRef.current) {
+    // v0.50 [CLIP-SILENT-1] — `force`는 **연속 실패 임계 도달**이다. 2026-08-19 실기기 사고에서
+    // 트랙은 살아 있고(`ended` 아님) 무음만 흘러 이 판정이 69회 연속 no-op이었다. 결과로 판정한
+    // 호출자(useValueCommit)가 그 사실을 여기로 넘긴다.
+    if ((opts?.force === true || rec.isStreamLost()) && !micLostLatchedRef.current) {
       micLostLatchedRef.current = true;
       setMicLost(true);
       logCell({
@@ -1655,6 +1665,10 @@ export function useVoiceSession() {
     });
     return attempt;
   }, []);
+
+  // v0.50 [CLIP-SILENT-1] — 실패 고지(화면 끄기 자동 해제 + TTS 1문장)의 **유일한 배선 지점**.
+  // 복구는 여기서 하지 않는다 — 바로 아래 자동 재연결 effect가 종전대로 소유한다.
+  useClipFailureAlert({ micLost, say, logCell });
 
   // v0.38.0 #5 — micLost 한 번의 연속 구간마다 자동 복구는 정확히 1회뿐이다. 실패 상태가 계속
   // 유지돼도 attempted ref가 effect 재실행을 차단하며, 성공/세션 리셋으로 micLost가 false가 된 뒤에만
@@ -1839,6 +1853,7 @@ export function useVoiceSession() {
     archiveCellClip,
     clipCapture,
     maybeAutoRecoverOrLatch,
+    clipHealth: clipHealthRef.current,
     isModifyLike,
     epochRef,
     awaitingFieldRef,
@@ -2506,6 +2521,9 @@ export function useVoiceSession() {
     // 스트림으로 시작한다(start()가 새 AudioRecorder.init()로 재획득).
     micLostLatchedRef.current = false;
     setMicLost(false);
+    // v0.50 [CLIP-SILENT-1] — 클립 결산·연속 실패 카운터도 세션 경계에서 비운다(이전 세션의
+    // 실패가 새 세션의 첫 클립을 임계로 밀어 올리면 안 된다).
+    clipHealthRef.current.reset();
     // (UI 음성명령 신호 클리어는 F18로 setPhase('active') **이전**으로 이동 — 위 주석 참조.)
     sessionTodayRef.current = localTodayISO();
     // v0.8.0: 과거값 인덱스 프리페치(fire-and-forget) — 마스터 토글 제거 → 이상치 알람 규칙
@@ -2705,6 +2723,15 @@ export function useVoiceSession() {
     // 가능하면 자연 onstop으로 실제 blob을 저장하는 것이 우선.
     // 5초 안전 타임아웃: dispose가 즉시 해소하므로 일반적으로 즉시 끝나지만 race 대비.
     await clipCapture.flushSaves(5000);
+    // v0.50 [CLIP-SILENT-1] — 클립 결산 1건(신규 이벤트라 기존 바이트 계약과 무관). 실패가 있으면
+    // 종료 화면에 남긴다 — 로그만 남기면 2026-08-19가 그대로 반복된다(값은 멀쩡해 아무도 모른다).
+    const clipSummary = clipHealthRef.current.summary();
+    logCell({ type: 'session', extra: clipSummaryExtra(clipSummary) });
+    useSessionStore.getState().setClipWarning(
+      clipSummary.failed > 0
+        ? clipFailSummaryScreen(clipSummary.failed, clipSummary.saved + clipSummary.failed)
+        : null,
+    );
     recorderRef.current?.dispose();
     recorderRef.current = null;
     // v0.10: await로 변경 — audioClips 키가 IDB session에 확실히 저장된 후 종료

@@ -1,0 +1,90 @@
+/**
+ * v0.50 [CLIP-SILENT-1] — **클립 캡처 건강도 장부**(순수 모듈).
+ *
+ * ## 왜 있나 — 2026-08-19 실기기 사고
+ * 같은 날 두 세션에서 마이크 트랙이 **살아 있는 채 무음 프레임만** 흘렸다. `MediaRecorder`는
+ * 컨테이너 조각 5바이트(또는 chunk 0)만 내놓았고, 앱은 **끝까지 아무것도 알아채지 못했다**:
+ *   · 이원창 A — 60/60 전량 소실(40분) · 이원창 세션 `wave_stats:peak=0.00`
+ *   · 양혁진 A — 연속 9셀 소실(2분 26초) 뒤 **외부 조건이 풀려** 저절로 회복
+ * 값(STT)은 멀쩡히 시트까지 갔다. 잃은 것은 **「값이 맞는지 나중에 확인할 수단」**뿐이라
+ * 화면에도 시트에도 이상이 없었다 — 그래서 **세션이 끝날 때까지 아무도 몰랐다.**
+ *
+ * ## 왜 「연속 실패 카운터」인가 — 다른 신호는 전부 막혔다
+ *  · `AudioRecorder.isStreamLost()`는 `readyState === 'ended'`만 사망으로 본다. 무음 트랙은
+ *    `ended`가 아니라 **`maybeAutoRecoverOrLatch`가 69회 호출되어 69회 no-op**이었다.
+ *  · `navigator.audioSession`은 iOS 26.6에서 `state=unknown`만 주고 `statechange`가 0건이다
+ *    (08-06~08-19 누적 로그 실측 — v0.46.0 P1 프로브가 이 기기에서 무용이라는 뜻).
+ *  · `window.blur`는 비특이적이다(정상 세션도 같은 신호를 맞고 멀쩡했다).
+ *  👉 남는 신뢰 가능한 신호는 **「빈 클립이 계속 나온다」는 결과 그 자체**뿐이다.
+ *
+ * ## 오탐이 왜 안 나는가
+ * 진짜 조용한 발화도 webm/opus는 수만 바이트다(정상 3세션 실측 min **29,484B**). 임계
+ * `EMPTY_CLIP_BYTES=200`과 사고 실측 **5B** 사이에 두 자릿수 배율의 여유가 있어 정상 클립이
+ * 이 경로에 들어올 수 없다. 연속 2회 조건이 단발 사고(재질문 취소 등)를 한 겹 더 거른다.
+ *
+ * 🔴 **리셋은 `clip_saved`에서만이다.** 「다음 클립 시작(`clip_started`)」으로 리셋하면 안 된다 —
+ * 양혁진 세션은 `clip_started` 123 vs `clip_stop_await` 68로 **정지 대기에 못 간 클립이 55개**다
+ * (재질문·저신뢰 거부로 교체된 것들). 시작으로 리셋하면 **소란한 세션에서 래치가 영영 안 걸린다.**
+ * `clip_stale_pending`도 리셋 대상이 아니다(저장 성공이 아니다).
+ */
+
+/** 연속 실패 몇 회에서 마이크 소실로 판정하는가.
+ *
+ *  **2인 이유**: 1회는 단발 사고(재질문 취소·경계 클립)에서도 나므로 오탐이 된다. 3회면 늦다 —
+ *  실측으로 되짚으면 양혁진은 2회 지점이 발병 **20초 뒤**(07:12:31 → 07:12:51), 이원창은 세션
+ *  시작 **48초 뒤**(09:41:39 → 09:41:48)다. 실제로는 각각 2분 26초·40분을 잃었다.
+ *  3회로 올리면 그만큼 늦어지고, 얻는 것은 이미 두 자릿수 배율로 확보된 오탐 여유뿐이다. */
+export const CLIP_FAIL_LATCH_THRESHOLD = 2;
+
+/** 세션 1건의 클립 결산. `saved + failed` = 값 커밋 시 클립을 **정지 대기까지 보낸** 횟수다.
+ *
+ *  🔑 분모로 `clip_started`를 쓰지 않는 이유: 재질문·저신뢰 거부로 **버려진 클립까지 세어**
+ *  분모가 부풀기 때문이다(양혁진 123 vs 68). 사용자에게 「0/60」을 보여줄 때 정직한 분모는
+ *  「값이 커밋된 셀 수」인 이 합이다. */
+export interface ClipHealthSummary {
+  saved: number;
+  failed: number;
+}
+
+export interface ClipHealth {
+  /** 빈/극소 클립 1건 기록. **연속 실패가 임계 이상이면 true**(= 마이크 소실로 봐도 된다). */
+  recordFailure(): boolean;
+  /** 클립 저장 성공 1건 — 연속 카운터를 0으로 되돌린다. */
+  recordSaved(): void;
+  /** 세션 결산(누적). */
+  summary(): ClipHealthSummary;
+  /** 세션 경계 초기화 — 연속 카운터와 누적 결산을 모두 비운다. */
+  reset(): void;
+}
+
+export function createClipHealth(threshold: number = CLIP_FAIL_LATCH_THRESHOLD): ClipHealth {
+  let streak = 0;
+  let saved = 0;
+  let failed = 0;
+  return {
+    recordFailure() {
+      streak += 1;
+      failed += 1;
+      return streak >= threshold;
+    },
+    recordSaved() {
+      streak = 0;
+      saved += 1;
+    },
+    summary() {
+      return { saved, failed };
+    },
+    reset() {
+      streak = 0;
+      saved = 0;
+      failed = 0;
+    },
+  };
+}
+
+/** 세션 종료 시 1건 남기는 결산 이벤트의 `extra`. **신규 이벤트라 기존 바이트 계약과 무관**하다.
+ *  `saved=0`이고 `failed>0`이면 그 세션은 **음성 증빙이 통째로 없다** — 종료 화면이 그 사실을
+ *  사용자에게 남긴다(로그만 남기면 2026-08-19가 그대로 반복된다). */
+export function clipSummaryExtra(s: ClipHealthSummary): string {
+  return `clip_summary:saved=${s.saved},failed=${s.failed}`;
+}
