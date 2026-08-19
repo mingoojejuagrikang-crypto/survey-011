@@ -339,8 +339,15 @@ export function useVoiceSession() {
    * 🔴 v0.50 fixdc U1 / fixdc2 RD-1·RD-3 — **`epochRef`는 단조가 아니다.** 두 곳이 0으로
    * **리셋**한다: `start()`(새 세션) · `resume()`(일시정지 해제). 나머지 **17곳**은 전부 `++`다.
    * ⚠️ 이 수를 믿고 완전성을 판단하는 사람이 있으므로 **실측 절차를 남긴다**:
-   * `grep -rn "epochRef.current++\|++epochRef.current" src/` 히트 18 − `useCommitLanding.ts`의
-   * 주석 인용 1 = **17**. (fixdc2 RD-5 — 종전 이 주석은 `14`였다. 그 수로는 조사가 빠진다.)
+   * `grep -rn "epochRef.current++\|++epochRef.current" src/ \
+   *   | grep -vE "^[^:]+:[0-9]+:[[:space:]]*(\*|//)"` → **17** (2026-08-19 실측).
+   * 🔴 **필터 없이 세지 마라**: 이 주석 자신을 포함해 bump를 «인용»하는 주석이 여럿이라 히트가
+   * 부풀고, 그 수는 주석이 늘 때마다 또 변한다(필터 없이는 21 — fixdc2 RE-3). 블록(`*`)과
+   * 줄(`//`) 주석을 **둘 다** 걸러야 한다 — 한쪽만 거르면 19가 나온다(이 정정 자체의 1차 실패).
+   * 결론 수치의 근거는 파일별 전수다:
+   * `useRowNav` 3 · `useFieldNav` 2 · `useValueCommit` 1 · `useTrendGate` 4 ·
+   * `useFinalCommands` 3 · `useVoiceSession` 3 · `useFinalValueGate` 1 = **17**.
+   * (fixdc2 RD-5 — 종전 이 주석은 `14`였다. 그 수로는 조사가 빠진다.)
    *
    * 그 비대칭이 v0.50 C의 신규 착지 가드에서 **회귀**를 냈다(리뷰 양측이 서로 다른 진입로로
    * 독립 재현). 「낡은 착지인가」를 **값 하나의 차이**로만 재면 **정상 재개가 경합자로 잡힌다** —
