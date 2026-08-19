@@ -17,6 +17,7 @@
  *   feedback_uploaded:user=..,admin=.. / feedback_failed:<err> / feedback_flush:...
  */
 import JSZip from 'jszip';
+import { readBundleId } from './bundleId';
 import { logger } from './logger';
 import { feedbackUploadMic, withErr } from './logEvents';
 import {
@@ -46,34 +47,6 @@ const CAPTURE_TIMEOUT_MS = 4_000;
 function feedbackFilename(now: number = Date.now()): string {
   const date = new Date(now).toISOString().slice(0, 10);
   return `feedback_${date}_${now}.zip`;
-}
-
-/** 🔴 v0.47.0 W5ⓐ′(민구 FB-F · 08-08) — **개선요청이 어느 빌드에서 왔는지를 zip이 스스로 말한다.**
- *
- *  08-08 새벽 제보 7건 전수 triage에서 *"어느 빌드였나"* 가 끝까지 UNCLEAR로 남았다. 그게
- *  치명적인 이유: 같은 증상이 **처방 전 번들**에서 온 것이면 재현이고, **처방 후 번들**에서
- *  온 것이면 처방이 틀린 것이다 — 두 결론의 다음 행동이 정반대인데 가를 근거가 없었다.
- *
- *  `device.appVersion`(logger)은 `package.json` 버전 + `-preview` 접미까지만 말한다. 같은
- *  버전에서 여러 번 빌드해 배포하는 프리뷰 흐름([[survey011-preview-first-flow]])에서는
- *  **그 문자열이 완전히 같다**(`vite.config.ts:16` 주석이 같은 사건을 기록해 뒀다).
- *  실제로 빌드를 가르는 유일한 것은 **번들 자산 해시**다.
- *
- *  취득: 로드된 `<script src>` 중 vite가 낸 `assets/index-<hash>.js`를 읽는다. 해시는 내용
- *  기반이라 같은 소스면 같은 값이고, 한 글자만 달라도 갈린다.
- *  🟡 dev(`vite`)에는 그 자산이 없다 — `'dev'`를 낸다. 실패는 삼키고 `'unknown'`을 낸다:
- *  캡처와 마찬가지로 **best-effort**이고, 이것 때문에 개선요청 자체가 실패하면 본말전도다. */
-function readBundleId(): string {
-  try {
-    const scripts = Array.from(document.querySelectorAll('script[src]')) as HTMLScriptElement[];
-    for (const s of scripts) {
-      const m = /\/assets\/(index-[A-Za-z0-9_.-]+\.js)/.exec(s.getAttribute('src') ?? '');
-      if (m) return m[1];
-    }
-    return 'dev';
-  } catch {
-    return 'unknown';
-  }
 }
 
 /** 화면 캡처(타임아웃 가드). 실패/초과 시 null — throw 안 함. */
