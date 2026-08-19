@@ -97,7 +97,12 @@ test('ⓑ 세션 중 소실 → 자동 1회 재연결로 자가 복구한다(배
 
   expect(await killStream(page), '전제: fake 트랙 핸들이 노출돼 있다').toBe(true);
   // 다음 커밋의 클립 종단이 스트림 상태를 관측한다(maybeAutoRecoverOrLatch → isStreamLost).
+  // 🔴 v0.50: **커밋이 두 번 필요하다.** 픽스처가 실기기에 맞춰지면서(`fixtures/mediaRecorder.ts`)
+  //    첫 커밋이 닫는 클립은 **트랙 사망 전에 시작돼 이미 조각을 받아 둔** 것이라 정상 저장된다
+  //    — 실기기도 그렇다(그때까지 녹음분은 남는다). 사망 **이후에 시작된** 클립이라야 빈다.
   await fireStt(page, '22.2', 1500);
+  await waitForTtsIdle(page);
+  await fireStt(page, '33.3', 1500);
   await waitForTtsIdle(page);
 
   const evs = await clipEvents(page);
@@ -117,7 +122,10 @@ test('ⓒ 소실 + 재획득 거부 → 배너가 서고 그 자리에서 재연
   // 헤드셋이 아예 사라진 형태 — 트랙도 죽고 재획득도 거부된다(자동 1회가 실패해야 배너가 뜬다).
   expect(await killStream(page)).toBe(true);
   await page.evaluate(() => { (window as unknown as { __gumDeny?: boolean }).__gumDeny = true; });
+  // 🔴 v0.50: ⓑ와 같은 이유로 커밋 2회 — 사망 이후에 시작된 클립이라야 빈다.
   await fireStt(page, '22.2', 1500);
+  await waitForTtsIdle(page);
+  await fireStt(page, '33.3', 1500);
   await expect(banner(page), '재획득까지 실패했는데 배너가 없다').toBeVisible({ timeout: 10000 });
 
   // 복구 진입로가 살아 있다. 여기서는 재획득을 다시 열어 준다(사용자가 헤드셋을 다시 켠 상황).

@@ -6,10 +6,12 @@
  * 비어 나온다」**였다. 종전 판정(`isStreamLost()` = `ended`만 사망)은 그 상태를 **영원히 no-op**
  * 으로 흘려보냈다 — 이원창 세션에서 60번, 양혁진 세션에서 9번.
  *
- * 🔑 **이 스펙의 픽스처가 곧 그 상태다.** `GUM_GRANT_SCRIPT`의 fake 트랙은 `readyState:'live'`인데
- * 진짜 MediaStream이 아니라 `MediaRecorder`가 던져 **클립이 항상 빈다**(fixtures/gum.ts 헤더).
- * 그래서 별도 무음 심을 만들지 않아도 사고와 같은 축이 재현된다 — 그리고 **종전 코드에서는
- * `mic_lost`가 절대 나지 않는다**(트랙이 `ended`가 아니므로). 처방을 빼면 ⓑ가 즉시 red다.
+ * 🔑 **재현 방법**: `fixtures/mediaRecorder.ts` 스텁의 `window.__clipSilentMode`를 켜면
+ * 트랙은 `readyState:'live'`인 채 레코더만 빈 조각을 낸다 — **사고와 정확히 같은 축**이다.
+ *   · `'tiny'` → 5바이트(`clip_too_small:5` — 이원창 60/60·양혁진 6건의 실측 형상)
+ *   · `'none'` → chunk 0(`clip_stop_resolved:null` → `clip_empty` — 양혁진 3건의 형상)
+ * 🔴 **종전 코드에서는 `mic_lost`가 절대 나지 않는다**(트랙이 `ended`가 아니라
+ * `isStreamLost()`가 false다). 처방을 빼면 ⓑ가 즉시 red다.
  *
  * ## 반증 축(무엇을 빼면 red인가)
  *  · 연속 카운터를 지우면 → ⓑ가 red(`mic_lost:*` 없음)
@@ -67,7 +69,13 @@ async function logExtras(page: Page): Promise<string[]> {
   });
 }
 
-async function bootMini(page: Page) {
+/** 무음 사고를 **명시적으로** 켠 채 부팅한다.
+ *  🔴 `addInitScript`로 **goto보다 먼저** 심는다 — 세션 시작(F18 선행 획득)이 이미 클립을
+ *  만들기 시작하므로 `evaluate`로 나중에 켜면 첫 클립을 놓친다. */
+async function bootMini(page: Page, mode: 'tiny' | 'none' = 'tiny') {
+  await page.addInitScript((m) => {
+    (window as unknown as { __clipSilentMode: string }).__clipSilentMode = m;
+  }, mode);
   await boot(page, PHONE_402, {
     settings: MINI_SETTINGS as unknown as typeof AZ_SETTINGS,
     headers: MINI_HEADERS,
@@ -113,13 +121,19 @@ test('ⓐ 빈 클립 1회로는 래치하지 않는다 — 경계의 아래쪽(�
 });
 
 test('ⓑ 빈 클립 연속 2회 → 트랙이 live여도 래치하고, 그 자리에서 고지한다', async ({ page }) => {
-  await bootMini(page);
+  // 실측 형상(5바이트 = `clip_too_small`)으로 두 번 연속 실패시킨다.
+  // ⚠️ **사유 혼합(5B + chunk-0)은 여기서 재지 않는다.** 다음 클립은 값 커밋 **직후** 시작되므로
+  //    모드를 갈아끼울 창이 커밋과 겹쳐 첫 조각을 놓친다(08-19 실측). 혼합이 같은 카운터를
+  //    쓴다는 계약은 ⓪(`recordFailure`가 **사유를 인자로 받지 않는다**)와 `useValueCommit`의
+  //    두 호출부가 같은 `clipHealth`를 쓰는 구조가 보장한다.
+  await bootMini(page, 'tiny');
   await fireStt(page, '11.1', 900);
   await waitForTtsIdle(page);
   await fireStt(page, '22.2', 1500);
   await waitForTtsIdle(page);
 
   const evs = await logExtras(page);
+  expect(evs.some((e) => e.startsWith('clip_too_small')), '전제: 실패 형상이 5바이트다').toBe(true);
   // 🔴 종전 판정(`isStreamLost()`)은 여기서 **false**다 — fake 트랙은 `readyState:'live'`다.
   //    그러니 이 단언은 새 경로가 아니면 절대 통과하지 않는다(반증 축).
   expect(evs.filter((e) => e.startsWith('mic_lost')).length,

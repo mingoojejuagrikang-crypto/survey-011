@@ -10,6 +10,7 @@
  * 서버: `playwright.config.ts`의 webServer가 5177을 자동 기동한다([ORCH-27]).
  */
 import { expect, type Page } from '@playwright/test';
+import { MEDIA_RECORDER_STUB_SCRIPT } from './mediaRecorder';
 import { fireStt, installVoiceMocks } from './stt';
 import { BASE } from '../baseUrl';
 
@@ -95,7 +96,7 @@ export const SHEET_ROWS = [
 ];
 
 /** headless는 getUserMedia가 거부돼 micLost가 래치되면 톤이 red로 고정된다 → fake 'live' 트랙 제공. */
-export const MOCK_INIT_SCRIPT = `
+export const MOCK_INIT_SCRIPT = MEDIA_RECORDER_STUB_SCRIPT + `
 (function() {
   window.__micSettleSkipForTest = true; // F18 픽스처 우회 — 시작 시 1초 마이크 정착 생략(우회 심 오라클: v0440-c8-flow.spec.ts)
   function nextStream() {
