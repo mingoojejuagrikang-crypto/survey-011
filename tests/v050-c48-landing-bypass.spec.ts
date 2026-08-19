@@ -215,10 +215,16 @@ test('① 일시정지 중 음성 칩 수동 커밋이 일시정지를 조용히
   await expect
     .poll(async () => logExtras(page), { timeout: 8000 })
     .toContain('advance_phase_held:paused:row_complete');
-  expect(
-    await logExtras(page),
-    '다음 행 전이가 보류된 흔적이 없다 — 4곳 중 한 곳만 막으면 나머지가 같은 구멍이다',
-  ).toContain('advance_phase_held:paused:next_row');
+  // 🔴 v0.50 r2 — **이 단언에도 폴링이 필요하다.** 위 주석의 근거가 여기에도 그대로 적용되는데
+  //   초판은 앞 단언에만 `poll`을 걸었다. `next_row`는 `row_complete` **다음에** 오는 이벤트라
+  //   앞이 막 도착한 시점엔 아직 안 왔을 수 있다 — 08-19 r2 게이트에서 실제로 그 창에 걸렸다
+  //   (스위트 732번째 · 배치 red / 단독 green). 「아직 안 왔다」와 「영영 안 온다」는 다르다.
+  await expect
+    .poll(async () => logExtras(page), {
+      timeout: 8000,
+      message: '다음 행 전이가 보류된 흔적이 없다 — 4곳 중 한 곳만 막으면 나머지가 같은 구멍이다',
+    })
+    .toContain('advance_phase_held:paused:next_row');
 });
 
 // ── ② #4 과잉 수정 반증 — 보류는 국면 전이만이다 ([TEAMOPS-97] · 브리핑 §3) ────────────
