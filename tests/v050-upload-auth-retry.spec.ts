@@ -83,6 +83,25 @@ test('[node] ⓓ 첫 시도가 성공이면 업로드는 1회뿐이다(정상 �
   expect(out.userDriveId).toBe('u1');
 });
 
+test('[node] ⓖ 부분 성공 재시도는 **이미 성공한 레그를 다시 올리지 않는다** — Drive 중복 파일 방지', async () => {
+  // admin만 401, user는 성공 — 08-19 실측 4건은 전부 양쪽 실패였지만 이 형상도 실재한다.
+  const partial: Dual = { errors: ['admin_drive: 로그 업로드 실패: 401'], userDriveId: 'u1' };
+  const calls: ({ userDriveId?: string; adminDriveId?: string } | undefined)[] = [];
+  const out = await withAuthRetry({
+    upload: async (keep) => {
+      calls.push(keep);
+      return calls.length === 1 ? partial : { errors: [], userDriveId: keep?.userDriveId ?? 'u2', adminDriveId: 'a1' };
+    },
+    ensureAuth: async () => true,
+  });
+  expect(calls).toHaveLength(2);
+  expect(calls[0], '첫 호출에는 keep이 없다').toBeUndefined();
+  expect(calls[1], '재시도가 이미 성공한 user 레그를 넘겨받지 못했다 — 같은 파일이 두 번 올라간다')
+    .toEqual({ userDriveId: 'u1', adminDriveId: undefined });
+  expect(out.userDriveId, '첫 시도의 성공 id가 유지돼야 한다').toBe('u1');
+  expect(out.adminDriveId).toBe('a1');
+});
+
 test('[node] ⓔ 실패 사유는 남기되 비밀은 남기지 않는다', () => {
   expect(sanitizeUploadError('user_drive: 하위 폴더 검색 실패 mingoo@example.com 401'))
     .toBe('user_drive: 하위 폴더 검색 실패 <email> 401');

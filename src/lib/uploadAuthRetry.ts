@@ -61,7 +61,10 @@ export function sanitizeUploadError(raw: string): string {
  *  🔑 제네릭인 이유: 호출부의 결과 타입(`DualUploadResult`의 `adminConfigured` 등)을 **그대로**
  *  통과시킨다. 여기서 좁히면 호출부가 자기 필드를 잃는다. */
 export async function withAuthRetry<T extends UploadLegsResult>(deps: {
-  upload: () => Promise<T>;
+  /** 🔴 v0.50 r2 [UA-2] — 재시도 호출에는 **이미 성공한 레그**가 `keep`으로 넘어온다.
+   *  구현은 그 레그를 다시 올리지 않고 넘겨받은 id를 그대로 결과에 싣는다. 넘기지 않으면
+   *  「admin만 401」 같은 부분 실패에서 **user Drive에 같은 파일이 두 개** 생긴다. */
+  upload: (keep?: { userDriveId?: string; adminDriveId?: string }) => Promise<T>;
   ensureAuth: (opts?: { force?: boolean }) => Promise<boolean>;
   onRetry?: () => void;
 }): Promise<T> {
@@ -69,7 +72,10 @@ export async function withAuthRetry<T extends UploadLegsResult>(deps: {
   if (!first.errors.some(isAuthError)) return first;
   if (!(await deps.ensureAuth({ force: true }))) return first;
   deps.onRetry?.();
-  const second = await deps.upload();
+  const second = await deps.upload({
+    userDriveId: first.userDriveId,
+    adminDriveId: first.adminDriveId,
+  });
   // 🔑 재시도가 더 나빠지는 경우를 없다고 가정하지 않는다 — 두 번째가 아무 레그도 못 얻었는데
   //    첫 번째가 한쪽이라도 붙였다면 **첫 결과를 지키는 쪽이 데이터 안전이다**(부분 성공 보존).
   const secondGained = !!second.userDriveId || !!second.adminDriveId;

@@ -259,20 +259,34 @@ async function uploadToBothLegs(opts: {
   adminLeg: () => Promise<string>;
   onUserError?: () => void;
   onAdminError?: () => void;
+  /** 🔴 v0.50 r2 [UA-2] — **이미 성공한 레그를 다시 올리지 않는다.**
+   *  인증 실패 재시도는 「하나라도 인증 오류면」 돈다. admin만 401이고 user는 성공한 경우
+   *  재시도가 두 레그를 다시 올려 **user Drive에 같은 파일이 두 개** 생겼다.
+   *  결과의 부분 성공은 보존되지만 **부수효과(중복 파일)는 못 막는다** — 그래서 여기서 건너뛴다.
+   *  건너뛴 레그의 id는 호출자가 넘긴 값을 그대로 돌려준다(결과 합성은 호출자 몫이 아니다). */
+  keep?: { userDriveId?: string; adminDriveId?: string };
 }): Promise<DualUploadResult> {
   const result: DualUploadResult = { errors: [], adminConfigured: opts.adminConfigured };
-  try {
-    result.userDriveId = await opts.userLeg();
-  } catch (e) {
-    result.errors.push(`user_drive: ${e instanceof Error ? e.message : String(e)}`);
-    opts.onUserError?.();
+  if (opts.keep?.userDriveId) {
+    result.userDriveId = opts.keep.userDriveId;
+  } else {
+    try {
+      result.userDriveId = await opts.userLeg();
+    } catch (e) {
+      result.errors.push(`user_drive: ${e instanceof Error ? e.message : String(e)}`);
+      opts.onUserError?.();
+    }
   }
   if (opts.adminConfigured) {
-    try {
-      result.adminDriveId = await opts.adminLeg();
-    } catch (e) {
-      result.errors.push(`admin_drive: ${e instanceof Error ? e.message : String(e)}`);
-      opts.onAdminError?.();
+    if (opts.keep?.adminDriveId) {
+      result.adminDriveId = opts.keep.adminDriveId;
+    } else {
+      try {
+        result.adminDriveId = await opts.adminLeg();
+      } catch (e) {
+        result.errors.push(`admin_drive: ${e instanceof Error ? e.message : String(e)}`);
+        opts.onAdminError?.();
+      }
     }
   }
   return result;
@@ -282,9 +296,12 @@ async function uploadToBothLegs(opts: {
 export async function uploadLogToBothDrives(
   zipBlob: Blob,
   filename: string,
+  /** v0.50 r2 [UA-2] — 인증 재시도에서 **이미 성공한 레그**를 넘긴다(그 레그는 다시 안 올린다). */
+  keep?: { userDriveId?: string; adminDriveId?: string },
 ): Promise<DualUploadResult> {
   const auth = captureUploadAuth(); // 작업 단위 스냅샷 — 두 레그가 같은 계정으로 완결
   return uploadToBothLegs({
+    keep,
     adminConfigured: !!LOG_FOLDER_ID,
     userLeg: () => uploadLogToUserDrive(zipBlob, filename, auth ?? undefined),
     adminLeg: () => uploadLogToAdminTeamFolder(zipBlob, filename, auth ?? undefined),

@@ -183,6 +183,16 @@ export function useDataActions() {
           // 로그인 버튼을 눌러야 재시도가 붙었다. 클릭이 없던 세션 하나는 로그가 통째로 남지
           // 않았다. 실패해도 진행한다 — 종전 실패 경로(재로그인 배너)가 그대로 받는다.
           await ensureAccessToken();
+          // [UA-1] 위 주석 참조 — 작업 단위 1회 강제 갱신 게이트.
+          let forceRefreshDone = false;
+          const forceRefreshOnce = async (o?: { force?: boolean }): Promise<boolean> => {
+            if (o?.force && forceRefreshDone) {
+              logger.log({ type: 'app', extra: 'auth_ensure:skipped:already_forced' });
+              return false;
+            }
+            if (o?.force) forceRefreshDone = true;
+            return ensureAccessToken(o);
+          };
           // v0.19.0 W6 — 세션별 개별 zip 업로드. v0.23.0 데이터탭#1 — 대상 = 선택한 모든 세션(행 보유).
           // 파일명은 수확 prefix `growth-log_<date>` + 세션 식별자(rclone/SOP-003·복구 파싱 호환).
           const zips = await exportLogZipsPerSession(uploadIds);
@@ -202,8 +212,12 @@ export function useDataActions() {
             try {
               // v0.50 [UPLOAD-AUTH-1] — 인증 실패 1회 자동 재시도(계약·근거는 uploadAuthRetry).
               const dual = await withAuthRetry({
-                upload: () => uploadLogToBothDrives(z.blob, z.filename),
-                ensureAuth: ensureAccessToken,
+                upload: (keep) => uploadLogToBothDrives(z.blob, z.filename, keep),
+                // 🔴 v0.50 r2 [UA-1] — **강제 갱신은 이 업로드 작업 전체에서 1회뿐이다.**
+                //   `ensureAccessToken({force})`는 저장 토큰 단축이 없어 zip마다 `signIn()`을 다시
+                //   부른다. 콜백 wedge면 `SIGNIN_TIMEOUT_MS`(120초)를 그대로 기다리므로 세션 N개면
+                //   최악 N×120초 동안 동기화가 멈춘다 — 「진행을 막지 않는다」와 정면 충돌이다.
+                ensureAuth: forceRefreshOnce,
                 onRetry: () => logger.log({ type: 'app', extra: 'drive_upload_retry:auth', parsed: z.sessionId }),
               });
               // v0.50 [UPLOAD-AUTH-1] — **실패 사유를 남긴다.** 종전엔 `drive_upload:partial:fail=`에
@@ -239,7 +253,9 @@ export function useDataActions() {
               failedDests.add('exception');
               const emsg = String((err as Error)?.message ?? err);
               if (isAuth(emsg)) backupNeedsLogin = true;
-              logger.log({ type: 'app', extra: `drive_upload:failed:${z.sessionId}:${emsg}` });
+              // v0.50 r2 [UA-3] — 같은 함수의 자매 지점도 마스킹을 탄다. 「이 함수의 에러 문자열은
+              //   마스킹된다」는 계약이 반쪽이면 다음 사람이 그 계약을 믿는다.
+              logger.log({ type: 'app', extra: `drive_upload:failed:${z.sessionId}:${sanitizeUploadError(emsg)}` });
               console.warn('Drive 로그 업로드 실패(세션)', z.sessionId, err);
             }
           }
@@ -261,7 +277,8 @@ export function useDataActions() {
             console.warn('Drive 로그 백업 실패 세션', failedIds, [...failedDests]);
           }
         } catch (err) {
-          logger.log({ type: 'app', extra: `drive_upload:failed:${String((err as Error)?.message ?? err)}` });
+          // v0.50 r2 [UA-3] — 위와 같은 이유로 마스킹.
+          logger.log({ type: 'app', extra: `drive_upload:failed:${sanitizeUploadError(String((err as Error)?.message ?? err))}` });
           setMsg((m) => (m ? `${m} · ⚠️ 로그 백업 실패` : '⚠️ 시트 추가 OK, 로그 백업 실패'));
           console.warn('Drive 로그 업로드 실패', err);
         }

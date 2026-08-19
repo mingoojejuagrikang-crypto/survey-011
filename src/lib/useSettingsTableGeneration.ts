@@ -17,7 +17,7 @@ import {
   applySheetFormatRequests, fetchHeaderRow, fetchHeaderAndSample, fetchSpreadsheetMeta,
   inferColumns, parseSpreadsheetId,
 } from './sheets';
-import { buildNumberFormatRequests, planNumberFormats } from './sheetNumberFormat';
+import { applyDecimalFormats } from './applyDecimalFormats';
 import { computeTotalRows } from './autoValue';
 import { buildSessionLabel, pickSessionLabelValue } from './sessionLabel';
 import { localTodayIso } from './weekTuesday';
@@ -120,30 +120,22 @@ export function useSettingsTableGeneration(shared: SettingsActionsShared) {
    *
    *  🔴 **여기서 부르는 이유**: 자리수(`col.decimals`)가 확정되는 유일한 시점이 테이블 생성이다.
    *  매 sync마다 치면 시트 쓰기가 행 입력 빈도로 늘어난다 — 서식은 스키마성 설정이라 1회면 된다.
-   *  🔴 **await하지 않는다**: 서식은 부가 기능이고, 실패해도 생성·세션 흐름을 막지 않는다
-   *  (PRINCIPLES §3 기능 격리 — 꺼짐/실패 시 조용한 no-op). 결과는 로그로만 남긴다. */
-  const applyDecimalFormats = async (): Promise<void> => {
-    const st = useSettingsStore.getState();
-    const spreadsheetId = parseSpreadsheetId(st.sheetUrl);
-    if (!spreadsheetId || !st.sheetTab) return;
-    try {
-      const headers = await fetchHeaderRow(spreadsheetId, st.sheetTab);
-      const specs = planNumberFormats(st.columns, headers);
-      if (specs.length === 0) return; // float+decimals 컬럼이 없다 — 조용히 끝낸다.
-      const meta = await fetchSpreadsheetMeta(spreadsheetId);
-      const sheetId = meta.sheets.find((sh) => sh.title === st.sheetTab)?.sheetId;
-      if (sheetId == null) return;
-      const res = await applySheetFormatRequests(spreadsheetId, buildNumberFormatRequests(sheetId, specs));
-      logger.log({
-        type: 'app',
-        // 실패도 남긴다 — 권한 없는 시트(403)에서 조용히 아무 일도 안 일어나면 「왜 40.0이 안 되나」를
-        // 다음 회차가 처음부터 다시 조사한다([REVIEW-1] 빈 catch 금지).
-        extra: `sheet_number_format:${res.ok ? 'ok' : 'failed'}:cols=${specs.length}${res.status ? `:status=${res.status}` : ''}`,
-      });
-    } catch (e) {
-      logger.log({ type: 'app', extra: `sheet_number_format:error:${e instanceof Error ? e.name : 'unknown'}` });
-    }
-  };
+   *  🔴 **await하지 않는다**: 서식은 부가 기능이고, 실패해도 생성·세션 흐름을 막지 않는다.
+   *
+   *  v0.50 r2 [DD-5] — 본체는 `applyDecimalFormats`(주입형 모듈)로 옮겼다. 여기는 **조립만** 한다
+   *  — 그래야 배선(호출 여부·인자·실패 무해)을 실계정 없이 오라클로 잠글 수 있다. */
+  const runDecimalFormats = (): Promise<void> => applyDecimalFormats({
+    getSettings: () => {
+      const st = useSettingsStore.getState();
+      return { sheetUrl: st.sheetUrl, sheetTab: st.sheetTab, columns: st.columns };
+    },
+    parseSpreadsheetId,
+    fetchHeaderRow,
+    resolveSheetId: async (id, tab) =>
+      (await fetchSpreadsheetMeta(id)).sheets.find((sh) => sh.title === tab)?.sheetId ?? null,
+    applyFormats: applySheetFormatRequests,
+    log: (extra) => logger.log({ type: 'app', extra }),
+  });
 
   // "확인(생성)" — 여기서만 실제 생성 부수효과 실행.
   const onGenerateConfirm = () => {
@@ -163,7 +155,7 @@ export function useSettingsTableGeneration(shared: SettingsActionsShared) {
     // v0.38.0 리뷰#1 — 판단은 shouldPreparePastIndex 단일 술어로(호출부마다 복붙하지 않는다).
     if (shouldPreparePastIndex({ requireAuth: true })) { resetPastIndexRetries(); prefetchPastIndex(); }
     // v0.50 [DECIMAL-DISPLAY-1] — 시트 표시 자리수 서식(부가 · 실패 무해 · 흐름 비차단).
-    void applyDecimalFormats();
+    void runDecimalFormats();
     setGenerateGateOpen(false);
   };
 
