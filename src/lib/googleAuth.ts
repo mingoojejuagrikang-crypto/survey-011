@@ -315,6 +315,37 @@ export function signIn(): Promise<{ email: string; token: string }> {
   });
 }
 
+/** v0.50 [UPLOAD-AUTH-1] — **업로드 직전 유효 토큰을 보장한다**(무팝업 갱신 시도).
+ *
+ *  ## 왜 필요한가 — 2026-08-19 실측
+ *  로그 백업이 그날 **5회 중 4회 첫 시도에 실패**했고, 실패 4건 모두 같은 모양이었다:
+ *  `drive_upload:partial:fail=user_drive,admin_drive` → 1~2초 뒤 `login_prompt_login_clicked`
+ *  → `auth_signin_start` → `auth_token_settled`(939~2000ms) → `drive_upload:ok`.
+ *  즉 **만료된 토큰으로 업로드를 시작하고, 사용자가 로그인 버튼을 눌러야 갱신됐다.**
+ *  양혁진 세션(07:24)만 그 클릭이 없어 로그가 **6시간 뒤 수동 재업로드까지 Drive에 없었다.**
+ *
+ *  `getStoredToken()`은 만료 1분 전부터 null을 돌려주므로(선반영), 그걸 먼저 보고 없을 때만
+ *  `signIn()`을 부른다. `signIn()`은 `prompt: ''`라 기존 동의가 살아 있으면 팝업 없이 갱신된다.
+ *
+ *  @param force 서버가 이미 401/403을 준 경우 — 저장 토큰이 「아직 안 만료」로 보여도 다시 받는다.
+ *  @returns 유효 토큰을 확보했는가. **실패해도 throw하지 않는다** — 호출부는 종전 실패 경로
+ *    (재로그인 배너)로 그대로 수렴해야 하고, 이 함수가 흐름을 끊으면 그 경로가 사라진다. */
+export async function ensureAccessToken(opts?: { force?: boolean }): Promise<boolean> {
+  if (!opts?.force && getStoredToken()) {
+    logger.log({ type: 'app', extra: 'auth_ensure:hit' });
+    return true;
+  }
+  try {
+    await signIn();
+    logger.log({ type: 'app', extra: `auth_ensure:refreshed${opts?.force ? ':forced' : ''}` });
+    return true;
+  } catch (e) {
+    // 실패 사유는 남기되 토큰·이메일은 절대 싣지 않는다(signOut 주석의 동일 계약).
+    logger.log({ type: 'app', extra: `auth_ensure:failed:${e instanceof Error ? e.name : 'unknown'}` });
+    return false;
+  }
+}
+
 /** v0.34.0 계측 갭① — 로그아웃 시점이 로그에 없어 "언제부터 토큰이 없었나"를 재구성할 수 없던
  *  갭(Trace). reason: 'manual'(설정탭 연결 해제 버튼) | 'settings_reset'(전체 초기화의 로그인
  *  삭제 옵트인). 토큰 만료(수동 아님)는 여기로 오지 않는다 — SettingsScreen 마운트 강등 분기가

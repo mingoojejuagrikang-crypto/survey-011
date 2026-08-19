@@ -17,7 +17,8 @@ import { deleteSession as dbDeleteSession, saveSession } from './db';
 import type { Session } from '../types';
 import { exportLogZipsPerSession } from './exportLog';
 import { uploadLogToBothDrives } from './driveUpload';
-import { signIn } from './googleAuth';
+import { withAuthRetry, isAuthError, sanitizeUploadError } from './uploadAuthRetry';
+import { signIn, ensureAccessToken } from './googleAuth';
 import { useExportActions } from './useExportActions';
 import { useRecoverActions } from './useRecoverActions';
 import { logger } from './logger';
@@ -177,6 +178,11 @@ export function useDataActions() {
       const uploadIds = excludeInProgress(syncIds).filter(hasRows);
       if (uploadIds.length > 0) {
         try {
+          // v0.50 [UPLOAD-AUTH-1] — **업로드를 시작하기 전에 토큰부터 확보한다.**
+          // 2026-08-19: 이 한 줄이 없어 5회 중 4회가 첫 시도에 401/403으로 죽었고, 사용자가
+          // 로그인 버튼을 눌러야 재시도가 붙었다. 클릭이 없던 세션 하나는 로그가 통째로 남지
+          // 않았다. 실패해도 진행한다 — 종전 실패 경로(재로그인 배너)가 그대로 받는다.
+          await ensureAccessToken();
           // v0.19.0 W6 — 세션별 개별 zip 업로드. v0.23.0 데이터탭#1 — 대상 = 선택한 모든 세션(행 보유).
           // 파일명은 수확 prefix `growth-log_<date>` + 세션 식별자(rclone/SOP-003·복구 파싱 호환).
           const zips = await exportLogZipsPerSession(uploadIds);
@@ -187,13 +193,26 @@ export function useDataActions() {
           // v0.20.0 Phase 2 — Drive 백업 실패가 토큰 만료(401/403)면 시트추가와 독립으로 로그인
           // 팝업을 띄울 수 있게 신호를 모은다(시트추가는 성공해도 백업만 만료될 수 있다).
           let backupNeedsLogin = false;
-          const isAuth = (s: string) => /\b(401|403)\b/.test(s) || /로그인이 필요/.test(s);
+          // v0.50 [UPLOAD-AUTH-1] — 판정은 driveUpload가 소유한다(재시도 결정과 같은 기준).
+          const isAuth = isAuthError;
           // 데이터 유실 방지 불변식(v0.23.0): 로그는 선택한 모든 세션을 올리되, autoDelete 대상은
           // successIds(시트에 새로 반영된 세션)로만 한정한다. 그 successIds가 **모두** 완전 백업(본인
           // Drive 필수 + 관리자 설정 시 admin도 필수)됐을 때만 backupOk=true → 부분 성공으로는 삭제 안 함.
           for (const z of zips) {
             try {
-              const dual = await uploadLogToBothDrives(z.blob, z.filename);
+              // v0.50 [UPLOAD-AUTH-1] — 인증 실패 1회 자동 재시도(계약·근거는 uploadAuthRetry).
+              const dual = await withAuthRetry({
+                upload: () => uploadLogToBothDrives(z.blob, z.filename),
+                ensureAuth: ensureAccessToken,
+                onRetry: () => logger.log({ type: 'app', extra: 'drive_upload_retry:auth', parsed: z.sessionId }),
+              });
+              // v0.50 [UPLOAD-AUTH-1] — **실패 사유를 남긴다.** 종전엔 `drive_upload:partial:fail=`에
+              // 레그 이름만 남아(`e.split(':')[0]`) 「왜 죽었는지」를 로그로 알 수 없었다 —
+              // 그래서 이번 조사도 인증 이벤트와의 시간 대조로만 근인을 잡았다.
+              // 🔴 기존 `drive_upload:*` 문자열은 **바이트 그대로 둔다**(PRINCIPLES §4) — 신규 이벤트다.
+              for (const e of dual.errors) {
+                logger.log({ type: 'app', extra: `drive_upload_error:${sanitizeUploadError(e)}`, parsed: z.sessionId });
+              }
               const sessionOk = !!dual.userDriveId && (!dual.adminConfigured || !!dual.adminDriveId);
               if (sessionOk) backedUpOk.add(z.sessionId);
               if (dual.userDriveId) anyUser.add('본인 Drive');
