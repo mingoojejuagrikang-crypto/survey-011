@@ -100,6 +100,9 @@ export function createClipHealth(threshold: number = CLIP_FAIL_LATCH_THRESHOLD):
 /** 세션 종료 시 1건 남기는 결산 이벤트의 `extra`. **신규 이벤트라 기존 바이트 계약과 무관**하다.
  *  `saved=0`이고 `failed>0`이면 그 세션은 **음성 증빙이 통째로 없다** — 종료 화면이 그 사실을
  *  사용자에게 남긴다(로그만 남기면 2026-08-19가 그대로 반복된다). */
-export function clipSummaryExtra(s: ClipHealthSummary): string {
-  return `clip_summary:saved=${s.saved},failed=${s.failed}`;
+export function clipSummaryExtra(s: ClipHealthSummary, audioSessionEvts?: number): string {
+  const base = `clip_summary:saved=${s.saved},failed=${s.failed}`;
+  // v0.50 r2 [갈래 B] — 세션 총계. **신규 이벤트의 꼬리**라 계약 문제가 없고, 클립이 하나도
+  // 안 남은 세션(이원창형)에서도 「그 세션에 오디오 세션 전이가 몇 번 있었나」가 남는다.
+  return audioSessionEvts === undefined ? base : `${base},asEvt=${audioSessionEvts}`;
 }

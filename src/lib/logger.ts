@@ -73,6 +73,10 @@ export interface LogEntry {
    *  미가용(관측 수단 없음)이고, **0은 「관측했고 무음이었다」**로 서로 다른 사실이다.
    *  세션 단위 `wave_stats`만으로는 어느 클립이 죽었는지 가릴 수 없어 클립 단위로 내린다. */
   clipPeak?: number;
+  /** v0.50 r2 [갈래 B]: 앱 수명 누적 `statechange` **발화 수**(`audioInterruption`).
+   *  🔑 **클립과 클립 사이**에 일어난 오디오 세션 전이도 다음 클립에서 드러나게 한다 —
+   *  「녹음 중일 때만」으로 좁히면 정작 그 전이(재생이 끝나는 순간)를 놓친다는 리서치 판단. */
+  audioSessionEvts?: number;
 }
 
 /** Snapshot of session-level context, emitted on the `session` start/stop events. */

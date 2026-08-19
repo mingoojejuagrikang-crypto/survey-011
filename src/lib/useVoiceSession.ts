@@ -45,6 +45,7 @@ import { ensureUniqueSessionLabel } from './sessionLabel';
 // [ENV-12] Stage 3 — 클립 캡처·보존 장부는 useClipCapture가 소유한다(이 파일은 호출만).
 import { useClipCapture, type PendingCommandClip } from './useClipCapture';
 import { createClipHealth, clipSummaryExtra, type ClipHealth } from './clipHealth';
+import { getAudioSessionEventCount } from './audioInterruption';
 import { useClipFailureAlert } from './useClipFailureAlert';
 import { clipFailSummaryScreen } from './voicePrompts';
 // [ENV-12] Stage 3 — 세션 영속화(persistSession)는 usePersistSession이 소유한다(이 파일은 호출만).
@@ -2753,7 +2754,7 @@ export function useVoiceSession() {
     // v0.50 [CLIP-SILENT-1] — 클립 결산 1건(신규 이벤트라 기존 바이트 계약과 무관). 실패가 있으면
     // 종료 화면에 남긴다 — 로그만 남기면 2026-08-19가 그대로 반복된다(값은 멀쩡해 아무도 모른다).
     const clipSummary = clipHealthRef.current.summary();
-    logCell({ type: 'session', extra: clipSummaryExtra(clipSummary) });
+    logCell({ type: 'session', extra: clipSummaryExtra(clipSummary, getAudioSessionEventCount()) });
     useSessionStore.getState().setClipWarning(
       clipSummary.failed > 0
         ? clipFailSummaryScreen(clipSummary.failed, clipSummary.saved + clipSummary.failed)

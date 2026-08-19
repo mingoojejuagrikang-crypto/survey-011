@@ -22,6 +22,7 @@ import { processClip, type PrerollPcm } from './audioTrim';
 // [ENV-12] 마이크 PCM 캡처(링버퍼·레벨·파형)는 MicPrerollTap이 소유한다 — 이 클래스는 위임만.
 import { MicPrerollTap, PREROLL_MS, clipWindowPeak, type ClipWindow } from './micPrerollTap';
 import { classifyInputDevice, classifyAudioInputClass } from './inputDevice';
+import { getAudioSessionEventCount } from './audioInterruption';
 
 interface ClipSlot {
   recorder: MediaRecorder;
@@ -135,10 +136,15 @@ function isObservedSilence(clipPeak: number | undefined): boolean {
 function clipObservation(stream: MediaStream | null, window: ClipWindow | null): {
   trackState: AudioTrackState;
   clipPeak?: number;
+  audioSessionEvts: number;
 } {
   const trackState = trackStateOf(stream);
   const peak = clipWindowPeak(window);
-  return peak === null ? { trackState } : { trackState, clipPeak: peak };
+  // v0.50 r2 [갈래 B] — 누적 발화 수를 클립마다 동봉한다(클립 사이 전이도 드러나게).
+  const audioSessionEvts = getAudioSessionEventCount();
+  return peak === null
+    ? { trackState, audioSessionEvts }
+    : { trackState, clipPeak: peak, audioSessionEvts };
 }
 
 /** 스트림의 모든 트랙을 멈춘다(마이크 인디케이터 해제). 실패해도 호출부를 막지 않는다. */
