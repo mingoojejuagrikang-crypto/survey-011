@@ -392,11 +392,30 @@
 
 ### [IOS-5] 스피커폰 모드 ON인데 출력이 이어피스(리시버)로 강제 전환 — getUserMedia `echoCancellation:true`의 voice-processing 세션
 - **증상:** 사용자가 설정에서 스피커폰 모드를 켰는데도(소음 현장 대응) TTS 안내 음성이 스피커가 아니라 **이어피스(리시버)** 로 나가 잘 안 들림. iOS 18.7 / WebKit 26.5 실기기.
-- **원인(코드+플랫폼 추론):** 앱은 출력 라우팅을 전혀 제어하지 않는다(`setSinkId`/`sinkId`/`setAudioOutput` grep = NONE; `speakerphoneMode`는 `speech.ts:159`·`useVoiceSession.ts:955,1188`의 소프트웨어 half-duplex/STT 임계값 전용). 마이크는 `audioRecorder.ts:135-139`에서 `echoCancellation:true`로 열린다. iOS WebKit은 `echoCancellation:true`를 요청받으면 마이크를 **voice-processing 오디오 세션**(AVAudioSession 통신/voice-chat 모드)으로 열고, 이 모드에서 OS가 출력을 리시버로 라우팅한다. iOS Safari엔 출력을 강제할 Web API가 없다(`HTMLMediaElement.setSinkId` 미지원). → **OS/WebKit 레벨 제약, 앱 코드로 직접 해결 불가.**
+- **원인 — 🔴 2026-08-19 정정(기제만 바뀐다 · 결론은 그대로).**
+  앱이 출력 라우팅을 전혀 제어하지 않는다는 사실(`setSinkId`/`sinkId`/`setAudioOutput` grep = NONE;
+  `speakerphoneMode`는 소프트웨어 half-duplex/STT 임계값 전용)과 **iOS Safari엔 출력을 강제할 Web
+  API가 없다**는 결론은 유효하다. 바뀐 것은 **왜 리시버로 가는가**다.
+  - **종전 설명(틀렸다):** *"`echoCancellation:true`를 요청받으면 마이크를 voice-processing 오디오
+    세션으로 열고, 그 모드에서 OS가 출력을 리시버로 라우팅한다."*
+  - **실제(WebKit `safari-7624.4.5-branch` = 26.6 대응 브랜치 소스 직접 대조, `rmic` 리서치
+    2026-08-19):** `MediaSessionManagerCocoa::updateSessionState()`에 **`echoCancellation`을 보는
+    분기가 없다.** **캡처가 하나라도 있으면** 무조건 `PlayAndRecord` + `VideoChat`
+    (→ `AVAudioSessionModeVideoChat`)이다. 즉 세션 카테고리·모드는 **EC 설정과 무관**하게 정해진다.
+    `echoCancellation`이 실제로 바꾸는 것은 **AudioUnit 한 겹 아래**다 —
+    `CoreAudioCaptureUnit.cpp`의 `m_shouldUseVPIO = enableEchoCancellation();`
+    → `kAudioUnitSubType_VoiceProcessingIO` vs `kAudioUnitSubType_RemoteIO`.
+  - 👉 **`echoCancellation:false`를 「라우팅/세션 해법」으로 기대할 근거는 없다**(종전보다 더
+    분명해졌다). 🔴 **블라인드 플립 금지 판단은 그대로 유지한다.**
+  - ⚠️ **결론을 뒤집지 마라**: 바뀐 것은 *왜 그런가*이지 *무엇이 관측됐는가*가 아니다.
+    v0.12.0 종결(토글 제거 · EC 항상 ON)은 실측 A/B에 근거하며 유효하다.
+  - 📎 관련: 같은 소스 대조가 `[CLIP-SILENT-1]`의 「살아 있는 무음」에 대해 **파괴 없는 캡처 유닛
+    재구성**(`applyConstraints`로 `reconfigure()` 유발) 가능성을 열었다 —
+    `deliverables/2026-08-19-research-rmic.md` §3-C. **미검증이고 민구 결정 대기다.**
 - **해결·회피(미확정 — 트레이드오프):** `echoCancellation:false`(또는 speakerphoneMode일 때만 false)로 열면 voice-processing 세션을 피해 스피커 출력이 유지될 *가능성*. 단 [CLIP-4]의 의도적 `echoCancellation:on`(빗소리 에코 되먹임 감소)과 [IOS-3] phantom 입력 위험과 충돌 → **블라인드 플립 금지, 측정 A/B 필요**(라우팅·에코·노이즈 오인식 3축 비교).
 - **v0.9.0 실험(A/B 빌드):** 민구 결정 — "일단 입력탭에 스피커/이어폰 토글을 넣어 실기기에서 측정". 입력탭 우상단 토글(`speakerOutput`, 기본 이어폰=현행). 스피커 선택 시 `audioRecorder.setOutputMode(true)`가 마이크 스트림을 **`echoCancellation:false`로 재취득**(`acquireStream`/`reacquire`)해 voice-processing 세션 회피를 시도한다. `speakerphoneMode`(소프트 half-duplex)와는 **독립**(혼동 금지). `audio_route_changed`/`audio_reacquired:ec=<bool>` 텔레메트리로 다음 로그에서 출력 dB·STT 오인식률을 A/B 측정. ⚠️ 미검증: iOS에서 실제 스피커 전환 여부(OS 의존, 안 바뀔 수도)·세션 중 재취득 시 0.3~0.5s 인식 끊김. 재취득 실패 시 stream=null로 남아 `clip_no_stream`(안전선).
 - **v0.12.0 종결(민구 결정, 2026-06-17):** `speakerOutput` 토글 + `setOutputMode`/`reacquire` **전부 삭제**. 근거 — ① v0.11.0 비 오는 비닐하우스 로그 Log2에서 토글을 실제 A/B(스피커↔이어피스, `audio_reacquired:ec=true/false`)했으나 출력 라우팅이 실제로 바뀐다는 증거 없음(iOS 미제공 재확인) + 토글이 "눌러도 글자만 바뀌고 작동 안 한다"는 민구 보고와 일치. ② `echoCancellation`은 이제 **항상 ON 고정**(이어피스 기본). 출력 강제는 PWA 불가 확정 → **AUDIO-ROUTE-1 네이티브 셸(Capacitor)** 경로로만 해결(B0 WKWebView STT 스파이크가 게이트, 본 항목 비범위). 입력탭 토글 자리는 **읽기전용 입력장치 CATEGORY 배지**(🎧 블루투스 / 📱 내장 마이크 / 🎧 유선)로 교체 — 출력이 아니라 어떤 마이크로 듣는지 표시. `speakerphoneMode`(소프트 half-duplex)+post-TTS 가드는 **독립이라 유지**. persist v6→7(speakerOutput 영속값 삭제).
-- **출처:** `2026-06-15 v0.7.0 실기기 로그` (민구 제보; 코드 firsthand 확인) → `2026-06-17 v0.11.0 로그`(A/B 무효과 + 민구 토글 제거 결정). 메커니즘 외부 출처 교차확인은 **미수행**(확인 필요).
+- **출처:** `2026-06-15 v0.7.0 실기기 로그` (민구 제보; 코드 firsthand 확인) → `2026-06-17 v0.11.0 로그`(A/B 무효과 + 민구 토글 제거 결정). ✅ **메커니즘 교차확인 완료(2026-08-19)** — WebKit `safari-7624.4.5-branch` 소스 직접 대조(`deliverables/2026-08-19-research-rmic.md` §2-4). 종전 「미수행」 표기를 해소한다.
 - **현재 상태:** ✅PWA 레벨 종결(토글 제거, echoCancellation 항상 ON) — 출력 강제는 AUDIO-ROUTE-1 네이티브 셸로 이관. `src/lib/audioRecorder.ts` acquireStream(echoCancellation:true 고정).
 
 ### [WAKELOCK-REACQUIRE-1] 브라우저가 해제한 stale sentinel 때문에 화면 wake lock을 영구 재획득하지 못한다
@@ -2503,8 +2522,16 @@ TTS 구간(`:2522-2523`)에 오버레이가 열리면 **모달 뒤에서 STT 인
   임계 1 → ⓐ red). 인접 78스펙 green.
 - **출처:** 실기기 로그 `workspace_teamops/inbox/2026-08-19-device/` 4세션 + 재업로드 1세션.
 - **현재 상태:** 🟡 **MONITORING** — 데스크톱 회귀·반증 완료. **실기기 판정 대기**:
-  유튜브 백그라운드 재생 중 세션 → 2회째 실패에서 고지가 뜨는지, `clip_silent:track=muted|live`가
-  남는지. 🔑 **그 로그가 「트랙이 muted였나 live였나」라는 조사의 마지막 미확정을 닫는다.**
+  유튜브 백그라운드 재생 중 세션 → 2회째 실패에서 **고지(TTS+블랙아웃 해제+배너)** 가 뜨는지.
+  🔴 **해제 조건 정정(r2 · 콜드 리뷰 CF-3)**: 종전엔 *"`clip_silent:track=muted|live`가 남는지"*로
+  적었는데, 그 마커는 `clipPeak === 0`에서만 나가고 `inputLevel`은 지수평활이라 **한 번이라도
+  소리가 있었으면 다시 0이 되지 않는다**(denormal 1.5e-323 고정점) — 즉 **양혁진형(도중 발병)에서
+  구조적으로 충족 불가**했다. r2에서 임계(`< 1e-4`)로 고쳤지만, **판정의 정본은
+  `clip_duration`에 항상 실리는 `trackState` + `clipPeak` 값**이다(그 둘은 모든 클립에 실린다).
+  ⚠️ `[미확인]`: 실기기의 무음이 정확한 0 샘플인지 미세 잡음인지는 확인하지 못했다. 미세 잡음이
+  임계를 넘으면 `clip_silent`는 그 세션에서도 안 나간다 — 그래서 **값 판독이 정본**이다.
+  ⚠️ e2e에는 이 관측 축이 **없다**(fake 스트림은 프리롤 탭이 안 붙어 `clipPeak`가 실리지 않는다) —
+  B안 검증은 **실기기 전용**이다.
 
 ### [UPLOAD-AUTH-1] 로그 백업이 **만료된 토큰으로 시작**해 첫 시도가 상시 죽는다
 - **증상:** 2026-08-19 백업 시도 **5회 중 4회 첫 시도 실패**
