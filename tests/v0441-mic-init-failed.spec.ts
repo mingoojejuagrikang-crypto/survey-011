@@ -124,6 +124,20 @@ test('거부 경로 — mic_init_failed 계측 + 배너 즉시 노출 + TTS 고�
     spoken.some((t) => t.includes('음성 클립이 저장되지 않습니다')),
     `TTS 고지가 없다. 발화 목록: ${JSON.stringify(spoken)}`,
   ).toBe(true);
+
+  // 🔴 v0.50 r2 [CF-4] — **이 경로의 경고는 하나여야 한다.**
+  //   v0.50이 넣은 클립 실패 고지(`useClipFailureAlert`)가 종전엔 `micLost` 전반에 걸려 있어,
+  //   init 실패에서도 거의 같은 뜻의 두 번째 문장(*"…저장되지 않고 **있습니다**…"*)이 연달아
+  //   나가고 세션 시작 안내가 그만큼 밀렸다(리뷰 실측 3발화).
+  //   ⚠️ 위 ③의 부분 매칭은 두 문구가 **안 겹쳐서** 그 회귀를 못 잡았다 — 그래서 계측으로 잠근다.
+  expect(
+    all.filter((x) => x.startsWith('clip_fail_alert')),
+    '클립 실패 고지가 init 실패 경로에도 붙었다 — 같은 뜻의 문장이 두 번 나간다',
+  ).toHaveLength(0);
+  expect(
+    spoken.filter((t) => t.includes('음성 클립이 저장되지 않고 있습니다')),
+    `클립 연속 실패 문구가 init 실패 경로에서 발화됐다: ${JSON.stringify(spoken)}`,
+  ).toHaveLength(0);
 });
 
 test('승인 경로(반증) — mic_init_failed 0건 · 배너 없음 · 경고 TTS 없음', async ({ page }) => {

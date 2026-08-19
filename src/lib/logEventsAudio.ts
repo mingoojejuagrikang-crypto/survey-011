@@ -26,6 +26,19 @@ export function micAutoReconnect(stage: 'attempt' | 'ok' | 'failed'): string {
     : `mic_auto_reconnect:${kv({ result: stage })}`;
 }
 
+/** v0.50 r2 [CF-1] — 자동 재연결을 **시도하지 않고 건너뛴** 경우.
+ *
+ *  `stream_live`: 스트림이 아직 살아 있다(트랙이 `ended`가 아니다). `recoverStream`은
+ *  destructive-first라 그 상태에서 자동으로 부르면 **멀쩡한 스트림을 먼저 버린다** —
+ *  v0.22.0 P0가 롤백한 사고이고 `[IOS-5]` 종결 정책이다. 재획득은 사용자 제스처에 맡기고
+ *  배너를 즉시 세운다.
+ *
+ *  🔴 기존 `mic_auto_reconnect:attempt` / `:result=ok|failed` 문자열은 **바이트 불변**이다 —
+ *  이건 **신규 접미**이고 소비자는 접두(`mic_auto_reconnect:`)로 읽는다. */
+export function micAutoReconnectSkipped(reason: 'stream_live'): string {
+  return `mic_auto_reconnect:${kv({ skipped: reason })}`;
+}
+
 /** v0.38.0 리뷰#1 — 재획득 `getUserMedia`가 **응답 없이 보류**돼 타임아웃으로 포기한 경우.
  *
  *  기존 `clip_recorder_recover_failed:<reason>:<message>`(거부·오류)와 **별도 이벤트**로 둔다.

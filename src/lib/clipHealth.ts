@@ -49,11 +49,19 @@ export interface ClipHealthSummary {
 export interface ClipHealth {
   /** 빈/극소 클립 1건 기록. **연속 실패가 임계 이상이면 true**(= 마이크 소실로 봐도 된다). */
   recordFailure(): boolean;
+  /** 🔴 v0.50 r2 [CF-2] — **이 세션에서 아직 고지하지 않았으면 true**(그리고 이후 false).
+   *
+   *  종전 구현은 고지의 1회성을 `micLost` 상승 에지에 맡겼는데, 자동 재연결이 성공하면
+   *  `micLost`가 곧 false로 내려가 **에지가 다시 생기고 셀마다 반복 발화**했다(콜드 리뷰 CF-2 실측:
+   *  한 세션 `clip_fail_alert` 2건). 민구가 승인한 것은 「복구에 성공해도 **1회**」다.
+   *  1회성의 소유자를 **세션 수명을 가진 이 장부**로 옮겨 구조로 보장한다 —
+   *  재무장은 `reset()`(세션 start)에서만 일어난다. */
+  alertOnce(): boolean;
   /** 클립 저장 성공 1건 — 연속 카운터를 0으로 되돌린다. */
   recordSaved(): void;
   /** 세션 결산(누적). */
   summary(): ClipHealthSummary;
-  /** 세션 경계 초기화 — 연속 카운터와 누적 결산을 모두 비운다. */
+  /** 세션 경계 초기화 — 연속 카운터·누적 결산·고지 1회 플래그를 모두 비운다. */
   reset(): void;
 }
 
@@ -61,11 +69,17 @@ export function createClipHealth(threshold: number = CLIP_FAIL_LATCH_THRESHOLD):
   let streak = 0;
   let saved = 0;
   let failed = 0;
+  let alerted = false;
   return {
     recordFailure() {
       streak += 1;
       failed += 1;
       return streak >= threshold;
+    },
+    alertOnce() {
+      if (alerted) return false;
+      alerted = true;
+      return true;
     },
     recordSaved() {
       streak = 0;
@@ -78,6 +92,7 @@ export function createClipHealth(threshold: number = CLIP_FAIL_LATCH_THRESHOLD):
       streak = 0;
       saved = 0;
       failed = 0;
+      alerted = false;
     },
   };
 }

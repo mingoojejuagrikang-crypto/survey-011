@@ -14,12 +14,17 @@
  * `isStreamLost()`가 false다). 처방을 빼면 ⓑ가 즉시 red다.
  *
  * ## 반증 축(무엇을 빼면 red인가)
- *  · 연속 카운터를 지우면 → ⓑ가 red(`mic_lost:*` 없음)
- *  · 임계를 1로 낮추면 → ⓐ가 red(1회에서 이미 래치)
- *  · 리셋을 `clip_saved`가 아니라 `clip_started`로 옮기면 → ⓒ가 red(카운터가 매번 0으로 밀려
- *    임계에 못 닿는다 — 양혁진 세션이 `clip_started` 123 vs `stop_await` 68이었던 그 축)
- *  · 고지 배선(`useClipFailureAlert`)을 빼면 → ⓑ의 `clip_fail_alert:*` 단언이 red
- *  · 결산 로깅을 빼면 → ⓓ가 red
+ *  · 연속 카운터를 지우면 → **ⓑ** red(`mic_lost:*` 없음)
+ *  · 임계를 1로 낮추면 → **ⓐ** red(1회에서 이미 래치)
+ *  · 🔴 **정정(r2 · CF-6)**: 리셋을 `clip_saved`가 아니라 `clip_started`로 옮기면 → **ⓒ가 아니라
+ *    ⓑ가** red다. 초판 헤더는 ⓒ를 지목했는데 **틀렸다** — ⓒ는 `clip_summary`의 `failed>0`과 종료
+ *    화면 경고만 재고, `failed`는 래치·연속 카운터와 무관하게 증가한다(`clipHealth.recordFailure`).
+ *    즉 **래치를 어떻게 망가뜨려도 ⓒ는 green이다**(리뷰 실측 런 B). 요구(§1-3 「리셋은 저장
+ *    성공에서만」)를 덮는 것은 ⓑ다(연속이 임계에 못 닿아 `mic_lost` 0).
+ *  · 고지 배선(`useClipFailureAlert`)을 빼면 → ⓑ의 `clip_fail_alert` 단언이 red
+ *  · [CF-1] 자동 재연결 게이트를 빼면 → ⓑ의 「자동 재획득 0회」 단언이 red
+ *  · [CF-2] 고지 1회성을 `micLost` 에지로 되돌리면 → ⓑ(3회 실패에 1건)와 ⓔ(세션당 1건)가 red
+ *  · 결산 로깅을 빼면 → ⓒ가 red
  *
  * ## 🔴 안 재는 것 — 정직하게 적는다
  * **iOS 오디오 세션 탈취 자체는 Playwright로 만들 수 없다**(OS 레벨 사건 —
@@ -50,6 +55,22 @@ const MINI_SETTINGS = {
 const MINI_HEADERS = ['조사일자', '농가명', '조사나무', '측정항목01', '측정항목02', '측정항목03'];
 const MINI_ROWS = [[PREV_ROUND, '이원창', '1', '100.0', '', '']];
 
+/** ⓔ 전용 — **세션 2개에 각각 2회 이상 커밋**할 음성 필드가 필요하다.
+ *  기본 MINI는 음성 3필드/1행이라 두 번째 세션에는 남은 필드가 1개뿐이고, 그러면 임계(2)에
+ *  못 닿아 「재무장됐는데도 조용한」 위양성 red가 난다(실측으로 잡았다). */
+const WIDE_COLUMNS = [
+  ...MINI_COLUMNS,
+  { id: 'm4', name: '측정항목04', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+  { id: 'm5', name: '측정항목05', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+  { id: 'm6', name: '측정항목06', type: 'float', input: 'voice', ttsAnnounce: true, auto: { kind: 'fixed', value: '' }, decimals: 1, sampleKey: false },
+];
+const WIDE_SETTINGS = {
+  ...AZ_SETTINGS,
+  state: { ...AZ_SETTINGS.state, columns: WIDE_COLUMNS, totalRows: 1, sessionAutoLabel: 'clip-silent-wide' },
+};
+const WIDE_HEADERS = [...MINI_HEADERS, '측정항목04', '측정항목05', '측정항목06'];
+const WIDE_ROWS = [[PREV_ROUND, '이원창', '1', '100.0', '', '', '', '', '']];
+
 /** clip/error/session 계열 로그의 `extra` — 「경로가 실제로 돌았는가」의 증명(r3-11과 같은 패턴). */
 async function logExtras(page: Page): Promise<string[]> {
   return page.evaluate(async () => {
@@ -72,14 +93,14 @@ async function logExtras(page: Page): Promise<string[]> {
 /** 무음 사고를 **명시적으로** 켠 채 부팅한다.
  *  🔴 `addInitScript`로 **goto보다 먼저** 심는다 — 세션 시작(F18 선행 획득)이 이미 클립을
  *  만들기 시작하므로 `evaluate`로 나중에 켜면 첫 클립을 놓친다. */
-async function bootMini(page: Page, mode: 'tiny' | 'none' = 'tiny') {
+async function bootMini(page: Page, mode: 'tiny' | 'none' = 'tiny', wide = false) {
   await page.addInitScript((m) => {
     (window as unknown as { __clipSilentMode: string }).__clipSilentMode = m;
   }, mode);
   await boot(page, PHONE_402, {
-    settings: MINI_SETTINGS as unknown as typeof AZ_SETTINGS,
-    headers: MINI_HEADERS,
-    sheetRows: MINI_ROWS,
+    settings: (wide ? WIDE_SETTINGS : MINI_SETTINGS) as unknown as typeof AZ_SETTINGS,
+    headers: wide ? WIDE_HEADERS : MINI_HEADERS,
+    sheetRows: wide ? WIDE_ROWS : MINI_ROWS,
   });
 }
 
@@ -101,6 +122,14 @@ test('[node] ⓪ clipHealth 계약 — 연속만 세고, 성공에서만 리셋�
   // 결산은 누적이다(연속과 별개) — 종료 화면 문구의 분모가 여기서 나온다.
   expect(h2.summary()).toEqual({ saved: 1, failed: 3 });
   expect(clipSummaryExtra(h2.summary())).toBe('clip_summary:saved=1,failed=3');
+
+  // 🔴 [CF-2] 고지 1회성의 소유자는 이 장부다 — 세션 안에서는 몇 번을 물어도 한 번만 true다.
+  const h3 = createClipHealth();
+  expect(h3.alertOnce(), '세션 첫 고지는 허용').toBe(true);
+  expect(h3.alertOnce(), '같은 세션에서 두 번째 고지가 허용됐다 — 셀마다 반복 발화한다').toBe(false);
+  expect(h3.alertOnce()).toBe(false);
+  h3.reset();
+  expect(h3.alertOnce(), '세션 경계에서 재무장되지 않았다 — 다음 세션이 영영 조용하다').toBe(true);
 
   // 세션 경계 리셋은 연속·누적을 **둘 다** 비운다(이전 세션이 새 세션을 임계로 밀면 안 된다).
   h2.reset();
@@ -127,9 +156,13 @@ test('ⓑ 빈 클립 연속 2회 → 트랙이 live여도 래치하고, 그 자�
   //    쓴다는 계약은 ⓪(`recordFailure`가 **사유를 인자로 받지 않는다**)와 `useValueCommit`의
   //    두 호출부가 같은 `clipHealth`를 쓰는 구조가 보장한다.
   await bootMini(page, 'tiny');
+  // 🔴 [CF-2] **3회** 실패시킨다. 2회면 「1회 고지」가 커밋 수 때문에 우연히 성립해 공허해진다
+  //    (리뷰 실측: 종전 코드로 3회를 돌리면 `clip_fail_alert`가 2건이었다).
   await fireStt(page, '11.1', 900);
   await waitForTtsIdle(page);
   await fireStt(page, '22.2', 1500);
+  await waitForTtsIdle(page);
+  await fireStt(page, '33.3', 1500);
   await waitForTtsIdle(page);
 
   const evs = await logExtras(page);
@@ -138,9 +171,50 @@ test('ⓑ 빈 클립 연속 2회 → 트랙이 live여도 래치하고, 그 자�
   //    그러니 이 단언은 새 경로가 아니면 절대 통과하지 않는다(반증 축).
   expect(evs.filter((e) => e.startsWith('mic_lost')).length,
     '연속 2회 빈 클립인데 래치가 안 걸렸다 — 2026-08-19가 그대로 재발하는 상태다').toBeGreaterThan(0);
-  // 고지가 **실제로 나갔는가**. 로그가 없으면 「고지했는데 못 봤다」와 구분할 수 없다.
+  // 🔴 [CF-2] 고지는 **정확히 1건**이다. 3회 실패에도 반복되면 현장 방해다.
   expect(evs.filter((e) => e.startsWith('clip_fail_alert:')).length,
-    '래치는 됐는데 고지 배선이 안 돌았다').toBe(1);
+    '고지가 반복됐거나(반복=현장 방해) 아예 안 나갔다').toBe(1);
+  // 🔴 [CF-1] **살아 있는 스트림에서 자동 재획득을 하지 않는다.** `recoverStream`은 destructive-first라
+  //    제스처 밖에서 부르면 멀쩡한 스트림을 먼저 버린다(v0.22.0 P0가 롤백한 사고).
+  expect(evs.filter((e) => e === 'mic_auto_reconnect:attempt').length,
+    '트랙이 live인데 자동 재획득을 시도했다 — v0.22.0 P0 재개방이다').toBe(0);
+  expect(evs.filter((e) => e.startsWith('mic_auto_reconnect:skipped=')).length,
+    '건너뛴 사실이 계측되지 않았다 — 다음 회차가 「왜 자동 복구가 없었나」를 못 읽는다').toBe(1);
+  // 복구 진입로는 사용자 제스처다 — 배너가 **즉시** 서야 한다(자동 시도를 안 하므로).
+  await expect(page.locator('[data-testid="mic-reconnect-btn"]'),
+    '자동 재획득을 건너뛰었는데 수동 복구 진입로도 없다').toBeVisible({ timeout: 10_000 });
+});
+
+test('ⓔ 고지는 **세션당** 1회다 — 새 세션에서 다시 한 번(경계에서만 재무장)', async ({ page }) => {
+  await bootMini(page, 'tiny', true);
+  await fireStt(page, '11.1', 900);
+  await waitForTtsIdle(page);
+  await fireStt(page, '22.2', 1500);
+  await waitForTtsIdle(page);
+  expect((await logExtras(page)).filter((e) => e.startsWith('clip_fail_alert:')).length,
+    '전제: 첫 세션에서 1회 고지').toBe(1);
+
+  // 세션 종료 → 새 세션 시작.
+  await page.locator('button[title="입력 종료"]').click();
+  await page.locator('button[title="종료 확인"]').click();
+  await expect(page.locator('[data-testid="clip-warning"]')).toBeVisible({ timeout: 15_000 });
+  await page.locator('text=음성 입력 시작').first().click();
+  await expect(page.locator('[data-testid="voice-active-state"]').first()).toBeVisible({ timeout: 8_000 });
+
+  await fireStt(page, '44.4', 900);
+  await waitForTtsIdle(page);
+  await fireStt(page, '55.5', 1500);
+  await waitForTtsIdle(page);
+  await fireStt(page, '66.6', 1500);
+  await waitForTtsIdle(page);
+
+  // 🔴 세션 경계에서 재무장되지 않으면 **두 번째 세션은 영영 조용하다**(CF-2 수정의 반대 방향 결함).
+  // 🔑 `poll`인 이유: 클립 종단(stop → 트림 → 저장)은 커밋 TTS가 끝난 뒤에도 몇 틱 더 간다.
+  //    즉시 읽으면 두 번째 세션의 실패 1건만 보이는 창이 있다(실측으로 잡았다).
+  await expect
+    .poll(async () => (await logExtras(page)).filter((e) => e.startsWith('clip_fail_alert:')).length,
+      { timeout: 10_000, message: '새 세션에서 고지가 재무장되지 않았다' })
+    .toBe(2);
 });
 
 test('ⓒ 세션 종료 — 클립 결산을 남기고 종료 화면에 경고를 세운다', async ({ page }) => {

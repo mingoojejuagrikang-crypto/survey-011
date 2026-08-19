@@ -20,6 +20,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
+import { MEDIA_RECORDER_STUB_SCRIPT } from './fixtures/mediaRecorder';
 import { installVoiceMocks, fireStt, ttsLog, waitForTtsIdle } from './fixtures/stt';
 import { BASE } from './baseUrl';
 import { reviewWaitAbsorbTts } from '../src/lib/voicePrompts';
@@ -193,6 +194,28 @@ test('F13 — "다음"은 완료 행을 건너뛰지 않는다: jump delta 전 �
   await waitForRow(page, 1, TOTAL);
   expect(await getActiveRow(page, TOTAL)).toBe(1);
 
+  // 🔴 v0.50 r2 [CF-5] — **이 스펙의 세계가 실기기와 같은지 잠근다.**
+  //   이 파일은 로컬 `GUM_GRANT_SCRIPT` 사본을 쓰는데, 종전엔 거기에 `MediaRecorder` 스텁이 없어
+  //   **클립이 항상 비었고** 커밋마다 래치·고지·(쿨다운 시) 배너가 섰다. 지금은 내비게이션만
+  //   단언해 green이지만 상단 고정 배너가 클릭을 가로채는 `[CLIP-INIT-SILENT-1]` 계보의 지뢰였다.
+  //   여기 4회 커밋 뒤에 `mic_lost`가 하나도 없어야 「정상 세션」이다.
+  expect(
+    (await page.evaluate(async () => {
+      const db: IDBDatabase = await new Promise((r) => {
+        const q = indexedDB.open('survey-011');
+        q.onsuccess = () => r(q.result);
+      });
+      const rows: { extra?: string }[] = await new Promise((r) => {
+        const q = db.transaction('logEvents', 'readonly').objectStore('logEvents').getAll();
+        q.onsuccess = () => r(q.result as { extra?: string }[]);
+        q.onerror = () => r([]);
+      });
+      db.close();
+      return rows.map((e) => String(e.extra ?? '')).filter((x) => x.startsWith('mic_lost'));
+    })),
+    '정상 커밋만 했는데 마이크 소실이 래치됐다 — 픽스처가 「클립이 항상 비는 세계」로 돌아갔다',
+  ).toHaveLength(0);
+
   // 🔑 핵심 반증축: 행 2가 완료여도 '다음'은 행 2에 선다(+1). 건너뛰기 로직(구
   // findNextIncompleteRow)을 되살리면 1→3(+2)으로 튀어 여기서 red.
   await speakWhenArmed(page, '다음행', 700);
@@ -307,8 +330,15 @@ test('F13 — 마지막 행(완료)에서 "다음"은 검토 대기를 재무장
 // ─── F18 ────────────────────────────────────────────────────────────────────
 
 /** getUserMedia 스텁(승인 경로) + 호출 시각 기록 + 음성화면 등장 시각 기록.
- *  activeZones 픽스처의 fake 트랙 계보 — headless의 기본 거부와 달리 **승인**을 재현한다. */
-const GUM_GRANT_SCRIPT = `
+ *  activeZones 픽스처의 fake 트랙 계보 — headless의 기본 거부와 달리 **승인**을 재현한다.
+ *
+ *  🔴 v0.50 r2 [CF-5] — **`MediaRecorder` 스텁을 앞에 붙인다.** 이 로컬 사본은 호출 **횟수** 계측이
+ *  오라클 계약이라 공용 픽스처를 안 쓰는데, 그 때문에 `d3e46c6`의 스텁이 여기만 안 왔다.
+ *  결과: 이 파일의 F13 3스펙(각 4회 이상 커밋)은 여전히 **「클립이 항상 비는 세계」**여서
+ *  커밋마다 래치·고지·(쿨다운 시) 배너가 섰다 — 지금은 내비게이션만 단언해 green이지만
+ *  `[CLIP-INIT-SILENT-1]` 계보의 지뢰(상단 고정 배너가 클릭을 가로챈다)가 그대로 남아 있었다.
+ *  스텁은 `getUserMedia` 호출 수를 바꾸지 않으므로 이 파일의 계약과 무관하다. */
+const GUM_GRANT_SCRIPT = MEDIA_RECORDER_STUB_SCRIPT + `
 (function() {
   window.__gumCalls = [];
   function nextStream() {

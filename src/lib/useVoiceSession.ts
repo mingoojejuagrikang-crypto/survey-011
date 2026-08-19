@@ -28,6 +28,7 @@ import {
   clipArmBlocked,
   manualHoldGuide,
   micAutoReconnect,
+  micAutoReconnectSkipped,
   micInitFailed,
   notifyPerm,
 } from './logEvents';
@@ -501,6 +502,8 @@ export function useVoiceSession() {
   // `isStreamLost()`로 안 잡히므로(트랙이 `ended`가 아니다) **결과**로 판정한다. start()에서 리셋,
   // stop()에서 결산 1건. 근거·임계 근거는 clipHealth.ts 헤더.
   const clipHealthRef = useRef<ClipHealth>(createClipHealth());
+  /** v0.50 r2 [CF-2·CF-4] — 클립 연속 실패 고지 요청(세션당 1회 상승). `useClipFailureAlert`가 소비. */
+  const [clipFailAlert, setClipFailAlert] = useState(false);
   /** React state가 아닌 순수 정책 상태 — 복귀 이벤트가 phase와 무관하게 hiddenAt을 소비한다. */
   const foregroundReturnRef = useRef<ForegroundReturnState>(INITIAL_FOREGROUND_RETURN_STATE);
 
@@ -1624,6 +1627,14 @@ export function useVoiceSession() {
       logCell({
         type: 'clip', extra: `mic_lost:${reason}`,
       });
+      // 🔴 v0.50 r2 [CF-2·CF-4] — 고지는 **클립 연속 실패(force)로 선 래치에만**, 그리고
+      //   **세션당 정확히 1회**다.
+      //   · CF-4: `micLost`는 init 실패·복귀 시 트랙 ended에서도 선다. 그 경로엔 이미 고유 안내가
+      //     있어(`init_failed` 직후 say) 같은 뜻의 문장이 연달아 나갔다.
+      //   · CF-2: 종전엔 `micLost`가 false로 내려갈 때(=자동 재연결 성공) 에지 가드가 풀려
+      //     **셀마다 반복 발화**했다. 민구가 승인한 것은 「복구에 성공해도 1회」이지 반복이 아니다.
+      //   `clipHealth.alertOnce()`가 세션 경계(`reset()`)에서만 재무장되므로 1회가 구조로 보장된다.
+      if (opts?.force === true && clipHealthRef.current.alertOnce()) setClipFailAlert(true);
     }
     // 스트림이 살아있으면 복구 금지(no-op) — 다음 클립이 자가 치유. recoverStream 진입은 오직
     // reconnectMic 한 곳(자동 1회/수동 공용)이다.
@@ -1668,7 +1679,7 @@ export function useVoiceSession() {
 
   // v0.50 [CLIP-SILENT-1] — 실패 고지(화면 끄기 자동 해제 + TTS 1문장)의 **유일한 배선 지점**.
   // 복구는 여기서 하지 않는다 — 바로 아래 자동 재연결 effect가 종전대로 소유한다.
-  useClipFailureAlert({ micLost, say, logCell });
+  useClipFailureAlert({ alert: clipFailAlert, say, logCell });
 
   // v0.38.0 #5 — micLost 한 번의 연속 구간마다 자동 복구는 정확히 1회뿐이다. 실패 상태가 계속
   // 유지돼도 attempted ref가 effect 재실행을 차단하며, 성공/세션 리셋으로 micLost가 false가 된 뒤에만
@@ -1683,6 +1694,19 @@ export function useVoiceSession() {
     }
     if (micAutoReconnectAttemptedRef.current) return;
     micAutoReconnectAttemptedRef.current = true;
+    // 🔴 v0.50 r2 [CF-1] — **스트림이 살아 있으면 자동 재획득을 하지 않는다.**
+    //   `recoverStream`은 destructive-first다(`audioRecorder.ts` — 트랙 stop → stream=null → 재획득).
+    //   종전 판정(`isStreamLost()`)은 **이미 죽은 스트림**에서만 참이라 잃을 게 없었는데, v0.50이
+    //   넣은 `force` 래치(빈 클립 연속 2회)가 **살아 있는 스트림**에서도 이 effect를 깨웠다 —
+    //   그러면 iOS가 제스처 밖 getUserMedia를 거부하는 순간 **멀쩡하던 스트림까지 잃는다.**
+    //   그게 v0.22.0 P0가 롤백한 바로 그 사고이고([IOS-5] 종결 정책), 2026-08-19 양혁진 세션처럼
+    //   **외부 조건이 풀려 저절로 회복하는 경로 자체**를 없앤다.
+    //   👉 감지(래치·고지)는 그대로 두고 **재획득만 사용자 제스처에 맡긴다** — 배너를 즉시 세운다.
+    if (!recorderRef.current?.isStreamLost()) {
+      logCell({ type: 'clip', extra: micAutoReconnectSkipped('stream_live') });
+      setMicReconnectFallbackVisible(true);
+      return;
+    }
     setMicReconnectFallbackVisible(false);
     logCell({ type: 'clip', extra: micAutoReconnect('attempt') });
     let active = true;
@@ -2524,6 +2548,9 @@ export function useVoiceSession() {
     // v0.50 [CLIP-SILENT-1] — 클립 결산·연속 실패 카운터도 세션 경계에서 비운다(이전 세션의
     // 실패가 새 세션의 첫 클립을 임계로 밀어 올리면 안 된다).
     clipHealthRef.current.reset();
+    // 🔴 [CF-2] 고지 재무장은 **세션 경계에서만**이다. 이 한 줄을 빠뜨리면 다음 세션에서 상태가
+    //   true로 남아 상승 에지가 없어 **고지가 아예 안 나간다**(반대 방향 결함).
+    setClipFailAlert(false);
     // (UI 음성명령 신호 클리어는 F18로 setPhase('active') **이전**으로 이동 — 위 주석 참조.)
     sessionTodayRef.current = localTodayISO();
     // v0.8.0: 과거값 인덱스 프리페치(fire-and-forget) — 마스터 토글 제거 → 이상치 알람 규칙

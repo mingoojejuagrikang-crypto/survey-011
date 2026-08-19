@@ -107,6 +107,29 @@ function trackStateOf(stream: MediaStream | null): AudioTrackState {
   return 'live';
 }
 
+/** 🔴 v0.50 r2 [CF-3] — 이 값 **미만**이면 그 클립을 「관측된 무음」으로 본다.
+ *
+ *  **왜 `=== 0`이면 안 되는가**(콜드 리뷰 실측): `clipPeak`의 원천 `inputLevel`은 **지수평활**이라
+ *  (`micPrerollTap.ts`: `x += (target - x) * 0.15`) 한 번이라도 0이 아니었으면 **다시 정확히 0이
+ *  되지 않는다** — denormal `1.5e-323`에서 고정점이다(500만 회 반복해도 0에 도달하지 않음).
+ *  즉 `=== 0`은 **세션 시작 전부터 완전 디지털 무음**인 경우(이원창형)에만 성립하고,
+ *  **정상 발화가 있다가 도중에 무음이 된 경우(양혁진형 — 정확히 조사가 못 밝힌 그 케이스)에는
+ *  영원히 안 나갔다.**
+ *
+ *  **왜 1e-4인가**: 아래(고정점 `1e-323`)와 위(유효 신호) 사이에서 안전한 자리다.
+ *  레벨은 `min(1, rms / 0.1)`이므로 `1e-4`는 **RMS 1e-5** — 16bit PCM의 1 LSB(3e-5)보다도 작아
+ *  실제 소리로는 도달할 수 없는 구간이다. 반면 감쇠로 흘러내린 잔값(1e-5 이하로 금방 떨어진다)은
+ *  전부 잡는다.
+ *  ⚠️ `[미확인]`(리뷰 그대로 옮긴다): 실기기의 무음이 **정확한 0 샘플**인지 미세 잡음인지는
+ *  확인하지 못했다. 미세 잡음이 1e-4를 넘으면 이 마커는 그 세션에서도 안 나간다 —
+ *  그래서 **판정의 정본은 `clip_duration`에 항상 실리는 `trackState`+`clipPeak` 값**이다. */
+const CLIP_SILENT_PEAK_MAX = 1e-4;
+
+/** v0.50 r2 [CF-3] — 관측된 무음인가. **미관측(`undefined`)은 무음이 아니다.** */
+function isObservedSilence(clipPeak: number | undefined): boolean {
+  return clipPeak !== undefined && clipPeak < CLIP_SILENT_PEAK_MAX;
+}
+
 /** v0.50 [CLIP-SILENT-1] — 클립 종료 계측에 동봉하는 관측 조각.
  *  `clipPeak`은 **관측된 경우에만** 실린다(미동봉 = 프리롤 탭 미가용 ≠ 무음). */
 function clipObservation(stream: MediaStream | null, window: ClipWindow | null): {
@@ -769,6 +792,7 @@ export class AudioRecorder {
         // measured duration + actually-delivered postrollMs (<POSTROLL_MS) stay observable.
         // Clips never stop-requested (re-ask restarts) keep their pre-B5 behavior: no event.
         if (prev.stopRequestedAt != null) {
+          const prevObservation = clipObservation(prev.stream, prev.prerollWindow);
           logger.log({
             type: 'clip',
             extra: 'clip_duration',
@@ -776,8 +800,14 @@ export class AudioRecorder {
             prerollMs: prev.preroll ? Math.round((prev.preroll.pcm.length / prev.preroll.sampleRate) * 1000) : 0,
             postrollMs: Math.max(0, Math.round(performance.now() - prev.stopRequestedAt)),
             // v0.50 [CLIP-SILENT-1] — 이 클립이 무음이었는지·트랙이 어떤 상태였는지.
-            ...clipObservation(prev.stream, prev.prerollWindow),
+            ...prevObservation,
           });
+          // 🔴 v0.50 r2 [CF-7] — **절단 경로도 대칭이다.** 종전엔 정상 `onstop`에서만 `clip_silent`를
+          //   남겨, 같은 사실이 경로에 따라 다르게 기록됐다(다음 클립이 post-roll 안에 시작하면
+          //   이 경로로 닫힌다 — 빠른 커밋이 이어지는 세션에서는 오히려 이쪽이 흔하다).
+          if (isObservedSilence(prevObservation.clipPeak)) {
+            logger.log({ type: 'clip', extra: `clip_silent:track=${prevObservation.trackState}` });
+          }
         }
         prev.resolveStop(blob);
         prev.resolveStop = null;
@@ -843,7 +873,7 @@ export class AudioRecorder {
         // v0.50 [CLIP-SILENT-1] — **관측된 무음**만 별도 1건으로 세운다(peak가 미관측이면 안 남긴다).
         // 정상 세션에서는 발생하지 않으므로 링버퍼(2000)를 잠식하지 않는다 — 2026-08-19 사고에서는
         // 이 한 줄이 「트랙이 muted였나 live였나」를 즉시 답했을 것이다.
-        if (observation.clipPeak === 0) {
+        if (isObservedSilence(observation.clipPeak)) {
           logger.log({ type: 'clip', extra: `clip_silent:track=${observation.trackState}` });
         }
         slot.resolveStop?.(blob);

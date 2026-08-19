@@ -20,13 +20,25 @@
  *      `'tiny'` → 5바이트(2026-08-19 실측 형상 · `clip_too_small`)
  *      `'none'` → chunk 0 (`clip_stop_resolved:null` · `clip_empty`)
  *
+ * ⚠️ **e2e에는 관측 축(`clipPeak`)이 없다** `[CF-7]`: fake 스트림은 `createMediaStreamSource`가
+ * 던져 프리롤 탭이 안 붙는다(`clip_preroll_unavailable`). 그래서 `clip_duration`에 `clipPeak`가
+ * **한 번도 실리지 않고**, `clip_silent`도 e2e에서는 **구조적으로 나갈 수 없다**.
+ * 👉 B안(관측 보강)의 검증은 **실기기 몫**이다. 여기서 재는 것은 래치·고지·결산 배선뿐이다.
+ *
  * ⚠️ 이 blob은 **디코드 가능한 webm이 아니다.** `audioTrim.processClip`의 `decodeAudioData`가
  * 실패해 `clip_trim_failed:decode:*`가 남고 **원본이 그대로 저장**된다(v0.20.0 BL-2 폴백).
  * 저장·포인터·매니페스트 경로를 재는 데는 충분하고, 트림 결과 자체를 재려면 `audioTrim.spec.ts`
  * (합성 PCM 단위 테스트)를 봐라.
  */
 
-/** 정상 클립 1건의 바이트 수 — 실측 정상 세션 최소치(29,484B)와 같은 자릿수로 둔다. */
+/** **조각(chunk) 하나**의 바이트 수.
+ *
+ *  🔴 v0.50 r2 [CF-7] 정정: 종전 주석은 *"정상 클립 1건의 바이트 수 — 실측 최소치(29,484B)와 같은
+ *  자릿수"*라고 적었는데 **틀렸다.** `start(timeslice)`가 **조각마다** 이만큼 내므로 클립 1건은
+ *  조각 수만큼 곱해진다(실측 대조군: `clip_saved:120000` · `180000` = 실기기 최소치의 4~6배).
+ *  동작에는 무해하지만 IDB 쓰기량이 그만큼 늘고, 무엇보다 **사실이 아닌 주석**이 남아 있었다.
+ *  값 자체는 유지한다 — 중요한 것은 `EMPTY_CLIP_BYTES=200`을 확실히 넘는 것이고, 조각 수는
+ *  클립 길이에 비례해 실물과 같은 방향으로 변한다. */
 export const STUB_CLIP_BYTES = 30_000;
 
 export const MEDIA_RECORDER_STUB_SCRIPT = `
