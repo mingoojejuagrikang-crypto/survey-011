@@ -204,7 +204,12 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   // 리팩토링 R1 P1-1 ②(08-14): `BargeInToggle`도 같은 디렉터리의 자기 파일로 분리됐다
   //   (본 파일 413→351줄 안전권 착지). 계약 4건(captionXs·stepperValue·captionXxs·
   //   stepperValueLg 참조) 그대로 — 🔴 디렉터리 밖 이동 금지 함정 동일. 65 그대로.
-  expect(contractCount, '계약 참조 (통과)').toBe(65);
+  // v0.50 [CLIP-SILENT-1](08-19 — 클립 소실 고지 표면): **정당 파손 — 방향이 계약 쪽이다.**
+  //   `ReadyState.tsx`의 직전 세션 클립 결산 경고 1건(+1 계약 — `VOICE_TYPE.bodySm`,
+  //   "이번 세션의 음성 클립 N건 중 M건이 저장되지 않았습니다…"). 위반 0 그대로. 65 → 66.
+  //   근거: 값은 시트까지 정상으로 가고 화면·시트 어디에도 이상이 없어, 세션이 끝난 뒤
+  //   **이 한 줄이 유일한 사후 통지**다(조사 산출물 §6 — 2026-08-19 실기기 2세션 소실).
+  expect(contractCount, '계약 참조 (통과)').toBe(66);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);
