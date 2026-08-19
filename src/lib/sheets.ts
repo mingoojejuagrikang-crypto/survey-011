@@ -223,6 +223,34 @@ export async function fetchAllRowsUnbounded(
   return { headers: all[0] || [], rows: all.slice(1) };
 }
 
+/** v0.50 [DECIMAL-DISPLAY-1] — 시트에 **셀 서식만** 적용한다(값은 건드리지 않는다).
+ *
+ *  🔴 **best-effort다.** 서식 실패가 값 기록·세션 흐름을 막으면 안 된다 — 호출부는 결과를
+ *  기다리지 않아도 되고(fire-and-forget), 실패는 로그로만 남긴다. 남의 시트에 편집 권한이
+ *  없으면 여기서 403이 나는데, 그건 **정상적인 결말**이지 사고가 아니다.
+ *
+ *  OAuth 스코프는 이미 `https://www.googleapis.com/auth/spreadsheets`(전체 쓰기)라
+ *  `batchUpdate`에 추가 동의가 필요하지 않다 — 🔴 스코프를 넓히지 마라(googleAuth §SCOPE).
+ *
+ *  @returns 적용 성공 여부. 실패 사유는 throw하지 않고 false로 접는다. */
+export async function applySheetFormatRequests(
+  spreadsheetId: string,
+  requests: readonly unknown[],
+): Promise<{ ok: boolean; status?: number; message?: string }> {
+  if (requests.length === 0) return { ok: true };
+  try {
+    const r = await authFetch(`${API}/${spreadsheetId}:batchUpdate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests }),
+    });
+    if (!r.ok) return { ok: false, status: r.status };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Append a single row to the sheet. */
 export async function appendRow(
   spreadsheetId: string,
