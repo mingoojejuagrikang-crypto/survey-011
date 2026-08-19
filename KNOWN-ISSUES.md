@@ -2467,3 +2467,79 @@ TTS 구간(`:2522-2523`)에 오버레이가 열리면 **모달 뒤에서 STT 인
 - **해결(2026-08-15, fixc):** `waitForLandingTts(page, sinceLen)` 헬퍼를 스펙에 넣고 `①②③`의 「배너 소멸 대기」 뒤에서 **완료 낭독을 직접 기다린 뒤** `waitForTtsIdle`을 태운다. 대기는 실패해도 삼킨다 — **판정은 원 단언이 그대로** 한다(여기서 red를 내면 오라클의 실패 메시지가 죽는다). 픽스처(`waitForTtsIdle`의 50ms)는 **건드리지 않았다**: 전 스펙 공용이라 다른 스펙의 숨은 마진을 흔든다. 앱의 배너 clear 시점 이동은 기능 변경이라 별도 라운드 몫이다.
 - **일반화:** **비동기 체인의 중간 신호를 종단의 프록시로 쓰지 마라.** 「배너가 사라졌다」는 체인의 1/3 지점이고, 남은 IDB await 구간에는 TTS가 없어 `waitForTtsIdle` 같은 「조용해질 때까지」 대기가 **즉시 만족된다**. 종단(완료 낭독·상태 전이)을 **직접** 기다려라. [TEST-TTS-MOCK-1]의 「너무 빨라도 화면이 실기기와 달라진다」와 같은 계열이고, 증상 표면은 [TEST-MANUAL-CHIP-1]·[TEST-W7-TIMING-1](실패 항목이 실행마다 바뀌는 부하 민감 flaky)과 같다 — 다만 이 건은 **원인이 계측으로 확정**됐다.
 - **현재 상태:** ✅수정됨(`tests/v049-r7-01-retry-landing.spec.ts` — `waitForLandingTts` 동기화). 수정 후 단독 반복 12회 + 배치 문맥 1회 green.
+
+---
+
+## 2026-08-19 v0.50 실기기 클립 소실 회차 (조사 SSOT: `workspace_teamops/deliverables/2026-08-19-clipfail-investigation.md` · 구현 SSOT: `…/2026-08-19-clipfix-implementation.md`)
+
+### [CLIP-SILENT-1] 마이크 트랙이 **살아 있는 채 무음**이면 클립이 전량 죽는데 아무도 모른다
+- **증상(실측 2건, 같은 날):**
+  · **이원창 A**(09:41~10:21) — 클립 **60/60 전량 소실**. `clip_stop_resolved`가 60개 모두 **5바이트**,
+    `clip_trim_failed:decode:EncodingError` + `clip_too_small:5` 60건, `clip_saved` **0**.
+    세션 `wave_stats:peak=0.00,avg=0.00,activePct=0`(정상 3세션은 `peak=1.00`).
+  · **양혁진 A**(06:53~07:23) — **연속 9셀 · 2분 26초**(r16 종경~r20 종경) 소실 후 **저절로** 회복.
+    5바이트 6건 + `clip_stop_resolved:null`(chunk 0) 3건이 한 구간에 섞였다.
+  · 값(STT)은 두 세션 모두 **시트까지 정상 도달**(빈칸 0). 화면·시트에 이상이 없어
+    **세션이 끝날 때까지 아무도 몰랐다** — 잃은 것은 「값이 맞는지 확인할 수단」이다.
+- **근인:** `getUserMedia` 트랙이 **`ended`가 아닌 채 무음 프레임만** 흘렸다. 그래서
+  `AudioRecorder.isStreamLost()`(= `readyState === 'ended'`)가 false → `maybeAutoRecoverOrLatch`가
+  **69회 호출되어 69회 no-op**. 복귀 복구 경로(`onForegroundReturn`)는 `visibilitychange`/`pageshow`
+  전용이라 **blur-only 인터럽션**(알람 배너 등, `vis`는 계속 `visible`)에 깨어나지 않는다.
+  🔴 관측 수단도 죽어 있었다 — `navigator.audioSession`은 iOS 26.6에서 `state=unknown`만 주고
+  `statechange`가 **08-06~08-19 누적 0건**이다(v0.46.0 P1 프로브가 이 기기에서 무용).
+- **정황(확정 아님):** 민구 증언 — 두 세션 모두 *"타이머 알람 → 해제 → 유튜브 자동재생"*이 있었다.
+  🔴 본인이 *"그게 클립 유실의 원인인지는 모르겠다"*고 유보했고, 앱 로그에 그 앱을 지목하는
+  자국은 없다. 양혁진 쪽은 무음 구간과 **네트워크 스톨**(`past_index_skip` 20s 타임아웃 7건)이
+  정확히 겹치고 회복 시각도 같은 초다 — 오디오·네트워크를 동시에 쓰는 무언가가 있었다는 정황.
+- **해결(v0.50 A+B안):** 신호가 아니라 **결과**로 감지한다.
+  · `clipHealth.ts` — 연속 빈클립 카운터(임계 **2**, 🔴 리셋은 `clip_saved`에서만).
+    `maybeAutoRecoverOrLatch(reason, {force})`가 임계 도달 시 스트림이 `live`여도 래치.
+  · `useClipFailureAlert.ts` — 래치 시 **블랙아웃 자동 해제 + TTS 1문장**
+    (`BlackoutOverlay` z-9999가 `MicReconnectBanner` z-60을 완전히 가렸다).
+  · 세션 종료 `clip_summary:saved=N,failed=M` + 종료 화면 경고(`clipWarning`).
+  · 관측 보강 — `clip_duration`에 `trackState`·`clipPeak`, `clip_silent:track=<state>`,
+    `mic_track_evt:<type>`(리스너는 있었는데 **무기록**이었다), `focus_interrupt:ms=`(1초 이상만).
+- **회귀:** `tests/v050-clip-silent-latch.spec.ts` — 경계 양쪽 반증 실측(임계 99 → ⓑ red ·
+  임계 1 → ⓐ red). 인접 78스펙 green.
+- **출처:** 실기기 로그 `workspace_teamops/inbox/2026-08-19-device/` 4세션 + 재업로드 1세션.
+- **현재 상태:** 🟡 **MONITORING** — 데스크톱 회귀·반증 완료. **실기기 판정 대기**:
+  유튜브 백그라운드 재생 중 세션 → 2회째 실패에서 고지가 뜨는지, `clip_silent:track=muted|live`가
+  남는지. 🔑 **그 로그가 「트랙이 muted였나 live였나」라는 조사의 마지막 미확정을 닫는다.**
+
+### [UPLOAD-AUTH-1] 로그 백업이 **만료된 토큰으로 시작**해 첫 시도가 상시 죽는다
+- **증상:** 2026-08-19 백업 시도 **5회 중 4회 첫 시도 실패**
+  (`drive_upload:partial:fail=user_drive,admin_drive:ok=-`). 사용자가 로그인 버튼을 누르면
+  (`login_prompt_login_clicked` → `auth_signin_start` → `auth_token_settled:ms=939~2000`)
+  재시도가 **전부 성공**했다. 그 클릭이 없던 세션(양혁진 07:24) 하나만 로그가 **6시간 뒤 수동
+  재업로드 전까지 Drive에 없었다** — 클립 소실 조사의 핵심 증거가 그동안 통째로 비어 있었다.
+- **근인:** 업로드 시작 전에 토큰 유효성을 확인하지 않는다. 두 레그(user·admin)가 **함께** 죽는
+  것이 공통 상위 원인(인증)을 가리켰다. 실패 사유가 로그에 안 남는 것도 겹쳤다 —
+  `e.split(':')[0]`으로 **레그 이름만** 남아 「왜 죽었는지」를 로그만으로 알 수 없었다.
+- **해결(v0.50):** `ensureAccessToken({force})`(googleAuth) — 업로드 진입 시 선제 확보
+  (`getStoredToken()`은 만료 1분 전부터 null, `signIn()`은 `prompt:''`라 무팝업 갱신).
+  `uploadAuthRetry.ts` — 401/403이면 **강제 갱신 후 정확히 1회** 재시도(그 이상은 v0.22.0 P0가
+  되돌린 폭주), 재시도가 아무 레그도 못 얻으면 **첫 결과를 지킨다**(부분 성공 보존).
+  `drive_upload_error:<사유>` 신규 이벤트 — 이메일·토큰 마스킹, 120자 상한.
+  🔴 기존 `drive_upload:*` 문자열은 **바이트 그대로**(SOP-003 파서 계약).
+- **회귀:** `tests/v050-upload-auth-retry.spec.ts` 6건(주입형 — fetch·GIS 불필요).
+- **현재 상태:** 🟡 **MONITORING** — 다음 업로드 회차에서 `drive_upload:ok`가 **첫 시도에** 나는지,
+  실패 시 `drive_upload_error:`에 사유가 남는지로 판정.
+
+### [DECIMAL-DISPLAY-1] 시트에 `40.0`이 아니라 `40`으로 보인다 — 문자열 패딩으로는 못 고친다
+- **증상(민구 제보 08-19 07:30):** *"값 입력시 실수는 소수점까지 저장. 예: 40 >> 40.0 /
+  각 항목마다 유효 소수점이 존재"*
+- **🔴 함정:** `appendRow`/`appendRows`가 `valueInputOption=USER_ENTERED`라 **`"40.0"` 문자열을
+  보내도 Sheets가 숫자 40으로 강제**하고 표시는 셀 서식이 정한다. 값 쪽을 깎으면
+  「고쳤는데 안 고쳐진」 형상이 된다. (같은 강제 변환이 반대 방향으로 이미 알려져 있다 —
+  `pastValuesIndex.ts` r4 M9: 앱의 `'1.0'`이 시트에서 `'1'`로 그려져 2차 대조가 깨졌다.)
+- **해결(v0.50):** 값은 숫자로 두고 **표시만** 바꾼다 — `sheetNumberFormat.ts`가 `float` +
+  `decimals` 컬럼만 골라 `repeatCell` + `numberFormat{type:NUMBER,pattern:'0.0'}`을 만들고,
+  **테이블 생성 확정 1회**(`onGenerateConfirm`)에 `void`로 적용한다(best-effort · 흐름 비차단).
+  열은 **이름**으로 맞춘다(`sync.ts`의 `mapColumnsToHeader`와 같은 계약 — 위치로 맞추면 시트 열
+  순서가 바뀐 순간 남의 열에 서식을 씌운다). 헤더 행 제외 · `fields`를 `numberFormat`으로 좁혀
+  남의 색·테두리는 건드리지 않는다.
+- **부작용 확인:** 과거값 2차 대조는 `canonicalDecimal`이 양쪽을 정규화하므로(`'40.0'` → `'40'`)
+  서식 변경이 대조를 깨지 않는다. 값 자체를 안 건드리므로 sync dirty 판정에도 영향 없다.
+- **회귀:** `tests/v050-sheet-number-format.spec.ts` 5건.
+- **현재 상태:** 🟡 **MONITORING** — **실호출 미검증**(개발 환경에서 실계정 `batchUpdate` 불가).
+  민구가 테이블 생성을 1회 하면 `sheet_number_format:ok|failed:cols=N[:status=]`로 즉시 판정된다.
