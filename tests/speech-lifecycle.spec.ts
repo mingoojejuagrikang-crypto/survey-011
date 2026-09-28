@@ -17,7 +17,7 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { SpeechController } from '../src/lib/speech';
+import { SpeechController, setBargeInEnabled } from '../src/lib/speech';
 import { logger } from '../src/lib/logger';
 
 /** 앱과 동일한 이벤트 표면을 가진 SpeechRecognition 목. 생성 시 shared 배열에
@@ -94,6 +94,7 @@ test.describe('SpeechController — 인식기 수명주기 (영구 사멸 방지
   let ctrl: SpeechController | null = null;
 
   test.beforeEach(() => {
+    setBargeInEnabled(true);
     MockRec.reset();
     logger.clear();
     (globalThis as any).window = {
@@ -103,6 +104,7 @@ test.describe('SpeechController — 인식기 수명주기 (영구 사멸 방지
   });
 
   test.afterEach(() => {
+    setBargeInEnabled(true);
     ctrl?.stop();
     ctrl = null;
     delete (globalThis as any).window;
@@ -363,5 +365,246 @@ test.describe('SpeechController — 인식기 수명주기 (영구 사멸 방지
     await sleep(30);
     await waitFor(() => MockRec.instances.length === 3, 2000);
     expect(lifecycleEvents().some((e) => /^lifecycle:zombie_restart:stale_ms=\d+,n=1$/.test(e))).toBe(true);
+  });
+});
+
+test.describe('iOS 27 preview A/B — raw output boundary and fresh STT', () => {
+  let ctrl: SpeechController | null = null;
+  test.beforeEach(() => {
+    MockRec.reset(); logger.clear(); setBargeInEnabled(true);
+    (globalThis as any).window = { setTimeout, clearTimeout, setInterval, clearInterval, webkitSpeechRecognition: MockRec };
+  });
+  test.afterEach(() => {
+    ctrl?.stop(); ctrl = null; setBargeInEnabled(true); logger.clear(); MockRec.reset();
+    delete (globalThis as any).window;
+  });
+
+  test('A: first result → actual output end → one fresh attempt; onstart alone is not recovery', async () => {
+    const finals: string[] = [];
+    const notices: boolean[] = [];
+    ctrl = new SpeechController({ onFinal: (text) => finals.push(text), canMonitorOutput: () => true,
+      onRecoveryNotice: (visible) => notices.push(visible) },
+    { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 30, aUnconfirmedMs: 35 } });
+    ctrl.start();
+    const old = MockRec.instances[0];
+    old.fire('start'); old.fireResult('54.6', true);
+    const seq = ctrl.beginOutput('tts');
+    ctrl.outputEdge(seq, 'tts', 'end');
+    await waitFor(() => MockRec.instances.length === 2);
+    old.fireResult('999', true); // stale final must not reach the value commit callback
+    expect(finals).toEqual(['54.6']);
+    MockRec.instances[1].fire('start');
+    await waitFor(() => notices.includes(true));
+    expect(finals).toEqual(['54.6']); // onstart did not falsely confirm recovery
+    MockRec.instances[1].fireResult('17', true);
+    expect(finals).toEqual(['54.6', '17']);
+    expect(notices.at(-1)).toBe(false);
+    await sleep(45);
+    expect(MockRec.instances).toHaveLength(2); // one automatic attempt per output
+  });
+
+  test('A: new output and stop cancel the old silence timer', async () => {
+    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true },
+      { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 40 } });
+    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
+    const first = ctrl.beginOutput('tts'); ctrl.outputEdge(first, 'tts', 'end');
+    const second = ctrl.beginOutput('tts'); // cancels first timer
+    expect(logger.getAll().map((e) => e.extra).some((e) => e?.startsWith('stt_recovery:') &&
+      e.includes('phase=skip') && e.includes('reason=new_output'))).toBe(true);
+    await sleep(65);
+    expect(MockRec.instances).toHaveLength(1);
+    ctrl.outputEdge(second, 'tts', 'end');
+    ctrl.stop();
+    await sleep(65);
+    expect(MockRec.instances).toHaveLength(1);
+  });
+
+  test('B: barge-in ON setting still uses existing half-duplex abort, then waits four-second policy delay', async () => {
+    ctrl = new SpeechController({ onFinal: () => {} },
+      { patchMode: 'b', watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 45 } });
+    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
+    ctrl.muteForTts();
+    expect(old.aborted).toBe(true);
+    old.fire('end');
+    const seq = ctrl.beginOutput('tts');
+    ctrl.outputEdge(seq, 'tts', 'end');
+    ctrl.unmuteForTts();
+    await sleep(20);
+    expect(MockRec.instances).toHaveLength(1);
+    await waitFor(() => MockRec.instances.length === 2);
+    expect(logger.getAll().map((e) => e.extra).some((x) => x?.startsWith('stt_recovery:') && x.includes('phase=attempt') && x.includes('reason=b_half_duplex'))).toBe(true);
+  });
+
+  test('B: watchdog completion still uses the existing half-duplex fresh restart after the policy delay', async () => {
+    ctrl = new SpeechController({ onFinal: () => {} },
+      { patchMode: 'b', watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 30 } });
+    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
+    ctrl.muteForTts(); old.fire('end');
+    const seq = ctrl.beginOutput('tts');
+    ctrl.outputEdge(seq, 'tts', 'watchdog');
+    ctrl.unmuteForTts();
+    await sleep(12);
+    expect(MockRec.instances).toHaveLength(1);
+    await waitFor(() => MockRec.instances.length === 2);
+    expect(logger.getAll().map((e) => e.extra).some((e) => e?.includes('evt=watchdog,actual=0'))).toBe(true);
+  });
+
+  test('B: a natural recognition end keeps its ordinary restart cause and interval', async () => {
+    ctrl = new SpeechController({ onFinal: () => {} },
+      { patchMode: 'b', restartDelayMs: 12, watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 45 } });
+    ctrl.start(); const old = MockRec.instances[0]; old.fire('start'); old.fire('end');
+    await waitFor(() => MockRec.instances.length === 2);
+    const extras = logger.getAll().map((e) => e.extra ?? '');
+    expect(extras).toContain('stt_instance:inst=2,action=create,cause=restart,out=0');
+    expect(extras.some((e) => e.startsWith('stt_recovery:') && e.includes('reason=b_half_duplex'))).toBe(false);
+  });
+
+  test('B: a following beep cancels the TTS restart and starts the four-second delay at the last actual edge', async () => {
+    ctrl = new SpeechController({ onFinal: () => {} },
+      { patchMode: 'b', watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 45 } });
+    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
+    ctrl.muteForTts(); old.fire('end');
+    const tts = ctrl.beginOutput('tts'); ctrl.outputEdge(tts, 'tts', 'end');
+    ctrl.unmuteForTts(); // schedules restart for 45ms after TTS
+    await sleep(18);
+    const beep = ctrl.beginOutput('beep'); // extends the output chain
+    await sleep(40);
+    expect(MockRec.instances).toHaveLength(1); // old timer must be gone
+    ctrl.outputEdge(beep, 'beep', 'end');
+    await sleep(20);
+    expect(MockRec.instances).toHaveLength(1);
+    await waitFor(() => MockRec.instances.length === 2);
+    const attempt = logger.getAll().map((e) => e.extra ?? '').find((e) => e.startsWith('stt_recovery:') && e.includes('phase=attempt') && e.includes('reason=b_half_duplex'));
+    expect(attempt).toMatch(/ms=\d+$/); // abort→restart interval is recorded
+  });
+
+  test('A: watchdog alone never triggers an automatic fresh recognizer', async () => {
+    const notices: boolean[] = [];
+    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true,
+      onRecoveryNotice: (visible) => notices.push(visible) },
+    { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 20, aUnconfirmedMs: 30 } });
+    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
+    const tts = ctrl.beginOutput('tts'); ctrl.outputEdge(tts, 'tts', 'watchdog');
+    await waitFor(() => notices.includes(true));
+    expect(MockRec.instances).toHaveLength(1);
+    ctrl.outputEdge(tts, 'tts', 'end'); // only a late native edge can arm A
+    await waitFor(() => MockRec.instances.length === 2);
+  });
+
+  test('A: a result after watchdog cancels the unconfirmed-output notice', async () => {
+    const notices: boolean[] = [];
+    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true,
+      onRecoveryNotice: (visible) => notices.push(visible) },
+    { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 20, aUnconfirmedMs: 35 } });
+    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
+    const tts = ctrl.beginOutput('tts'); ctrl.outputEdge(tts, 'tts', 'watchdog');
+    MockRec.instances[0].fireResult('2', true);
+    await sleep(55);
+    expect(notices).not.toContain(true);
+    expect(MockRec.instances).toHaveLength(1);
+  });
+
+  test('A: a new output clears a visible recovery notice', async () => {
+    const notices: boolean[] = [];
+    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true,
+      onRecoveryNotice: (visible) => notices.push(visible) },
+    { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 20, aUnconfirmedMs: 25 } });
+    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
+    const first = ctrl.beginOutput('tts'); ctrl.outputEdge(first, 'tts', 'watchdog');
+    await waitFor(() => notices.at(-1) === true);
+    ctrl.beginOutput('tts');
+    expect(notices.at(-1)).toBe(false);
+  });
+
+  test('ready beep: OFF waits for real onstart, observes first result, and never repeats on consecutive restarts', async () => {
+    setBargeInEnabled(false);
+    const heard: number[] = [];
+    ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: (inst) => heard.push(inst) },
+      { restartDelayMs: 10, watchdogIntervalMs: 1000 });
+    ctrl.start();
+    expect(heard).toEqual([]);
+    const first = MockRec.instances[0];
+    first.fire('start');
+    first.fire('start');
+    expect(heard).toEqual([1]);
+    first.fire('error', 'audio-capture');
+    first.fire('end');
+    await waitFor(() => MockRec.instances.length === 2);
+    MockRec.instances[1].fire('start');
+    expect(heard).toEqual([1]); // failed listen must not make a chirp loop
+    const events = logger.getAll().map((e) => e.extra);
+    expect(events).toContainEqual(expect.stringMatching(/^ready_beep:inst=1,phase=error,ms=\d+,anchor=onstart,code=audio-capture$/));
+    expect(events).toContainEqual(expect.stringMatching(/^ready_beep:inst=1,phase=end,ms=\d+,anchor=onstart$/));
+
+    ctrl.muteForTts();
+    MockRec.instances[1].fire('end');
+    ctrl.unmuteForTts();
+    await waitFor(() => MockRec.instances.length === 3);
+    MockRec.instances[2].fire('start');
+    expect(heard).toEqual([1, 3]);
+    MockRec.instances[2].fireResult('7');
+    expect(logger.getAll().map((e) => e.extra)).toContainEqual(
+      expect.stringMatching(/^ready_beep:inst=3,phase=first_result,ms=\d+,anchor=onstart$/));
+  });
+
+  test('ready beep: ON gives no cue, B forces one, start failure gives none', async () => {
+    const heard: number[] = [];
+    ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: (inst) => heard.push(inst) });
+    ctrl.start(); MockRec.instances[0].fire('start');
+    expect(heard).toEqual([]);
+    ctrl.stop();
+    ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: (inst) => heard.push(inst) },
+      { patchMode: 'b' });
+    MockRec.startThrowsRemaining = 1;
+    ctrl.start();
+    expect(heard).toEqual([]);
+    await waitFor(() => MockRec.instances.length >= 3);
+    MockRec.instances.at(-1)!.fire('start');
+    expect(heard).toEqual([2]);
+  });
+
+  test('ready beep: first session cue waits for field output and onstart', () => {
+    setBargeInEnabled(false);
+    const heard: number[] = [];
+    ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: (inst) => heard.push(inst) },
+      { deferInitialReadyBeep: true });
+    ctrl.start(); MockRec.instances[0].fire('start');
+    expect(heard).toEqual([]);
+    const tts = ctrl.beginOutput('tts');
+    ctrl.enableReadyBeep();
+    expect(heard).toEqual([]);
+    ctrl.outputEdge(tts, 'tts', 'end');
+    expect(heard).toEqual([1]);
+  });
+
+  test('ready beep: first result latency is anchored to actual cue output end', () => {
+    setBargeInEnabled(false);
+    ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: () => {
+      const seq = ctrl!.beginOutput('ready_beep');
+      ctrl!.outputEdge(seq, 'ready_beep', 'end');
+    } });
+    ctrl.start();
+    MockRec.instances[0].fire('start');
+    MockRec.instances[0].fireResult('8');
+    expect(logger.getAll().map((e) => e.extra)).toContainEqual(
+      expect.stringMatching(/^ready_beep:inst=1,phase=first_result,ms=\d+,anchor=output_end$/));
+  });
+
+  test('ready beep: OFF keeps its watchdog fresh restart but waits for real output end to sound', async () => {
+    setBargeInEnabled(false);
+    const heard: number[] = [];
+    ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: (inst) => heard.push(inst) },
+      { restartDelayMs: 10, watchdogIntervalMs: 1000 });
+    ctrl.start(); MockRec.instances[0].fire('start');
+    expect(heard).toEqual([1]);
+    const tts = ctrl.beginOutput('tts');
+    ctrl.muteForTts(); MockRec.instances[0].fire('end');
+    ctrl.outputEdge(tts, 'tts', 'watchdog');
+    ctrl.unmuteForTts();
+    await waitFor(() => MockRec.instances.length === 2);
+    MockRec.instances[1].fire('start');
+    expect(heard).toEqual([1]);
+    ctrl.outputEdge(tts, 'tts', 'end');
+    expect(heard).toEqual([1, 2]);
   });
 });

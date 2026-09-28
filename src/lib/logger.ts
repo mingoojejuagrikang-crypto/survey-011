@@ -193,7 +193,7 @@ export const logger = {
       //   문자열로 담기만 한다). 확인하고 붙였다.
       appVersion:
         typeof __APP_VERSION__ !== 'undefined'
-          ? `${__APP_VERSION__}${typeof __PREVIEW_BUILD__ !== 'undefined' && __PREVIEW_BUILD__ ? '-preview' : ''}`
+          ? `${__APP_VERSION__}${typeof __PREVIEW_BUILD__ !== 'undefined' && __PREVIEW_BUILD__ && !__APP_VERSION__.endsWith('-preview') ? '-preview' : ''}`
           : '?',
     };
   },

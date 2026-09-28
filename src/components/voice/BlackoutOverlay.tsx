@@ -3,6 +3,7 @@ import { VOICE_TYPE } from './heroLayout';
 import { logger } from '../../lib/logger';
 import { useSessionStore } from '../../stores/sessionStore';
 import { holdAbort } from '../../lib/logEvents';
+import { CLIP_MUTE_UNSTABLE_SCREEN } from '../../lib/voicePrompts';
 
 /**
  * v0.46.0 WP-F — **검은 화면 모드**(제보 F13② · 민구 R2 확정)
@@ -95,8 +96,8 @@ const WAKE_LINE_ESCAPE = '가운데를 2초 누르면 화면이 켜집니다.';
 const WAKE_LINES_OK = [WAKE_LINE_ESCAPE, '음성 입력은 계속됩니다.'] as const;
 const WAKE_LINES_MIC_OFF = [WAKE_LINE_ESCAPE, '⚠ 마이크가 멈춰 지금은 녹음되지 않습니다.'] as const;
 /** 상태 → 문구. **분기는 여기 하나다** — 화면·aria-label이 각자 고르면 반드시 갈린다. */
-function wakeLines(micInterrupted: boolean): readonly string[] {
-  return micInterrupted ? WAKE_LINES_MIC_OFF : WAKE_LINES_OK;
+function wakeLines(micInterrupted: boolean, persistent = false): readonly string[] {
+  return micInterrupted ? (persistent ? [WAKE_LINE_ESCAPE, CLIP_MUTE_UNSTABLE_SCREEN] : WAKE_LINES_MIC_OFF) : WAKE_LINES_OK;
 }
 
 /** 고스트 클릭 삼킴 창(ms). **손가락을 뗀 시점부터** 센다(아래 §기준점 참조). */
@@ -178,7 +179,8 @@ function swallowGhostClick(): void {
 export function BlackoutOverlay({ onRelease }: { onRelease: () => void }) {
   // v0.51 [CLIP-MUTED-SPAN-1] — 트랙 muted 여부. 작성자는 `useMicInterruptionNotice` 하나다.
   const micInterrupted = useSessionStore((st) => st.micInterrupted);
-  const lines = wakeLines(micInterrupted);
+  const persistent = useSessionStore((st) => st.clipMutePersistent);
+  const lines = wakeLines(micInterrupted, persistent);
   /** V-FIX5 — 해제도 계측한다. 진입(`screen_off` + `src:hold`/`src:voice`)과 **대칭**이어야
    *  «몇 번 껐다 켰나 · 어느 경로로»가 로그에서 짝지어진다. 새 이벤트 타입은 만들지 않는다
    *  (SOP-003 파서 계약 — `command`/`parsed`/`extra:src=` 문법 그대로).

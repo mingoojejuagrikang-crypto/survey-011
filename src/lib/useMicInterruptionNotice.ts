@@ -79,8 +79,9 @@
  */
 import { useEffect, useRef } from 'react';
 import { useSessionStore } from '../stores/sessionStore';
-import { isMicMuted, subscribeMicMuted } from './micInterruption';
-import { MIC_INTERRUPT_RECOVERED_TTS } from './voicePrompts';
+import { getMutedSince, isMicMuted, subscribeMicMuted } from './micInterruption';
+import { CLIP_MUTE_UNSTABLE_TTS, MIC_INTERRUPT_RECOVERED_TTS } from './voicePrompts';
+import { IOS27_AUDIO_TIMING, audioPatchAvailable } from './ios27AudioPatch';
 import type { ClipHealth } from './clipHealth';
 import type { logger } from './logger';
 
@@ -114,6 +115,7 @@ export interface MicInterruptionNoticeDeps {
   hasMutedClipOpen: () => boolean;
   say: (text: string, interrupt?: boolean) => Promise<boolean>;
   logCell: LogCell;
+  probeInput?: (edge: 'first_mute' | 'mute_notice') => void;
 }
 
 /** 본체(`useVoiceSession`)가 세션 경계에서 부르는 손잡이. identity는 마운트 동안 고정이다
@@ -123,25 +125,57 @@ export interface MicInterruptionNoticeHandle {
    *  🔴 레코더 `dispose()` **뒤**에 불러라 — muted 상태로 세션을 끝내면 dispose의 detach가 unmute
    *  콜백을 만들고, 그 순간 활성 슬롯의 `sawMuted`가 아직 살아 있어 새 유예가 생길 수 있다. */
   dropPendingVerdict: (reason: 'session_end') => void;
+  resetSession: () => void;
 }
 
 type PendingDropReason = 'session_end' | 'unmount';
 
 export function useMicInterruptionNotice(
-  { clipHealth, hasMutedClipOpen, say, logCell }: MicInterruptionNoticeDeps,
+  { clipHealth, hasMutedClipOpen, say, logCell, probeInput }: MicInterruptionNoticeDeps,
 ): MicInterruptionNoticeHandle {
   // 최신 참조를 ref로 잡아 effect deps를 비운다 — 구독은 **마운트당 한 번**이어야 한다.
   // deps에 함수를 넣으면 호출부의 인라인 화살표마다 재구독되고, 그때 타이머가 조용히 유실된다.
-  const depsRef = useRef({ clipHealth, hasMutedClipOpen, say, logCell });
-  depsRef.current = { clipHealth, hasMutedClipOpen, say, logCell };
+  const depsRef = useRef({ clipHealth, hasMutedClipOpen, say, logCell, probeInput });
+  depsRef.current = { clipHealth, hasMutedClipOpen, say, logCell, probeInput };
   // effect 안의 폐기 함수를 밖으로 내는 통로. 핸들 자체는 ref로 identity를 고정한다.
   const dropRef = useRef<((reason: PendingDropReason) => void) | null>(null);
+  const resetRef = useRef<(() => void) | null>(null);
   const handleRef = useRef<MicInterruptionNoticeHandle>({
     dropPendingVerdict: (reason) => { dropRef.current?.(reason); },
+    resetSession: () => { resetRef.current?.(); },
   });
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+    let persistentNotified = false;
+    let firstMuteProbed = false;
+    const clearNoticeTimer = () => {
+      if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
+    };
+    const armNotice = () => {
+      if (!audioPatchAvailable() || persistentNotified || !isMicMuted()) return;
+      clearNoticeTimer();
+      const mutedSince = getMutedSince() ?? Date.now();
+      noticeTimer = setTimeout(() => {
+        noticeTimer = null;
+        if (!isMicMuted() || persistentNotified) return;
+        const phase = useSessionStore.getState().phase;
+        if (phase !== 'active' && phase !== 'complete' && phase !== 'paused') return;
+        persistentNotified = true;
+        useSessionStore.getState().setClipMutePersistent(true);
+        depsRef.current.probeInput?.('mute_notice');
+        // Same non-interrupting TTS queue as the existing recovery notice. One attempt per session.
+        void depsRef.current.say(CLIP_MUTE_UNSTABLE_TTS, false);
+      }, Math.max(0, IOS27_AUDIO_TIMING.clipMuteNoticeMs - (Date.now() - mutedSince)));
+    };
+    resetRef.current = () => {
+      persistentNotified = false;
+      firstMuteProbed = false;
+      useSessionStore.getState().setClipMutePersistent(false);
+      if (isMicMuted()) { firstMuteProbed = true; depsRef.current.probeInput?.('first_mute'); }
+      armNotice();
+    };
     /** 이 muted **구간** 시작 시점의 누적치. 회복 시 증가분이 곧 「이 구간에 잃은 증거」다.
      *
      *  🔴 v0.51 r2 [P1-2] — **두 칸을 다 본다.** 종전에는 `unreliable`만 봤는데, 2026-09-01
@@ -207,6 +241,10 @@ export function useMicInterruptionNotice(
       });
 
       if (muted) {
+        if (audioPatchAvailable()) {
+          if (!firstMuteProbed) { firstMuteProbed = true; depsRef.current.probeInput?.('first_mute'); }
+          armNotice();
+        }
         // 유예 중이면 기준선을 **유지**한다(헤더 「유예 중 새 구간」 — 유예 = 기준선 고정). 구간 사이에
         //   닫힌 증거는 이미 `onMutedEvidence`가 소비했으므로 다시 찍어도 값은 같다 — 규칙을 하나로 둔다.
         if (!pendingVerdict) {
@@ -243,6 +281,8 @@ export function useMicInterruptionNotice(
 
       // ── 회복(unmute) ──
       clearTimer();
+      clearNoticeTimer();
+      st.setClipMutePersistent(false);
       // 🔴 v0.51.1 ⓓ — 유예 조건은 **둘 다**다(헤더 규칙): 아직 잃은 게 0이고 && 걸친 클립이 열려 있다.
       //   잃은 게 이미 있으면 지금 말한다 — 그 뒤에 열린 muted 클립이 하나 더 닫혀도 이 구간의 고지는
       //   끝났다(구간당 1회). 걸친 클립이 없으면 종전 즉시 판정(G1 `skipped`)이다.
@@ -288,8 +328,10 @@ export function useMicInterruptionNotice(
       unsubscribeMuted();
       unsubscribeEvidence();
       clearTimer();
+      clearNoticeTimer();
       drop('unmount');
       dropRef.current = null;
+      resetRef.current = null;
     };
   }, []);
 

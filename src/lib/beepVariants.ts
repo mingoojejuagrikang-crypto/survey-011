@@ -153,6 +153,11 @@ export interface ScheduledTone {
   wave: OscillatorType;
 }
 
+/** Half-duplex listening cue: one short, speech-free note, distinct from the value-acceptance triad. */
+export const READY_BEEP_TONE: ScheduledTone = {
+  startMs: 0, stopMs: 85, freq: 940, endFreq: null, gain: 0.04, wave: 'sine',
+};
+
 /** 세그먼트 스펙 → 절대 스케줄(순수 변환, startMs 오름차순). Node/Playwright에서 직접 검증 가능. */
 export function buildBeepSchedule(variant: BeepVariant): ScheduledTone[] {
   return [...variant.segments]

@@ -11,7 +11,8 @@
  */
 
 import { logger } from './logger';
-import { kv, zombieRestart } from './logEvents';
+import { audioOutputEdge, kv, readyBeep, sttInstance, sttRaw, sttRecovery, zombieRestart } from './logEvents';
+import { IOS27_AUDIO_TIMING, type AudioPatchMode } from './ios27AudioPatch';
 
 type SRCtor = new () => SpeechRecognitionLike;
 
@@ -76,6 +77,11 @@ export interface SpeechCallbacks {
   onError?: (kind: string) => void;
   onStart?: () => void;
   onEnd?: () => void;
+  /** Preview A only: the UI owns the current waiting cell and modal/background state. */
+  canMonitorOutput?: () => boolean;
+  onRecoveryNotice?: (visible: boolean) => void;
+  onOutputFinished?: (seq: number) => void;
+  onReadyToListen?: (inst: number) => void;
 }
 
 /** 좀비(started-but-silent) 인식기 판정 임계값(ms). recRunning=true인데 onresult가 이 시간을
@@ -107,6 +113,7 @@ export class SpeechController {
   private cb: SpeechCallbacks;
   private active = false;
   private restartingTimer: number | null = null;
+  private restartingCause: 'restart' | 'b_half_duplex' | null = null;
   /** True while TTS is speaking — prevents STT restart to avoid echo feedback */
   private ttsMuted = false;
   /** TTS mute가 시작된 시각. stale liveness에서 **mute 구간만** 제외하기 위한 앵커다. */
@@ -157,9 +164,39 @@ export class SpeechController {
   /** lifecycle 텔레메트리 스로틀 상태 (kind별 마지막 기록 시각 + 억제 카운트). */
   private lifecycleLastLoggedAt: Record<string, number> = {};
   private lifecycleSuppressed: Record<string, number> = {};
+  private readonly patchMode: AudioPatchMode;
+  private readonly aSilenceMs: number;
+  private readonly aUnconfirmedMs: number;
+  private readonly bRestartDelayMs: number;
+  private instanceId = 0;
+  private outputSeq = 0;
+  private outputPending = new Set<number>();
+  private outputActual = true;
+  private outputHadPriorResult = false;
+  private priorResults = 0;
+  private firstInterimForOutput = false;
+  private recoveryTimer: number | null = null;
+  private recoveryConfirmTimer: number | null = null;
+  private watchdogNoticeTimer: number | null = null;
+  private recoveringSeq = 0;
+  private outputWatchdogBlocked = false;
+  private halfDuplexAbortedAt = 0;
+  private forcedFresh = false;
+  private readyBeepArmed = true;
+  private readyBeepDeferred: boolean;
+  private readyCandidateInst = 0;
+  private readyPlayedInst = 0;
+  private readyBeepAt = 0;
+  private readyBeepAnchor: 'onstart' | 'output_end' = 'onstart';
+  private readyTelemetryInst = 0;
 
-  constructor(cb: SpeechCallbacks, opts?: { restartDelayMs?: number; watchdogIntervalMs?: number; zombieStaleMs?: number }) {
+  constructor(cb: SpeechCallbacks, opts?: { restartDelayMs?: number; watchdogIntervalMs?: number; zombieStaleMs?: number; patchMode?: AudioPatchMode; deferInitialReadyBeep?: boolean; audioTiming?: Partial<Record<'aSilenceMs' | 'aUnconfirmedMs' | 'bRestartDelayMs', number>> }) {
     this.cb = cb;
+    this.patchMode = opts?.patchMode ?? 'default';
+    this.readyBeepDeferred = opts?.deferInitialReadyBeep ?? false;
+    this.aSilenceMs = opts?.audioTiming?.aSilenceMs ?? IOS27_AUDIO_TIMING.aSilenceMs;
+    this.aUnconfirmedMs = opts?.audioTiming?.aUnconfirmedMs ?? IOS27_AUDIO_TIMING.aUnconfirmedMs;
+    this.bRestartDelayMs = opts?.audioTiming?.bRestartDelayMs ?? IOS27_AUDIO_TIMING.bRestartDelayMs;
     this.baseRestartDelayMs = opts?.restartDelayMs ?? 100;
     this.restartDelayMs = this.baseRestartDelayMs;
     this.watchdogIntervalMs = opts?.watchdogIntervalMs ?? 4000;
@@ -200,6 +237,7 @@ export class SpeechController {
     if (this.restartingTimer !== null) {
       window.clearTimeout(this.restartingTimer);
       this.restartingTimer = null;
+      this.restartingCause = null;
       // P0: 취소한 재시작은 unmuteForTts에서 반드시 재예약한다 — 이 플래그 없이는
       // 인식기 죽음+타이머 취소 조합이 영구 STT 사멸로 이어진다(사멸 시그니처, 항상 기록).
       this.restartPendingAfterTts = true;
@@ -209,9 +247,16 @@ export class SpeechController {
     // 스피커폰에서 echoCancellation ON으로도 못 막은 TTS 에코 되먹임(08-02 실측: stt_barge_in
     // 167건 전부 TTS 재생창 안, 45셀에 771발화)의 처방. abort의 'end'는 onEnd가 받아
     // restartPendingAfterTts로 미루고, unmuteForTts가 기존 P0 경로로 fresh 재시작한다.
-    if (!_bargeInEnabled && this.active) {
+    if ((!_bargeInEnabled || this.patchMode === 'b') && this.active) {
+      this.readyBeepArmed = true;
+      this.readyCandidateInst = 0;
       this.halfDuplexHold = true;
       this.logLifecycle('half_duplex_stt_stop', true);
+      if (this.patchMode === 'b') {
+        this.restartPendingAfterTts = true; // WebKit may omit end after abort.
+        this.halfDuplexAbortedAt = Date.now();
+        this.logInstance('abort', 'b_half_duplex');
+      }
       try { this.rec?.abort(); } catch { /* ignore — 미기동 인스턴스 abort는 무해 */ }
     }
   }
@@ -233,10 +278,15 @@ export class SpeechController {
     // fresh로 되살린다(onEnd가 hold 동안 restartPendingAfterTts를 세워 뒀다).
     this.halfDuplexHold = false;
     // P0: muteForTts가 취소했던 재시작을 여기서 되살린다.
-    if (this.active && this.restartPendingAfterTts) {
+    if (this.active && this.restartPendingAfterTts && (this.patchMode !== 'a' || !this.outputWatchdogBlocked) &&
+        (this.patchMode !== 'b' || this.outputPending.size === 0)) {
       this.restartPendingAfterTts = false;
       this.logLifecycle('restart_resched_after_tts', true);
-      this.scheduleRestart();
+      this.scheduleRestart(this.patchMode === 'b' ? this.bRestartDelayMs : this.restartDelayMs,
+        this.patchMode === 'b' ? 'b_half_duplex' : 'restart');
+    }
+    if (this.patchMode === 'a' && this.active && this.outputPending.size === 0 && this.outputActual && !this.outputWatchdogBlocked) {
+      this.armOutputMonitor();
     }
   }
 
@@ -250,32 +300,73 @@ export class SpeechController {
     return this.active && this.recRunning ? 'listening' : 'idle';
   }
 
+  /** Session start introduces its first field announcement after start(). The cue
+   *  waits for that announcement and a real onstart, even if onstart came first. */
+  enableReadyBeep() {
+    this.readyBeepDeferred = false;
+    this.maybeReadyBeep();
+  }
+
+  private maybeReadyBeep() {
+    if ((_bargeInEnabled && this.patchMode !== 'b') || !this.cb.onReadyToListen ||
+        !this.active || this.readyBeepDeferred || !this.readyBeepArmed || !this.recRunning ||
+        this.readyCandidateInst !== this.instanceId || this.readyPlayedInst === this.instanceId ||
+        this.ttsMuted || this.halfDuplexHold || this.restartPendingAfterTts ||
+        this.restartingTimer !== null || this.outputPending.size > 0 ||
+        !this.outputActual || this.outputWatchdogBlocked) return;
+    this.readyBeepArmed = false;
+    this.readyPlayedInst = this.instanceId;
+    this.readyTelemetryInst = this.instanceId;
+    this.readyBeepAt = Date.now();
+    this.readyBeepAnchor = 'onstart';
+    logger.log({ type: 'app', extra: readyBeep({ inst: this.instanceId, phase: 'onstart' }) });
+    this.cb.onReadyToListen(this.instanceId);
+  }
+
+  private logReadyBeepFollowup(phase: 'first_result' | 'error' | 'end' | 'interrupted', code?: string) {
+    if (!this.readyTelemetryInst) return;
+    logger.log({ type: 'app', extra: readyBeep({ inst: this.readyTelemetryInst, phase,
+      ms: Date.now() - this.readyBeepAt, anchor: this.readyBeepAnchor, ...(code ? { code } : {}) }) });
+    if (phase === 'first_result' || phase === 'interrupted') this.readyTelemetryInst = 0;
+  }
+
   start() {
     if (this.active) return;
     this.rec = createRecognition();
     if (!this.rec) {
+      this.logInstance('create_failed', 'session_start');
       this.cb.onError?.('unsupported');
       return;
     }
+    this.instanceId++;
+    this.logInstance('create', 'session_start');
     this.active = true;
     this.bind();
     this.startWatchdog();
     try {
       this.lastStartAttemptAt = Date.now();
+      this.logInstance('start', 'session_start');
       this.rec.start();
     } catch {
+      this.logInstance('start_throw', 'session_start');
       // recognition already started — schedule restart
       this.scheduleRestart();
     }
   }
 
   stop() {
+    this.clearRecovery('session_end');
+    this.outputPending.clear();
+    this.cb.onRecoveryNotice?.(false);
     this.active = false;
     this.ttsMuted = false;
     this.ttsMutedAt = null;
     this.halfDuplexHold = false; // §D1 — 세션 경계에서 half-duplex 래치도 리셋(오차단 방지)
     this.restartPendingAfterTts = false;
     this.recRunning = false;
+    this.readyBeepArmed = false;
+    this.readyCandidateInst = 0;
+    this.readyTelemetryInst = 0;
     this.hadResultSinceStart = false;
     this.erroredSinceLastResult = false;
     this.zombieRestartStreak = 0;
@@ -283,11 +374,13 @@ export class SpeechController {
     if (this.restartingTimer !== null) {
       window.clearTimeout(this.restartingTimer);
       this.restartingTimer = null;
+      this.restartingCause = null;
     }
     if (this.watchdogTimer !== null) {
       window.clearInterval(this.watchdogTimer);
       this.watchdogTimer = null;
     }
+    if (this.rec) this.logInstance('abort', 'session_end');
     try { this.rec?.abort(); } catch { /* ignore */ }
     this.rec = null;
   }
@@ -298,17 +391,22 @@ export class SpeechController {
    *  다음 필드용으로 인식기를 자동 재시작한다(scheduleRestart). */
   restartRecognition() {
     if (!this.active) return;
+    this.logInstance('abort', 'early_commit');
     try { this.rec?.abort(); } catch { /* ignore — onEnd→scheduleRestart가 복구 */ }
   }
 
   private bind() {
     if (!this.rec) return;
     const rec = this.rec;
+    const inst = this.instanceId;
 
     const onResult = (raw: Event) => {
       // stale-instance 가드: 버려진 구 인식기 인스턴스의 늦은 이벤트가 중복 재시작(이중 start)을
       // 예약하지 못하게, 현재 인스턴스가 아니면 무시한다(onError/onStart/onEnd 동일).
-      if (this.rec !== rec) return;
+      if (this.rec !== rec) {
+        logger.log({ type: 'stt', extra: sttRaw({ inst, evt: 'result', out: this.outputSeq, stale: true }) });
+        return;
+      }
       // v0.44.0 §D1 — half-duplex(말끊기 OFF) 동안의 결과는 **여기서 폐기**한다(논리 차단).
       // abort는 비동기라 in-flight 결과가 새어들 수 있고, 그 한 건이면 TTS 에코 오커밋이
       // 재발한다. 텔레메트리(raw_confidence)·liveness·barge-in 컷·onFinal 전부 도달 전 컷 —
@@ -320,6 +418,7 @@ export class SpeechController {
       // 좀비 감지용 liveness 갱신 — interim 포함(가장 이르고 잦은 liveness 증거; final-only는
       // 지연됨). watchdog이 recRunning=true인데 이 값이 오래 정체되면 좀비로 판정한다.
       this.lastResultAt = Date.now();
+      this.logReadyBeepFollowup('first_result');
       // [STT-18] 실제 결과 1건 = 인식기 건강 증명: 에러 이력·좀비 streak을 모두 해제한다.
       this.hadResultSinceStart = true;
       this.erroredSinceLastResult = false;
@@ -327,6 +426,19 @@ export class SpeechController {
       const e = raw as SREvent;
       const r = e.results[e.results.length - 1];
       const final = r.isFinal;
+      if (final || !this.firstInterimForOutput) {
+        logger.log({ type: 'stt', extra: sttRaw({ inst, evt: 'result', final, out: this.outputSeq }) });
+        if (!final) this.firstInterimForOutput = true;
+      }
+      this.priorResults++;
+      if (this.recoveryTimer !== null || this.recoveryConfirmTimer !== null ||
+          this.watchdogNoticeTimer !== null || this.recoveringSeq !== 0) {
+        this.logRecovery('result', 'onresult');
+        this.clearRecovery('already_result');
+        this.cb.onRecoveryNotice?.(false);
+      } else if (this.patchMode === 'b' && this.outputSeq > 0) {
+        this.logRecovery('result', 'b_half_duplex');
+      }
       const text = (r[0]?.transcript || '').trim();
       // v0.20.0 Phase 5 #1 (Pax HIGH) — RAW confidence 가시화. iOS Safari가 confidence를 비우거나
       // 0으로 돌려주면 신뢰도 게이트 전체가 무의미해진다(Pax 우려) → 온디바이스 검증이 필요하다.
@@ -359,8 +471,10 @@ export class SpeechController {
       else this.cb.onInterim?.(text, confAbsent ? undefined : rawConf);
     };
     const onError = (e: Event) => {
-      if (this.rec !== rec) return;
       const err = (e as unknown as { error?: string }).error || 'unknown';
+      logger.log({ type: 'stt', extra: sttRaw({ inst, evt: 'error', code: err, out: this.outputSeq, stale: this.rec !== rec }) });
+      if (this.rec !== rec) return;
+      this.logReadyBeepFollowup('error', err);
       // [STT-18] 확인된 사망 시그니처(audio-capture)만 좀비 자격을 연다. no-speech/aborted/
       // permission 계열은 정상 무음·앱 abort·사용자 조치 오류라 stale 재시작 근거가 아니다.
       this.erroredSinceLastResult = err === 'audio-capture';
@@ -368,8 +482,10 @@ export class SpeechController {
       this.cb.onError?.(err);
     };
     const onStart = () => {
+      logger.log({ type: 'stt', extra: sttRaw({ inst, evt: 'start', out: this.outputSeq, stale: this.rec !== rec }) });
       if (this.rec !== rec) return;
       this.recRunning = true;
+      this.readyCandidateInst = inst;
       // recRunning=true가 되는 순간을 liveness 기준점으로 앵커링한다 — 갓 시작해 아직 결과가
       // 없는 정상 무음 인식기를 좀비로 오판(lastResultAt=0 → 즉시 stale)하지 않도록.
       this.lastResultAt = Date.now();
@@ -380,18 +496,22 @@ export class SpeechController {
       this.restartDelayMs = this.baseRestartDelayMs;
       this.logLifecycle('start');
       this.cb.onStart?.();
+      this.maybeReadyBeep();
     };
     const onEnd = () => {
+      logger.log({ type: 'stt', extra: sttRaw({ inst, evt: 'end', out: this.outputSeq, stale: this.rec !== rec }) });
       if (this.rec !== rec) return;
       // 'error' 후엔 스펙상 항상 'end'가 따라오므로 recRunning은 여기서만 내린다.
       this.recRunning = false;
+      this.logReadyBeepFollowup('end');
       this.logLifecycle('end');
       this.cb.onEnd?.();
       if (this.active) {
         // v0.44.0 §D1 — half-duplex 동안(muteForTts의 abort 포함)은 즉시 재시작하지 않고
         // 기존 P0 플래그에 합류한다: unmuteForTts가 TTS 종료 시 재예약한다. 여기서 그냥
         // scheduleRestart하면 TTS 재생 중 인식기가 되살아나 half-duplex가 무의미해진다.
-        if (this.halfDuplexHold) {
+        if (this.forcedFresh) return;
+        if (this.halfDuplexHold || (this.patchMode === 'b' && this.restartPendingAfterTts)) {
           this.restartPendingAfterTts = true;
           this.logLifecycle('restart_deferred_half_duplex', true);
         } else {
@@ -406,33 +526,41 @@ export class SpeechController {
     rec.addEventListener('end', onEnd);
   }
 
-  private scheduleRestart(delay = this.restartDelayMs) {
+  private scheduleRestart(delay = this.restartDelayMs, cause: 'restart' | 'b_half_duplex' = 'restart') {
     // v5.2: STT must keep running during TTS so command keywords still work.
     // ttsMuted is no longer a guard here — handleFinal filters non-command results during TTS.
     if (this.restartingTimer !== null) return;
+    this.restartingCause = cause;
     this.restartingTimer = window.setTimeout(() => {
       this.restartingTimer = null;
+      this.restartingCause = null;
       if (!this.active) return;
-      this.attemptStart();
+      this.attemptStart(cause);
     }, delay);
     this.logLifecycle('restart_scheduled');
+    if (cause === 'b_half_duplex') this.logRecovery('armed', 'b_half_duplex', delay);
   }
 
   /** 인식기 재생성+start 본체 (scheduleRestart 타이머와 watchdog이 공유).
    *  P0-2: 구 코드는 rec.start() throw를 빈 catch로 삼키고 재시도하지 않아("try again next
    *  tick"이라는 주석과 달리 다음 tick이 없음) 두 번째 영구사멸 경로였다. 실패 시 백오프
    *  (×2, 상한 5000ms)로 **무한** 재예약한다 — 재시도 상한을 두면 사멸 경로가 되살아난다. */
-  private attemptStart() {
+  private attemptStart(cause = 'restart') {
     try {
+      if (cause === 'b_half_duplex') this.logRecovery('attempt', 'b_half_duplex', Date.now() - this.halfDuplexAbortedAt);
       this.rec = createRecognition();
       if (!this.rec) throw new Error('createRecognition failed');
+      this.instanceId++;
+      this.logInstance('create', cause);
       this.bind();
       this.lastStartAttemptAt = Date.now();
+      this.logInstance('start', cause);
       this.rec.start();
     } catch {
+      this.logInstance(this.rec ? 'start_throw' : 'create_failed', cause);
       this.restartDelayMs = Math.min(this.restartDelayMs * 2, 5000);
       this.logLifecycle(`restart_retry:delay=${this.restartDelayMs}`, true);
-      this.scheduleRestart(this.restartDelayMs);
+      this.scheduleRestart(this.restartDelayMs, cause === 'b_half_duplex' ? cause : 'restart');
     }
   }
 
@@ -506,12 +634,165 @@ export class SpeechController {
     this.attemptStart();
     return 'restarted';
   }
+
+  private logInstance(action: 'create' | 'create_failed' | 'start' | 'start_throw' | 'abort', cause: string) {
+    logger.log({ type: 'stt', extra: sttInstance({ inst: this.instanceId, action, cause, out: this.outputSeq }) });
+  }
+
+  private logRecovery(phase: 'armed' | 'skip' | 'timeout' | 'attempt' | 'result' | 'unconfirmed' | 'tap', reason: string, ms?: number) {
+    logger.log({ type: 'stt', extra: sttRecovery({ seq: this.outputSeq, phase, inst: this.instanceId, reason, ms }) });
+  }
+
+  private clearRecovery(reason: string) {
+    if (this.recoveryTimer !== null) window.clearTimeout(this.recoveryTimer);
+    if (this.recoveryConfirmTimer !== null) window.clearTimeout(this.recoveryConfirmTimer);
+    if (this.watchdogNoticeTimer !== null) window.clearTimeout(this.watchdogNoticeTimer);
+    if (this.recoveryTimer !== null || this.recoveryConfirmTimer !== null || this.watchdogNoticeTimer !== null) this.logRecovery('skip', reason);
+    this.recoveryTimer = null;
+    this.recoveryConfirmTimer = null;
+    this.watchdogNoticeTimer = null;
+    this.recoveringSeq = 0;
+  }
+
+  /** One output chain is tracked across beep and queued TTS. All starts cancel the old timer. */
+  beginOutput(kind: 'tts' | 'beep' | 'ready_beep'): number {
+    if (kind !== 'ready_beep') this.logReadyBeepFollowup('interrupted');
+    this.clearRecovery('new_output');
+    this.cb.onRecoveryNotice?.(false);
+    // B uses the existing half-duplex abort. A beep or queued utterance can follow
+    // its TTS end before the four-second restart fires; wait for the final output.
+    if (this.patchMode === 'b' && this.restartingCause === 'b_half_duplex' && this.restartingTimer !== null) {
+      window.clearTimeout(this.restartingTimer);
+      this.restartingTimer = null;
+      this.restartingCause = null;
+      this.restartPendingAfterTts = true;
+      this.logRecovery('skip', 'output_extended');
+    }
+    if (this.outputPending.size === 0) {
+      this.outputActual = true;
+      this.outputWatchdogBlocked = false;
+      this.outputHadPriorResult = this.priorResults > 0;
+    }
+    const seq = ++this.outputSeq;
+    this.outputPending.add(seq);
+    this.firstInterimForOutput = false;
+    logger.log({ type: 'app', extra: audioOutputEdge({ seq, kind, evt: 'begin', actual: false }) });
+    return seq;
+  }
+
+  outputEdge(seq: number, kind: 'tts' | 'beep' | 'ready_beep', evt: 'start' | 'end' | 'error' | 'watchdog' | 'skip') {
+    if (!this.active) return;
+    const actual = evt === 'start' || evt === 'end' || evt === 'error';
+    logger.log({ type: 'app', extra: audioOutputEdge({ seq, kind, evt, actual }) });
+    if (kind === 'ready_beep' && evt === 'end' && this.readyTelemetryInst) {
+      this.readyBeepAt = Date.now();
+      this.readyBeepAnchor = 'output_end';
+    }
+    if (evt === 'start') return;
+    if (!this.outputPending.delete(seq)) {
+      // A watchdog can resolve the promise while speech still plays. A later native end
+      // is the first safe edge at which a recovery timer may be armed.
+      if (actual && this.outputWatchdogBlocked && this.outputPending.size === 0 && seq === this.outputSeq) {
+        this.outputWatchdogBlocked = false;
+        this.outputActual = true;
+        this.maybeReadyBeep();
+        if (this.patchMode === 'a') this.armOutputMonitor();
+        if (this.patchMode === 'b' && this.restartPendingAfterTts && !this.ttsMuted) {
+          this.restartPendingAfterTts = false;
+          this.scheduleRestart(this.bRestartDelayMs, 'b_half_duplex');
+        }
+      }
+      return;
+    }
+    if (!actual) { this.outputActual = false; this.outputWatchdogBlocked = true; }
+    if (this.outputPending.size > 0) return;
+    this.maybeReadyBeep();
+    this.cb.onOutputFinished?.(this.outputSeq);
+    if (this.patchMode === 'b' && this.restartPendingAfterTts && !this.ttsMuted) {
+      this.restartPendingAfterTts = false;
+      this.scheduleRestart(this.bRestartDelayMs, 'b_half_duplex');
+    }
+    if (this.patchMode !== 'a') return;
+    if (!this.outputActual || this.outputWatchdogBlocked) {
+      this.logRecovery('skip', 'tts_watchdog');
+      this.watchdogNoticeTimer = window.setTimeout(() => {
+        this.watchdogNoticeTimer = null;
+        if (this.active && this.outputSeq === seq && this.outputWatchdogBlocked) this.cb.onRecoveryNotice?.(true);
+      }, this.aUnconfirmedMs);
+      return;
+    }
+    this.armOutputMonitor();
+  }
+
+  /** A applies only to the barge-in ON path; the old half-duplex path is its control. */
+  private armOutputMonitor() {
+    if (!_bargeInEnabled) { this.logRecovery('skip', 'barge_off'); return; }
+    if (!this.outputHadPriorResult) { this.logRecovery('skip', 'no_prior_result'); return; }
+    if (this.ttsMuted) { this.logRecovery('skip', 'tts_active'); return; }
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') { this.logRecovery('skip', 'background'); return; }
+    if (!this.cb.canMonitorOutput?.()) { this.logRecovery('skip', 'no_waiting_cell'); return; }
+    const seq = this.outputSeq;
+    this.logRecovery('armed', 'post_output', this.aSilenceMs);
+    this.recoveryTimer = window.setTimeout(() => {
+      this.recoveryTimer = null;
+      if (!this.active || seq !== this.outputSeq || this.ttsMuted || !this.cb.canMonitorOutput?.() ||
+          (typeof document !== 'undefined' && document.visibilityState === 'hidden')) {
+        this.logRecovery('skip', 'guard_changed'); return;
+      }
+      this.logRecovery('timeout', 'post_output', this.aSilenceMs);
+      this.logInstance('abort', 'post_output_timeout');
+      this.forcedFresh = true;
+      try { this.rec?.abort(); } catch { /* old instance may already be stopped */ }
+      this.logRecovery('attempt', 'post_output_timeout');
+      this.attemptStart('post_output_timeout');
+      this.forcedFresh = false;
+      this.recoveringSeq = seq;
+      this.recoveryConfirmTimer = window.setTimeout(() => {
+        this.recoveryConfirmTimer = null;
+        if (!this.active || this.recoveringSeq !== seq || seq !== this.outputSeq) return;
+        this.logRecovery('unconfirmed', 'no_result', this.aUnconfirmedMs);
+        this.cb.onRecoveryNotice?.(true);
+      }, this.aUnconfirmedMs);
+    }, this.aSilenceMs);
+  }
+
+  /** Tap only recreates Web Speech; it never touches the clip MediaStream. */
+  reconnectRecognition() {
+    if (!this.active) return;
+    this.clearRecovery('tap');
+    this.cb.onRecoveryNotice?.(false);
+    this.logRecovery('tap', 'user_gesture');
+    this.logInstance('abort', 'tap');
+    this.forcedFresh = true;
+    try { this.rec?.abort(); } catch { /* no-op */ }
+    this.attemptStart('tap');
+    this.forcedFresh = false;
+    const seq = this.outputSeq;
+    this.recoveringSeq = seq;
+    this.recoveryConfirmTimer = window.setTimeout(() => {
+      this.recoveryConfirmTimer = null;
+      if (!this.active || this.recoveringSeq !== seq) return;
+      this.logRecovery('unconfirmed', 'tap_no_result', this.aUnconfirmedMs);
+      this.cb.onRecoveryNotice?.(true);
+    }, this.aUnconfirmedMs);
+  }
 }
 
 // ─── Active controller reference (for TTS mute integration) ───
 let _activeController: SpeechController | null = null;
 export function setActiveController(ctrl: SpeechController | null) {
   _activeController = ctrl;
+}
+
+export function beginAudioOutput(kind: 'tts' | 'beep' | 'ready_beep'): { controller: SpeechController; seq: number; kind: 'tts' | 'beep' | 'ready_beep' } | null {
+  const controller = _activeController;
+  // Legacy TTS unit harnesses inject a mute/unmute-only controller. They have no
+  // output telemetry surface; real SpeechController instances always do.
+  return controller && typeof controller.beginOutput === 'function'
+    ? { controller, seq: controller.beginOutput(kind), kind } : null;
+}
+export function finishAudioOutput(token: ReturnType<typeof beginAudioOutput>, evt: 'start' | 'end' | 'error' | 'watchdog' | 'skip') {
+  token?.controller.outputEdge(token.seq, token.kind, evt);
 }
 
 // ─── TTS ───────────────────────────────────────────────────────
@@ -725,6 +1006,13 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     let stage: 'start' | 'end' = 'start';
     /** 워치독이 실제로 대신 resolve했는가. 늦게 도착한 end/error를 계측할지 판정한다. */
     let watchdogFired = false;
+    let outputToken: ReturnType<typeof beginAudioOutput> = null;
+    let outputFinished = false;
+    const finishOutput = (evt: 'end' | 'error' | 'watchdog' | 'skip') => {
+      if (outputFinished) return;
+      outputFinished = true;
+      finishAudioOutput(outputToken, evt);
+    };
     /** 1단(시작 감시) 무장 — 「내 차례가 왔다」 시점에 불린다(#5 선언부 주석). */
     const armStartWatchdog = () => {
       if (settled || started) return;
@@ -735,6 +1023,7 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     };
     const done = () => {
       if (settled) return;
+      finishOutput('skip'); // cancel/drain path; native end and watchdog set their own edge first.
       settled = true;
       _pendingSpeakDone.delete(done);
       _pendingStartArm.delete(armStartWatchdog);
@@ -760,6 +1049,7 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
         logger.log({ type: 'app', extra: `tts_watchdog_fired:started=${started ? 'yes' : 'no'},ms=${Date.now() - enqueuedAt},stage=${stage},len=${text.length}` });
       } catch { /* 계측은 best-effort — 절대 발화 경로를 막지 않는다 */ }
       watchdogFired = true;
+      finishOutput('watchdog');
       done();
     };
 
@@ -772,17 +1062,20 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     const finish = (reason: 'end' | 'error') => {
       if (settled) {
         if (watchdogFired) {
+          finishAudioOutput(outputToken, reason);
           try {
             logger.log({ type: 'app', extra: `tts_late_end:reason=${reason},afterMs=${Date.now() - enqueuedAt},stage=${stage}` });
           } catch { /* 계측은 best-effort */ }
         }
         return;
       }
+      finishOutput(reason);
       done();
     };
 
     u.onstart = () => {
       if (settled) return;
+      finishAudioOutput(outputToken, 'start');
       started = true;
       // 시작이 확인됐으니 대기열 무장자에서 뺀다(#5) — 앞 발화의 done()이 뒤늦게 깨우면
       //   이미 2단으로 넘어간 발화를 1단으로 되돌린다.
@@ -833,7 +1126,9 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     // synth.speak → onstart 사이 50~500ms 갭 동안 STT 값이 필터링 안 되는 버그 수정:
     // muteForTts를 onstart가 아닌 synth.speak 직전에 호출
     _activeController?.muteForTts();
-    engine.speak(u);
+    outputToken = beginAudioOutput('tts');
+    try { engine.speak(u); }
+    catch { finishOutput('error'); done(); }
   });
 }
 

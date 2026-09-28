@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SEMVER = '\\d+\\.\\d+\\.\\d+';
+const SEMVER = '\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?';
 
 const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const readme = readFileSync(join(root, 'README.md'), 'utf8');

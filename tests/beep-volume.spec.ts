@@ -5,7 +5,16 @@
  * 매핑(0/0.5/1 → 0/3×/6×) + 클램프 + 손상값(NaN/Inf/문자열/범위 밖) coercion을 고정한다.
  */
 import { test, expect } from '@playwright/test';
-import { beepVolumeToMultiplier, BEEP_VOLUME_MAX } from '../src/lib/beepVariants';
+import { beepVolumeToMultiplier, BEEP_VOLUME_MAX, READY_BEEP_TONE, buildBeepSchedule, getBeepVariant } from '../src/lib/beepVariants';
+
+test('ready cue is a short, distinct 500–1200 Hz tone at bounded master gain', () => {
+  const accepted = buildBeepSchedule(getBeepVariant('pos-triad', 'positive'));
+  expect(READY_BEEP_TONE.freq).toBeGreaterThanOrEqual(500);
+  expect(READY_BEEP_TONE.freq).toBeLessThanOrEqual(1200);
+  expect(READY_BEEP_TONE.stopMs).toBeLessThanOrEqual(120);
+  expect(accepted.some((tone) => tone.freq === READY_BEEP_TONE.freq)).toBe(false);
+  expect(READY_BEEP_TONE.gain * beepVolumeToMultiplier(1)).toBeLessThan(1);
+});
 
 // v0.44.0 F17(민구 확정 08-02: "2배로 진행") — 마스터 배수 상한 6→12에 따른 기대값 2배 갱신
 // (정당 파손). 매핑 형태(선형·클램프·손상값 치유)는 불변, 배율만 2배다.

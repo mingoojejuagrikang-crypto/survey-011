@@ -34,6 +34,7 @@ const CHIP_SCROLL_PAD = 8;
  *  `ACTIVE_ZONE_ROWS` 주석 참조. */
 export function ActiveState({
   totalRows, columns, voiceCols, currentColId, completing, endReached, paused, anomalyPending, tone,
+  patchBadge,
   getAudioLevel, getTimeDomainData,
   reaskReason, uiCommand,
   onEnd, onJumpToRow, onPrevRow, onNextRow, onTogglePause, onTouchCommit,
@@ -55,6 +56,7 @@ export function ActiveState({
   anomalyPending: boolean;
   /** 상태 톤(VoiceScreen glowTone SSOT) — 칩·도트·파형·엣지글로우가 같은 색으로 상태를 말한다. */
   tone: GlowTone;
+  patchBadge?: string;
   /** v0.34.0 B7 — 파동 레벨 getter(useVoiceSession, 안정 참조). */
   getAudioLevel: () => number;
   /** v0.35.0 — 시간영역 파형 getter(useVoiceSession). */
@@ -97,6 +99,7 @@ export function ActiveState({
     })),
   );
   const row = sess.activeRow;
+  const clipMutePersistent = useSessionStore((s) => s.clipMutePersistent);
   // v0.37.0 리뷰 #1(민구: 커밋 영수증) — 검토 표시값 파생을 **여기(항상 마운트)** 에서 한다.
   const reviewCommit = useReviewCommit(completing, row);
   // v0.45.0 UI③ — 방금 음성 확정된 칩의 V 마크(중앙 ✓+항목명 라벨 삭제의 승계 표시).
@@ -306,6 +309,8 @@ export function ActiveState({
         totalRows={totalRows}
         progressPct={pct}
         progressAccent={progressAccent}
+        clipMutePersistent={clipMutePersistent}
+        patchBadge={patchBadge}
         onOpenHelp={openCommandHelp}
       />
 

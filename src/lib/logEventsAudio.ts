@@ -13,6 +13,47 @@
 import { kv } from './logEvents';
 import type { RawSkipReason } from './audioTrim';
 
+/** iOS 27 preview: new names only; all existing extra bytes remain unchanged. */
+export function sttRaw(fields: { inst: number; evt: 'start' | 'result' | 'error' | 'end'; out: number; final?: boolean; code?: string; stale?: boolean }): string {
+  return `stt_raw:${kv({ inst: fields.inst, evt: fields.evt,
+    ...(fields.final === undefined ? {} : { final: fields.final ? 1 : 0 }),
+    ...(fields.code ? { code: fields.code.replace(/[^a-z-]/g, '').slice(0, 32) || 'unknown' } : {}),
+    out: fields.out, ...(fields.stale ? { stale: 1 } : {}),
+  })}`;
+}
+export function sttInstance(fields: { inst: number; action: 'create' | 'create_failed' | 'start' | 'start_throw' | 'abort'; cause: string; out: number }): string {
+  return `stt_instance:${kv(fields)}`;
+}
+export function audioOutputEdge(fields: { seq: number; kind: 'tts' | 'beep' | 'ready_beep'; evt: 'begin' | 'start' | 'end' | 'error' | 'watchdog' | 'skip'; actual: boolean }): string {
+  return `audio_output_edge:${kv({ seq: fields.seq, kind: fields.kind, evt: fields.evt, actual: fields.actual ? 1 : 0 })}`;
+}
+export function readyBeep(fields: { inst: number; phase: 'onstart' | 'play' | 'first_result' | 'error' | 'end' | 'interrupted'; ms?: number; anchor?: 'onstart' | 'output_end'; result?: string; code?: string; seq?: number; gain?: number }): string {
+  return `ready_beep:${kv({ inst: fields.inst, phase: fields.phase,
+    ...(fields.ms === undefined ? {} : { ms: fields.ms }),
+    ...(fields.anchor === undefined ? {} : { anchor: fields.anchor }),
+    ...(fields.result === undefined ? {} : { result: fields.result }),
+    ...(fields.code === undefined ? {} : { code: fields.code }),
+    ...(fields.seq === undefined ? {} : { seq: fields.seq }),
+    ...(fields.gain === undefined ? {} : { gain: fields.gain }),
+  })}`;
+}
+export function sttRecovery(fields: { seq: number; phase: 'armed' | 'skip' | 'timeout' | 'attempt' | 'result' | 'unconfirmed' | 'tap'; inst: number; reason: string; ms?: number }): string {
+  return `stt_recovery:${kv({ seq: fields.seq, phase: fields.phase, inst: fields.inst, reason: fields.reason, ...(fields.ms === undefined ? {} : { ms: fields.ms }) })}`;
+}
+export function clipInputProbe(fields: { edge: 'first_mute' | 'after_output' | 'tap_recover' | 'mute_notice'; track: string; enabled: string; ctx: string; peak: number; seq: number }): string {
+  return `clip_input_probe:${kv(fields)}`;
+}
+export function audioPatchMode(fields: { mode: string; build: string; selectedAt: number; bargeIn: boolean; halfDuplex: boolean; sessionType: 'on' | 'off'; supported: boolean; before: string; after: string; state: string; set: string; aMs: number; aConfirmMs: number; bMs: number; muteMs: number }): string {
+  return `audio_patch_mode:${kv({ mode: fields.mode, build: fields.build, selectedAt: fields.selectedAt,
+    bargeIn: fields.bargeIn ? 1 : 0, halfDuplex: fields.halfDuplex ? 1 : 0,
+    sessionType: fields.sessionType, supported: fields.supported ? 1 : 0, before: fields.before,
+    after: fields.after, state: fields.state, set: fields.set, aMs: fields.aMs,
+    aConfirmMs: fields.aConfirmMs, bMs: fields.bMs, muteMs: fields.muteMs })}`;
+}
+export function audioPatchModeRestore(result: 'off' | 'ok' | 'error', type: string): string {
+  return `audio_patch_mode_restore:${kv({ result, type })}`;
+}
+
 /** `lifecycle:zombie_restart:stale_ms=<ms>,n=<streak>` — STT 좀비 재시작 진단.
  *  stale_ms/n 순서는 SOP-003 판독 계약이므로 이 빌더와 특성화 테스트에서 고정한다. */
 export function zombieRestart(staleMs: number, streak: number): string {

@@ -223,7 +223,7 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //   "이번 세션 · 다시 묻기 … · 고친 칸 … · 알람 …"). 위반 0 그대로. 73 → 74.
   //   🔴 이 검사기는 `src/components/voice/`를 **재귀 순회**한다 — `ReadyState.tsx`를 이 디렉터리
   //   밖으로 옮기면 계약이 −1 되어 여기가 red가 된다(AlarmInterimStrip 분리 때와 같은 함정).
-  expect(contractCount, '계약 참조 (통과)').toBe(74);
+  expect(contractCount, '계약 참조 (통과)').toBe(78);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);

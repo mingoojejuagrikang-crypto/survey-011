@@ -21,6 +21,8 @@ import { StoppingState } from '../components/voice/StoppingState';
 import { ReadyState } from '../components/voice/ReadyState';
 import { ActiveState } from '../components/voice/ActiveState';
 import { MicReconnectBanner } from '../components/voice/MicReconnectBanner';
+import { SttRecoveryBanner } from '../components/voice/SttRecoveryBanner';
+import { audioPatchAvailable } from '../lib/ios27AudioPatch';
 
 /** App.tsx ↔ useVoiceSession 브리지. VoiceScreen은 세션 훅을 소유하지만 `visibilitychange`는
  *  문서 단위라 App.tsx가 듣는다 — 그 사이를 잇는 유일한 채널이다.
@@ -177,6 +179,7 @@ export function VoiceScreen(props: {
         />
       )}
       <ActiveState
+        patchBadge={audioPatchAvailable() ? `${voiceSession.activePatchMode.toUpperCase()} · v${__APP_VERSION__}` : undefined}
         totalRows={totalRows}
         columns={activeColumns}
         voiceCols={voiceCols}
@@ -233,6 +236,7 @@ export function VoiceScreen(props: {
         }}
         onCooldownEnd={() => setReconnecting(false)}
       />
+      <SttRecoveryBanner visible={voiceSession.sttRecoveryNotice} onReconnect={voiceSession.reconnectRecognition} />
       {/* v0.35.0 R3-FIX-2(리뷰 라운드3) — 최종 저장 실패 모달. stop()의 persistSession()이 false를
           반환하면 phase가 'ready'로 내려가지 않아(=이 화면 유지) 사용자가 "종료가 왜 안 되지"로
           남는다. 그 사유를 명시하고 [다시 저장]만 제공한다. persistError=null이면 미렌더. */}

@@ -138,6 +138,8 @@ interface SessionState {
    *  흘려주고, 그 경로가 곧 유일한 진실이다(두 곳에서 쓰면 화면이 사실과 갈린다).
    *  🔑 `blackout`과 같이 **메모리 전용**이다 — 영속되면 재시작 후에도 유령 경고가 남는다. */
   micInterrupted: boolean;
+  /** iOS 27 G1: same mic interruption surface, escalated after 5 seconds. Memory only. */
+  clipMutePersistent: boolean;
   /** v0.51.1 [CLIP-MUTED-SPAN-1] G2 — **히어로 홀드 문구(`HeroHoldToBlackout`)가 지금 떠 있는가.**
    *  관찰 전용이다. 작성자는 그 컴포넌트 하나(`useEffect([holding])` 미러), 소비자는
    *  `useMicInterruptionNotice`의 `mic_interrupt_ui:…,hold=` 계측 하나다 — 실기기 판정 ⓑ(문구가
@@ -238,6 +240,7 @@ interface SessionState {
   setBlackout: (b: boolean) => void;
   /** v0.51 [CLIP-MUTED-SPAN-1] — 트랙 muted 구독의 단일 작성자만 호출한다(위 필드 주석). */
   setMicInterrupted: (v: boolean) => void;
+  setClipMutePersistent: (v: boolean) => void;
   /** v0.51.1 G2 — `HeroHoldToBlackout`만 호출한다(위 필드 주석). */
   setHeroHolding: (v: boolean) => void;
   setStartProgress: (p: { step: number; total: number; label: string; warn?: string } | null) => void;
@@ -289,6 +292,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   uiModalOpen: null,
   blackout: false,
   micInterrupted: false,
+  clipMutePersistent: false,
   heroHolding: false,
   startProgress: null,
   persistError: null,
@@ -327,6 +331,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setUiModalOpen: (uiModalOpen) => set({ uiModalOpen }),
   setBlackout: (blackout) => set({ blackout }),
   setMicInterrupted: (micInterrupted) => set({ micInterrupted }),
+  setClipMutePersistent: (clipMutePersistent: boolean) => set({ clipMutePersistent }),
   setHeroHolding: (heroHolding) => set({ heroHolding }),
   setStartProgress: (startProgress) => set({ startProgress }),
   requestOverlayClose: () => set((s) => ({ overlayCloseSeq: s.overlayCloseSeq + 1 })),
@@ -437,6 +442,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       returnStack: [],
       // WP-F — 세션이 끝나면 검은 화면도 함께 풀린다(위 blackout 주석).
       blackout: false,
+      clipMutePersistent: false,
     }),
 }));
 

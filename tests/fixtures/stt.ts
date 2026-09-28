@@ -68,6 +68,9 @@ const VOICE_MOCK_INIT_SCRIPT = `
   function MockSTT() {
     this._ls = {};
     this.continuous = true; this.interimResults = true; this.lang = 'ko-KR'; this.maxAlternatives = 3;
+    window.__mockSTTInstances = window.__mockSTTInstances || [];
+    this.instanceId = window.__mockSTTInstances.length + 1;
+    window.__mockSTTInstances.push(this);
     window.__mockSTT = this;
   }
   MockSTT.prototype.addEventListener = function(t, cb) { if (!this._ls[t]) this._ls[t] = []; this._ls[t].push(cb); };
@@ -76,9 +79,12 @@ const VOICE_MOCK_INIT_SCRIPT = `
   MockSTT.prototype.stop = function() {};
   MockSTT.prototype.abort = function() { var self = this; setTimeout(function() { (self._ls['end'] || []).forEach(function(cb) { cb(new Event('end')); }); }, 5); };
   MockSTT.prototype.fireResult = function(transcript, confidence) {
+    if (window.__mockSTTMode === 'firstResultThenSilentAfterPlayback' &&
+        window.__mockSTTFirstFinalSeen && this.instanceId === 1) return;
     if (confidence === undefined) confidence = 0.95;
     var event = { resultIndex: 0, results: { length: 1, 0: { isFinal: true, length: 1, 0: { transcript: transcript, confidence: confidence } } } };
     (this._ls['result'] || []).forEach(function(cb) { cb(event); });
+    window.__mockSTTFirstFinalSeen = true;
   };
   // interim(중간) 결과 주입 — fastRecognition(조기확정) 경로 검증용(리뷰 라운드2 Flash Medium).
   MockSTT.prototype.fireInterim = function(transcript, confidence) {
@@ -138,9 +144,11 @@ const GIS_OFFLINE_STUB_SCRIPT = `
  *  단언하지 않는 순수 파서/즉답 spec만 0으로 낮춰라(그래도 setTimeout(0) = 비동기 유지). */
 export async function installVoiceMocks(page: Page, opts?: {
   ttsOnendDelayMs?: number;
+  sttMode?: 'firstResultThenSilentAfterPlayback';
   /** 시각 애니메이션 자체를 검증하는 스펙만 true. 기본 0ms는 다수 비시각 스펙의 flake 억제 계약. */
   preserveAnimations?: boolean;
 }): Promise<void> {
+  if (opts?.sttMode) await page.addInitScript((mode) => { (window as any).__mockSTTMode = mode; }, opts.sttMode);
   if (opts?.ttsOnendDelayMs !== undefined) {
     await page.addInitScript(
       (d) => { (window as unknown as { __ttsOnendDelayMs?: number }).__ttsOnendDelayMs = d; },

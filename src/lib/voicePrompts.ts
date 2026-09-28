@@ -212,6 +212,10 @@ export function clipUnreliableSummaryScreen(unreliable: number, total: number): 
  *  👉 **소리는 회복된 뒤에만 쓴다.** 인터럽트 도중의 통지는 화면이 진다(절전 화면 문구 전환). */
 export const MIC_INTERRUPT_RECOVERED_TTS = '마이크가 잠시 멈춰 있었습니다. 그동안의 음성 기록은 확인이 필요합니다.';
 
+/** iOS 27 G1 — Mingoo-approved persistent clip mute warning, once per session in TTS. */
+export const CLIP_MUTE_UNSTABLE_TTS = '음성 클립 저장이 불안정합니다';
+export const CLIP_MUTE_UNSTABLE_SCREEN = '음성 클립 저장이 불안정합니다';
+
 /** v0.51.1 B1 (제보① 2026-09-02 14:53) — **음성 입력 열이 0개**인 구성에서 세션을 시작할 수 없다는 사실.
  *
  *  종전엔 `start()`가 `vc.length === 0`에서 **무음으로 false**를 돌려줬고(오디오 unlock·gUM보다 앞이라
@@ -258,4 +262,3 @@ export const CONFUSION_ANSWER_FIRST_TTS = '먼저 답해 주세요.';
 export function sessionHealthSummaryScreen(reask: number, correctedCells: number, alarmFired: number): string {
   return `이번 세션 · 다시 묻기 ${reask} · 고친 칸 ${correctedCells} · 알람 ${alarmFired}`;
 }
-

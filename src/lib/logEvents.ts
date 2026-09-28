@@ -47,6 +47,7 @@ export function withErr(prefix: string, err: unknown): string {
 
 // 마이크·오디오·수명주기 도메인 — 빌더 주석·판정 사다리 설명은 logEventsAudio.ts.
 export {
+  sttRaw, sttInstance, audioOutputEdge, readyBeep, sttRecovery, clipInputProbe, audioPatchMode, audioPatchModeRestore,
   zombieRestart, micAutoReconnect, micAutoReconnectSkipped, recoverTimeout, micInitFailed,
   audioRouteRevalidate, foregroundReturn, wakeLockEvent,
   visibilityContext, lifecycleSignal, clipArmBlocked, micTeardown,

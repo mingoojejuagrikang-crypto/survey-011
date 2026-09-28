@@ -142,6 +142,8 @@ export async function boot(
     settings?: typeof SETTINGS;
     headers?: readonly string[];
     sheetRows?: readonly (readonly string[])[];
+    sttMode?: 'firstResultThenSilentAfterPlayback';
+    beforeStart?: (page: Page) => Promise<void>;
   },
 ) {
   await page.setViewportSize(viewport);
@@ -161,6 +163,7 @@ export async function boot(
   );
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(500);
+  await opts?.beforeStart?.(page);
   await page.locator('[data-testid="tab-voice"]').click();
   await page.waitForTimeout(200);
   await page.locator('text=음성 입력 시작').first().click();

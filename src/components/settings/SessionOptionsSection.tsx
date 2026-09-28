@@ -8,6 +8,8 @@ import { settingChanged } from '../../lib/logEvents';
 // v0.46.0 WP-I — BeepPicker 렌더 제거(소리 고정·UI 숨김). 파일은 남아 있다 — 되살리는 방법은 아래 렌더 지점 주석 참조.
 // import { BeepPicker } from './BeepPicker';
 import { TtsVoiceSelector } from './TtsVoiceSelector';
+import { AudioPatchPreviewControl } from './AudioPatchPreviewControl';
+import { audioPatchAvailable } from '../../lib/ios27AudioPatch';
 
 /** v0.35.2 Stage 2 — 설정탭 세션 옵션 섹션: 세션명 컬럼 선택/자유입력/미리보기 + 빠른 인식 토글 +
  *  자동 캡처 토글 + 비프음 선택 + TTS 음성 선택. SettingsScreen에서 순수 이동(DOM 불변).
@@ -16,6 +18,7 @@ export function SessionOptionsSection({ prospectiveSessionLabel }: { prospective
   const s = useSettingsStore();
   return (
     <>
+        {audioPatchAvailable() && <div style={{ padding: '10px 16px 0' }}><AudioPatchPreviewControl /></div>}
         {/* 세션 옵션: 세션명 컬럼 선택 + 소음 환경 모드 */}
         <div
           style={{

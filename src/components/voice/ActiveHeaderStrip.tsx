@@ -1,5 +1,6 @@
 import { T } from '../../tokens';
 import { VOICE_TYPE } from './heroLayout';
+import { CLIP_MUTE_UNSTABLE_SCREEN } from '../../lib/voicePrompts';
 
 /** 상단 스트립 — 행 진행값 + 진행바 + 상시 도움말.
  *
@@ -7,13 +8,15 @@ import { VOICE_TYPE } from './heroLayout';
  *  접근성 상태명은 `CenterStage`의 aria-only paused surface와 `CompleteSummary`의 `aria-label`이
  *  맡는다. `?`는 상태와 무관하게 언제나 같은 자리에 남는다(GL-007 원칙 3). */
 export function ActiveHeaderStrip({
-  row, totalRows, progressPct, progressAccent, onOpenHelp,
+  row, totalRows, progressPct, progressAccent, onOpenHelp, clipMutePersistent = false, patchBadge,
 }: {
   row: number;
   totalRows: number;
   progressPct: number;
   progressAccent: string;
   onOpenHelp: () => void;
+  clipMutePersistent?: boolean;
+  patchBadge?: string;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px 4px' }}>
@@ -31,8 +34,12 @@ export function ActiveHeaderStrip({
         </span>
         <span style={{ fontSize: VOICE_TYPE.captionSm, fontWeight: 700, color: T.textMute }}>/ {totalRows}행</span>
       </div>
-      <div style={{ flex: 1, position: 'relative', height: 4, borderRadius: 2, background: T.line, minWidth: 0 }}>
-        <div
+      <div style={{ flex: 1, position: 'relative', height: clipMutePersistent ? 'auto' : 4, borderRadius: 2, background: T.line, minWidth: 0 }}>
+        {clipMutePersistent ? (
+          <span data-testid="mic-interrupt-status" style={{ color: '#ffd35a', fontSize: VOICE_TYPE.captionSm, fontWeight: 800, lineHeight: 1.2 }}>
+            {CLIP_MUTE_UNSTABLE_SCREEN}
+          </span>
+        ) : <div
           // §C4 — mono 점멸 대상(진행바). global.css의 스코프 셀렉터와 오라클이 이 testid를 잡는다.
           data-testid="voice-progress-fill"
           style={{
@@ -41,8 +48,9 @@ export function ActiveHeaderStrip({
             background: progressAccent,
             transition: 'width 400ms ease-out, background 200ms',
           }}
-        />
+        />}
       </div>
+      {patchBadge && <span data-testid="audio-patch-badge" style={{ color: T.textDim, fontSize: VOICE_TYPE.captionSm, maxWidth: 75, lineHeight: 1.1 }}>{patchBadge}</span>}
       <button
         type="button"
         onClick={onOpenHelp}

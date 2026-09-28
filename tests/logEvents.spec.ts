@@ -58,7 +58,33 @@ import {
   authLostInSession,
   authLostPrompt,
   statusCardLogin,
+  sttRaw, sttInstance, audioOutputEdge, readyBeep, sttRecovery, clipInputProbe, audioPatchMode, audioPatchModeRestore,
 } from '../src/lib/logEvents';
+
+test('iOS 27 preview diagnostic extras — production-shaped literal bytes', () => {
+  expect(sttRaw({ inst: 3, evt: 'start', out: 2 })).toBe('stt_raw:inst=3,evt=start,out=2');
+  expect(sttRaw({ inst: 3, evt: 'result', final: false, out: 2 })).toBe('stt_raw:inst=3,evt=result,final=0,out=2');
+  expect(sttRaw({ inst: 3, evt: 'error', code: 'audio-capture', out: 2, stale: true }))
+    .toBe('stt_raw:inst=3,evt=error,code=audio-capture,out=2,stale=1');
+  expect(sttInstance({ inst: 4, action: 'create', cause: 'post_output_timeout', out: 2 }))
+    .toBe('stt_instance:inst=4,action=create,cause=post_output_timeout,out=2');
+  expect(audioOutputEdge({ seq: 2, kind: 'tts', evt: 'end', actual: true }))
+    .toBe('audio_output_edge:seq=2,kind=tts,evt=end,actual=1');
+  expect(audioOutputEdge({ seq: 3, kind: 'ready_beep', evt: 'end', actual: true }))
+    .toBe('audio_output_edge:seq=3,kind=ready_beep,evt=end,actual=1');
+  expect(readyBeep({ inst: 4, phase: 'first_result', ms: 419, anchor: 'output_end' }))
+    .toBe('ready_beep:inst=4,phase=first_result,ms=419,anchor=output_end');
+  expect(sttRecovery({ seq: 2, phase: 'armed', inst: 3, reason: 'post_output', ms: 8000 }))
+    .toBe('stt_recovery:seq=2,phase=armed,inst=3,reason=post_output,ms=8000');
+  expect(clipInputProbe({ edge: 'first_mute', track: 'muted', enabled: 'yes', ctx: 'running', peak: 0, seq: 0 }))
+    .toBe('clip_input_probe:edge=first_mute,track=muted,enabled=yes,ctx=running,peak=0,seq=0');
+  expect(audioPatchMode({ mode: 'b', build: '0.55.1-preview', selectedAt: 1790560242168,
+    bargeIn: true, halfDuplex: true, sessionType: 'on', supported: true, before: 'auto',
+    after: 'play-and-record', state: 'unreadable', set: 'ok', aMs: 8000, aConfirmMs: 8000,
+    bMs: 4000, muteMs: 5000 }))
+    .toBe('audio_patch_mode:mode=b,build=0.55.1-preview,selectedAt=1790560242168,bargeIn=1,halfDuplex=1,sessionType=on,supported=1,before=auto,after=play-and-record,state=unreadable,set=ok,aMs=8000,aConfirmMs=8000,bMs=4000,muteMs=5000');
+  expect(audioPatchModeRestore('ok', 'auto')).toBe('audio_patch_mode_restore:result=ok,type=auto');
+});
 
 /** v0.51.1 L (민구 지시 2026-09-02) — 동기화 완료 계측. 예시는 STT 레인 §6 L의 형태 그대로. */
 test('sheetSynced — 동기화 완료 바이트 계약 (L 신규 이벤트)', () => {

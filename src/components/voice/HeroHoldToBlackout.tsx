@@ -6,6 +6,7 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { logger } from '../../lib/logger';
 import { holdAbort, holdStart, holdTtsSkipped } from '../../lib/logEvents';
 import { speak } from '../../lib/speech';
+import { CLIP_MUTE_UNSTABLE_SCREEN } from '../../lib/voicePrompts';
 import {
   HOLD_GRACE_BUDGET_MS, HOLD_GRACE_MS, HOLD_GRACE_RADIUS_PX,
   HOLD_TO_BLACKOUT_MS, REDUCED_STEPS, REDUCED_STEP_MS, prefersReducedMotion,
@@ -84,8 +85,8 @@ const HOLD_LINES_OK = [HOLD_LINE_ACTION, '음성 입력은 계속됩니다.'] as
  *  사용자가 **끌지 말지를 스스로 고른다** — 화면을 끈 뒤에 알려주는 것보다 낫다. */
 const HOLD_LINES_MIC_OFF = [HOLD_LINE_ACTION, '⚠ 마이크가 멈춰 지금은 녹음되지 않습니다.'] as const;
 /** 상태 → 문구. **분기는 여기 하나다**(화면·TTS·aria-label이 각자 고르면 갈린다 — V-FIX2). */
-function holdLines(micInterrupted: boolean): readonly string[] {
-  return micInterrupted ? HOLD_LINES_MIC_OFF : HOLD_LINES_OK;
+function holdLines(micInterrupted: boolean, persistent = false): readonly string[] {
+  return micInterrupted ? (persistent ? [HOLD_LINE_ACTION, CLIP_MUTE_UNSTABLE_SCREEN] : HOLD_LINES_MIC_OFF) : HOLD_LINES_OK;
 }
 
 /** 안내 발화를 미루는 시간(V-FIX1ⓐ). 스침·오터치는 여기 못 미친다 —
@@ -100,12 +101,16 @@ const HOLD_TTS_DELAY_MS = 400;
 export function HeroHoldToBlackout({ children }: { children: ReactNode }) {
   // v0.51 [CLIP-MUTED-SPAN-1] — 트랙 muted 여부(작성자는 `useMicInterruptionNotice` 하나).
   const micInterrupted = useSessionStore((st) => st.micInterrupted);
-  const lines = holdLines(micInterrupted);
+  const persistent = useSessionStore((st) => st.clipMutePersistent);
+  const lines = holdLines(micInterrupted, persistent);
   const holdSentence = lines.join(' ');
+  // G1's exact spoken warning is owned by useMicInterruptionNotice (once per session).
+  // Repeated hold gestures keep the existing, shorter mic warning for their own cue.
+  const holdTtsSentence = holdLines(micInterrupted).join(' ');
   // 🔑 TTS 예약 콜백이 **발화 시점의** 문장을 읽게 한다 — 400ms 지연 동안 상태가 바뀔 수 있고,
   //    그때 예약 시점의 옛 문장을 말하면 화면과 귀가 갈린다(V-FIX2가 고친 그 결함의 재발).
-  const holdSentenceRef = useRef(holdSentence);
-  holdSentenceRef.current = holdSentence;
+  const holdSentenceRef = useRef(holdTtsSentence);
+  holdSentenceRef.current = holdTtsSentence;
   const [progress, setProgress] = useState(0);
   /** 🔴 V-FIX3b(2차 재검증 신규 위험) — **표시 여부는 「눌렸는가」이지 「진행값이 0보다 큰가」가 아니다.**
    *

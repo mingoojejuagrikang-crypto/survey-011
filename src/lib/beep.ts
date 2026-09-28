@@ -14,11 +14,13 @@ import {
   getBeepVariant,
   beepVolumeToMultiplier,
   BEEP_VOLUME_MAX,
+  READY_BEEP_TONE,
   type BeepVariant,
   type ScheduledTone,
 } from './beepVariants';
 import { logger } from './logger';
-import { beepPlay } from './logEvents';
+import { beepPlay, readyBeep } from './logEvents';
+import { beginAudioOutput, finishAudioOutput } from './speech';
 
 /** v0.46.0 WP-E(F7②) — 'commit' 신설: 값이 저장될 때 울리는 **커밋 확인음**. 긍정 극성이다.
  *  종전엔 정상 커밋에 소리가 아예 없었다(alert·corrected·modify 3종뿐) — 민구 제보 F7②의
@@ -137,7 +139,7 @@ export function unlockAudioPlayback(): PlaybackContext {
  *  `onended` 카운팅**으로 한다. ctx가 suspended면 `ctx.currentTime`은 멈춰 있는데 setTimeout은 실시간
  *  이라, resume 지연 시 소리가 나기 전에 disconnect돼 첫 비프가 잘리거나 묵음이 됐고(백그라운드에서
  *  타이머 스로틀 시 노드 누수), onended는 실제 재생 종료에 동기화돼 그 레이스를 없앤다. */
-function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier()): PlaybackOutcome {
+function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier(), outputToken: ReturnType<typeof beginAudioOutput> = null): PlaybackOutcome {
   let appliedGain = 0;
   let scheduledTones = 0;
   try {
@@ -178,7 +180,10 @@ function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier())
       osc.onended = () => {
         try { osc.disconnect(); gain.disconnect(); } catch { /* no-op */ }
         // 마지막 oscillator가 끝난 뒤에만 마스터 해제(재생 종료에 동기 — setTimeout 레이스 제거).
-        if (--pending === 0) { try { master.disconnect(); } catch { /* no-op */ } }
+        if (--pending === 0) {
+          try { master.disconnect(); } catch { /* no-op */ }
+          finishAudioOutput(outputToken, 'end');
+        }
       };
     }
     const result: PlaybackResult = initialState === 'suspended' || initialState === 'interrupted'
@@ -195,23 +200,36 @@ function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier())
 
 export function playBeep(kind: BeepKind): void {
   let outcome: PlaybackOutcome;
+  const outputToken = beginAudioOutput('beep');
   try {
     if (kind === 'modify') {
       // modify는 "성공/실패"가 아닌 "모드 전환" 신호라 극성 팔레트 밖의 중립음이다(현행 보존).
-      outcome = playSchedule([MODIFY_TONE]);
+      outcome = playSchedule([MODIFY_TONE], masterMultiplier(), outputToken);
     } else {
       // 🔴 v0.46.0 WP-I — store가 아니라 고정 상수를 쓴다(위 FIXED_* 주석의 근거).
       //    'commit'(WP-E 신설)·'corrected'는 긍정 = 화음, 'alert'·'reject'(r2 B2)는 부정 = 트릴.
       const variant = kind === 'alert' || kind === 'reject'
         ? getBeepVariant(FIXED_NEGATIVE_ID, 'negative')
         : getBeepVariant(FIXED_POSITIVE_ID, 'positive');
-      outcome = playSchedule(buildBeepSchedule(variant));
+      outcome = playSchedule(buildBeepSchedule(variant), masterMultiplier(), outputToken);
     }
   } catch {
     // 설정 조회 실패 등도 음성 흐름을 막지 않는다.
     outcome = { result: 'error', ctx: contextState(), gain: 0, tones: 0 };
   }
+  if (outcome.tones === 0) finishAudioOutput(outputToken, 'skip');
   logBeep(kind, outcome);
+}
+
+/** Called only after a fresh half-duplex recognizer reports onstart. This cue alone
+ *  follows the persisted beepVolume; the existing confirmation/warning sounds retain
+ *  their fixed 100% contract. */
+export function playReadyBeep(inst: number, volume: number): void {
+  const token = beginAudioOutput('ready_beep');
+  const outcome = playSchedule([READY_BEEP_TONE], beepVolumeToMultiplier(volume), token);
+  if (outcome.result === 'error' || outcome.tones === 0) finishAudioOutput(token, 'skip');
+  logger.log({ type: 'app', extra: readyBeep({ inst, phase: 'play', result: outcome.result,
+    seq: token?.seq, gain: outcome.gain }) });
 }
 
 /** 설정탭 칩 미리듣기 — 선택 여부와 무관하게 해당 변형을 즉시 재생.

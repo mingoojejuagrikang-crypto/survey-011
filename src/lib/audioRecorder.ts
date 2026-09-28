@@ -406,6 +406,17 @@ export class AudioRecorder {
     return trackStateOf(this.stream);
   }
 
+  /** iOS 27 G1 observation only. The stream and graph are never changed by this probe. */
+  getInputProbe(): { track: AudioTrackState; enabled: string; ctx: string; peak: number } {
+    const track = this.stream?.getAudioTracks()[0] ?? null;
+    return {
+      track: this.getTrackState(),
+      enabled: track ? (track.enabled ? 'yes' : 'no') : 'na',
+      ctx: this.prerollTap.getContextState(),
+      peak: Math.round(this.getInputLevel() * 1000) / 1000,
+    };
+  }
+
   /** 계측 H — 백그라운드 진입 순간 실제 MediaRecorder 슬롯이 녹음 중인지 읽는 관찰 전용 getter. */
   isRecording(): boolean {
     return this.active?.recorder.state === 'recording' && !this.active.finalized;

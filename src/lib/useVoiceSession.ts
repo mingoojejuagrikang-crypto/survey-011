@@ -13,7 +13,7 @@ import { SpeechController, speak, cancelTts, isSpeechSupported, formatForTts, wa
 import { computeTotalRows, buildCyclingValues, nestedAutoValue, isUserInputColumn } from './autoValue';
 import type { Column, Session, SessionRow, SessionTarget } from '../types';
 import { loadSession, saveSession } from './db';
-import { playBeep, unlockAudioPlayback } from './beep';
+import { playBeep, playReadyBeep, unlockAudioPlayback } from './beep';
 import { useModifyPhase } from './modifyPhase';
 import { useSessionCommitMarks } from '../components/voice/useVoiceCommitMark';
 import { useCellPersistError } from './cellPersistError';
@@ -52,6 +52,8 @@ import { useClipCapture, type PendingCommandClip } from './useClipCapture';
 import { createClipHealth, clipSummaryExtra, clipUnreliableSummaryExtra, type ClipHealth } from './clipHealth';
 import { getMutedSpanCount, resetMicInterruptionSpans } from './micInterruption';
 import { getAudioSessionEventCount } from './audioInterruption';
+import { IOS27_AUDIO_TIMING, applyAudioSessionPatch, audioPatchAvailable, snapshotAudioPatch, type AudioPatchMode, type AudioSessionPatchResult } from './ios27AudioPatch';
+import { audioPatchMode, audioPatchModeRestore, clipInputProbe } from './logEvents';
 import { useClipFailureAlert } from './useClipFailureAlert';
 import { useMicInterruptionNotice } from './useMicInterruptionNotice';
 import { clipFailSummaryScreen, clipUnreliableSummaryScreen, sessionHealthSummaryScreen } from './voicePrompts';
@@ -363,6 +365,23 @@ export interface VoiceRuntimeSnapshot {
 
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
+  const patchModeRef = useRef<AudioPatchMode>('default');
+  const audioSessionPatchRef = useRef<AudioSessionPatchResult | null>(null);
+  const [activePatchMode, setActivePatchMode] = useState<AudioPatchMode>('default');
+  const [sttRecoveryNotice, setSttRecoveryNotice] = useState(false);
+  const emitClipInputProbe = (edge: 'first_mute' | 'after_output' | 'tap_recover' | 'mute_notice', seq: number) => {
+    const probe = recorderRef.current?.getInputProbe() ?? { track: 'none' as const, enabled: 'na', ctx: 'none', peak: 0 };
+    logCell({ type: 'clip', extra: clipInputProbe({ edge, ...probe, seq }) });
+  };
+  const patchCallbacks = () => ({
+    canMonitorOutput: () => {
+      const phase = useSessionStore.getState().phase;
+      return phase === 'active' && !!awaitingFieldRef.current && uiSuspendRef.current.reasons.size === 0;
+    },
+    onRecoveryNotice: (visible: boolean) => setSttRecoveryNotice(visible),
+    onOutputFinished: (seq: number) => emitClipInputProbe('after_output', seq),
+    onReadyToListen: (inst: number) => playReadyBeep(inst, useSettingsStore.getState().beepVolume),
+  });
   // F18 — start()의 마이크 획득+정착 대기 중 재클릭 가드. 그 창에서는 phase가 아직 'ready'라
   // '음성 입력 시작' 버튼이 살아 있어, 가드 없이는 start()가 이중 진입한다(세션 이중 생성).
   const startingRef = useRef(false);
@@ -1881,6 +1900,7 @@ export function useVoiceSession() {
     hasMutedClipOpen: () => recorderRef.current?.hasOpenMutedClip() === true,
     say,
     logCell,
+    probeInput: (edge) => emitClipInputProbe(edge, 0),
   });
 
   // v0.38.0 #5 — micLost 한 번의 연속 구간마다 자동 복구는 정확히 1회뿐이다. 실패 상태가 계속
@@ -2343,6 +2363,7 @@ export function useVoiceSession() {
         onFinal: handleFinal,
         onInterim: handleInterim,
         onError: () => {},
+        ...patchCallbacks(),
         // v0.43.0 #4 5번 — **"재개 시도"가 아니라 "재개 성공"에 건다**(plan §3-3). `onStart`는
         //   인식기가 실제로 기동한 신호다. [MIC-B2] 전례(복귀 32.5초 뒤 `audio-capture` 오류)라
         //   시도 시점에 "다시 시작합니다"라고 말하면 거짓말이 된다.
@@ -2352,7 +2373,7 @@ export function useVoiceSession() {
         ...(announceBgResume
           ? { onStart: bgResumeAnnouncerOnce(say, () => buildReturnBriefing(true)) }
           : {}),
-      });
+      }, { patchMode: patchModeRef.current });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
     }
@@ -2613,6 +2634,15 @@ export function useVoiceSession() {
     }
     const total = computeTotalRows(columns);
     if (total === 0) return false;
+    // Preview experiment snapshot and AudioSession override happen in the start gesture.
+    // Existing builds/default selection do not change the audio session.
+    const patchSelection = snapshotAudioPatch();
+    if (!startingRef.current) {
+      patchModeRef.current = patchSelection.mode;
+      setActivePatchMode(patchSelection.mode);
+      setSttRecoveryNotice(false);
+      audioSessionPatchRef.current = applyAudioSessionPatch(patchSelection.playAndRecord);
+    }
 
     // v0.53.0 C14 — start() 앞부분 진단 로그가 직전 세션 id로 찍히지 않게 빈 값으로 리셋(X1 창으로 새 세션 zip에 포섭)
     sessionIdRef.current = '';
@@ -2713,6 +2743,8 @@ export function useVoiceSession() {
     // 만든 레코더의 스트림을 되돌려 놓는다(획득 세대 카운터가 늦게 열린 스트림도 닫는다 —
     // audioRecorder [리뷰#6]). 세션은 올리지 않는다: 올리면 새 훅이 닿을 수 없는 고아다.
     if (disposedRef.current) {
+      audioSessionPatchRef.current?.restore();
+      audioSessionPatchRef.current = null;
       recorderRef.current?.dispose();
       recorderRef.current = null;
       return false;
@@ -2754,6 +2786,8 @@ export function useVoiceSession() {
     sess.setActiveCol(0);
 
     if (!isSpeechSupported()) {
+      audioSessionPatchRef.current?.restore();
+      audioSessionPatchRef.current = null;
       sess.setLastTts('이 기기는 음성 인식을 지원하지 않습니다.');
       return false;
     }
@@ -2787,6 +2821,7 @@ export function useVoiceSession() {
     //   구간까지 세면 안 된다). 🔴 현재 muted 여부는 비우지 않는다 — 그건 물리적 사실이고
     //   세션 경계와 무관하다(`micInterruption.resetMicInterruptionSpans` 주석이 SSOT).
     resetMicInterruptionSpans();
+    if (audioPatchAvailable()) micInterruptionNotice.resetSession();
     // 🔴 [CF-2] 고지 재무장은 **세션 경계에서만**이다. 이 한 줄을 빠뜨리면 다음 세션에서 상태가
     //   true로 남아 상승 에지가 없어 **고지가 아예 안 나간다**(반대 방향 결함).
     setClipFailAlert(false);
@@ -2808,6 +2843,19 @@ export function useVoiceSession() {
     // 토큰 만료 세션에서도 신선 인덱스를 당길 수 있다 — [TREND-AUTH-1]의 침묵 창이 좁아진다.
     if (anyAnomalyRule && readonlySheetsAuth()) { resetPastIndexRetries(); prefetchPastIndex(); }
     logger.setSessionId(sessionIdRef.current);
+    if (audioPatchAvailable()) {
+      const audio = audioSessionPatchRef.current;
+      logCell({ type: 'app', extra: audioPatchMode({
+        mode: patchSelection.mode, build: logger.device().appVersion,
+        selectedAt: patchSelection.selectedAt, bargeIn: s.bargeInEnabled,
+        halfDuplex: patchSelection.mode === 'b' || !s.bargeInEnabled,
+        sessionType: patchSelection.playAndRecord ? 'on' : 'off',
+        supported: audio?.supported ?? false, before: audio?.before ?? 'unreadable',
+        after: audio?.after ?? 'unreadable', state: audio?.state ?? 'unreadable', set: audio?.set ?? 'off',
+        aMs: IOS27_AUDIO_TIMING.aSilenceMs, aConfirmMs: IOS27_AUDIO_TIMING.aUnconfirmedMs,
+        bMs: IOS27_AUDIO_TIMING.bRestartDelayMs, muteMs: IOS27_AUDIO_TIMING.clipMuteNoticeMs,
+      }) });
+    }
     // #1 reach telemetry: attach session-meta alongside the existing `extra:'start'` tag.
     // `extra` is preserved so any analysis keying on it keeps working; new fields are additive.
     logCell({
@@ -2923,12 +2971,14 @@ export function useVoiceSession() {
         onFinal: handleFinal,
         onInterim: handleInterim,
         onError: () => {},
-      });
+        ...patchCallbacks(),
+      }, { patchMode: patchModeRef.current, deferInitialReadyBeep: true });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
     }
 
     await announceField(vc[0]);
+    ctrlRef.current?.enableReadyBeep();
     return true;
   }, [announceField, announceRowDiff, handleFinal, handleInterim, say, clearUiSuspendLatch]);
 
@@ -2937,6 +2987,12 @@ export function useVoiceSession() {
     // v0.35.0 P1 — 종료 teardown 전체를 단일 비대화형 phase로 잠근다. 첫 await보다 먼저 전환해야
     // pause→stop 사이 재시작, 완료행 이동, 중복 stop이 같은 이벤트 루프 틈에서도 끼어들 수 없다.
     if (phaseAtEntry === 'stopping') return false;
+    if (audioPatchAvailable() && audioSessionPatchRef.current) {
+      const restored = audioSessionPatchRef.current.restore();
+      logCell({ type: 'app', extra: audioPatchModeRestore(restored.result, restored.type) });
+      audioSessionPatchRef.current = null;
+    }
+    setSttRecoveryNotice(false);
     useSessionStore.getState().setPhase('stopping');
     setActiveController(null);
     ctrlRef.current?.stop();
@@ -3174,7 +3230,8 @@ export function useVoiceSession() {
         onFinal: handleFinal,
         onInterim: handleInterim,
         onError: () => {},
-      });
+        ...patchCallbacks(),
+      }, { patchMode: patchModeRef.current, deferInitialReadyBeep: true });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
     }
@@ -3189,6 +3246,7 @@ export function useVoiceSession() {
     }
     const vc = voiceColsList();
     const cur = vc[sess.activeColIdx];
+    try {
     await say('재시작.');
     // v0.45.0 WP-3 (F14) — 재시작 브리핑: 현재 행 요약("나무 3, … 45.1. 다음.") 뒤에
     // announceField가 항목명을 잇는다(Q5 형식 완성: "…, 다음, 횡경."). 일시정지 중 복귀는
@@ -3249,6 +3307,9 @@ export function useVoiceSession() {
       if (awaiting?.kind === 'reviewWait') { await enterReviewWait(awaiting.row); return; }
       if (cur) await announceField(cur, fw != null ? { fractionWhole: fw } : undefined);
     }
+    } finally {
+      ctrlRef.current?.enableReadyBeep();
+    }
   }, [announceEndReached, announceField, armClipForCell, enterCellWait, enterReviewWait, handleFinal, handleInterim, say, buildReturnBriefing]);
 
   // Keep resumeRef in sync so handleFinal can call resume without a circular dep.
@@ -3301,7 +3362,8 @@ export function useVoiceSession() {
         onFinal: handleFinal,
         onInterim: handleInterim,
         onError: () => {},
-      });
+        ...patchCallbacks(),
+      }, { patchMode: patchModeRef.current });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
       logger.log({ type: 'stt', extra: 'manual_hold_restore_controller:started', sessionId: live.sessionId, row: pending.row, colId: pending.colId });
@@ -4034,6 +4096,9 @@ export function useVoiceSession() {
   return {
     start,
     stop,
+    activePatchMode,
+    sttRecoveryNotice,
+    reconnectRecognition: () => ctrlRef.current?.reconnectRecognition(),
     /** v0.35.0 R3-FIX-2 — 종료 저장 실패 배너의 [다시 저장] 핸들러(VoiceScreen). */
     retryFinalPersist,
     jumpToRow,
