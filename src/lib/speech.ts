@@ -96,6 +96,10 @@ const DEFAULT_ZOMBIE_STALE_MS = 12_000;
  *  들쑤시는 잔여 churn 방지와 "영영 안 되살림" 사이의 절충. onresult가 오면 기본값으로 리셋. */
 const ZOMBIE_BACKOFF_CAP_MS = 60_000;
 
+/** cancel 뒤 native 종료가 소실돼도 출력 토큰은 유한 시간에 닫는다.
+ * 실제 비프는 이 유예 뒤에도 엔진 speaking/pending이 꺼진 경우에만 허용한다. */
+const TTS_CANCEL_SETTLE_MS = 250;
+
 // ── v0.44.0 §D1 — barge-in(말끊기) 설정, 모듈 레벨 플래그 ──────────────────────
 // settingsStore를 여기서 import하지 않는다: postTtsGuard/speech-lifecycle 스펙이 이 모듈을
 // Node에서 직접 import하는데, 스토어는 import 시점에 persist 하이드레이션(localStorage/IDB)을
@@ -171,7 +175,8 @@ export class SpeechController {
   private outputSeq = 0;
   private outputPending = new Set<number>();
   private outputStarted = new Set<number>();
-  private outputUncertain = new Set<number>(); // ready cue still requires an actual output boundary
+  private outputUncertain = new Set<number>();
+  private outputCancelTimers = new Map<number, number>();
   private firstInterimForOutput = false;
   private readyBeepArmed = true;
   private readyBeepDeferred: boolean;
@@ -291,6 +296,8 @@ export class SpeechController {
         this.readyCandidateInst !== this.instanceId || this.readyPlayedInst === this.instanceId ||
         this.ttsMuted || this.halfDuplexHold || this.restartPendingAfterTts ||
         this.restartingTimer !== null || this.outputPending.size > 0 || this.outputUncertain.size > 0) return;
+    const engine = getEngine();
+    if (engine?.speaking || engine?.pending) return;
     this.readyBeepArmed = false;
     this.readyPlayedInst = this.instanceId;
     this.readyTelemetryInst = this.instanceId;
@@ -339,6 +346,8 @@ export class SpeechController {
     this.outputPending.clear();
     this.outputStarted.clear();
     this.outputUncertain.clear();
+    for (const timer of this.outputCancelTimers.values()) window.clearTimeout(timer);
+    this.outputCancelTimers.clear();
     this.active = false;
     this.ttsMuted = false;
     this.ttsMutedAt = null;
@@ -678,6 +687,8 @@ export class SpeechController {
     if (!this.outputPending.has(seq)) {
       if (this.outputUncertain.has(seq) && (evt === 'end' || evt === 'error')) {
         this.outputUncertain.delete(seq);
+        window.clearTimeout(this.outputCancelTimers.get(seq));
+        this.outputCancelTimers.delete(seq);
         this.maybeReadyBeep();
       }
       return; // late/duplicate native callbacks cannot swap twice
@@ -691,10 +702,21 @@ export class SpeechController {
       this.readyBeepAt = Date.now(); this.readyBeepAnchor = 'output_end';
     }
     this.outputPending.delete(seq);
-    if (kind === 'tts' && evt === 'watchdog') this.outputUncertain.add(seq);
+    if (kind === 'tts' && evt === 'watchdog') {
+      this.outputUncertain.add(seq);
+      // speak() has canceled the engine before this edge. This is a cancellation
+      // deadline, not a fabricated native end (audio_output_edge actual stays 0).
+      this.outputCancelTimers.set(seq, window.setTimeout(() => {
+        this.outputCancelTimers.delete(seq);
+        if (!this.outputUncertain.delete(seq)) return;
+        logger.log({ type: 'app', extra: `tts_cancel_settled:seq=${seq},reason=native_timeout` });
+        this.maybeReadyBeep();
+      }, TTS_CANCEL_SETTLE_MS));
+    }
     this.outputStarted.delete(seq);
     this.hybridTts.delete(seq);
-    if (kind === 'tts' && this.hybrid.enabled && _bargeInEnabled && (evt === 'end' || evt === 'watchdog')) {
+    if (kind === 'tts' && this.hybrid.enabled && _bargeInEnabled &&
+        (evt === 'end' || evt === 'watchdog' || (evt === 'error' && started))) {
       this.hybridDue ??= { inst: this.instanceId, endedAt: Date.now() };
       this.flushHybridSwap(); // speak.done's unmute retries after the output edge
     }
@@ -1002,8 +1024,19 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
         }
         return;
       }
+      // A started utterance can error while the engine still reports output.
+      // Cancel before releasing mute / owing a hybrid swap; synchronous native
+      // callbacks during cancel must not settle this utterance ahead of cancel.
+      const cancelStartedError = reason === 'error' && started;
+      if (cancelStartedError) {
+        watchdogCanceling = true;
+        try { engine.cancel(); } catch {
+          logger.log({ type: 'app', extra: 'tts_error_cancel_failed' });
+        } finally { watchdogCanceling = false; }
+      }
       finishOutput(reason);
       done();
+      if (cancelStartedError) drainPendingSpeakDone();
     };
 
     u.onstart = () => {

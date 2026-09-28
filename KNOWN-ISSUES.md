@@ -2827,4 +2827,13 @@ TTS 구간(`:2522-2523`)에 오버레이가 열리면 **모달 뒤에서 STT 인
 - **말끊기 OFF 준비음(결정 7·8):** 기존 half-duplex를 유지한다. fresh onstart와 실제 출력 경계 뒤 940Hz 단음을 한 번 울리고 `beepVolume`을 따른다. 정상 침묵 중 반복 준비음/하이브리드 교체는 없다. 기존 `ready_beep` 첫 결과·오류·종료 계측은 유지한다.
 - **클립·오디오 세션:** G1 5초 mute 화면 고지와 unmute 뒤 세션당 한 번 음성, 재시도·기존 회복 고지 중복 억제는 유지한다. 프리뷰 전용 오디오 세션 토글은 독립이며 백그라운드·언마운트에서 원래 유형 복원, 같은 세션 복귀·재마운트에서 재적용한다.
 - **리뷰 이력:** F3 `f101c8f`는 B의 foreground kick 우회를 차단했으나 4회전은 B 구 인식기 늦은 final, 최초 시작 speaking 고착, 준비음 중 end의 재시작 의무 소실을 지적했다. 결정 15에 따라 B 자체를 제거한다. 이는 B 해결 선언이 아니며 기존 리뷰 전문은 teamops `REVIEW-R.md`에 보존한다. P2 비프 토큰 상한 후 지연 재개는 이월한다.
+- **리뷰 5회전 P1 보강:** 재생 시작 후 `onerror`에도 cancel → 종료 처리 → 하이브리드 교체 의무를 세우고 진행 중 final은 기존처럼 유예한다. 워치독 cancel 뒤 native 종료가 소실되면 250ms 상수 유예로 해당 seq의 불확실 토큰을 닫고 `tts_cancel_settled`로 기록한다. 비프는 엔진 speaking/pending이 꺼진 경우에만 허용한다. `speech-lifecycle.spec.ts`는 실제 speak 경로에서 native 종료를 주입하지 않고 다음 정상 TTS 뒤 준비음까지 확인한다. 타이머 종료는 물리 출력 종료의 증명이 아니므로 앱 실기기 판정은 계속 필요하다.
 - **현재 상태:** 🟡 **MONITORING** — 앱 iOS 실기기의 둘째 값·경계 발화·중복 커밋·안내 청취·클립 신뢰도를 확인해야 한다. 비-iOS 기본 OFF는 현행 동작이며 옵션 ON의 안드로이드 영향은 미판정이다.
+
+### [TEST-TTS-SYNTH-CACHE-1] TTS 워치독 목의 변경이 모듈 캐시를 통해 다음 테스트로 남는다
+- **카테고리:** ⑧ 테스트 함정 · ① 음성/STT
+- **상태:** `OPEN` — P2 이월(2026-09-28 결정 10, F5 수정 범위 밖).
+- **재현:** `npm run test:e2e -- tests/v049-p1-tts-watchdog.spec.ts --workers=1 --reporter=dot`를 기준 커밋 `ac42c2e`의 별도 복사본에서 실행하면 5 passed / 1 failed. 긴 정상 발화가 4초 뒤 끝나야 하는 ①에서 `resolvedAt=0`으로 실패한다. F5 전체 게이트 4워커에서도 같은 실패를 관측했다. 반대로 `speech-lifecycle.spec.ts` 등을 포함한 단일 워커 묶음은 통과했다 — 묶음 green만으로 flake라 단정하지 않는다.
+- **기전:** 첫 F4 워치독 테스트가 `loadSpeech()`로 로드한 엔진의 `speak/cancel`을 바꾸고, 마지막에 `hold=false`로 즉시 종료하는 목을 남긴다. 모듈의 `synth`는 최초 import 객체를 보존하지만 다음 `loadSpeech()`는 window 객체만 교체한다. 따라서 import 순서에 따라 이전 목이 다음 테스트에도 사용된다.
+- **다음 작업:** 첫 테스트의 엔진 메서드를 finally에서 원복하거나 하네스 엔진 수명을 통일한 뒤 파일 단독·묶음·전체 게이트를 대조한다. 앱 엔진 선택 로직이나 타이밍 기대값을 바꿔 덮지 않는다.
+- **증거:** teamops `deliverables/2026-09-28-ios27-pwa-audio/F5-logs/baseline-watchdog.log`, `gate.log`. 앱 iOS 실기기 판정과 별개인 테스트 격리 문제다.
