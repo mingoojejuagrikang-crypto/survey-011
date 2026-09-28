@@ -2819,3 +2819,10 @@ TTS 구간(`:2522-2523`)에 오버레이가 열리면 **모달 뒤에서 STT 인
   관측만 적는다 ⑤ 미매칭에 「그런 항목이 없습니다」 류 사유 문구 없음(새 TTS 문구는 민구 확인 사항).
 - **현재 상태:** 🟡 **MONITORING** — 데스크톱 오라클(`tests/v052-def003-voice-modify-durable.spec.ts` · `tests/v052-modify-column-spoken.spec.ts` · `voiceFinalResolver.spec` P1-1) · 반증 완료.
   **v0.52.0(2026-09-17) 릴리스에 포함.** 실기기 판정 대기.
+
+### [STT-19] iOS 27에서 출력 뒤 기존 Web Speech 인식기가 무응답 — A/B 프리뷰 판정 대기
+- **현장 증거(2026-09-28):** 정식 0.52.0에서 말끊기 OFF(기존 half-duplex의 `abort`→fresh 재시작)로 약 3분간 값 8개 확정. 같은 세션에서 `half_duplex_stt_stop` 35건, `restart_resched_after_tts` 34건. ON에서 출력 뒤 인식기 유지 시 무응답이라는 민구 실기기 관찰과 함께 A/B 비교 근거다. 출처: `workspace_teamops/inbox/2026-09-28-ios-device/growth-log_2026-09-28_sess_1790559954449_1790560242168`.
+- **프리뷰 실험(v0.55.1-preview):** A는 말끊기 ON에서 실제 출력 종료 뒤 8초 무결과면 STT만 fresh 1회, 다시 8초 무결과면 「음성 인식 응답 없음 / 다시 연결」을 표시한다. B는 말끊기 설정과 무관하게 기존 half-duplex를 강제하고 마지막 출력 뒤 4초에 재시작한다. 설정은 비영속 세션 스냅샷이며 오디오 세션 `play-and-record` 토글과 독립이다. 상수·로그는 `ios27AudioPatch.ts`/`logEventsAudio.ts`.
+- **말끊기 OFF 준비음(민구 결정 7):** 평상시 OFF 또는 B의 fresh `onstart`가 확인되고 TTS/기존 비프 출력이 끝난 뒤 940Hz 단음 1회. 값 수용 화음과 구별하며 `beepVolume`을 따른다. 연속 자연 재시작 중에는 재생하지 않아 소음 루프를 막는다. `ready_beep`과 `audio_output_edge:kind=ready_beep`으로 첫 결과까지 시간 및 선행 `onerror`/`onend`를 남긴다. A는 ON 한정이며 OFF의 정상 침묵에 8초 타이머를 붙이지 않는다. 비프가 STT를 죽이는지는 iOS 27 실기기 판정 전까지 미확인.
+- **클립 축은 별개:** 위 정식 로그에서 `mic_track_evt:mute` 6건, `mic_muted_blackout` 6건, `clip_muted_fail` 5건, `mic_interrupt_ui` 12건. 5초 지속 mute 고지는 기존 `mic_interrupt_ui` 화면에 합치고 세션당 TTS 1회만 예약한다. 기존 mutedSpan 회계·트랙 보존·자동 destructive 재획득 금지 규약은 유지한다.
+- **현재 상태:** 🟡 **MONITORING** — 데스크톱 목/Playwright는 타이머·중복 커밋·기본 경로 회귀만 판정한다. iOS 27에서 A/B별 둘째 값, 실제 청취, 클립 저장 신뢰도, 경계 발화 절단은 실기기 로그와 클립으로 판정한다.

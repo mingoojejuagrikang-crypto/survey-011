@@ -117,6 +117,16 @@
     `export_clips_failed:<메시지>` (세션 로그 zip 백업 중 클립 읽기 예외 방출 · `type:'app'`) ·
     `export_clips_incomplete:missing=<n>` (세션 로그 zip 백업 중 누락 클립 발생 시 방출 · `type:'app'`) ·
     `clip_bytes_count_failed:<메시지>` (`useSessionClipBytes` 집계 중 예외 발생 시 방출 · `type:'error'` · `sessionId:'__app__'`).
+  - **iOS 27 프리뷰 진단(v0.55.1-preview, `MONITORING`):** 기존 `extra`는 그대로 두고
+    `stt_raw`, `stt_instance`, `audio_output_edge`, `ready_beep`, `stt_recovery`, `clip_input_probe`,
+    `audio_patch_mode`, `audio_patch_mode_restore`를 추가한다. 빌더와 리터럴 오라클은
+    `logEventsAudio.ts`·`tests/logEvents.spec.ts`에 있다. `audio_output_edge`의
+    `actual=0`(시작 요청·watchdog·skip)은 실제 출력 종료의 증거가 아니다.
+    A 타이머는 실제 출력 종료 뒤에만 시작하고, B의 재시작 간격은 기존 half-duplex
+    abort에서 마지막 출력 뒤 fresh 시도까지 잰다. 실험 임계값은 `ios27AudioPatch.ts`에 모은다.
+    말끊기 OFF 또는 B의 `ready_beep`은 fresh `onstart` 뒤 한 대기 구간에 한 번 울린다.
+    `audio_output_edge:kind=ready_beep`과 첫 `onresult`까지의 ms·그 사이 오류/종료를
+    기록하되, 정상 침묵에 A식 8초 재생성을 걸지 않는다. 준비음은 `beepVolume`을 따른다.
   - 목록에 없는 이벤트는 **바이트 불변**이다. 확장이 필요하면 필드를 늘리지 말고 **새 이벤트
     이름**을 써라 — 그게 계약을 안 깨고 늘리는 유일한 길이다.
   - 🔴 **오라클은 「프로덕션이 실제로 방출하는 형상」을 재라.** 확장 필드가 항상 붙는 이벤트를
