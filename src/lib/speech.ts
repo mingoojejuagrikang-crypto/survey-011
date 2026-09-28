@@ -1044,12 +1044,17 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
         logger.log({ type: 'app', extra: `tts_watchdog_fired:started=${started ? 'yes' : 'no'},ms=${Date.now() - enqueuedAt},stage=${stage},len=${text.length}` });
       } catch { /* 계측은 best-effort — 절대 발화 경로를 막지 않는다 */ }
       watchdogFired = true;
-      watchdogCanceling = true;
-      try { engine.cancel(); } catch { /* still settle app promises if engine throws */ }
-      watchdogCanceling = false;
+      // 결정 36: 기본 OFF/말끊기 OFF에서는 종전처럼 이 발화만 끝낸다.
+      // 엔진 큐 취소와 드레인은 하이브리드 출력에만 적용한다.
+      const cancelHybridQueue = outputToken?.controller.usesHybridTts?.() === true;
+      if (cancelHybridQueue) {
+        watchdogCanceling = true;
+        try { engine.cancel(); } catch { /* still settle app promises if engine throws */ }
+        watchdogCanceling = false;
+      }
       finishOutput('watchdog');
       done();
-      drainPendingSpeakDone();
+      if (cancelHybridQueue) drainPendingSpeakDone();
     };
 
     /** 🔴 v0.49 P-1 — **워치독이 판정한 뒤 도착한 종료 이벤트를 기록한다.**

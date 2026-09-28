@@ -910,15 +910,16 @@ test.describe('F5 — native TTS error / missing cancel completion', () => {
     });
   }
 
-  test('F5 P1-2: missing native end after watchdog cancel recovers this and the next ready beep', async () => {
+  test('r8: half-duplex watchdog avoids cancel and recovers ready beep after engine silence', async () => {
     start(false);
     expect(heard).toEqual([1]);
     const p = speak('1'); event(utterances[0], 'start'); MockRec.instances[0].fire('end');
-    await p; // real watchdog cancels; NEVER inject native end/error for utterance 0
-    expect(cancels).toBe(1);
+    await p; // No native end/error: watchdog settles this utterance without canceling the engine.
+    expect(cancels).toBe(0);
     await waitFor(() => MockRec.instances.length === 2);
     MockRec.instances[1].fire('start');
-    expect(heard).toEqual([1]); // not before the cancellation settle window
+    expect(heard).toEqual([1]); // not before the watchdog settle window
+    engine.speaking = false; // native output eventually stops without delivering end
     await waitFor(() => heard.length === 2);
     expect(heard).toEqual([1, 2]);
     expect(logger.getAll().map((e) => e.extra)).toContain('tts_cancel_settled:seq=1,reason=native_timeout');

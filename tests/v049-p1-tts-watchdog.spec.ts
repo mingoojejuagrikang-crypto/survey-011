@@ -45,17 +45,17 @@ class MockSynth {
   resume() { /* noop */ }
   speak(_u: unknown) { /* 발화는 테스트가 이벤트로 흉내낸다 */ }
 }
+const mockSynth = new MockSynth();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** window/전역 shim을 세운 뒤 speech.ts를 **처음** 로드한다. 모듈 캐시가 워커 단위로
- *  공유되므로 이 파일은 자기 워커에서 speech.ts를 최초로 import하는 쪽이어야 한다 —
- *  `--workers=1` 단독 실행에서도 성립하도록 import를 이 함수 안에 가둔다. */
+/** 같은 엔진 목을 모든 케이스가 공유한다. speech.ts의 synth가 최초 import 객체를
+ *  보존하므로 케이스마다 새 객체로 바꾸면 뒤 테스트가 다른 엔진을 조작하게 된다. */
 async function loadSpeech() {
   const g = globalThis as any;
   g.window = {
     setTimeout, clearTimeout, setInterval, clearInterval,
-    speechSynthesis: new MockSynth(),
+    speechSynthesis: mockSynth,
     SpeechSynthesisUtterance: MockUtterance,
   };
   g.SpeechSynthesisUtterance = MockUtterance;
@@ -79,40 +79,65 @@ test.describe('v0.49 P-1 — TTS 워치독 2단 분리', () => {
     MockSynth.cancelCount = 0;
   });
 
-  test('F4 watchdog cancels stuck engine queue, drains queued promises and lets next TTS start', async () => {
+  for (const hybrid of [false, true]) {
+    test(`r8 watchdog queue: hybrid=${hybrid} ${hybrid ? 'cancels queued B' : 'plays queued B before resolving it'}`, async () => {
     const { speak, setActiveController } = await loadSpeech();
     const synth = (globalThis as any).window.speechSynthesis;
+    const originalSpeak = synth.speak;
+    const originalCancel = synth.cancel;
     let speaking = false;
     let pending = false;
-    let last: MockUtterance | null = null;
-    let hold = true;
+    const queue: MockUtterance[] = [];
+    const played: string[] = [];
     const order: string[] = [];
     synth.speak = (u: MockUtterance) => {
-      if (speaking) { pending = true; return; }
-      speaking = true; last = u;
-      if (!hold) { u.onstart?.(); speaking = false; u.onend?.(); }
+      queue.push(u); pending = true;
     };
     synth.cancel = () => {
-      order.push('cancel'); speaking = false; pending = false;
-      last?.onend?.(); // WebKit can synchronously callback during cancel
+      order.push('cancel'); queue.length = 0; speaking = false; pending = false;
+    };
+    const playNext = () => {
+      const u = queue.shift()!;
+      pending = queue.length > 0; speaking = true;
+      played.push(u.text); u.onstart?.();
+      return u;
     };
     setActiveController({ muteForTts: () => order.push('mute'),
       unmuteForTts: () => order.push('unmute'), beginOutput: () => 1,
-      outputEdge: () => {}, isTtsMuted: () => true } as any);
+      outputEdge: () => {}, isTtsMuted: () => true,
+      usesHybridTts: () => hybrid } as any);
     try {
       const first = speak('첫 안내', { interrupt: false });
-      const second = speak('다음 안내', { interrupt: false });
+      let secondDone = false;
+      const second = speak('다음 안내', { interrupt: false }).then(() => { secondDone = true; });
       expect(pending).toBe(true);
-      await Promise.all([first, second]);
-      expect(order.filter((e) => e === 'cancel')).toHaveLength(1);
-      expect(order.indexOf('cancel')).toBeLessThan(order.indexOf('unmute'));
-      expect(speaking).toBe(false); expect(pending).toBe(false);
-      hold = false;
-      await speak('새 안내', { interrupt: false });
-      expect(last?.text).toBe('새 안내');
-      expect(order.filter((e) => e === 'cancel')).toHaveLength(1);
-    } finally { setActiveController(null); }
-  });
+      playNext(); // A starts, but native end/error never arrives.
+      expect(queue).toHaveLength(1);
+      await first; // A's end watchdog fires.
+      if (hybrid) {
+        await second;
+        expect(order.filter((e) => e === 'cancel')).toHaveLength(1);
+        expect(queue).toHaveLength(0);
+        expect(played).toEqual(['첫 안내']);
+        expect(secondDone).toBe(true);
+      } else {
+        expect(order.filter((e) => e === 'cancel')).toHaveLength(0);
+        expect(queue).toHaveLength(1);
+        expect(played).toEqual(['첫 안내']);
+        expect(secondDone).toBe(false);
+        const b = playNext();
+        expect(played).toEqual(['첫 안내', '다음 안내']);
+        expect(secondDone).toBe(false);
+        speaking = false; b.onend?.(); await second;
+        expect(secondDone).toBe(true);
+      }
+    } finally {
+      setActiveController(null);
+      synth.speak = originalSpeak;
+      synth.cancel = originalCancel;
+    }
+    });
+  }
 
   test('① 2.5초를 넘겨 재생되는 긴 발화를 자르지 않는다 — onend(4초)를 기다린다', async () => {
     const { speak } = await loadSpeech();
