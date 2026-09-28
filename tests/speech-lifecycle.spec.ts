@@ -455,6 +455,57 @@ test.describe('iOS 27 preview A/B — raw output boundary and fresh STT', () => 
     expect(logger.getAll().map((e) => e.extra).some((e) => e?.includes('evt=watchdog,actual=0'))).toBe(true);
   });
 
+  test('B: manual tap cancels still-speaking TTS and waits for silence before fresh STT', async () => {
+    const notices: boolean[] = [];
+    const finals: string[] = [];
+    const events: string[] = [];
+    const engine = {
+      speaking: true,
+      cancel() {
+        events.push('cancel');
+        setTimeout(() => { engine.speaking = false; events.push('silent'); }, 25);
+      },
+    };
+    (window as any).speechSynthesis = engine;
+    ctrl = new SpeechController({ onFinal: (text) => finals.push(text), onRecoveryNotice: (visible) => notices.push(visible) },
+      { patchMode: 'b', watchdogIntervalMs: 20, audioTiming: { bOutputUncertainMs: 35, aUnconfirmedMs: 100 } });
+    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
+    ctrl.muteForTts(); old.fire('end');
+    const seq = ctrl.beginOutput('tts');
+    ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'watchdog');
+    ctrl.unmuteForTts();
+    await waitFor(() => notices.at(-1) === true);
+    ctrl.reconnectRecognition();
+    expect(events).toEqual(['cancel']);
+    expect(MockRec.instances).toHaveLength(1);
+    await sleep(15);
+    expect(MockRec.instances).toHaveLength(1); // cancel has not confirmed silence yet
+    old.fireResult('999', true); // late echo while cancel is still draining
+    expect(finals).toEqual([]);
+    await waitFor(() => MockRec.instances.length === 2);
+    expect(events).toEqual(['cancel', 'silent']);
+    expect(notices.at(-1)).toBe(false);
+  });
+
+  test('B: manual tap leaves recovery visible when cancel never confirms silence', async () => {
+    const notices: boolean[] = [];
+    let cancels = 0;
+    (window as any).speechSynthesis = { speaking: true, cancel: () => { cancels++; } };
+    ctrl = new SpeechController({ onFinal: () => {}, onRecoveryNotice: (visible) => notices.push(visible) },
+      { patchMode: 'b', watchdogIntervalMs: 20, audioTiming: { bOutputUncertainMs: 35 } });
+    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
+    ctrl.muteForTts(); old.fire('end');
+    const seq = ctrl.beginOutput('tts');
+    ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'watchdog');
+    ctrl.unmuteForTts();
+    await waitFor(() => notices.at(-1) === true);
+    ctrl.reconnectRecognition();
+    await sleep(130); // includes the cancel grace and several STT watchdog ticks
+    expect(cancels).toBe(1);
+    expect(MockRec.instances).toHaveLength(1);
+    expect(notices.at(-1)).toBe(true);
+  });
+
   test('B: late native onend within grace starts one fresh recognizer only after the policy delay', async () => {
     ctrl = new SpeechController({ onFinal: () => {} },
       { patchMode: 'b', watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 35, bOutputUncertainMs: 100 } });

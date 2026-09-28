@@ -177,6 +177,7 @@ export class SpeechController {
   private outputUncertain = new Set<number>();
   private bUncertainTimer: number | null = null;
   private bManualRecovery = false;
+  private manualReconnectTimer: number | null = null;
   private outputActual = true;
   private outputHadPriorResult = false;
   private priorResults = 0;
@@ -366,6 +367,7 @@ export class SpeechController {
     this.outputStarted.clear();
     this.outputUncertain.clear();
     this.clearBUncertainTimer();
+    this.clearManualReconnectTimer();
     this.bManualRecovery = false;
     this.cb.onRecoveryNotice?.(false);
     this.active = false;
@@ -417,6 +419,9 @@ export class SpeechController {
         logger.log({ type: 'stt', extra: sttRaw({ inst, evt: 'result', out: this.outputSeq, stale: true }) });
         return;
       }
+      // The manual B fallback keeps the old recognizer closed until canceled TTS
+      // is confirmed quiet. A late result in that window must not reach onFinal.
+      if (this.patchMode === 'b' && this.bManualRecovery) return;
       // v0.44.0 §D1 — half-duplex(말끊기 OFF) 동안의 결과는 **여기서 폐기**한다(논리 차단).
       // abort는 비동기라 in-flight 결과가 새어들 수 있고, 그 한 건이면 TTS 에코 오커밋이
       // 재발한다. 텔레메트리(raw_confidence)·liveness·barge-in 컷·onFinal 전부 도달 전 컷 —
@@ -517,6 +522,7 @@ export class SpeechController {
       this.logLifecycle('end');
       this.cb.onEnd?.();
       if (this.active) {
+        if (this.patchMode === 'b' && this.bManualRecovery) return;
         // v0.44.0 §D1 — half-duplex 동안(muteForTts의 abort 포함)은 즉시 재시작하지 않고
         // 기존 P0 플래그에 합류한다: unmuteForTts가 TTS 종료 시 재예약한다. 여기서 그냥
         // scheduleRestart하면 TTS 재생 중 인식기가 되살아나 half-duplex가 무의미해진다.
@@ -539,7 +545,7 @@ export class SpeechController {
   private scheduleRestart(delay = this.restartDelayMs, cause: 'restart' | 'b_half_duplex' = 'restart') {
     // v5.2: STT must keep running during TTS so command keywords still work.
     // ttsMuted is no longer a guard here — handleFinal filters non-command results during TTS.
-    if (this.restartingTimer !== null) return;
+    if (this.restartingTimer !== null || (this.patchMode === 'b' && this.bManualRecovery)) return;
     this.restartingCause = cause;
     this.restartingTimer = window.setTimeout(() => {
       this.restartingTimer = null;
@@ -590,6 +596,7 @@ export class SpeechController {
 
   private watchdogTick() {
     if (!this.active) return;                    // 세션 꺼짐
+    if (this.patchMode === 'b' && this.bManualRecovery) return;
     if (this.ttsMuted) return;                   // TTS 재생 중 — unmute 경로가 처리
     if (this.restartingTimer !== null) return;   // 이미 재시작 예약됨
     if (this.restartPendingAfterTts) return;     // unmuteForTts가 재예약할 예정
@@ -683,6 +690,11 @@ export class SpeechController {
   private clearBUncertainTimer() {
     if (this.bUncertainTimer !== null) window.clearTimeout(this.bUncertainTimer);
     this.bUncertainTimer = null;
+  }
+
+  private clearManualReconnectTimer() {
+    if (this.manualReconnectTimer !== null) window.clearTimeout(this.manualReconnectTimer);
+    this.manualReconnectTimer = null;
   }
 
   /** Never restart B from a TTS watchdog. If native onend does not arrive within
@@ -824,6 +836,40 @@ export class SpeechController {
     if (!this.active) return;
     this.clearRecovery('tap');
     this.clearBUncertainTimer();
+    this.clearManualReconnectTimer();
+    const mustCancelTts = this.patchMode === 'b' &&
+      (this.outputUncertain.size > 0 || this.outputPending.size > 0 || getEngine()?.speaking === true);
+    if (mustCancelTts) {
+      // cancelTts owns the synthesis drain and TTS mute release. Keep the B
+      // manual latch up until the engine reports silence; cancel() can be async.
+      this.bManualRecovery = true;
+      try { cancelTts(); }
+      catch {
+        this.logRecovery('skip', 'tts_cancel_failed');
+        this.cb.onRecoveryNotice?.(true);
+        return;
+      }
+      const seq = this.outputSeq;
+      const deadline = Date.now() + this.bOutputUncertainMs;
+      const awaitSilence = () => {
+        this.manualReconnectTimer = null;
+        if (!this.active || this.outputSeq !== seq) return;
+        if (getEngine()?.speaking === false && this.outputPending.size === 0) {
+          this.finishManualReconnect();
+        } else if (Date.now() < deadline) {
+          this.manualReconnectTimer = window.setTimeout(awaitSilence, 50);
+        } else {
+          this.logRecovery('unconfirmed', 'tts_cancel_not_quiet');
+          this.cb.onRecoveryNotice?.(true);
+        }
+      };
+      awaitSilence();
+      return;
+    }
+    this.finishManualReconnect();
+  }
+
+  private finishManualReconnect() {
     this.outputUncertain.clear();
     this.outputPending.clear();
     this.outputStarted.clear();

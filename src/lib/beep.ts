@@ -145,33 +145,35 @@ function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier(),
   let master: GainNode | null = null;
   const nodes: Array<{ osc: OscillatorNode; gain: GainNode }> = [];
   let terminalTimer: ReturnType<typeof setTimeout> | null = null;
-  let settled = false;
-  const settle = (evt: 'end' | 'skip') => {
-    if (settled) return;
-    settled = true;
+  let tokenSettled = false;
+  let nodesCleaned = false;
+  const finishToken = (evt: 'end' | 'skip') => {
+    if (tokenSettled) return;
+    tokenSettled = true;
+    finishAudioOutput(outputToken, evt);
+  };
+  const cleanNodes = (stop: boolean) => {
+    if (nodesCleaned) return;
+    nodesCleaned = true;
     if (terminalTimer !== null) clearTimeout(terminalTimer);
     for (const { osc, gain } of nodes) {
       osc.onended = null;
-      if (evt === 'skip') try { osc.stop(); } catch { /* already stopped */ }
+      if (stop) try { osc.stop(); } catch { /* already stopped */ }
       try { osc.disconnect(); gain.disconnect(); } catch { /* already disconnected */ }
     }
     try { master?.disconnect(); } catch { /* no-op */ }
-    finishAudioOutput(outputToken, evt);
   };
   try {
     const c = getCtx();
     appliedGain = Math.min(Math.max(0, mult), BEEP_VOLUME_MAX);
     if (!c) {
-      settle('skip');
+      finishToken('skip');
       return { result: 'no_ctx', ctx: 'none', gain: appliedGain, tones: 0 };
     }
     const initialState = c.state;
-    // A suspended/interrupted graph may resume much later. Do not queue a ghost
-    // beep that can fire after B has restarted recognition.
-    if (initialState !== 'running' || appliedGain === 0 || tones.length === 0) {
-      settle('skip');
-      return { result: initialState !== 'running' ? 'suspended' : appliedGain === 0 ? 'silent' : 'empty',
-        ctx: initialState, gain: appliedGain, tones: 0 };
+    if (tones.length === 0) {
+      finishToken('skip');
+      return { result: 'empty', ctx: initialState, gain: appliedGain, tones: 0 };
     }
     const now = c.currentTime;
     master = c.createGain();
@@ -202,17 +204,24 @@ function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier(),
       scheduledTones += 1;
       osc.onended = () => {
         // 마지막 oscillator가 끝난 뒤에만 마스터 해제(재생 종료에 동기 — setTimeout 레이스 제거).
-        if (--pending === 0) settle('end');
+        if (--pending === 0) { cleanNodes(false); finishToken('end'); }
       };
     }
-    // onended is tied to audio time; a suspended graph can leave it pending forever.
-    // Wall-clock cap stops every scheduled node before releasing the output token.
+    // Bound the output token even when audio time stops. A still-suspended graph keeps
+    // its scheduled tones for playback on resume; onended will clean the nodes then.
     const latestStopMs = Math.max(...tones.map((tone) => tone.stopMs));
-    terminalTimer = setTimeout(() => settle('skip'), latestStopMs + 1_500);
-    return { result: 'played', ctx: initialState, gain: appliedGain, tones: scheduledTones };
+    terminalTimer = setTimeout(() => {
+      terminalTimer = null;
+      if (c.state === 'running') cleanNodes(true);
+      finishToken('skip');
+    }, latestStopMs + 1_500);
+    const result: PlaybackResult = initialState === 'suspended' || initialState === 'interrupted'
+      ? 'suspended' : appliedGain === 0 ? 'silent' : 'played';
+    return { result, ctx: initialState, gain: appliedGain, tones: scheduledTones };
   } catch {
     // A partial schedule may have started one oscillator. Stop it before B can listen.
-    settle('skip');
+    cleanNodes(true);
+    finishToken('skip');
     return { result: 'error', ctx: contextState(), gain: appliedGain, tones: scheduledTones };
   }
 }
