@@ -460,7 +460,7 @@ test.describe('iOS 27 preview A/B — raw output boundary and fresh STT', () => 
     const finals: string[] = [];
     const events: string[] = [];
     const engine = {
-      speaking: true,
+      speaking: false,
       cancel() {
         events.push('cancel');
         setTimeout(() => { engine.speaking = false; events.push('silent'); }, 25);
@@ -470,6 +470,7 @@ test.describe('iOS 27 preview A/B — raw output boundary and fresh STT', () => 
     ctrl = new SpeechController({ onFinal: (text) => finals.push(text), onRecoveryNotice: (visible) => notices.push(visible) },
       { patchMode: 'b', watchdogIntervalMs: 20, audioTiming: { bOutputUncertainMs: 35, aUnconfirmedMs: 100 } });
     ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
+    engine.speaking = true;
     ctrl.muteForTts(); old.fire('end');
     const seq = ctrl.beginOutput('tts');
     ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'watchdog');
@@ -490,10 +491,11 @@ test.describe('iOS 27 preview A/B — raw output boundary and fresh STT', () => 
   test('B: manual tap leaves recovery visible when cancel never confirms silence', async () => {
     const notices: boolean[] = [];
     let cancels = 0;
-    (window as any).speechSynthesis = { speaking: true, cancel: () => { cancels++; } };
+    (window as any).speechSynthesis = { speaking: false, cancel: () => { cancels++; } };
     ctrl = new SpeechController({ onFinal: () => {}, onRecoveryNotice: (visible) => notices.push(visible) },
       { patchMode: 'b', watchdogIntervalMs: 20, audioTiming: { bOutputUncertainMs: 35 } });
     ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
+    (window as any).speechSynthesis.speaking = true;
     ctrl.muteForTts(); old.fire('end');
     const seq = ctrl.beginOutput('tts');
     ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'watchdog');
@@ -505,6 +507,112 @@ test.describe('iOS 27 preview A/B — raw output boundary and fresh STT', () => 
     expect(MockRec.instances).toHaveLength(1);
     expect(notices.at(-1)).toBe(true);
   });
+
+  for (const entry of ['kick', 'attemptStart', 'scheduleRestart', 'watchdogTick',
+    'restartIfZombie', 'reconnectRecognition', 'unmuteForTts', 'nativeEnd', 'lateOutputEnd'] as const) {
+    test(`B F3: uncertain output stays closed through ${entry}`, async () => {
+      const notices: boolean[] = [];
+      const finals: string[] = [];
+      const engine = { speaking: false, cancel: () => {} };
+      (window as any).speechSynthesis = engine;
+      ctrl = new SpeechController({ onFinal: (text) => finals.push(text),
+        onRecoveryNotice: (visible) => notices.push(visible) },
+      { patchMode: 'b', restartDelayMs: 10, watchdogIntervalMs: 20,
+        audioTiming: { bRestartDelayMs: 10, bOutputUncertainMs: 25 } });
+      ctrl.start();
+      const old = MockRec.instances[0]; old.fire('start');
+      engine.speaking = true;
+      ctrl.muteForTts(); old.fire('end');
+      const seq = ctrl.beginOutput('tts');
+      ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'watchdog');
+      ctrl.unmuteForTts();
+      await waitFor(() => notices.at(-1) === true);
+      ctrl.reconnectRecognition(); // cancel returns, but native speaking stays true
+      await sleep(65);
+      expect(MockRec.instances).toHaveLength(1);
+      expect(notices.at(-1)).toBe(true);
+
+      if (entry === 'kick') expect(ctrl.kick()).toBe('b_output_not_safe');
+      else if (entry === 'nativeEnd') old.fire('end');
+      else if (entry === 'lateOutputEnd') ctrl.outputEdge(seq, 'tts', 'end');
+      else if (entry === 'restartIfZombie') {
+        // Make the zombie branch eligible without waiting for real device thresholds.
+        Object.assign(ctrl, { recRunning: true, erroredSinceLastResult: true,
+          hadResultSinceStart: false, lastResultAt: 1, lastStartAttemptAt: 1 });
+        expect((ctrl as any).restartIfZombie(Date.now())).toBe(false);
+      } else (ctrl as any)[entry]();
+      await sleep(35);
+      expect(MockRec.instances).toHaveLength(1);
+      expect(notices.at(-1)).toBe(true);
+      old.fireResult('999', true);
+      expect(finals).toEqual([]);
+    });
+  }
+
+  test('B F3: an ordinary restart already queued rechecks output at execution', async () => {
+    ctrl = new SpeechController({ onFinal: () => {} },
+      { patchMode: 'b', restartDelayMs: 20, watchdogIntervalMs: 1000 });
+    ctrl.start(); const old = MockRec.instances[0]; old.fire('start'); old.fire('end');
+    const seq = ctrl.beginOutput('beep'); // starts after the ordinary timer was armed
+    await sleep(40);
+    expect(MockRec.instances).toHaveLength(1);
+    ctrl.outputEdge(seq, 'beep', 'end');
+    ctrl.stop();
+  });
+
+  test('B F3: delayed engine silence after native end retains the B restart delay', async () => {
+    const engine = { speaking: false };
+    (window as any).speechSynthesis = engine;
+    ctrl = new SpeechController({ onFinal: () => {} },
+      { patchMode: 'b', watchdogIntervalMs: 15, audioTiming: { bRestartDelayMs: 40 } });
+    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
+    engine.speaking = true;
+    ctrl.muteForTts(); old.fire('end');
+    const seq = ctrl.beginOutput('tts'); ctrl.outputEdge(seq, 'tts', 'start');
+    ctrl.outputEdge(seq, 'tts', 'end'); ctrl.unmuteForTts();
+    await sleep(35);
+    expect(MockRec.instances).toHaveLength(1);
+    engine.speaking = false;
+    await sleep(25);
+    expect(MockRec.instances).toHaveLength(1);
+    await waitFor(() => MockRec.instances.length === 2);
+    expect(MockRec.instances[1].started).toBe(true);
+  });
+
+  test('B F3: start and session recreation wait for the previous engine output', async () => {
+    const engine = { speaking: true };
+    (window as any).speechSynthesis = engine;
+    ctrl = new SpeechController({ onFinal: () => {} }, { patchMode: 'b', watchdogIntervalMs: 20 });
+    ctrl.start();
+    expect(MockRec.instances).toHaveLength(0);
+    await sleep(35);
+    expect(MockRec.instances).toHaveLength(0);
+    engine.speaking = false;
+    await waitFor(() => MockRec.instances.length === 1);
+    expect(MockRec.instances[0].started).toBe(true);
+    ctrl.stop();
+    engine.speaking = true;
+    ctrl = new SpeechController({ onFinal: () => {} }, { patchMode: 'b', watchdogIntervalMs: 20 });
+    ctrl.start();
+    await sleep(35);
+    expect(MockRec.instances).toHaveLength(1);
+    engine.speaking = false;
+    await waitFor(() => MockRec.instances.length === 2);
+    expect(MockRec.instances[1].started).toBe(true);
+  });
+
+  for (const patchMode of ['default', 'a'] as const) {
+    test(`${patchMode} F3: barge-in ON still opens STT while engine speaks`, async () => {
+      (window as any).speechSynthesis = { speaking: true };
+      ctrl = new SpeechController({ onFinal: () => {} },
+        { patchMode, restartDelayMs: 10, watchdogIntervalMs: 1000 });
+      ctrl.start();
+      expect(MockRec.instances[0].started).toBe(true);
+      MockRec.instances[0].fire('start'); MockRec.instances[0].fire('end');
+      await waitFor(() => MockRec.instances.length === 2);
+      expect(MockRec.instances[1].started).toBe(true);
+    });
+  }
 
   test('B: late native onend within grace starts one fresh recognizer only after the policy delay', async () => {
     ctrl = new SpeechController({ onFinal: () => {} },

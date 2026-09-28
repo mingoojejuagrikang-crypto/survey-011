@@ -287,7 +287,7 @@ export class SpeechController {
     this.halfDuplexHold = false;
     // P0: muteForTts가 취소했던 재시작을 여기서 되살린다.
     if (this.active && this.restartPendingAfterTts && (this.patchMode !== 'a' || !this.outputWatchdogBlocked) &&
-        (this.patchMode !== 'b' || this.bOutputIsSafe())) {
+        this.canStartRecognition()) {
       this.restartPendingAfterTts = false;
       this.logLifecycle('restart_resched_after_tts', true);
       this.scheduleRestart(this.patchMode === 'b' ? this.bRestartDelayMs : this.restartDelayMs,
@@ -339,6 +339,13 @@ export class SpeechController {
 
   start() {
     if (this.active) return;
+    // Keep the session/watchdog live while B waits for a still-speaking engine
+    // left by a previous controller (resume/remount). Never open STT through it.
+    if (!this.canStartRecognition()) {
+      this.active = true;
+      this.startWatchdog();
+      return;
+    }
     this.rec = createRecognition();
     if (!this.rec) {
       this.logInstance('create_failed', 'session_start');
@@ -545,14 +552,14 @@ export class SpeechController {
   private scheduleRestart(delay = this.restartDelayMs, cause: 'restart' | 'b_half_duplex' = 'restart') {
     // v5.2: STT must keep running during TTS so command keywords still work.
     // ttsMuted is no longer a guard here — handleFinal filters non-command results during TTS.
-    if (this.restartingTimer !== null || (this.patchMode === 'b' && this.bManualRecovery)) return;
+    if (this.restartingTimer !== null || !this.canStartRecognition()) return;
     this.restartingCause = cause;
     this.restartingTimer = window.setTimeout(() => {
       this.restartingTimer = null;
       this.restartingCause = null;
       if (!this.active) return;
-      if (cause === 'b_half_duplex' && !this.bOutputIsSafe()) {
-        this.restartPendingAfterTts = true;
+      if (!this.canStartRecognition()) {
+        if (this.outputPending.size > 0 || this.outputUncertain.size > 0) this.restartPendingAfterTts = true;
         this.logRecovery('skip', 'b_output_not_safe');
         return;
       }
@@ -567,6 +574,7 @@ export class SpeechController {
    *  tick"이라는 주석과 달리 다음 tick이 없음) 두 번째 영구사멸 경로였다. 실패 시 백오프
    *  (×2, 상한 5000ms)로 **무한** 재예약한다 — 재시도 상한을 두면 사멸 경로가 되살아난다. */
   private attemptStart(cause = 'restart') {
+    if (!this.active || !this.canStartRecognition()) return;
     try {
       if (cause === 'b_half_duplex') this.logRecovery('attempt', 'b_half_duplex', Date.now() - this.halfDuplexAbortedAt);
       this.rec = createRecognition();
@@ -596,10 +604,18 @@ export class SpeechController {
 
   private watchdogTick() {
     if (!this.active) return;                    // 세션 꺼짐
-    if (this.patchMode === 'b' && this.bManualRecovery) return;
+    if (!this.canStartRecognition()) return;
     if (this.ttsMuted) return;                   // TTS 재생 중 — unmute 경로가 처리
     if (this.restartingTimer !== null) return;   // 이미 재시작 예약됨
-    if (this.restartPendingAfterTts) return;     // unmuteForTts가 재예약할 예정
+    if (this.restartPendingAfterTts) {
+      // Native speaking may turn false just after onend/unmute. The common gate
+      // above has now proved safety; preserve B's delay instead of stranding STT.
+      if (this.patchMode === 'b') {
+        this.restartPendingAfterTts = false;
+        this.scheduleRestart(this.bRestartDelayMs, 'b_half_duplex');
+      }
+      return; // default/A still belong to unmuteForTts
+    }
     const now = Date.now();
     // recRunning=true지만 결과가 안 오는 좀비면 restartIfZombie가 처리, 아니면 정상 가동 → no-op.
     if (this.recRunning) { this.restartIfZombie(now); return; }
@@ -623,6 +639,7 @@ export class SpeechController {
    *  fresh 재시작하고 true 반환. 재시작 직후 gap(새 인스턴스 onStart 미도착 + recRunning=true·
    *  옛 앵커 잔존)에서의 오판 방지용 lastStartAttemptAt 유예는 유지. */
   private restartIfZombie(now: number): boolean {
+    if (!this.canStartRecognition()) return false;
     if (!this.recRunning) return false;
     if (!this.erroredSinceLastResult || this.hadResultSinceStart) return false;
     const threshold = this.effectiveZombieStaleMs();
@@ -644,6 +661,7 @@ export class SpeechController {
    *  SOP-003의 "watchdog 0이 이상적" 판독을 오염시키지 않기 위해). */
   kick(): string {
     if (!this.active) return 'inactive';
+    if (!this.canStartRecognition()) return 'b_output_not_safe';
     if (this.ttsMuted) return 'tts_muted';
     if (this.restartingTimer !== null) return 'restart_scheduled';
     if (this.restartPendingAfterTts) return 'pending_after_tts';
@@ -683,8 +701,16 @@ export class SpeechController {
     this.cb.onRecoveryNotice?.(false);
   }
 
-  private bOutputIsSafe(): boolean {
-    return this.outputPending.size === 0 && this.outputUncertain.size === 0 && !this.bManualRecovery;
+  /** Single B output gate for every STT opening, including start/resume and
+   *  timer execution. Default/A barge-in behavior must not depend on this gate.
+   *  Only a manual cancel with explicit engine silence may retire uncertainty.
+   *  Callers still recheck the normal gate after clearing that manual latch. */
+  private canStartRecognition(afterManualCancel = false): boolean {
+    if (this.patchMode !== 'b') return true;
+    if (this.outputPending.size > 0) return false;
+    const speaking = getEngine()?.speaking;
+    if (afterManualCancel) return speaking === false;
+    return speaking !== true && this.outputUncertain.size === 0 && !this.bManualRecovery;
   }
 
   private clearBUncertainTimer() {
@@ -773,7 +799,7 @@ export class SpeechController {
     if (this.outputPending.size > 0) return;
     this.maybeReadyBeep();
     this.cb.onOutputFinished?.(this.outputSeq);
-    if (this.patchMode === 'b' && this.restartPendingAfterTts && !this.ttsMuted && this.bOutputIsSafe()) {
+    if (this.patchMode === 'b' && this.restartPendingAfterTts && !this.ttsMuted && this.canStartRecognition()) {
       this.restartPendingAfterTts = false;
       this.scheduleRestart(this.bRestartDelayMs, 'b_half_duplex');
     }
@@ -854,7 +880,7 @@ export class SpeechController {
       const awaitSilence = () => {
         this.manualReconnectTimer = null;
         if (!this.active || this.outputSeq !== seq) return;
-        if (getEngine()?.speaking === false && this.outputPending.size === 0) {
+        if (this.canStartRecognition(true)) {
           this.finishManualReconnect();
         } else if (Date.now() < deadline) {
           this.manualReconnectTimer = window.setTimeout(awaitSilence, 50);
