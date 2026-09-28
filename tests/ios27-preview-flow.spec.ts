@@ -25,44 +25,18 @@ async function valueEvents(page: Page) {
   });
 }
 
-async function selectMode(page: Page, mode: 'a' | 'b') {
-  await page.locator('[data-testid="tab-settings"]').click();
-  await page.locator(`[data-testid="audio-patch-${mode}"]`).click();
-  await expect(page.locator(`[data-testid="audio-patch-${mode}"]`)).toHaveAttribute('aria-pressed', 'true');
-}
-
-test('A — first value follows real commit; silent old recognizer gets one fresh instance and second column remains correct', async ({ page }) => {
-  await boot(page, PHONE_402, { settings: settings as typeof SETTINGS, sttMode: 'firstResultThenSilentAfterPlayback',
-    beforeStart: (p) => selectMode(p, 'a') });
-  await expect(page.locator('[data-testid="audio-patch-badge"]')).toContainText('A');
+test('hybrid — real first and second values commit once across fresh recognizers', async ({ page }) => {
+  await boot(page, PHONE_402, { settings: { ...settings, state: { ...settings.state, refreshRecognitionAfterTts: true } } as typeof SETTINGS,
+    sttMode: 'firstResultThenSilentAfterPlayback' });
   await fireStt(page, '54.6', 1100);
   await expect.poll(async () => (await valueEvents(page)).filter((e) => e.type === 'value').length).toBe(1);
-  await expect.poll(() => page.evaluate(() => ((window as any).__mockSTTInstances ?? []).length), { timeout: 15_000 }).toBe(2);
+  await expect.poll(async () => (await valueEvents(page)).some((e) => e.extra?.startsWith('stt_hybrid_swap:'))).toBe(true);
   await fireStt(page, '23.4', 1400);
   await expect.poll(async () => (await valueEvents(page)).filter((e) => e.type === 'value').length).toBe(2);
   const values = (await valueEvents(page)).filter((e) => e.type === 'value');
   expect(values.map((e) => e.colId)).toEqual(['v1', 'v2']);
-  const recovery = (await valueEvents(page)).filter((e) => e.extra?.startsWith('stt_recovery:'));
-  expect(recovery.some((e) => e.extra?.includes('phase=attempt'))).toBe(true);
-  expect(recovery.some((e) => e.extra?.includes('phase=result'))).toBe(true);
+  expect((await valueEvents(page)).some((e) => e.extra === 'stt_hybrid_policy:platform=other,option=1,enabled=1,bargeIn=1')).toBe(true);
   expect((await valueEvents(page)).some((e) => e.extra?.startsWith('ready_beep:'))).toBe(false);
-});
-
-test('B — existing half-duplex is forced while setting says barge-in ON; fresh restart waits four seconds', async ({ page }) => {
-  await boot(page, PHONE_402, { settings: settings as typeof SETTINGS, sttMode: 'firstResultThenSilentAfterPlayback',
-    beforeStart: (p) => selectMode(p, 'b') });
-  await fireStt(page, '54.6', 1100);
-  await expect.poll(async () => (await valueEvents(page)).filter((e) => e.type === 'value').length).toBe(1);
-  await expect.poll(async () => (await valueEvents(page)).some((e) => e.extra?.startsWith('audio_patch_mode:mode=b') && e.extra?.includes('bargeIn=1,halfDuplex=1'))).toBe(true);
-  await expect.poll(() => page.evaluate(() => ((window as any).__mockSTTInstances ?? []).length), { timeout: 11_000 }).toBe(2);
-  await expect.poll(async () => (await valueEvents(page)).some((e) =>
-    e.extra?.startsWith('ready_beep:') && e.extra.includes('phase=play') && e.extra.includes('gain=6'))).toBe(true);
-  await fireStt(page, '23.4', 1400);
-  const values = (await valueEvents(page)).filter((e) => e.type === 'value');
-  expect(values.map((e) => e.colId)).toEqual(['v1', 'v2']);
-  const extras = (await valueEvents(page)).map((e) => e.extra ?? '');
-  expect(extras.some((e) => e.startsWith('audio_output_edge:') && e.includes('kind=ready_beep'))).toBe(true);
-  expect(extras.some((e) => e.startsWith('ready_beep:') && e.includes('phase=first_result'))).toBe(true);
 });
 
 test('ready beep — ordinary barge-in OFF also cues listening after fresh onstart', async ({ page }) => {
@@ -142,7 +116,7 @@ test('audio session toggle is independent and restores the original type on sess
       await p.locator('[data-testid="audio-session-play-and-record"]').check();
     } });
   expect(await page.evaluate(() => (navigator as any).audioSession.type)).toBe('play-and-record');
-  expect((await valueEvents(page)).some((e) => e.extra?.startsWith('audio_patch_mode:mode=default') &&
+  expect((await valueEvents(page)).some((e) => e.extra?.startsWith('audio_session_experiment:') &&
     e.extra?.includes('sessionType=on,supported=1,before=auto,after=play-and-record'))).toBe(true);
   await fireStt(page, '종료', 900);
   await expect(page.locator('text=음성 입력 시작').first()).toBeVisible({ timeout: 15_000 });
@@ -198,6 +172,6 @@ test('audio session toggle is disabled when the API is absent', async ({ page })
       await expect(p.locator('[data-testid="audio-session-play-and-record"]')).toBeDisabled();
       await expect(p.locator('[data-testid="audio-patch-controls"]')).toContainText('미지원');
     } });
-  expect((await valueEvents(page)).some((e) => e.extra?.startsWith('audio_patch_mode:mode=default') &&
+  expect((await valueEvents(page)).some((e) => e.extra?.startsWith('audio_session_experiment:') &&
     e.extra?.includes('sessionType=off,supported=0,before=unreadable,after=unreadable'))).toBe(true);
 });

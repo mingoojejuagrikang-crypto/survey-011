@@ -79,6 +79,41 @@ test.describe('v0.49 P-1 — TTS 워치독 2단 분리', () => {
     MockSynth.cancelCount = 0;
   });
 
+  test('F4 watchdog cancels stuck engine queue, drains queued promises and lets next TTS start', async () => {
+    const { speak, setActiveController } = await loadSpeech();
+    const synth = (globalThis as any).window.speechSynthesis;
+    let speaking = false;
+    let pending = false;
+    let last: MockUtterance | null = null;
+    let hold = true;
+    const order: string[] = [];
+    synth.speak = (u: MockUtterance) => {
+      if (speaking) { pending = true; return; }
+      speaking = true; last = u;
+      if (!hold) { u.onstart?.(); speaking = false; u.onend?.(); }
+    };
+    synth.cancel = () => {
+      order.push('cancel'); speaking = false; pending = false;
+      last?.onend?.(); // WebKit can synchronously callback during cancel
+    };
+    setActiveController({ muteForTts: () => order.push('mute'),
+      unmuteForTts: () => order.push('unmute'), beginOutput: () => 1,
+      outputEdge: () => {}, isTtsMuted: () => true } as any);
+    try {
+      const first = speak('첫 안내', { interrupt: false });
+      const second = speak('다음 안내', { interrupt: false });
+      expect(pending).toBe(true);
+      await Promise.all([first, second]);
+      expect(order.filter((e) => e === 'cancel')).toHaveLength(1);
+      expect(order.indexOf('cancel')).toBeLessThan(order.indexOf('unmute'));
+      expect(speaking).toBe(false); expect(pending).toBe(false);
+      hold = false;
+      await speak('새 안내', { interrupt: false });
+      expect(last?.text).toBe('새 안내');
+      expect(order.filter((e) => e === 'cancel')).toHaveLength(1);
+    } finally { setActiveController(null); }
+  });
+
   test('① 2.5초를 넘겨 재생되는 긴 발화를 자르지 않는다 — onend(4초)를 기다린다', async () => {
     const { speak } = await loadSpeech();
     const { logger } = await import('../src/lib/logger');

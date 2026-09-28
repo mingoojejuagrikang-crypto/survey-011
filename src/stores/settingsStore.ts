@@ -162,6 +162,7 @@ export const useSettingsStore = create<SettingsState>()(
       merge: (persisted, current) => {
         const p = { ...(persisted as Record<string, unknown>) };
         for (const k of DEPRECATED_PERSIST_KEYS) delete p[k];
+        if (typeof p.refreshRecognitionAfterTts !== 'boolean') p.refreshRecognitionAfterTts = false;
         return { ...current, ...(p as Partial<SettingsState>) };
       },
       // v0.14.0 C — 하이드레이션 breadcrumb. 다음 강제종료/시간경과 테스트 로그에서 시트 등록이

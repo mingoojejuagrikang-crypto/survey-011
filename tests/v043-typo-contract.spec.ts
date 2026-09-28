@@ -223,7 +223,9 @@ test('[node] 인라인 fontSize 계약 강제 검사기 (UI-g)', () => {
   //   "이번 세션 · 다시 묻기 … · 고친 칸 … · 알람 …"). 위반 0 그대로. 73 → 74.
   //   🔴 이 검사기는 `src/components/voice/`를 **재귀 순회**한다 — `ReadyState.tsx`를 이 디렉터리
   //   밖으로 옮기면 계약이 −1 되어 여기가 red가 된다(AlarmInterimStrip 분리 때와 같은 함정).
-  expect(contractCount, '계약 참조 (통과)').toBe(78);
+  // F4 결정 15: A/B 전용 SttRecoveryBanner 제거로 bannerTitle/bannerAction 2건 소멸.
+  // 기존 배너를 임시 복원하면 78로 통과함을 확인. 실제 위반 0·허용/주석 수는 불변.
+  expect(contractCount, '계약 참조 (통과)').toBe(76);
   expect(allowlistCount, 'ALLOWLIST (허용)').toBe(4);
   expect(commentCount, '주석 (skip)').toBe(3);
   expect(violationCount, '위반 (0건이어야 함)').toBe(0);

@@ -37,8 +37,12 @@ export function readyBeep(fields: { inst: number; phase: 'onstart' | 'play' | 'f
     ...(fields.gain === undefined ? {} : { gain: fields.gain }),
   })}`;
 }
-export function sttRecovery(fields: { seq: number; phase: 'armed' | 'skip' | 'timeout' | 'attempt' | 'result' | 'unconfirmed' | 'tap'; inst: number; reason: string; ms?: number }): string {
-  return `stt_recovery:${kv({ seq: fields.seq, phase: fields.phase, inst: fields.inst, reason: fields.reason, ...(fields.ms === undefined ? {} : { ms: fields.ms }) })}`;
+export function sttHybridSwap(reason: 'tts_end' | 'deferred_final' | 'defer_timeout', gapMs: number): string {
+  return `stt_hybrid_swap:${kv({ reason, gapMs })}`;
+}
+export function sttHybridPolicy(fields: { platform: 'ios' | 'other'; option: boolean; enabled: boolean; bargeIn: boolean }): string {
+  return `stt_hybrid_policy:${kv({ platform: fields.platform, option: fields.option ? 1 : 0,
+    enabled: fields.enabled && fields.bargeIn ? 1 : 0, bargeIn: fields.bargeIn ? 1 : 0 })}`;
 }
 export function clipInputProbe(fields: { edge: 'first_mute' | 'after_output' | 'tap_recover' | 'mute_notice'; track: string; enabled: string; ctx: string; peak: number; seq: number }): string {
   return `clip_input_probe:${kv(fields)}`;
@@ -46,12 +50,11 @@ export function clipInputProbe(fields: { edge: 'first_mute' | 'after_output' | '
 export function clipMuteVoice(fields: { phase: 'attempt' | 'started' | 'no_start'; n: number; reason: 'unmute' | 'retry' | 'foreground' }): string {
   return `clip_mute_voice:${kv(fields)}`;
 }
-export function audioPatchMode(fields: { mode: string; build: string; selectedAt: number; bargeIn: boolean; halfDuplex: boolean; sessionType: 'on' | 'off'; supported: boolean; before: string; after: string; state: string; set: string; aMs: number; aConfirmMs: number; bMs: number; muteMs: number }): string {
-  return `audio_patch_mode:${kv({ mode: fields.mode, build: fields.build, selectedAt: fields.selectedAt,
+export function audioSessionExperiment(fields: { build: string; selectedAt: number; bargeIn: boolean; halfDuplex: boolean; sessionType: 'on' | 'off'; supported: boolean; before: string; after: string; state: string; set: string; muteMs: number }): string {
+  return `audio_session_experiment:${kv({ build: fields.build, selectedAt: fields.selectedAt,
     bargeIn: fields.bargeIn ? 1 : 0, halfDuplex: fields.halfDuplex ? 1 : 0,
     sessionType: fields.sessionType, supported: fields.supported ? 1 : 0, before: fields.before,
-    after: fields.after, state: fields.state, set: fields.set, aMs: fields.aMs,
-    aConfirmMs: fields.aConfirmMs, bMs: fields.bMs, muteMs: fields.muteMs })}`;
+    after: fields.after, state: fields.state, set: fields.set, muteMs: fields.muteMs })}`;
 }
 export function audioPatchModeRestore(result: 'off' | 'ok' | 'error', type: string): string {
   return `audio_patch_mode_restore:${kv({ result, type })}`;

@@ -104,6 +104,8 @@ export function migrateSettings(persisted: unknown, version: number): SettingsSt
   // "디폴트는 바지인 on" — 기존 사용자 = undefined → ON). 같은 persist version의 저장본은
   // migrate를 안 타지만, 그 경로는 merge의 current 기본값(true)이 같은 결과를 보장한다.
   if (typeof s.bargeInEnabled !== 'boolean') s.bargeInEnabled = true;
+  // Additive option, version 13 stays frozen. Same-version hydration also coerces in merge.
+  if (typeof s.refreshRecognitionAfterTts !== 'boolean') s.refreshRecognitionAfterTts = false;
   if (typeof s.preferredVoiceName !== 'string') s.preferredVoiceName = '';
   // v0.35.1 — 계정 결합 폴더 캐시(형태 손상은 null로 치유). legacy 맨 문자열 캐시
   // (teamFolderId/userLogFolderId)는 계정 미상이라 승계하지 않는다(DEPRECATED strip —

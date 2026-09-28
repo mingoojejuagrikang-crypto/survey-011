@@ -117,16 +117,20 @@
     `export_clips_failed:<메시지>` (세션 로그 zip 백업 중 클립 읽기 예외 방출 · `type:'app'`) ·
     `export_clips_incomplete:missing=<n>` (세션 로그 zip 백업 중 누락 클립 발생 시 방출 · `type:'app'`) ·
     `clip_bytes_count_failed:<메시지>` (`useSessionClipBytes` 집계 중 예외 발생 시 방출 · `type:'error'` · `sessionId:'__app__'`).
-  - **iOS 27 프리뷰 진단(v0.55.1-preview, `MONITORING`):** 기존 `extra`는 그대로 두고
-    `stt_raw`, `stt_instance`, `audio_output_edge`, `ready_beep`, `stt_recovery`, `clip_input_probe`,
-    `audio_patch_mode`, `audio_patch_mode_restore`를 추가한다. 빌더와 리터럴 오라클은
-    `logEventsAudio.ts`·`tests/logEvents.spec.ts`에 있다. `audio_output_edge`의
-    `actual=0`(시작 요청·watchdog·skip)은 실제 출력 종료의 증거가 아니다.
-    A 타이머는 실제 출력 종료 뒤에만 시작하고, B의 재시작 간격은 기존 half-duplex
-    abort에서 마지막 출력 뒤 fresh 시도까지 잰다. 실험 임계값은 `ios27AudioPatch.ts`에 모은다.
-    말끊기 OFF 또는 B의 `ready_beep`은 fresh `onstart` 뒤 한 대기 구간에 한 번 울린다.
-    `audio_output_edge:kind=ready_beep`과 첫 `onresult`까지의 ms·그 사이 오류/종료를
-    기록하되, 정상 침묵에 A식 8초 재생성을 걸지 않는다. 준비음은 `beepVolume`을 따른다.
+  - **iOS 음성 하이브리드(v0.55.1-preview, `MONITORING`):** `stt_raw`, `stt_instance`,
+    `audio_output_edge`, `ready_beep`, `clip_input_probe`와 오디오 세션 복원 계측은 유지한다.
+    A/B 실험과 `stt_recovery`, `audio_patch_mode`는 폐기한다(결정 15·16).
+    새 이벤트 `stt_hybrid_swap:reason=<tts_end|deferred_final|defer_timeout>,gapMs=<ms>`는
+    TTS 종료부터 STT 교체 시도까지의 간격이다. `stt_hybrid_policy:platform=<ios|other>,option=<0|1>,enabled=<0|1>,bargeIn=<0|1>`은
+    원 설정과 적용 결과를 구분한다. `audio_session_experiment`는 기존 모드 이벤트를
+    새 이름으로 대체하며 기존 로그 바이트를 재정의하지 않는다. 빌더/오라클은
+    `logEventsAudio.ts`/`tests/logEvents.spec.ts`에 있다.
+    iOS는 말끊기 ON일 때 항상 하이브리드, 비-iOS는 영속 옵션(기본 OFF)을 따른다.
+    TTS 재생 중 인식기는 유지하고 종료 뒤 새 인식기로 교체하되 진행 중 발화는 final 처리 뒤까지
+    유예한다(상한 `speechPlatform.ts`의 5초). 워치독은 출력 종료의 물리적 증거가 아니며
+    엔진 큐를 cancel하고 앱 발화 대기를 드레인한 뒤 복구한다. `audio_output_edge`의
+    `actual=0` 의미는 그대로다. 말끊기 OFF 준비음은 fresh onstart/출력 경계를 기다려 한 번 울리며
+    정상 침묵에 주기적 재생성을 붙이지 않는다. 준비음은 `beepVolume`을 따른다.
   - 목록에 없는 이벤트는 **바이트 불변**이다. 확장이 필요하면 필드를 늘리지 말고 **새 이벤트
     이름**을 써라 — 그게 계약을 안 깨고 늘리는 유일한 길이다.
   - 🔴 **오라클은 「프로덕션이 실제로 방출하는 형상」을 재라.** 확장 필드가 항상 붙는 이벤트를

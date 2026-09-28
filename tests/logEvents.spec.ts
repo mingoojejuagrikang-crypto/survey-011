@@ -58,7 +58,7 @@ import {
   authLostInSession,
   authLostPrompt,
   statusCardLogin,
-  sttRaw, sttInstance, audioOutputEdge, readyBeep, sttRecovery, clipInputProbe, audioPatchMode, audioPatchModeRestore,
+  sttRaw, sttInstance, audioOutputEdge, readyBeep, sttHybridSwap, sttHybridPolicy, clipInputProbe, audioSessionExperiment, audioPatchModeRestore,
 } from '../src/lib/logEvents';
 
 test('iOS 27 preview diagnostic extras — production-shaped literal bytes', () => {
@@ -66,23 +66,23 @@ test('iOS 27 preview diagnostic extras — production-shaped literal bytes', () 
   expect(sttRaw({ inst: 3, evt: 'result', final: false, out: 2 })).toBe('stt_raw:inst=3,evt=result,final=0,out=2');
   expect(sttRaw({ inst: 3, evt: 'error', code: 'audio-capture', out: 2, stale: true }))
     .toBe('stt_raw:inst=3,evt=error,code=audio-capture,out=2,stale=1');
-  expect(sttInstance({ inst: 4, action: 'create', cause: 'post_output_timeout', out: 2 }))
-    .toBe('stt_instance:inst=4,action=create,cause=post_output_timeout,out=2');
+  expect(sttInstance({ inst: 4, action: 'create', cause: 'hybrid', out: 2 }))
+    .toBe('stt_instance:inst=4,action=create,cause=hybrid,out=2');
   expect(audioOutputEdge({ seq: 2, kind: 'tts', evt: 'end', actual: true }))
     .toBe('audio_output_edge:seq=2,kind=tts,evt=end,actual=1');
   expect(audioOutputEdge({ seq: 3, kind: 'ready_beep', evt: 'end', actual: true }))
     .toBe('audio_output_edge:seq=3,kind=ready_beep,evt=end,actual=1');
   expect(readyBeep({ inst: 4, phase: 'first_result', ms: 419, anchor: 'output_end' }))
     .toBe('ready_beep:inst=4,phase=first_result,ms=419,anchor=output_end');
-  expect(sttRecovery({ seq: 2, phase: 'armed', inst: 3, reason: 'post_output', ms: 8000 }))
-    .toBe('stt_recovery:seq=2,phase=armed,inst=3,reason=post_output,ms=8000');
+  expect(sttHybridSwap('deferred_final', 143)).toBe('stt_hybrid_swap:reason=deferred_final,gapMs=143');
+  expect(sttHybridPolicy({ platform: 'ios', option: false, enabled: true, bargeIn: true }))
+    .toBe('stt_hybrid_policy:platform=ios,option=0,enabled=1,bargeIn=1');
   expect(clipInputProbe({ edge: 'first_mute', track: 'muted', enabled: 'yes', ctx: 'running', peak: 0, seq: 0 }))
     .toBe('clip_input_probe:edge=first_mute,track=muted,enabled=yes,ctx=running,peak=0,seq=0');
-  expect(audioPatchMode({ mode: 'b', build: '0.55.1-preview', selectedAt: 1790560242168,
+  expect(audioSessionExperiment({ build: '0.55.1-preview', selectedAt: 1790560242168,
     bargeIn: true, halfDuplex: true, sessionType: 'on', supported: true, before: 'auto',
-    after: 'play-and-record', state: 'unreadable', set: 'ok', aMs: 8000, aConfirmMs: 8000,
-    bMs: 4000, muteMs: 5000 }))
-    .toBe('audio_patch_mode:mode=b,build=0.55.1-preview,selectedAt=1790560242168,bargeIn=1,halfDuplex=1,sessionType=on,supported=1,before=auto,after=play-and-record,state=unreadable,set=ok,aMs=8000,aConfirmMs=8000,bMs=4000,muteMs=5000');
+    after: 'play-and-record', state: 'unreadable', set: 'ok', muteMs: 5000 }))
+    .toBe('audio_session_experiment:build=0.55.1-preview,selectedAt=1790560242168,bargeIn=1,halfDuplex=1,sessionType=on,supported=1,before=auto,after=play-and-record,state=unreadable,set=ok,muteMs=5000');
   expect(audioPatchModeRestore('ok', 'auto')).toBe('audio_patch_mode_restore:result=ok,type=auto');
 });
 

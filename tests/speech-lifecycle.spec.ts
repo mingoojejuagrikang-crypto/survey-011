@@ -368,7 +368,7 @@ test.describe('SpeechController — 인식기 수명주기 (영구 사멸 방지
   });
 });
 
-test.describe('iOS 27 preview A/B — raw output boundary and fresh STT', () => {
+test.describe('Hybrid — output boundary and ready beep', () => {
   let ctrl: SpeechController | null = null;
   test.beforeEach(() => {
     MockRec.reset(); logger.clear(); setBargeInEnabled(true);
@@ -379,359 +379,150 @@ test.describe('iOS 27 preview A/B — raw output boundary and fresh STT', () => 
     delete (globalThis as any).window;
   });
 
-  test('A: first result → actual output end → one fresh attempt; onstart alone is not recovery', async () => {
-    const finals: string[] = [];
-    const notices: boolean[] = [];
-    ctrl = new SpeechController({ onFinal: (text) => finals.push(text), canMonitorOutput: () => true,
-      onRecoveryNotice: (visible) => notices.push(visible) },
-    { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 30, aUnconfirmedMs: 35 } });
-    ctrl.start();
-    const old = MockRec.instances[0];
-    old.fire('start'); old.fireResult('54.6', true);
-    const seq = ctrl.beginOutput('tts');
-    ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'end');
-    await waitFor(() => MockRec.instances.length === 2);
-    old.fireResult('999', true); // stale final must not reach the value commit callback
-    expect(finals).toEqual(['54.6']);
-    MockRec.instances[1].fire('start');
-    await waitFor(() => notices.includes(true));
-    expect(finals).toEqual(['54.6']); // onstart did not falsely confirm recovery
-    MockRec.instances[1].fireResult('17', true);
-    expect(finals).toEqual(['54.6', '17']);
-    expect(notices.at(-1)).toBe(false);
-    await sleep(45);
-    expect(MockRec.instances).toHaveLength(2); // one automatic attempt per output
+  function startHybrid(onFinal: (text: string) => void | Promise<void> = () => {}, deferMs = 40) {
+    ctrl = new SpeechController({ onFinal }, { hybridOption: true, hybridDeferMs: deferMs, watchdogIntervalMs: 1000 });
+    ctrl.start(); MockRec.instances[0].fire('start');
+    return ctrl;
+  }
+  function ttsStart(c: SpeechController) {
+    c.muteForTts();
+    const seq = c.beginOutput('tts'); c.outputEdge(seq, 'tts', 'start');
+    return seq;
+  }
+  function ttsEnd(c: SpeechController, seq: number, evt: 'end' | 'watchdog' = 'end') {
+    c.outputEdge(seq, 'tts', evt); c.unmuteForTts();
+  }
+
+  test('hybrid F4: iOS controller applies without opt-in even with frozen UA version', () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', { configurable: true,
+      value: { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X)', maxTouchPoints: 5 } });
+    try {
+      ctrl = new SpeechController({ onFinal: () => {} }, { hybridOption: false });
+      ctrl.start(); MockRec.instances[0].fire('start');
+      ttsEnd(ctrl, ttsStart(ctrl));
+      expect(MockRec.instances).toHaveLength(2);
+      expect(logger.getAll().some((e) => e.extra === 'stt_hybrid_policy:platform=ios,option=0,enabled=1,bargeIn=1')).toBe(true);
+    } finally {
+      if (original) Object.defineProperty(globalThis, 'navigator', original);
+      else delete (globalThis as any).navigator;
+    }
   });
 
-  test('A: new output and stop cancel the old silence timer', async () => {
-    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true },
-      { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 40 } });
-    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
-    const first = ctrl.beginOutput('tts'); ctrl.outputEdge(first, 'tts', 'start'); ctrl.outputEdge(first, 'tts', 'end');
-    const second = ctrl.beginOutput('tts'); // cancels first timer
-    expect(logger.getAll().map((e) => e.extra).some((e) => e?.startsWith('stt_recovery:') &&
-      e.includes('phase=skip') && e.includes('reason=new_output'))).toBe(true);
-    await sleep(65);
-    expect(MockRec.instances).toHaveLength(1);
-    ctrl.outputEdge(second, 'tts', 'start'); ctrl.outputEdge(second, 'tts', 'end');
-    ctrl.stop();
-    await sleep(65);
-    expect(MockRec.instances).toHaveLength(1);
-  });
-
-  test('B: barge-in ON setting still uses existing half-duplex abort, then waits four-second policy delay', async () => {
-    ctrl = new SpeechController({ onFinal: () => {} },
-      { patchMode: 'b', watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 45 } });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
-    ctrl.muteForTts();
+  test('hybrid F4: end swaps once, stale events cannot commit, second value is delivered once', () => {
+    const values: string[] = [];
+    const c = startHybrid((text) => { values.push(text); });
+    const old = MockRec.instances[0]; old.fireResult('54.6', true);
+    const seq = ttsStart(c);
+    expect(old.aborted).toBe(false); // barge-in listening remains alive during TTS
+    ttsEnd(c, seq);
     expect(old.aborted).toBe(true);
-    old.fire('end');
-    const seq = ctrl.beginOutput('tts');
-    ctrl.outputEdge(seq, 'tts', 'end');
-    ctrl.unmuteForTts();
-    await sleep(20);
-    expect(MockRec.instances).toHaveLength(1);
-    await waitFor(() => MockRec.instances.length === 2);
-    expect(logger.getAll().map((e) => e.extra).some((x) => x?.startsWith('stt_recovery:') && x.includes('phase=attempt') && x.includes('reason=b_half_duplex'))).toBe(true);
-  });
-
-  test('B: watchdog cannot restart STT without native onend; uncertainty falls back to manual recovery', async () => {
-    const notices: boolean[] = [];
-    ctrl = new SpeechController({ onFinal: () => {}, onRecoveryNotice: (visible) => notices.push(visible) },
-      { patchMode: 'b', watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 30, bOutputUncertainMs: 45 } });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
-    ctrl.muteForTts(); old.fire('end');
-    const seq = ctrl.beginOutput('tts');
-    ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'watchdog');
-    ctrl.unmuteForTts();
-    await sleep(38);
-    expect(MockRec.instances).toHaveLength(1);
-    await waitFor(() => notices.at(-1) === true);
-    ctrl.outputEdge(seq, 'tts', 'end'); // too late for automatic restart
-    await sleep(45);
-    expect(MockRec.instances).toHaveLength(1);
-    ctrl.reconnectRecognition();
     expect(MockRec.instances).toHaveLength(2);
-    expect(logger.getAll().map((e) => e.extra).some((e) => e?.includes('evt=watchdog,actual=0'))).toBe(true);
+    expect(MockRec.instances[1].started).toBe(true);
+    ttsEnd(c, seq); // duplicate native edge
+    old.fire('end'); old.fire('error', 'audio-capture'); old.fire('start'); old.fireResult('999', true);
+    expect(MockRec.instances).toHaveLength(2);
+    MockRec.instances[1].fire('start'); MockRec.instances[1].fireResult('23.4', true);
+    expect(values).toEqual(['54.6', '23.4']);
+    expect(logger.getAll().filter((e) => e.extra?.startsWith('stt_hybrid_swap:'))).toHaveLength(1);
   });
 
-  test('B: manual tap cancels still-speaking TTS and waits for silence before fresh STT', async () => {
-    const notices: boolean[] = [];
-    const finals: string[] = [];
-    const events: string[] = [];
-    const engine = {
-      speaking: false,
-      cancel() {
-        events.push('cancel');
-        setTimeout(() => { engine.speaking = false; events.push('silent'); }, 25);
-      },
-    };
-    (window as any).speechSynthesis = engine;
-    ctrl = new SpeechController({ onFinal: (text) => finals.push(text), onRecoveryNotice: (visible) => notices.push(visible) },
-      { patchMode: 'b', watchdogIntervalMs: 20, audioTiming: { bOutputUncertainMs: 35, aUnconfirmedMs: 100 } });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
-    engine.speaking = true;
-    ctrl.muteForTts(); old.fire('end');
-    const seq = ctrl.beginOutput('tts');
-    ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'watchdog');
-    ctrl.unmuteForTts();
-    await waitFor(() => notices.at(-1) === true);
-    ctrl.reconnectRecognition();
-    expect(events).toEqual(['cancel']);
+  test('hybrid F4: an interim during TTS defers swap until its final callback completes', async () => {
+    const values: string[] = [];
+    let finish!: () => void;
+    const c = startHybrid((text) => new Promise<void>((resolve) => {
+      values.push(text); finish = resolve;
+    }), 200);
+    const old = MockRec.instances[0];
+    const seq = ttsStart(c); old.fireResult('수정 14');
+    ttsEnd(c, seq);
     expect(MockRec.instances).toHaveLength(1);
-    await sleep(15);
-    expect(MockRec.instances).toHaveLength(1); // cancel has not confirmed silence yet
-    old.fireResult('999', true); // late echo while cancel is still draining
-    expect(finals).toEqual([]);
-    await waitFor(() => MockRec.instances.length === 2);
-    expect(events).toEqual(['cancel', 'silent']);
-    expect(notices.at(-1)).toBe(false);
-  });
-
-  test('B: manual tap leaves recovery visible when cancel never confirms silence', async () => {
-    const notices: boolean[] = [];
-    let cancels = 0;
-    (window as any).speechSynthesis = { speaking: false, cancel: () => { cancels++; } };
-    ctrl = new SpeechController({ onFinal: () => {}, onRecoveryNotice: (visible) => notices.push(visible) },
-      { patchMode: 'b', watchdogIntervalMs: 20, audioTiming: { bOutputUncertainMs: 35 } });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
-    (window as any).speechSynthesis.speaking = true;
-    ctrl.muteForTts(); old.fire('end');
-    const seq = ctrl.beginOutput('tts');
-    ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'watchdog');
-    ctrl.unmuteForTts();
-    await waitFor(() => notices.at(-1) === true);
-    ctrl.reconnectRecognition();
-    await sleep(130); // includes the cancel grace and several STT watchdog ticks
-    expect(cancels).toBe(1);
+    expect(old.aborted).toBe(false);
+    old.fireResult('수정 140', true);
+    expect(values).toEqual(['수정 140']);
     expect(MockRec.instances).toHaveLength(1);
-    expect(notices.at(-1)).toBe(true);
+    finish(); await sleep(0);
+    expect(MockRec.instances).toHaveLength(2);
+    expect(logger.getAll().some((e) => e.extra?.startsWith('stt_hybrid_swap:reason=deferred_final,'))).toBe(true);
   });
 
-  for (const entry of ['kick', 'attemptStart', 'scheduleRestart', 'watchdogTick',
-    'restartIfZombie', 'reconnectRecognition', 'unmuteForTts', 'nativeEnd', 'lateOutputEnd'] as const) {
-    test(`B F3: uncertain output stays closed through ${entry}`, async () => {
-      const notices: boolean[] = [];
-      const finals: string[] = [];
-      const engine = { speaking: false, cancel: () => {} };
-      (window as any).speechSynthesis = engine;
-      ctrl = new SpeechController({ onFinal: (text) => finals.push(text),
-        onRecoveryNotice: (visible) => notices.push(visible) },
-      { patchMode: 'b', restartDelayMs: 10, watchdogIntervalMs: 20,
-        audioTiming: { bRestartDelayMs: 10, bOutputUncertainMs: 25 } });
-      ctrl.start();
-      const old = MockRec.instances[0]; old.fire('start');
-      engine.speaking = true;
-      ctrl.muteForTts(); old.fire('end');
-      const seq = ctrl.beginOutput('tts');
-      ctrl.outputEdge(seq, 'tts', 'start'); ctrl.outputEdge(seq, 'tts', 'watchdog');
-      ctrl.unmuteForTts();
-      await waitFor(() => notices.at(-1) === true);
-      ctrl.reconnectRecognition(); // cancel returns, but native speaking stays true
-      await sleep(65);
+  test('hybrid F4: final can synchronously finish TTS without being cut before processing', () => {
+    const trace: string[] = [];
+    let seq = 0;
+    const c = startHybrid(() => {
+      ttsEnd(c, seq);
       expect(MockRec.instances).toHaveLength(1);
-      expect(notices.at(-1)).toBe(true);
-
-      if (entry === 'kick') expect(ctrl.kick()).toBe('b_output_not_safe');
-      else if (entry === 'nativeEnd') old.fire('end');
-      else if (entry === 'lateOutputEnd') ctrl.outputEdge(seq, 'tts', 'end');
-      else if (entry === 'restartIfZombie') {
-        // Make the zombie branch eligible without waiting for real device thresholds.
-        Object.assign(ctrl, { recRunning: true, erroredSinceLastResult: true,
-          hadResultSinceStart: false, lastResultAt: 1, lastStartAttemptAt: 1 });
-        expect((ctrl as any).restartIfZombie(Date.now())).toBe(false);
-      } else (ctrl as any)[entry]();
-      await sleep(35);
-      expect(MockRec.instances).toHaveLength(1);
-      expect(notices.at(-1)).toBe(true);
-      old.fireResult('999', true);
-      expect(finals).toEqual([]);
+      trace.push('committed');
     });
-  }
-
-  test('B F3: an ordinary restart already queued rechecks output at execution', async () => {
-    ctrl = new SpeechController({ onFinal: () => {} },
-      { patchMode: 'b', restartDelayMs: 20, watchdogIntervalMs: 1000 });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start'); old.fire('end');
-    const seq = ctrl.beginOutput('beep'); // starts after the ordinary timer was armed
-    await sleep(40);
-    expect(MockRec.instances).toHaveLength(1);
-    ctrl.outputEdge(seq, 'beep', 'end');
-    ctrl.stop();
+    seq = ttsStart(c); MockRec.instances[0].fireResult('140', true);
+    expect(trace).toEqual(['committed']);
+    expect(MockRec.instances).toHaveLength(2);
   });
 
-  test('B F3: delayed engine silence after native end retains the B restart delay', async () => {
-    const engine = { speaking: false };
-    (window as any).speechSynthesis = engine;
-    ctrl = new SpeechController({ onFinal: () => {} },
-      { patchMode: 'b', watchdogIntervalMs: 15, audioTiming: { bRestartDelayMs: 40 } });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
-    engine.speaking = true;
-    ctrl.muteForTts(); old.fire('end');
-    const seq = ctrl.beginOutput('tts'); ctrl.outputEdge(seq, 'tts', 'start');
-    ctrl.outputEdge(seq, 'tts', 'end'); ctrl.unmuteForTts();
-    await sleep(35);
+  test('hybrid F4: missing final swaps at the bounded deadline, no late double commit', async () => {
+    const values: string[] = [];
+    const c = startHybrid((text) => { values.push(text); });
+    const old = MockRec.instances[0]; const seq = ttsStart(c); old.fireResult('14');
+    ttsEnd(c, seq);
+    await sleep(15); expect(MockRec.instances).toHaveLength(1);
+    await waitFor(() => MockRec.instances.length === 2);
+    old.fireResult('140', true); expect(values).toEqual([]);
+    expect(logger.getAll().some((e) => e.extra?.startsWith('stt_hybrid_swap:reason=defer_timeout,'))).toBe(true);
+    await sleep(50); expect(MockRec.instances).toHaveLength(2);
+  });
+
+  test('hybrid F4: even a missing TTS onstart watchdog preserves the active utterance', () => {
+    const values: string[] = [];
+    const c = startHybrid((text) => { values.push(text); });
+    c.muteForTts(); const seq = c.beginOutput('tts');
+    MockRec.instances[0].fireResult('14');
+    ttsEnd(c, seq, 'watchdog');
     expect(MockRec.instances).toHaveLength(1);
-    engine.speaking = false;
-    await sleep(25);
-    expect(MockRec.instances).toHaveLength(1);
+    MockRec.instances[0].fireResult('140', true);
+    expect(values).toEqual(['140']); expect(MockRec.instances).toHaveLength(2);
+  });
+
+  test('hybrid F4: watchdog completion swaps once and late native end is inert', () => {
+    const c = startHybrid(); const seq = ttsStart(c);
+    ttsEnd(c, seq, 'watchdog');
+    expect(MockRec.instances).toHaveLength(2);
+    ttsEnd(c, seq);
+    expect(MockRec.instances).toHaveLength(2);
+  });
+
+  test('hybrid F4: a brief background return preserves the owed swap', async () => {
+    const c = startHybrid(); const seq = ttsStart(c);
+    MockRec.instances[0].fireResult('14'); ttsEnd(c, seq);
+    c.onBackgroundHidden();
+    c.kick();
     await waitFor(() => MockRec.instances.length === 2);
     expect(MockRec.instances[1].started).toBe(true);
+    expect(logger.getAll().some((e) => e.extra?.startsWith('stt_hybrid_swap:reason=defer_timeout,'))).toBe(true);
   });
 
-  test('B F3: start and session recreation wait for the previous engine output', async () => {
-    const engine = { speaking: true };
-    (window as any).speechSynthesis = engine;
-    ctrl = new SpeechController({ onFinal: () => {} }, { patchMode: 'b', watchdogIntervalMs: 20 });
-    ctrl.start();
-    expect(MockRec.instances).toHaveLength(0);
-    await sleep(35);
-    expect(MockRec.instances).toHaveLength(0);
-    engine.speaking = false;
-    await waitFor(() => MockRec.instances.length === 1);
-    expect(MockRec.instances[0].started).toBe(true);
-    ctrl.stop();
-    engine.speaking = true;
-    ctrl = new SpeechController({ onFinal: () => {} }, { patchMode: 'b', watchdogIntervalMs: 20 });
-    ctrl.start();
-    await sleep(35);
-    expect(MockRec.instances).toHaveLength(1);
-    engine.speaking = false;
+  test('hybrid F4: stop cancels pending swap', async () => {
+    const c = startHybrid(); const seq = ttsStart(c);
+    MockRec.instances[0].fireResult('14'); ttsEnd(c, seq); c.stop();
+    await sleep(65); expect(MockRec.instances).toHaveLength(1);
+  });
+
+  test('hybrid F4: natural restart during deferral invalidates the old swap', async () => {
+    const c = startHybrid(() => {}, 200); const seq = ttsStart(c);
+    MockRec.instances[0].fireResult('14'); ttsEnd(c, seq); MockRec.instances[0].fire('end');
     await waitFor(() => MockRec.instances.length === 2);
-    expect(MockRec.instances[1].started).toBe(true);
+    await sleep(220); expect(MockRec.instances).toHaveLength(2);
   });
 
-  for (const patchMode of ['default', 'a'] as const) {
-    test(`${patchMode} F3: barge-in ON still opens STT while engine speaks`, async () => {
-      (window as any).speechSynthesis = { speaking: true };
-      ctrl = new SpeechController({ onFinal: () => {} },
-        { patchMode, restartDelayMs: 10, watchdogIntervalMs: 1000 });
-      ctrl.start();
-      expect(MockRec.instances[0].started).toBe(true);
-      MockRec.instances[0].fire('start'); MockRec.instances[0].fire('end');
-      await waitFor(() => MockRec.instances.length === 2);
-      expect(MockRec.instances[1].started).toBe(true);
-    });
-  }
-
-  test('B: late native onend within grace starts one fresh recognizer only after the policy delay', async () => {
-    ctrl = new SpeechController({ onFinal: () => {} },
-      { patchMode: 'b', watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 35, bOutputUncertainMs: 100 } });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
-    ctrl.muteForTts(); old.fire('end');
-    const seq = ctrl.beginOutput('tts'); ctrl.outputEdge(seq, 'tts', 'start');
-    ctrl.outputEdge(seq, 'tts', 'watchdog'); ctrl.unmuteForTts();
-    await sleep(20);
-    expect(MockRec.instances).toHaveLength(1);
-    ctrl.outputEdge(seq, 'tts', 'end');
-    await sleep(15);
-    expect(MockRec.instances).toHaveLength(1);
-    await waitFor(() => MockRec.instances.length === 2);
-  });
-
-  test('B: TTS error without onstart also waits for native onend or manual recovery', async () => {
-    const notices: boolean[] = [];
-    ctrl = new SpeechController({ onFinal: () => {}, onRecoveryNotice: (visible) => notices.push(visible) },
-      { patchMode: 'b', watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 20, bOutputUncertainMs: 35 } });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
-    ctrl.muteForTts(); old.fire('end');
-    const seq = ctrl.beginOutput('tts'); ctrl.outputEdge(seq, 'tts', 'error');
-    ctrl.unmuteForTts();
-    await sleep(50);
-    expect(MockRec.instances).toHaveLength(1);
-    expect(notices.at(-1)).toBe(true);
-  });
-
-  test('B: a natural recognition end keeps its ordinary restart cause and interval', async () => {
-    ctrl = new SpeechController({ onFinal: () => {} },
-      { patchMode: 'b', restartDelayMs: 12, watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 45 } });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start'); old.fire('end');
-    await waitFor(() => MockRec.instances.length === 2);
-    const extras = logger.getAll().map((e) => e.extra ?? '');
-    expect(extras).toContain('stt_instance:inst=2,action=create,cause=restart,out=0');
-    expect(extras.some((e) => e.startsWith('stt_recovery:') && e.includes('reason=b_half_duplex'))).toBe(false);
-  });
-
-  test('B: a following beep cancels the TTS restart and starts the four-second delay at the last actual edge', async () => {
-    ctrl = new SpeechController({ onFinal: () => {} },
-      { patchMode: 'b', watchdogIntervalMs: 1000, audioTiming: { bRestartDelayMs: 45 } });
-    ctrl.start(); const old = MockRec.instances[0]; old.fire('start');
-    ctrl.muteForTts(); old.fire('end');
-    const tts = ctrl.beginOutput('tts'); ctrl.outputEdge(tts, 'tts', 'end');
-    ctrl.unmuteForTts(); // schedules restart for 45ms after TTS
-    await sleep(18);
-    const beep = ctrl.beginOutput('beep'); // extends the output chain
-    await sleep(40);
-    expect(MockRec.instances).toHaveLength(1); // old timer must be gone
-    ctrl.outputEdge(beep, 'beep', 'end');
-    await sleep(20);
-    expect(MockRec.instances).toHaveLength(1);
-    await waitFor(() => MockRec.instances.length === 2);
-    const attempt = logger.getAll().map((e) => e.extra ?? '').find((e) => e.startsWith('stt_recovery:') && e.includes('phase=attempt') && e.includes('reason=b_half_duplex'));
-    expect(attempt).toMatch(/ms=\d+$/); // abort→restart interval is recorded
-  });
-
-  test('A: watchdog alone never triggers an automatic fresh recognizer', async () => {
-    const notices: boolean[] = [];
-    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true,
-      onRecoveryNotice: (visible) => notices.push(visible) },
-    { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 20, aUnconfirmedMs: 30 } });
-    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
-    const tts = ctrl.beginOutput('tts'); ctrl.outputEdge(tts, 'tts', 'start'); ctrl.outputEdge(tts, 'tts', 'watchdog');
-    await waitFor(() => notices.includes(true));
-    expect(MockRec.instances).toHaveLength(1);
-    ctrl.outputEdge(tts, 'tts', 'end'); // only a late native edge can arm A
-    await waitFor(() => MockRec.instances.length === 2);
-  });
-
-  test('A: hidden then quick visible cancels the old silence timer', async () => {
-    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true },
-      { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 45 } });
-    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
-    const tts = ctrl.beginOutput('tts'); ctrl.outputEdge(tts, 'tts', 'start'); ctrl.outputEdge(tts, 'tts', 'end');
-    await sleep(15);
-    ctrl.onBackgroundHidden?.();
-    await sleep(55);
-    expect(MockRec.instances).toHaveLength(1);
-    expect(logger.getAll().map((e) => e.extra).some((e) => e?.includes('reason=background'))).toBe(true);
-  });
-
-  test('A: TTS error before onstart never qualifies as real output', async () => {
-    const notices: boolean[] = [];
-    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true,
-      onRecoveryNotice: (visible) => notices.push(visible) },
-    { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 25, aUnconfirmedMs: 30 } });
-    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
-    const tts = ctrl.beginOutput('tts'); ctrl.outputEdge(tts, 'tts', 'error');
-    await sleep(50);
-    expect(MockRec.instances).toHaveLength(1);
-    expect(notices).not.toContain(true);
-    expect(logger.getAll().map((e) => e.extra).some((e) => e?.includes('reason=tts_not_started'))).toBe(true);
-  });
-
-  test('A: a result after watchdog cancels the unconfirmed-output notice', async () => {
-    const notices: boolean[] = [];
-    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true,
-      onRecoveryNotice: (visible) => notices.push(visible) },
-    { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 20, aUnconfirmedMs: 35 } });
-    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
-    const tts = ctrl.beginOutput('tts'); ctrl.outputEdge(tts, 'tts', 'watchdog');
-    MockRec.instances[0].fireResult('2', true);
-    await sleep(55);
-    expect(notices).not.toContain(true);
-    expect(MockRec.instances).toHaveLength(1);
-  });
-
-  test('A: a new output clears a visible recovery notice', async () => {
-    const notices: boolean[] = [];
-    ctrl = new SpeechController({ onFinal: () => {}, canMonitorOutput: () => true,
-      onRecoveryNotice: (visible) => notices.push(visible) },
-    { patchMode: 'a', watchdogIntervalMs: 1000, audioTiming: { aSilenceMs: 20, aUnconfirmedMs: 25 } });
-    ctrl.start(); MockRec.instances[0].fire('start'); MockRec.instances[0].fireResult('1', true);
-    const first = ctrl.beginOutput('tts'); ctrl.outputEdge(first, 'tts', 'watchdog');
-    await waitFor(() => notices.at(-1) === true);
-    ctrl.beginOutput('tts');
-    expect(notices.at(-1)).toBe(false);
+  test('hybrid F4: non-iOS default remains unchanged, OFF remains half-duplex with opt-in', async () => {
+    ctrl = new SpeechController({ onFinal: () => {} }, { watchdogIntervalMs: 1000 });
+    ctrl.start(); MockRec.instances[0].fire('start');
+    ttsEnd(ctrl, ttsStart(ctrl)); expect(MockRec.instances).toHaveLength(1);
+    ctrl.stop(); setBargeInEnabled(false);
+    const c = startHybrid(); const old = MockRec.instances.at(-1)!;
+    const seq = ttsStart(c); expect(old.aborted).toBe(true); old.fire('end');
+    ttsEnd(c, seq); expect(MockRec.instances).toHaveLength(2);
+    await waitFor(() => MockRec.instances.length === 3);
+    expect(logger.getAll().filter((e) => e.extra?.startsWith('stt_hybrid_swap:'))).toHaveLength(0);
   });
 
   test('ready beep: OFF waits for real onstart, observes first result, and never repeats on consecutive restarts', async () => {
@@ -765,14 +556,14 @@ test.describe('iOS 27 preview A/B — raw output boundary and fresh STT', () => 
       expect.stringMatching(/^ready_beep:inst=3,phase=first_result,ms=\d+,anchor=onstart$/));
   });
 
-  test('ready beep: ON gives no cue, B forces one, start failure gives none', async () => {
+  test('ready beep: ON gives no cue, OFF waits for successful start', async () => {
     const heard: number[] = [];
     ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: (inst) => heard.push(inst) });
     ctrl.start(); MockRec.instances[0].fire('start');
     expect(heard).toEqual([]);
     ctrl.stop();
-    ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: (inst) => heard.push(inst) },
-      { patchMode: 'b' });
+    setBargeInEnabled(false);
+    ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: (inst) => heard.push(inst) });
     MockRec.startThrowsRemaining = 1;
     ctrl.start();
     expect(heard).toEqual([]);

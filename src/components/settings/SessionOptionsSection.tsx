@@ -1,3 +1,4 @@
+import { isIOSDevice } from '../../lib/speechPlatform';
 import { T } from '../../tokens';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { buildSessionLabel, pickSessionLabelValue } from '../../lib/sessionLabel';
@@ -16,6 +17,7 @@ import { audioPatchAvailable } from '../../lib/ios27AudioPatch';
  *  세션명 미리보기 계산(prospectiveSessionLabel)은 useSettingsActions 소유 — prop으로 받는다. */
 export function SessionOptionsSection({ prospectiveSessionLabel }: { prospectiveSessionLabel: () => string }) {
   const s = useSettingsStore();
+  const ios = isIOSDevice();
   return (
     <>
         {audioPatchAvailable() && <div style={{ padding: '10px 16px 0' }}><AudioPatchPreviewControl /></div>}
@@ -227,6 +229,27 @@ export function SessionOptionsSection({ prospectiveSessionLabel }: { prospective
 
             {/* v0.8.0 — 추세 검증 전역 마스터 토글 제거(이상치 알람은 컬럼별 규칙 유무로 활성).
                 조사시기(회차) 컬럼 선택은 조회탭으로 이전(WS4) — roundDateColId 필드는 유지. */}
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <label htmlFor="refresh-recognition-toggle" style={{ fontSize: 13, fontWeight: 700, color: T.textDim }}>
+                안내 후 음성인식 새로 켜기
+              </label>
+              <button id="refresh-recognition-toggle" data-testid="refresh-recognition-toggle"
+                aria-pressed={ios || s.refreshRecognitionAfterTts} disabled={ios}
+                onClick={() => {
+                  const next = !s.refreshRecognitionAfterTts;
+                  s.set({ refreshRecognitionAfterTts: next });
+                  logger.log({ type: 'app', extra: settingChanged('refreshRecognitionAfterTts', next) });
+                }}
+                style={{ minHeight: 44, minWidth: 60, padding: '0 10px', borderRadius: 10,
+                  border: `1px solid ${T.lineStrong}`, background: ios || s.refreshRecognitionAfterTts ? T.blue : T.cardAlt,
+                  color: T.text, cursor: ios ? 'default' : 'pointer' }}>
+                {ios ? '항상 켜짐(iOS)' : s.refreshRecognitionAfterTts ? '켜짐' : '꺼짐'}
+              </button>
+            </div>
+            <div style={{ fontSize: 12, color: T.textMute, lineHeight: 1.4 }}>
+              말끊기 ON에서 안내가 끝나면 인식기를 새로 시작합니다. 말하는 중이면 발화가 끝날 때까지 기다립니다.
+            </div>
 
             <TtsVoiceSelector />
 

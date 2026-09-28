@@ -111,6 +111,8 @@ export interface SettingsState {
    *  771발화가 된 08-02 실측의 처방). 라이브 배선은 speech.setBargeInEnabled 모듈 플래그 —
    *  변경 지점(입력탭 서랍 토글·세션 시작·초기화)에서 동기화한다(preferredVoiceName 패턴). */
   bargeInEnabled: boolean;
+  /** Non-iOS opt-in; iOS always refreshes when barge-in is enabled. */
+  refreshRecognitionAfterTts: boolean;
   /** Preferred Web Speech API voice name for ko-KR TTS. Empty string = auto (first available). */
   preferredVoiceName: string;
   /** v0.10.1: 캐시된 관리자 폴더 내 본인 팀 하위 폴더 — race 방지용, 첫 결정 후 재사용.
@@ -238,6 +240,7 @@ export function makeSettingsDefaults(): SettingsDefaults {
     beepNegativeId: DEFAULT_NEGATIVE_BEEP_ID,
     beepVolume: 0.5,
     bargeInEnabled: true,
+    refreshRecognitionAfterTts: false,
     preferredVoiceName: '',
     teamFolderCache: null,
     userLogFolderCache: null,
@@ -255,7 +258,7 @@ export function makeSettingsDefaults(): SettingsDefaults {
 const INPUT_SETTINGS_KEYS = [
   'columns', 'tableGenerated', 'totalRows', 'manualMode',
   'ttsRate', 'recognitionTolerance', 'fastRecognition', 'autoScreenCapture',
-  'beepPositiveId', 'beepNegativeId', 'beepVolume', 'bargeInEnabled', 'preferredVoiceName',
+  'beepPositiveId', 'beepNegativeId', 'beepVolume', 'bargeInEnabled', 'refreshRecognitionAfterTts', 'preferredVoiceName',
   'sessionLabelColId', 'sessionAutoLabel', 'sessionCustomLabel', 'roundDateColId',
   // v0.46.0 WP-J J-5 — 선택지를 지우는 것도 "입력값 설정 손질"이다(컬럼과 같은 축).
   'optionExclusions',
@@ -290,6 +293,7 @@ export function inputSettingsResetPatch(): Partial<SettingsState> {
     beepNegativeId: d.beepNegativeId,
     beepVolume: d.beepVolume,
     bargeInEnabled: d.bargeInEnabled,
+    refreshRecognitionAfterTts: d.refreshRecognitionAfterTts,
     manualMode: d.manualMode,
     preferredVoiceName: d.preferredVoiceName,
     sessionLabelColId: d.sessionLabelColId,

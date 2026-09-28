@@ -52,8 +52,8 @@ import { useClipCapture, type PendingCommandClip } from './useClipCapture';
 import { createClipHealth, clipSummaryExtra, clipUnreliableSummaryExtra, type ClipHealth } from './clipHealth';
 import { getMutedSpanCount, resetMicInterruptionSpans } from './micInterruption';
 import { getAudioSessionEventCount } from './audioInterruption';
-import { IOS27_AUDIO_TIMING, applyAudioSessionPatch, audioPatchAvailable, snapshotAudioPatch, rememberSessionAudioChoice, sessionAudioChoice, forgetSessionAudioChoice, type AudioPatchMode, type AudioSessionPatchResult } from './ios27AudioPatch';
-import { audioPatchMode, audioPatchModeRestore, audioPatchModeReapply, clipInputProbe } from './logEvents';
+import { IOS27_AUDIO_TIMING, applyAudioSessionPatch, audioPatchAvailable, snapshotAudioPatch, rememberSessionAudioChoice, sessionAudioChoice, forgetSessionAudioChoice, type AudioSessionPatchResult } from './ios27AudioPatch';
+import { audioSessionExperiment, audioPatchModeRestore, audioPatchModeReapply, clipInputProbe } from './logEvents';
 import { useClipFailureAlert } from './useClipFailureAlert';
 import { useMicInterruptionNotice } from './useMicInterruptionNotice';
 import { clipFailSummaryScreen, clipUnreliableSummaryScreen, sessionHealthSummaryScreen } from './voicePrompts';
@@ -365,20 +365,12 @@ export interface VoiceRuntimeSnapshot {
 
 export function useVoiceSession() {
   const ctrlRef = useRef<SpeechController | null>(null);
-  const patchModeRef = useRef<AudioPatchMode>('default');
   const audioSessionPatchRef = useRef<AudioSessionPatchResult | null>(null);
-  const [activePatchMode, setActivePatchMode] = useState<AudioPatchMode>('default');
-  const [sttRecoveryNotice, setSttRecoveryNotice] = useState(false);
   const emitClipInputProbe = (edge: 'first_mute' | 'after_output' | 'tap_recover' | 'mute_notice', seq: number) => {
     const probe = recorderRef.current?.getInputProbe() ?? { track: 'none' as const, enabled: 'na', ctx: 'none', peak: 0 };
     logCell({ type: 'clip', extra: clipInputProbe({ edge, ...probe, seq }) });
   };
   const patchCallbacks = () => ({
-    canMonitorOutput: () => {
-      const phase = useSessionStore.getState().phase;
-      return phase === 'active' && !!awaitingFieldRef.current && uiSuspendRef.current.reasons.size === 0;
-    },
-    onRecoveryNotice: (visible: boolean) => setSttRecoveryNotice(visible),
     onOutputFinished: (seq: number) => emitClipInputProbe('after_output', seq),
     onReadyToListen: (inst: number) => playReadyBeep(inst, useSettingsStore.getState().beepVolume),
   });
@@ -2390,7 +2382,7 @@ export function useVoiceSession() {
         ...(announceBgResume
           ? { onStart: bgResumeAnnouncerOnce(say, () => buildReturnBriefing(true)) }
           : {}),
-      }, { patchMode: patchModeRef.current });
+      }, { hybridOption: useSettingsStore.getState().refreshRecognitionAfterTts });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
     }
@@ -2658,9 +2650,6 @@ export function useVoiceSession() {
     // Existing builds/default selection do not change the audio session.
     const patchSelection = snapshotAudioPatch();
     if (!startingRef.current) {
-      patchModeRef.current = patchSelection.mode;
-      setActivePatchMode(patchSelection.mode);
-      setSttRecoveryNotice(false);
       audioSessionPatchRef.current = applyAudioSessionPatch(patchSelection.playAndRecord);
     }
 
@@ -2867,15 +2856,14 @@ export function useVoiceSession() {
     logger.setSessionId(sessionIdRef.current);
     if (audioPatchAvailable()) {
       const audio = audioSessionPatchRef.current;
-      logCell({ type: 'app', extra: audioPatchMode({
-        mode: patchSelection.mode, build: logger.device().appVersion,
+      logCell({ type: 'app', extra: audioSessionExperiment({
+        build: logger.device().appVersion,
         selectedAt: patchSelection.selectedAt, bargeIn: s.bargeInEnabled,
-        halfDuplex: patchSelection.mode === 'b' || !s.bargeInEnabled,
+        halfDuplex: !s.bargeInEnabled,
         sessionType: patchSelection.playAndRecord ? 'on' : 'off',
         supported: audio?.supported ?? false, before: audio?.before ?? 'unreadable',
         after: audio?.after ?? 'unreadable', state: audio?.state ?? 'unreadable', set: audio?.set ?? 'off',
-        aMs: IOS27_AUDIO_TIMING.aSilenceMs, aConfirmMs: IOS27_AUDIO_TIMING.aUnconfirmedMs,
-        bMs: IOS27_AUDIO_TIMING.bRestartDelayMs, muteMs: IOS27_AUDIO_TIMING.clipMuteNoticeMs,
+        muteMs: IOS27_AUDIO_TIMING.clipMuteNoticeMs,
       }) });
     }
     // #1 reach telemetry: attach session-meta alongside the existing `extra:'start'` tag.
@@ -2994,7 +2982,7 @@ export function useVoiceSession() {
         onInterim: handleInterim,
         onError: () => {},
         ...patchCallbacks(),
-      }, { patchMode: patchModeRef.current, deferInitialReadyBeep: true });
+      }, { hybridOption: useSettingsStore.getState().refreshRecognitionAfterTts, deferInitialReadyBeep: true });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
     }
@@ -3011,7 +2999,6 @@ export function useVoiceSession() {
     if (phaseAtEntry === 'stopping') return false;
     restoreAudioSession();
     forgetSessionAudioChoice(sessionIdRef.current);
-    setSttRecoveryNotice(false);
     useSessionStore.getState().setPhase('stopping');
     setActiveController(null);
     ctrlRef.current?.stop();
@@ -3250,7 +3237,7 @@ export function useVoiceSession() {
         onInterim: handleInterim,
         onError: () => {},
         ...patchCallbacks(),
-      }, { patchMode: patchModeRef.current, deferInitialReadyBeep: true });
+      }, { hybridOption: useSettingsStore.getState().refreshRecognitionAfterTts, deferInitialReadyBeep: true });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
     }
@@ -3382,7 +3369,7 @@ export function useVoiceSession() {
         onInterim: handleInterim,
         onError: () => {},
         ...patchCallbacks(),
-      }, { patchMode: patchModeRef.current });
+      }, { hybridOption: useSettingsStore.getState().refreshRecognitionAfterTts });
       setActiveController(ctrlRef.current);
       ctrlRef.current.start();
       logger.log({ type: 'stt', extra: 'manual_hold_restore_controller:started', sessionId: live.sessionId, row: pending.row, colId: pending.colId });
@@ -4123,9 +4110,6 @@ export function useVoiceSession() {
   return {
     start,
     stop,
-    activePatchMode,
-    sttRecoveryNotice,
-    reconnectRecognition: () => ctrlRef.current?.reconnectRecognition(),
     /** v0.35.0 R3-FIX-2 — 종료 저장 실패 배너의 [다시 저장] 핸들러(VoiceScreen). */
     retryFinalPersist,
     jumpToRow,

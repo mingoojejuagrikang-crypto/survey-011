@@ -242,3 +242,18 @@ test('D1-T4 — ON(기본): TTS 재생창 안의 값 발화가 barge-in으로 �
   await expect.poll(async () => (await loadLogEvents(page)).some((e) => e.type === 'value' && e.parsed === '35.1'),
     { timeout: 15_000 }).toBe(true);
 });
+
+test('F4 hybrid ON: speech during TTS still commits once, then refreshes recognition', async ({ page }) => {
+  await boot(page, { seed: { refreshRecognitionAfterTts: true }, ttsOnendDelayMs: 1500 });
+  await startSession(page);
+  await waitForRecognitionLive(page);
+  await waitForTtsWindow(page);
+  await fireStt(page, '삼십오 점 일', 300);
+  await expect.poll(async () => (await loadLogEvents(page)).some((e) => e.type === 'stt_barge_in'),
+    { timeout: 10_000 }).toBe(true);
+  await expect.poll(async () => (await loadLogEvents(page)).filter((e) => e.type === 'value' && e.parsed === '35.1').length,
+    { timeout: 15_000 }).toBe(1);
+  await expect.poll(async () => (await loadLogEvents(page)).some((e) => e.extra?.startsWith('stt_hybrid_swap:')),
+    { timeout: 10_000 }).toBe(true);
+  expect((await loadLogEvents(page)).filter((e) => e.type === 'value')).toHaveLength(1);
+});

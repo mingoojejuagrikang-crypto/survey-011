@@ -1,22 +1,16 @@
 /** iOS 27 preview experiment. Selection lives only in memory; each session snapshots it. */
-export type AudioPatchMode = 'default' | 'a' | 'b';
 export interface AudioPatchSelection {
-  mode: AudioPatchMode;
   playAndRecord: boolean;
   selectedAt: number;
 }
 
 // Larry/Mingoo 2026-09-28: experimental values, deliberately gathered in one place.
 export const IOS27_AUDIO_TIMING = {
-  aSilenceMs: 8_000,
-  aUnconfirmedMs: 8_000,
-  bRestartDelayMs: 4_000,
-  bOutputUncertainMs: 8_000,
   clipMuteNoticeMs: 5_000,
 } as const;
 
 const preview = typeof __PREVIEW_BUILD__ !== 'undefined' && __PREVIEW_BUILD__;
-let selected: AudioPatchSelection = { mode: 'default', playAndRecord: false, selectedAt: 0 };
+let selected: AudioPatchSelection = { playAndRecord: false, selectedAt: 0 };
 /** Session snapshot survives a VoiceScreen unmount; it is never persisted. */
 let liveAudioSessionChoice: { sessionId: string; enabled: boolean } | null = null;
 export function rememberSessionAudioChoice(sessionId: string, enabled: boolean): void {
@@ -36,13 +30,13 @@ export function subscribeAudioPatchSelection(cb: () => void): () => void {
   listeners.add(cb);
   return () => { listeners.delete(cb); };
 }
-export function selectAudioPatch(next: Pick<AudioPatchSelection, 'mode' | 'playAndRecord'>): void {
+export function selectAudioPatch(next: Pick<AudioPatchSelection, 'playAndRecord'>): void {
   if (!preview) return;
   selected = { ...next, selectedAt: Date.now() };
   for (const cb of listeners) cb();
 }
 export function snapshotAudioPatch(): AudioPatchSelection {
-  return preview ? { ...selected } : { mode: 'default', playAndRecord: false, selectedAt: 0 };
+  return preview ? { ...selected } : { playAndRecord: false, selectedAt: 0 };
 }
 
 type AudioSessionLike = { type?: string; state?: string };
