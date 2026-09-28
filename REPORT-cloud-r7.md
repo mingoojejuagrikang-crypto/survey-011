@@ -133,4 +133,4 @@ tests/v0550-login-status.spec.ts:178:1 › ④ ②에서 버튼 클릭 => 로그
 
 ## 4. 커밋
 - `83ae591` fix: hold hybrid TTS mute while a started output is unsettled (r7 P1) — `speech.ts` 1줄 조건 + 주석, 회귀 2건, PRINCIPLES·KNOWN-ISSUES 계약 문구
-- (이 보고서) docs: add cloud r7 report
+- `8f5ca68` docs: add cloud r7 report (이 보고서)
