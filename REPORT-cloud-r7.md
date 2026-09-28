@@ -56,7 +56,7 @@ A의 오류가 나중에 `hybridDue`를 세워도 이미 풀린 뮤트를 다시
 | `npm run build` / `npm run build:preview` | 통과 |
 | `npm run check:release` | exit 0 (문서 정합성 OK · lint 통과) |
 | `git diff --check` | 통과 |
-| `npm run test:e2e -- tests/speech-lifecycle.spec.ts tests/speech-platform.spec.ts tests/v0440-d1-bargein.spec.ts tests/beep-output-boundary.spec.ts tests/logEvents.spec.ts tests/v049-fix49b-tts-drain.spec.ts tests/v049-fix49-cancel-unmute.spec.ts --workers=1` | 헤드리스 쉘 누락 수정 전 첫 실행에서 **123 passed** + 15건 브라우저 기동 실패(환경 — 아래 참고). 브라우저 스펙은 아래 게이트에서 모두 실행됨 |
+| `npm run test:e2e -- tests/speech-lifecycle.spec.ts tests/speech-platform.spec.ts tests/v0440-d1-bargein.spec.ts tests/beep-output-boundary.spec.ts tests/logEvents.spec.ts --workers=1 --reporter=dot` (7회전 리뷰와 같은 명령) | **127 passed** (리뷰 125 + 신규 2) |
 | `PREVIEW_BUILD=1 npm run test:e2e -- tests/ios27-preview-flow.spec.ts --workers=1` | **8 passed** |
 
 ### 전체 게이트 `npm run test:e2e:gate -- --reporter=dot` (기준선 대조, 순차 실행·단일 워커)
@@ -124,10 +124,10 @@ tests/v0550-login-status.spec.ts:178:1 › ④ ②에서 버튼 클릭 => 로그
 
 | ID/항목 | 내용 | 처리 |
 |---|---|---|
-| 기존 P2-7 | 이전 회전에서 이월된 P2-7 | 다음 개선 작업으로 이월 |
-| suspended 비프 상한 뒤 늦은 재개 | 비프 토큰 상한이 지난 뒤 AudioContext가 늦게 재개되는 경우 | 이월(실기기 관측 대상) |
-| G1 재마운트 음성 래치 | G1 mute 고지의 「세션당 한 번」 음성 래치가 재마운트 경계에서 어떻게 유지되는가 | 이월 |
-| `[TEST-TTS-SYNTH-CACHE-1]` | TTS 워치독 목이 모듈 캐시로 다음 테스트에 남는 격리 문제 | `OPEN` 유지(이번 게이트에선 미재현, 위 참조) |
+| 기존 P2-7 | 리뷰 원문 「기존 P2-7」 | 이월 (이번에 조사하지 않음) |
+| suspended 비프 | 리뷰 원문 「suspended 비프 상한 뒤 늦은 재개」 | 이월 (이번에 조사하지 않음) |
+| G1 | 리뷰 원문 「G1 재마운트 음성 래치」 | 이월 (이번에 조사하지 않음) |
+| `[TEST-TTS-SYNTH-CACHE-1]` | 리뷰 원문 그대로 기지 테스트 격리 문제 | `OPEN` 유지 (이번 단일 워커 게이트 2회에서는 미재현 — 위 참조) |
 | (관찰) `wave-glow B7` flake | 켜진 셀 수 단일 표본 비교가 기준선에서도 가끔 실패 | 신규 관찰 기록만 — 테스트 수정은 하지 않음 |
 | (관찰) `fix49-cell-guard ①` | 이 환경에서 기준선 포함 대부분 실패 | 신규 관찰 기록만 |
 
