@@ -142,26 +142,49 @@ export function unlockAudioPlayback(): PlaybackContext {
 function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier(), outputToken: ReturnType<typeof beginAudioOutput> = null): PlaybackOutcome {
   let appliedGain = 0;
   let scheduledTones = 0;
+  let master: GainNode | null = null;
+  const nodes: Array<{ osc: OscillatorNode; gain: GainNode }> = [];
+  let terminalTimer: ReturnType<typeof setTimeout> | null = null;
+  let settled = false;
+  const settle = (evt: 'end' | 'skip') => {
+    if (settled) return;
+    settled = true;
+    if (terminalTimer !== null) clearTimeout(terminalTimer);
+    for (const { osc, gain } of nodes) {
+      osc.onended = null;
+      if (evt === 'skip') try { osc.stop(); } catch { /* already stopped */ }
+      try { osc.disconnect(); gain.disconnect(); } catch { /* already disconnected */ }
+    }
+    try { master?.disconnect(); } catch { /* no-op */ }
+    finishAudioOutput(outputToken, evt);
+  };
   try {
     const c = getCtx();
     appliedGain = Math.min(Math.max(0, mult), BEEP_VOLUME_MAX);
-    if (!c) return { result: 'no_ctx', ctx: 'none', gain: appliedGain, tones: 0 };
+    if (!c) {
+      settle('skip');
+      return { result: 'no_ctx', ctx: 'none', gain: appliedGain, tones: 0 };
+    }
     const initialState = c.state;
+    // A suspended/interrupted graph may resume much later. Do not queue a ghost
+    // beep that can fire after B has restarted recognition.
+    if (initialState !== 'running' || appliedGain === 0 || tones.length === 0) {
+      settle('skip');
+      return { result: initialState !== 'running' ? 'suspended' : appliedGain === 0 ? 'silent' : 'empty',
+        ctx: initialState, gain: appliedGain, tones: 0 };
+    }
     const now = c.currentTime;
-    const master = c.createGain();
+    master = c.createGain();
     // v0.35.0 R2-FIX-6(리뷰 라운드2, Pro) — 상한도 클램프. 종전엔 하한(Math.max(0,·))만 있어, 호출부가
     //   손상된 배수를 넘기면 클리핑/폭주 음량이 날 수 있었다. beepVolumeToMultiplier가 이미 [0,MAX]로
     //   매핑하지만, 재생기 자체에서도 최종 방어선을 둔다(defense in depth).
     master.gain.setValueAtTime(appliedGain, now);
     master.connect(c.destination);
     let pending = tones.length;
-    if (pending === 0) {
-      try { master.disconnect(); } catch { /* no-op */ }
-      return { result: 'empty', ctx: initialState, gain: appliedGain, tones: 0 };
-    }
     for (const tone of tones) {
       const osc = c.createOscillator();
       const gain = c.createGain();
+      nodes.push({ osc, gain });
       osc.type = tone.wave;
       const t0 = now + tone.startMs / 1000;
       const t1 = now + tone.stopMs / 1000;
@@ -178,22 +201,18 @@ function playSchedule(tones: ScheduledTone[], mult: number = masterMultiplier(),
       osc.stop(t1 + 0.03);
       scheduledTones += 1;
       osc.onended = () => {
-        try { osc.disconnect(); gain.disconnect(); } catch { /* no-op */ }
         // 마지막 oscillator가 끝난 뒤에만 마스터 해제(재생 종료에 동기 — setTimeout 레이스 제거).
-        if (--pending === 0) {
-          try { master.disconnect(); } catch { /* no-op */ }
-          finishAudioOutput(outputToken, 'end');
-        }
+        if (--pending === 0) settle('end');
       };
     }
-    const result: PlaybackResult = initialState === 'suspended' || initialState === 'interrupted'
-      ? 'suspended'
-      : appliedGain === 0
-        ? 'silent'
-        : 'played';
-    return { result, ctx: initialState, gain: appliedGain, tones: scheduledTones };
+    // onended is tied to audio time; a suspended graph can leave it pending forever.
+    // Wall-clock cap stops every scheduled node before releasing the output token.
+    const latestStopMs = Math.max(...tones.map((tone) => tone.stopMs));
+    terminalTimer = setTimeout(() => settle('skip'), latestStopMs + 1_500);
+    return { result: 'played', ctx: initialState, gain: appliedGain, tones: scheduledTones };
   } catch {
-    // Audio feedback is non-critical; never block the voice flow.
+    // A partial schedule may have started one oscillator. Stop it before B can listen.
+    settle('skip');
     return { result: 'error', ctx: contextState(), gain: appliedGain, tones: scheduledTones };
   }
 }
@@ -215,9 +234,9 @@ export function playBeep(kind: BeepKind): void {
     }
   } catch {
     // 설정 조회 실패 등도 음성 흐름을 막지 않는다.
+    finishAudioOutput(outputToken, 'skip');
     outcome = { result: 'error', ctx: contextState(), gain: 0, tones: 0 };
   }
-  if (outcome.tones === 0) finishAudioOutput(outputToken, 'skip');
   logBeep(kind, outcome);
 }
 
@@ -226,8 +245,12 @@ export function playBeep(kind: BeepKind): void {
  *  their fixed 100% contract. */
 export function playReadyBeep(inst: number, volume: number): void {
   const token = beginAudioOutput('ready_beep');
-  const outcome = playSchedule([READY_BEEP_TONE], beepVolumeToMultiplier(volume), token);
-  if (outcome.result === 'error' || outcome.tones === 0) finishAudioOutput(token, 'skip');
+  let outcome: PlaybackOutcome;
+  try { outcome = playSchedule([READY_BEEP_TONE], beepVolumeToMultiplier(volume), token); }
+  catch {
+    finishAudioOutput(token, 'skip');
+    outcome = { result: 'error', ctx: contextState(), gain: 0, tones: 0 };
+  }
   logger.log({ type: 'app', extra: readyBeep({ inst, phase: 'play', result: outcome.result,
     seq: token?.seq, gain: outcome.gain }) });
 }

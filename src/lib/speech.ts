@@ -168,9 +168,15 @@ export class SpeechController {
   private readonly aSilenceMs: number;
   private readonly aUnconfirmedMs: number;
   private readonly bRestartDelayMs: number;
+  private readonly bOutputUncertainMs: number;
   private instanceId = 0;
   private outputSeq = 0;
   private outputPending = new Set<number>();
+  private outputStarted = new Set<number>();
+  /** A watchdog or started-TTS error cannot prove that the speaker is quiet. */
+  private outputUncertain = new Set<number>();
+  private bUncertainTimer: number | null = null;
+  private bManualRecovery = false;
   private outputActual = true;
   private outputHadPriorResult = false;
   private priorResults = 0;
@@ -190,13 +196,14 @@ export class SpeechController {
   private readyBeepAnchor: 'onstart' | 'output_end' = 'onstart';
   private readyTelemetryInst = 0;
 
-  constructor(cb: SpeechCallbacks, opts?: { restartDelayMs?: number; watchdogIntervalMs?: number; zombieStaleMs?: number; patchMode?: AudioPatchMode; deferInitialReadyBeep?: boolean; audioTiming?: Partial<Record<'aSilenceMs' | 'aUnconfirmedMs' | 'bRestartDelayMs', number>> }) {
+  constructor(cb: SpeechCallbacks, opts?: { restartDelayMs?: number; watchdogIntervalMs?: number; zombieStaleMs?: number; patchMode?: AudioPatchMode; deferInitialReadyBeep?: boolean; audioTiming?: Partial<Record<'aSilenceMs' | 'aUnconfirmedMs' | 'bRestartDelayMs' | 'bOutputUncertainMs', number>> }) {
     this.cb = cb;
     this.patchMode = opts?.patchMode ?? 'default';
     this.readyBeepDeferred = opts?.deferInitialReadyBeep ?? false;
     this.aSilenceMs = opts?.audioTiming?.aSilenceMs ?? IOS27_AUDIO_TIMING.aSilenceMs;
     this.aUnconfirmedMs = opts?.audioTiming?.aUnconfirmedMs ?? IOS27_AUDIO_TIMING.aUnconfirmedMs;
     this.bRestartDelayMs = opts?.audioTiming?.bRestartDelayMs ?? IOS27_AUDIO_TIMING.bRestartDelayMs;
+    this.bOutputUncertainMs = opts?.audioTiming?.bOutputUncertainMs ?? IOS27_AUDIO_TIMING.bOutputUncertainMs;
     this.baseRestartDelayMs = opts?.restartDelayMs ?? 100;
     this.restartDelayMs = this.baseRestartDelayMs;
     this.watchdogIntervalMs = opts?.watchdogIntervalMs ?? 4000;
@@ -279,7 +286,7 @@ export class SpeechController {
     this.halfDuplexHold = false;
     // P0: muteForTts가 취소했던 재시작을 여기서 되살린다.
     if (this.active && this.restartPendingAfterTts && (this.patchMode !== 'a' || !this.outputWatchdogBlocked) &&
-        (this.patchMode !== 'b' || this.outputPending.size === 0)) {
+        (this.patchMode !== 'b' || this.bOutputIsSafe())) {
       this.restartPendingAfterTts = false;
       this.logLifecycle('restart_resched_after_tts', true);
       this.scheduleRestart(this.patchMode === 'b' ? this.bRestartDelayMs : this.restartDelayMs,
@@ -312,8 +319,7 @@ export class SpeechController {
         !this.active || this.readyBeepDeferred || !this.readyBeepArmed || !this.recRunning ||
         this.readyCandidateInst !== this.instanceId || this.readyPlayedInst === this.instanceId ||
         this.ttsMuted || this.halfDuplexHold || this.restartPendingAfterTts ||
-        this.restartingTimer !== null || this.outputPending.size > 0 ||
-        !this.outputActual || this.outputWatchdogBlocked) return;
+        this.restartingTimer !== null || this.outputPending.size > 0 || this.outputUncertain.size > 0) return;
     this.readyBeepArmed = false;
     this.readyPlayedInst = this.instanceId;
     this.readyTelemetryInst = this.instanceId;
@@ -357,6 +363,10 @@ export class SpeechController {
   stop() {
     this.clearRecovery('session_end');
     this.outputPending.clear();
+    this.outputStarted.clear();
+    this.outputUncertain.clear();
+    this.clearBUncertainTimer();
+    this.bManualRecovery = false;
     this.cb.onRecoveryNotice?.(false);
     this.active = false;
     this.ttsMuted = false;
@@ -535,6 +545,11 @@ export class SpeechController {
       this.restartingTimer = null;
       this.restartingCause = null;
       if (!this.active) return;
+      if (cause === 'b_half_duplex' && !this.bOutputIsSafe()) {
+        this.restartPendingAfterTts = true;
+        this.logRecovery('skip', 'b_output_not_safe');
+        return;
+      }
       this.attemptStart(cause);
     }, delay);
     this.logLifecycle('restart_scheduled');
@@ -654,11 +669,50 @@ export class SpeechController {
     this.recoveringSeq = 0;
   }
 
+  /** A timer belongs to the foreground output window, not merely the current cell. */
+  onBackgroundHidden() {
+    if (this.patchMode !== 'a') return;
+    this.clearRecovery('background');
+    this.cb.onRecoveryNotice?.(false);
+  }
+
+  private bOutputIsSafe(): boolean {
+    return this.outputPending.size === 0 && this.outputUncertain.size === 0 && !this.bManualRecovery;
+  }
+
+  private clearBUncertainTimer() {
+    if (this.bUncertainTimer !== null) window.clearTimeout(this.bUncertainTimer);
+    this.bUncertainTimer = null;
+  }
+
+  /** Never restart B from a TTS watchdog. If native onend does not arrive within
+   *  the bounded grace, show the existing STT-only manual recovery surface. */
+  private markBOutputUncertain(seq: number) {
+    this.outputUncertain.add(seq);
+    if (this.patchMode !== 'b') return;
+    if (this.restartingCause === 'b_half_duplex' && this.restartingTimer !== null) {
+      window.clearTimeout(this.restartingTimer);
+      this.restartingTimer = null;
+      this.restartingCause = null;
+      this.restartPendingAfterTts = true;
+    }
+    this.clearBUncertainTimer();
+    this.logRecovery('armed', 'b_output_end_unknown', this.bOutputUncertainMs);
+    this.bUncertainTimer = window.setTimeout(() => {
+      this.bUncertainTimer = null;
+      if (!this.active || this.outputUncertain.size === 0 || this.bManualRecovery) return;
+      this.bManualRecovery = true;
+      this.restartPendingAfterTts = false;
+      this.logRecovery('unconfirmed', 'b_output_end_unknown', this.bOutputUncertainMs);
+      this.cb.onRecoveryNotice?.(true);
+    }, this.bOutputUncertainMs);
+  }
+
   /** One output chain is tracked across beep and queued TTS. All starts cancel the old timer. */
   beginOutput(kind: 'tts' | 'beep' | 'ready_beep'): number {
     if (kind !== 'ready_beep') this.logReadyBeepFollowup('interrupted');
     this.clearRecovery('new_output');
-    this.cb.onRecoveryNotice?.(false);
+    if (!this.bManualRecovery) this.cb.onRecoveryNotice?.(false);
     // B uses the existing half-duplex abort. A beep or queued utterance can follow
     // its TTS end before the four-second restart fires; wait for the final output.
     if (this.patchMode === 'b' && this.restartingCause === 'b_half_duplex' && this.restartingTimer !== null) {
@@ -668,7 +722,7 @@ export class SpeechController {
       this.restartPendingAfterTts = true;
       this.logRecovery('skip', 'output_extended');
     }
-    if (this.outputPending.size === 0) {
+    if (this.outputPending.size === 0 && this.outputUncertain.size === 0) {
       this.outputActual = true;
       this.outputWatchdogBlocked = false;
       this.outputHadPriorResult = this.priorResults > 0;
@@ -682,44 +736,53 @@ export class SpeechController {
 
   outputEdge(seq: number, kind: 'tts' | 'beep' | 'ready_beep', evt: 'start' | 'end' | 'error' | 'watchdog' | 'skip') {
     if (!this.active) return;
-    const actual = evt === 'start' || evt === 'end' || evt === 'error';
+    const started = this.outputStarted.has(seq);
+    const actual = evt === 'start' || ((evt === 'end' || evt === 'error') && (kind !== 'tts' || started));
     logger.log({ type: 'app', extra: audioOutputEdge({ seq, kind, evt, actual }) });
     if (kind === 'ready_beep' && evt === 'end' && this.readyTelemetryInst) {
       this.readyBeepAt = Date.now();
       this.readyBeepAnchor = 'output_end';
     }
-    if (evt === 'start') return;
-    if (!this.outputPending.delete(seq)) {
-      // A watchdog can resolve the promise while speech still plays. A later native end
-      // is the first safe edge at which a recovery timer may be armed.
-      if (actual && this.outputWatchdogBlocked && this.outputPending.size === 0 && seq === this.outputSeq) {
-        this.outputWatchdogBlocked = false;
-        this.outputActual = true;
-        this.maybeReadyBeep();
-        if (this.patchMode === 'a') this.armOutputMonitor();
-        if (this.patchMode === 'b' && this.restartPendingAfterTts && !this.ttsMuted) {
-          this.restartPendingAfterTts = false;
-          this.scheduleRestart(this.bRestartDelayMs, 'b_half_duplex');
-        }
-      }
-      return;
+    if (evt === 'start') { this.outputStarted.add(seq); return; }
+    const pending = this.outputPending.delete(seq);
+    const uncertain = this.outputUncertain.has(seq);
+    if (!pending && !uncertain) return; // duplicate native callback after a settled token
+    if (kind === 'tts' && (evt === 'watchdog' || (evt === 'error' && this.patchMode === 'b'))) {
+      this.markBOutputUncertain(seq);
+      this.outputActual = false;
+      this.outputWatchdogBlocked = true;
+    } else {
+      this.outputUncertain.delete(seq);
+      this.outputStarted.delete(seq);
+      if (this.outputUncertain.size === 0) this.clearBUncertainTimer();
+      if (!actual) { this.outputActual = false; this.outputWatchdogBlocked = true; }
+      else if (uncertain) { this.outputActual = true; this.outputWatchdogBlocked = false; }
     }
-    if (!actual) { this.outputActual = false; this.outputWatchdogBlocked = true; }
     if (this.outputPending.size > 0) return;
     this.maybeReadyBeep();
     this.cb.onOutputFinished?.(this.outputSeq);
-    if (this.patchMode === 'b' && this.restartPendingAfterTts && !this.ttsMuted) {
+    if (this.patchMode === 'b' && this.restartPendingAfterTts && !this.ttsMuted && this.bOutputIsSafe()) {
       this.restartPendingAfterTts = false;
       this.scheduleRestart(this.bRestartDelayMs, 'b_half_duplex');
     }
     if (this.patchMode !== 'a') return;
-    if (!this.outputActual || this.outputWatchdogBlocked) {
-      this.logRecovery('skip', 'tts_watchdog');
+    if (kind === 'tts' && evt === 'error' && !started) {
+      this.logRecovery('skip', 'tts_not_started');
+      return;
+    }
+    if (!this.outputActual || this.outputWatchdogBlocked || this.outputUncertain.size > 0) {
+      this.logRecovery('skip', actual ? 'output_uncertain' : 'output_not_started');
+      if (this.watchdogNoticeTimer !== null) window.clearTimeout(this.watchdogNoticeTimer);
       this.watchdogNoticeTimer = window.setTimeout(() => {
         this.watchdogNoticeTimer = null;
         if (this.active && this.outputSeq === seq && this.outputWatchdogBlocked) this.cb.onRecoveryNotice?.(true);
       }, this.aUnconfirmedMs);
       return;
+    }
+    if (this.watchdogNoticeTimer !== null) {
+      window.clearTimeout(this.watchdogNoticeTimer);
+      this.watchdogNoticeTimer = null;
+      this.cb.onRecoveryNotice?.(false);
     }
     this.armOutputMonitor();
   }
@@ -760,6 +823,17 @@ export class SpeechController {
   reconnectRecognition() {
     if (!this.active) return;
     this.clearRecovery('tap');
+    this.clearBUncertainTimer();
+    this.outputUncertain.clear();
+    this.outputPending.clear();
+    this.outputStarted.clear();
+    this.bManualRecovery = false;
+    this.restartPendingAfterTts = false;
+    if (this.restartingCause === 'b_half_duplex' && this.restartingTimer !== null) {
+      window.clearTimeout(this.restartingTimer);
+      this.restartingTimer = null;
+      this.restartingCause = null;
+    }
     this.cb.onRecoveryNotice?.(false);
     this.logRecovery('tap', 'user_gesture');
     this.logInstance('abort', 'tap');

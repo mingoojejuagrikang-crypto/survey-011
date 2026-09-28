@@ -52,8 +52,8 @@ import { useClipCapture, type PendingCommandClip } from './useClipCapture';
 import { createClipHealth, clipSummaryExtra, clipUnreliableSummaryExtra, type ClipHealth } from './clipHealth';
 import { getMutedSpanCount, resetMicInterruptionSpans } from './micInterruption';
 import { getAudioSessionEventCount } from './audioInterruption';
-import { IOS27_AUDIO_TIMING, applyAudioSessionPatch, audioPatchAvailable, snapshotAudioPatch, type AudioPatchMode, type AudioSessionPatchResult } from './ios27AudioPatch';
-import { audioPatchMode, audioPatchModeRestore, clipInputProbe } from './logEvents';
+import { IOS27_AUDIO_TIMING, applyAudioSessionPatch, audioPatchAvailable, snapshotAudioPatch, rememberSessionAudioChoice, sessionAudioChoice, forgetSessionAudioChoice, type AudioPatchMode, type AudioSessionPatchResult } from './ios27AudioPatch';
+import { audioPatchMode, audioPatchModeRestore, audioPatchModeReapply, clipInputProbe } from './logEvents';
 import { useClipFailureAlert } from './useClipFailureAlert';
 import { useMicInterruptionNotice } from './useMicInterruptionNotice';
 import { clipFailSummaryScreen, clipUnreliableSummaryScreen, sessionHealthSummaryScreen } from './voicePrompts';
@@ -612,6 +612,23 @@ export function useVoiceSession() {
   const logCell = (entry: Omit<Parameters<typeof logger.log>[0], 'sessionId'>): void => {
     logger.log({ sessionId: sessionIdRef.current, ...entry } as Parameters<typeof logger.log>[0]);
   };
+  const restoreAudioSession = useCallback(() => {
+    const patch = audioSessionPatchRef.current;
+    if (!patch) return;
+    audioSessionPatchRef.current = null;
+    const restored = patch.restore();
+    if (audioPatchAvailable()) logger.log({ type: 'app', sessionId: sessionIdRef.current,
+      extra: audioPatchModeRestore(restored.result, restored.type) });
+  }, []);
+  const reapplyAudioSession = useCallback((reason: 'foreground' | 'remount') => {
+    const live = useSessionStore.getState();
+    if (!audioPatchAvailable() || !isSessionLive(live.phase) || !live.sessionId ||
+        !sessionAudioChoice(live.sessionId) || audioSessionPatchRef.current) return;
+    const patch = applyAudioSessionPatch(true);
+    audioSessionPatchRef.current = patch;
+    logger.log({ type: 'app', sessionId: live.sessionId,
+      extra: audioPatchModeReapply({ reason, before: patch.before, after: patch.after, set: patch.set }) });
+  }, []);
   const clearAnomalyAlert = useCallback((reason: string) => {
     const sess = useSessionStore.getState();
     const alert = sess.anomalyAlert;
@@ -2481,6 +2498,8 @@ export function useVoiceSession() {
    *  ⚠️ 화면 끄기와 앱 이탈은 **구분할 수 없다**([SCREEN-LOCK-1]: 53/53 `evidence=blur`).
    *  게이트는 그 구분을 전제하지 않는다 — phase 하나로 가른다. */
   const suspendForBackground = useCallback(() => {
+    ctrlRef.current?.onBackgroundHidden();
+    restoreAudioSession();
     if (shouldKeepInBackground(useSessionStore.getState().phase)) {
       // [D1] 유지 — 정지 없음. 생존 관측(WP-1④)과 임계 타이머만 세운다.
       bgKeepRef.current = { hiddenAt: Date.now(), finals: 0 };
@@ -2519,7 +2538,7 @@ export function useVoiceSession() {
       extra: bgMicAction({ edge: 'enter', stt: sttStopped ? 'stopped' : 'noop', capture: captureOff ? 'off' : 'noop' }),
       row: useSessionStore.getState().activeRow,
     });
-  }, [suspendRecognitionForUi, clearBgOffTimer]);
+  }, [suspendRecognitionForUi, clearBgOffTimer, restoreAudioSession]);
 
   /** 포그라운드 복귀: 캡처 on + STT 복원. 안내는 여기서 하지 않는다 — 복원된 인식기의
    *  `onStart`가 낸다(위 `announceBgResume`).
@@ -2531,6 +2550,7 @@ export function useVoiceSession() {
    *  🔑 캡처 복구는 **무조건** 돈다 — 백그라운드 중 세션이 끝나 래치가 비어도(`clearUiSuspendLatch`)
    *  트랙이 꺼진 채 남으면 다음 세션이 조용히 무음을 녹음한다. */
   const resumeFromBackground = useCallback(() => {
+    reapplyAudioSession('foreground');
     // 🔴 리뷰 C1 — 진행 중일 수 있는 임계 정지 continuation을 무효화한다(세대 증가).
     bgOffGenRef.current += 1;
     // WP-3 브리핑 게이트 — 유지 사이클이 실제로 있었는가(스퓨리어스 visible 이벤트 방어).
@@ -2584,7 +2604,7 @@ export function useVoiceSession() {
       const briefing = buildReturnBriefing(true);
       if (briefing) void say(briefing, false).catch(() => {});
     }
-  }, [resumeRecognitionForUi, clearBgOffTimer, emitBgKeepSummary, maybeAutoRecoverOrLatch, say, buildReturnBriefing, armClipForCell]);
+  }, [resumeRecognitionForUi, clearBgOffTimer, emitBgKeepSummary, maybeAutoRecoverOrLatch, say, buildReturnBriefing, armClipForCell, reapplyAudioSession]);
 
   // ── v0.34.0 A2 — 개선요청(피드백) 팝업 열림 중 STT 일시정지 ──
   // App.tsx가 sessionStore.uiModalOpen('feedback')을 올리고/내리는 단일 신호를 구독한다.
@@ -2781,6 +2801,7 @@ export function useVoiceSession() {
     // D-2 (RACE-7): persist session id/startedAt in the store so an in-app unmount during pause
     // can't lose them. MUST run AFTER resetAll() — resetAll clears sessionId/startedAt too.
     sess.setSessionMeta({ sessionId: sessionIdRef.current, startedAt: startTs, label: sessionLabelRef.current });
+    rememberSessionAudioChoice(sessionIdRef.current, patchSelection.playAndRecord);
     sess.setPhase('active');
     sess.setActiveRow(1);
     sess.setActiveCol(0);
@@ -2788,6 +2809,7 @@ export function useVoiceSession() {
     if (!isSpeechSupported()) {
       audioSessionPatchRef.current?.restore();
       audioSessionPatchRef.current = null;
+      forgetSessionAudioChoice(sessionIdRef.current);
       sess.setLastTts('이 기기는 음성 인식을 지원하지 않습니다.');
       return false;
     }
@@ -2987,11 +3009,8 @@ export function useVoiceSession() {
     // v0.35.0 P1 — 종료 teardown 전체를 단일 비대화형 phase로 잠근다. 첫 await보다 먼저 전환해야
     // pause→stop 사이 재시작, 완료행 이동, 중복 stop이 같은 이벤트 루프 틈에서도 끼어들 수 없다.
     if (phaseAtEntry === 'stopping') return false;
-    if (audioPatchAvailable() && audioSessionPatchRef.current) {
-      const restored = audioSessionPatchRef.current.restore();
-      logCell({ type: 'app', extra: audioPatchModeRestore(restored.result, restored.type) });
-      audioSessionPatchRef.current = null;
-    }
+    restoreAudioSession();
+    forgetSessionAudioChoice(sessionIdRef.current);
     setSttRecoveryNotice(false);
     useSessionStore.getState().setPhase('stopping');
     setActiveController(null);
@@ -3473,6 +3492,7 @@ export function useVoiceSession() {
       });
       const phase = useSessionStore.getState().phase;
       if (phase !== 'active' && phase !== 'complete' && phase !== 'paused') return;
+      reapplyAudioSession('foreground');
       resumeTtsEngine();
       const result = ctrlRef.current ? ctrlRef.current.kick() : 'no_controller';
       logCell({ type: 'stt', extra: `kick_result:${evt}:${result}` });
@@ -3499,6 +3519,8 @@ export function useVoiceSession() {
     };
     const onVis = () => {
       if (document.visibilityState !== 'visible') {
+        ctrlRef.current?.onBackgroundHidden();
+        restoreAudioSession();
         // v0.38.2 F5 — **여기서 라벨을 스냅샷하는 것이 핵심.** 복귀 후에 읽으면 before/after가 같은
         // 읽기가 돼 "백그라운드 중 경로가 바뀌었다"를 판정할 수 없다.
         const decision = reduceForegroundReturn(foregroundReturnRef.current, 'hidden', Date.now(), {
@@ -3583,8 +3605,13 @@ export function useVoiceSession() {
     }
   }, []);
 
+  useEffect(() => {
+    reapplyAudioSession('remount');
+  }, [reapplyAudioSession]);
+
   // unmount cleanup
   useEffect(() => () => {
+    restoreAudioSession();
     setActiveController(null);
     ctrlRef.current?.stop();
     // StrictMode simulated teardown 뒤 effect setup이 다시 돌 때 stopped 인스턴스를 재사용하지 않는다.

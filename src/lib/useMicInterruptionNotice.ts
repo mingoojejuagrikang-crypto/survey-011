@@ -82,6 +82,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import { getMutedSince, isMicMuted, subscribeMicMuted } from './micInterruption';
 import { CLIP_MUTE_UNSTABLE_TTS, MIC_INTERRUPT_RECOVERED_TTS } from './voicePrompts';
 import { IOS27_AUDIO_TIMING, audioPatchAvailable } from './ios27AudioPatch';
+import { clipMuteVoice } from './logEvents';
 import type { ClipHealth } from './clipHealth';
 import type { logger } from './logger';
 
@@ -149,9 +150,46 @@ export function useMicInterruptionNotice(
     let timer: ReturnType<typeof setTimeout> | null = null;
     let noticeTimer: ReturnType<typeof setTimeout> | null = null;
     let persistentNotified = false;
+    let voiceStarted = false;
+    let voiceAttempts = 0;
+    let voiceInFlight = false;
+    let voiceGeneration = 0;
+    let voiceRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let firstMuteProbed = false;
     const clearNoticeTimer = () => {
       if (noticeTimer !== null) { clearTimeout(noticeTimer); noticeTimer = null; }
+    };
+    const clearVoiceRetry = () => {
+      if (voiceRetryTimer !== null) { clearTimeout(voiceRetryTimer); voiceRetryTimer = null; }
+    };
+    const canSpeakAfterMute = () => {
+      const phase = useSessionStore.getState().phase;
+      return !isMicMuted() && (phase === 'active' || phase === 'complete' || phase === 'paused') &&
+        (typeof document === 'undefined' || document.visibilityState === 'visible');
+    };
+    const attemptPersistentVoice = (reason: 'unmute' | 'retry' | 'foreground') => {
+      if (!persistentNotified || voiceStarted || voiceInFlight || voiceAttempts >= 2 || !canSpeakAfterMute()) return;
+      clearVoiceRetry();
+      const n = ++voiceAttempts;
+      const generation = voiceGeneration;
+      voiceInFlight = true;
+      depsRef.current.logCell({ type: 'clip', extra: clipMuteVoice({ phase: 'attempt', n, reason }) });
+      void depsRef.current.say(CLIP_MUTE_UNSTABLE_TTS, false).then((started) => {
+        if (generation !== voiceGeneration) return;
+        voiceInFlight = false;
+        if (started) voiceStarted = true;
+        depsRef.current.logCell({ type: 'clip', extra: clipMuteVoice({ phase: started ? 'started' : 'no_start', n, reason }) });
+        if (!started && n < 2 && canSpeakAfterMute()) {
+          voiceRetryTimer = setTimeout(() => { voiceRetryTimer = null; attemptPersistentVoice('retry'); }, 500);
+        }
+      }).catch(() => {
+        if (generation !== voiceGeneration) return;
+        voiceInFlight = false;
+        depsRef.current.logCell({ type: 'clip', extra: clipMuteVoice({ phase: 'no_start', n, reason }) });
+        if (n < 2 && canSpeakAfterMute()) {
+          voiceRetryTimer = setTimeout(() => { voiceRetryTimer = null; attemptPersistentVoice('retry'); }, 500);
+        }
+      });
     };
     const armNotice = () => {
       if (!audioPatchAvailable() || persistentNotified || !isMicMuted()) return;
@@ -165,12 +203,16 @@ export function useMicInterruptionNotice(
         persistentNotified = true;
         useSessionStore.getState().setClipMutePersistent(true);
         depsRef.current.probeInput?.('mute_notice');
-        // Same non-interrupting TTS queue as the existing recovery notice. One attempt per session.
-        void depsRef.current.say(CLIP_MUTE_UNSTABLE_TTS, false);
+        // Keep the screen warning now; queue speech after the track unmutes.
       }, Math.max(0, IOS27_AUDIO_TIMING.clipMuteNoticeMs - (Date.now() - mutedSince)));
     };
     resetRef.current = () => {
+      voiceGeneration++;
+      clearVoiceRetry();
       persistentNotified = false;
+      voiceStarted = false;
+      voiceAttempts = 0;
+      voiceInFlight = false;
       firstMuteProbed = false;
       useSessionStore.getState().setClipMutePersistent(false);
       if (isMicMuted()) { firstMuteProbed = true; depsRef.current.probeInput?.('first_mute'); }
@@ -225,7 +267,8 @@ export function useMicInterruptionNotice(
       log({ type: 'clip', extra: `mic_interrupt_notice:lost=${lost},unrel=${unrel},fail=${fail}` });
       // interrupt:false — 진행 중 echo(방금 커밋한 값의 되읽기)를 끊지 않는다.
       //   `useClipFailureAlert`와 같은 판단이고, 같은 이유다.
-      void speak(MIC_INTERRUPT_RECOVERED_TTS, false);
+      // Persistent mute already owns the one spoken warning for this interruption.
+      if (!persistentNotified) void speak(MIC_INTERRUPT_RECOVERED_TTS, false);
     };
 
     const onMuted = (muted: boolean) => {
@@ -241,6 +284,7 @@ export function useMicInterruptionNotice(
       });
 
       if (muted) {
+        clearVoiceRetry();
         if (audioPatchAvailable()) {
           if (!firstMuteProbed) { firstMuteProbed = true; depsRef.current.probeInput?.('first_mute'); }
           armNotice();
@@ -294,10 +338,12 @@ export function useMicInterruptionNotice(
         pendingVerdict = true;
         // 판독 불변식(헤더): unmute 시점에 정확히 1줄 — 유예도 「판정이 안 돌았다」와 갈라야 한다.
         log({ type: 'clip', extra: 'mic_interrupt_notice:deferred' });
+        attemptPersistentVoice('unmute');
         return;
       }
       pendingVerdict = false;
       verdict();
+      attemptPersistentVoice('unmute');
     };
 
     /** 🔴 v0.51.1 ⓓ — 걸친 클립의 증거가 장부에 오른 순간(`recordUnreliable`·`recordFailure(mutedSpan)`
@@ -322,13 +368,20 @@ export function useMicInterruptionNotice(
     dropRef.current = drop;
 
     const unsubscribeMuted = subscribeMicMuted(onMuted);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') attemptPersistentVoice('foreground');
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
     // 🔴 마운트 시점의 장부에 건다 — 호출부가 `useRef`로 고정한 인스턴스다(deps 주석).
     const unsubscribeEvidence = depsRef.current.clipHealth.onMutedEvidence(onMutedEvidence);
     return () => {
       unsubscribeMuted();
       unsubscribeEvidence();
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
       clearTimer();
       clearNoticeTimer();
+      clearVoiceRetry();
+      voiceGeneration++;
       drop('unmount');
       dropRef.current = null;
       resetRef.current = null;

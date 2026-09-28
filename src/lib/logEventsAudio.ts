@@ -43,6 +43,9 @@ export function sttRecovery(fields: { seq: number; phase: 'armed' | 'skip' | 'ti
 export function clipInputProbe(fields: { edge: 'first_mute' | 'after_output' | 'tap_recover' | 'mute_notice'; track: string; enabled: string; ctx: string; peak: number; seq: number }): string {
   return `clip_input_probe:${kv(fields)}`;
 }
+export function clipMuteVoice(fields: { phase: 'attempt' | 'started' | 'no_start'; n: number; reason: 'unmute' | 'retry' | 'foreground' }): string {
+  return `clip_mute_voice:${kv(fields)}`;
+}
 export function audioPatchMode(fields: { mode: string; build: string; selectedAt: number; bargeIn: boolean; halfDuplex: boolean; sessionType: 'on' | 'off'; supported: boolean; before: string; after: string; state: string; set: string; aMs: number; aConfirmMs: number; bMs: number; muteMs: number }): string {
   return `audio_patch_mode:${kv({ mode: fields.mode, build: fields.build, selectedAt: fields.selectedAt,
     bargeIn: fields.bargeIn ? 1 : 0, halfDuplex: fields.halfDuplex ? 1 : 0,
@@ -52,6 +55,9 @@ export function audioPatchMode(fields: { mode: string; build: string; selectedAt
 }
 export function audioPatchModeRestore(result: 'off' | 'ok' | 'error', type: string): string {
   return `audio_patch_mode_restore:${kv({ result, type })}`;
+}
+export function audioPatchModeReapply(fields: { reason: 'foreground' | 'remount'; before: string; after: string; set: string }): string {
+  return `audio_patch_mode_reapply:${kv(fields)}`;
 }
 
 /** `lifecycle:zombie_restart:stale_ms=<ms>,n=<streak>` — STT 좀비 재시작 진단.

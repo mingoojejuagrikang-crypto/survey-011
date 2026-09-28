@@ -84,7 +84,7 @@ test('G1 — five-second clip mute uses the existing interruption status and spe
   await expect(page.locator('[data-testid="mic-interrupt-status"]')).toHaveCount(0);
   await expect(page.locator('[data-testid="mic-interrupt-status"]'), 'same interruption surface escalates after threshold')
     .toHaveText('음성 클립 저장이 불안정합니다', { timeout: 7_000 });
-  await expect.poll(async () => (await ttsLog(page)).filter((t) => t === '음성 클립 저장이 불안정합니다').length).toBe(1);
+  expect((await ttsLog(page)).filter((t) => t === '음성 클립 저장이 불안정합니다')).toHaveLength(0);
   const hero = await page.locator('[data-testid="hero-hold-surface"]').boundingBox();
   if (!hero) throw new Error('hero hold surface missing');
   await page.mouse.move(hero.x + hero.width / 2, hero.y + hero.height / 2);
@@ -92,8 +92,10 @@ test('G1 — five-second clip mute uses the existing interruption status and spe
   await expect(page.locator('[data-testid="hero-hold-cue"]')).toContainText('음성 클립 저장이 불안정합니다');
   await page.waitForTimeout(550); // the ordinary hold TTS fires, but must not repeat G1's exact utterance
   await page.mouse.up();
-  expect((await ttsLog(page)).filter((t) => t === '음성 클립 저장이 불안정합니다')).toHaveLength(1);
+  expect((await ttsLog(page)).filter((t) => t === '음성 클립 저장이 불안정합니다')).toHaveLength(0);
   expect(await setMuted(false)).toBe(true);
+  await expect.poll(async () => (await ttsLog(page)).filter((t) => t === '음성 클립 저장이 불안정합니다').length).toBe(1);
+  expect((await ttsLog(page)).filter((t) => t.includes('마이크가 잠시 멈춰 있었습니다')).length).toBe(0);
   expect(await setMuted(true)).toBe(true);
   await page.waitForTimeout(5_400);
   expect((await ttsLog(page)).filter((t) => t === '음성 클립 저장이 불안정합니다')).toHaveLength(1);
@@ -101,6 +103,32 @@ test('G1 — five-second clip mute uses the existing interruption status and spe
   expect(extras.some((e) => e.startsWith('clip_input_probe:edge=first_mute'))).toBe(true);
   expect(extras.some((e) => e.startsWith('clip_input_probe:edge=mute_notice'))).toBe(true);
   expect(extras.some((e) => e.startsWith('mic_auto_reconnect:attempt'))).toBe(false);
+  expect(extras.some((e) => e.startsWith('clip_mute_voice:phase=started,n=1'))).toBe(true);
+});
+
+test('G1 — missing utterance onstart is attempted, then retried once after unmute', async ({ page }) => {
+  await boot(page, PHONE_402, { settings: settings as typeof SETTINGS });
+  await page.evaluate(() => {
+    const synth = speechSynthesis;
+    const original = synth.speak.bind(synth);
+    let skipped = false;
+    (synth as any).speak = (utterance: SpeechSynthesisUtterance) => {
+      if (utterance.text === '음성 클립 저장이 불안정합니다' && !skipped) {
+        skipped = true;
+        setTimeout(() => utterance.onerror?.(new Event('error') as SpeechSynthesisErrorEvent), 0);
+        return;
+      }
+      original(utterance);
+    };
+  });
+  const setMuted = (v: boolean) => page.evaluate((next) => (window as any).__setFakeTrackMuted?.(next) === true, v);
+  expect(await setMuted(true)).toBe(true);
+  await expect(page.locator('[data-testid="mic-interrupt-status"]')).toHaveText('음성 클립 저장이 불안정합니다', { timeout: 7_000 });
+  expect(await setMuted(false)).toBe(true);
+  await expect.poll(async () => (await valueEvents(page)).some((e) => e.extra?.startsWith('clip_mute_voice:phase=started,n=2')), { timeout: 5_000 }).toBe(true);
+  expect((await ttsLog(page)).filter((t) => t === '음성 클립 저장이 불안정합니다')).toHaveLength(1);
+  const attempts = (await valueEvents(page)).map((e) => e.extra ?? '').filter((e) => e.startsWith('clip_mute_voice:phase=attempt'));
+  expect(attempts).toHaveLength(2);
 });
 
 test('audio session toggle is independent and restores the original type on session end', async ({ page }) => {
@@ -120,6 +148,47 @@ test('audio session toggle is independent and restores the original type on sess
   await expect(page.locator('text=음성 입력 시작').first()).toBeVisible({ timeout: 15_000 });
   expect(await page.evaluate(() => (navigator as any).audioSession.type)).toBe('auto');
   expect((await valueEvents(page)).some((e) => e.extra === 'audio_patch_mode_restore:result=ok,type=auto')).toBe(true);
+});
+
+test('audio session type restores in background and reapplies on foreground', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'audioSession', {
+    configurable: true, value: { type: 'auto', state: 'active' },
+  }));
+  await boot(page, PHONE_402, { settings: settings as typeof SETTINGS,
+    beforeStart: async (p) => {
+      await p.locator('[data-testid="tab-settings"]').click();
+      await p.locator('[data-testid="audio-session-play-and-record"]').check();
+    } });
+  expect(await page.evaluate(() => (navigator as any).audioSession.type)).toBe('play-and-record');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(await page.evaluate(() => (navigator as any).audioSession.type)).toBe('auto');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(() => page.evaluate(() => (navigator as any).audioSession.type)).toBe('play-and-record');
+  expect((await valueEvents(page)).some((e) => e.extra?.startsWith('audio_patch_mode_reapply:reason=foreground'))).toBe(true);
+});
+
+test('audio session type restores on VoiceScreen unmount and reapplies on live remount', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'audioSession', {
+    configurable: true, value: { type: 'auto', state: 'active' },
+  }));
+  await boot(page, PHONE_402, { settings: settings as typeof SETTINGS,
+    beforeStart: async (p) => {
+      await p.locator('[data-testid="tab-settings"]').click();
+      await p.locator('[data-testid="audio-session-play-and-record"]').check();
+    } });
+  expect(await page.evaluate(() => (navigator as any).audioSession.type)).toBe('play-and-record');
+  await page.locator('[data-testid="tab-data"]').click();
+  await page.evaluate(async () => (await import('/src/stores/sessionStore.ts')).useSessionStore.getState().setPhase('ready'));
+  await expect.poll(() => page.evaluate(() => (navigator as any).audioSession.type)).toBe('auto');
+  await page.evaluate(async () => (await import('/src/stores/sessionStore.ts')).useSessionStore.getState().setPhase('active'));
+  await expect.poll(() => page.evaluate(() => (navigator as any).audioSession.type)).toBe('play-and-record');
+  expect((await valueEvents(page)).some((e) => e.extra?.startsWith('audio_patch_mode_reapply:reason=remount'))).toBe(true);
 });
 
 test('audio session toggle is disabled when the API is absent', async ({ page }) => {

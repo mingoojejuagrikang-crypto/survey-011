@@ -11,11 +11,23 @@ export const IOS27_AUDIO_TIMING = {
   aSilenceMs: 8_000,
   aUnconfirmedMs: 8_000,
   bRestartDelayMs: 4_000,
+  bOutputUncertainMs: 8_000,
   clipMuteNoticeMs: 5_000,
 } as const;
 
 const preview = typeof __PREVIEW_BUILD__ !== 'undefined' && __PREVIEW_BUILD__;
 let selected: AudioPatchSelection = { mode: 'default', playAndRecord: false, selectedAt: 0 };
+/** Session snapshot survives a VoiceScreen unmount; it is never persisted. */
+let liveAudioSessionChoice: { sessionId: string; enabled: boolean } | null = null;
+export function rememberSessionAudioChoice(sessionId: string, enabled: boolean): void {
+  liveAudioSessionChoice = { sessionId, enabled };
+}
+export function sessionAudioChoice(sessionId: string): boolean {
+  return liveAudioSessionChoice?.sessionId === sessionId && liveAudioSessionChoice.enabled;
+}
+export function forgetSessionAudioChoice(sessionId: string): void {
+  if (liveAudioSessionChoice?.sessionId === sessionId) liveAudioSessionChoice = null;
+}
 const listeners = new Set<() => void>();
 
 export function audioPatchAvailable(): boolean { return preview; }
