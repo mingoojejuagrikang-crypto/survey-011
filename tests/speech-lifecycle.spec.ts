@@ -714,6 +714,43 @@ test.describe('F5 — native TTS error / missing cancel completion', () => {
     });
   }
 
+  // r7 P1 — hybrid cancel synchronously errors the never-started queued B while A's
+  // audio is still out. B's done() must not release the mute A's started output owns.
+  for (const trigger of ['error', 'watchdog'] as const) {
+    test(`r7 P1: queued B sync onerror during A ${trigger} cancel keeps mute until engine silence`, async () => {
+      setBargeInEnabled(true);
+      const finals: { text: string; muted: boolean }[] = [];
+      ctrl = new SpeechController({ onFinal: (text) => { finals.push({ text, muted: ctrl.isTtsMuted() }); } },
+        { hybridOption: true, restartDelayMs: 10, watchdogIntervalMs: 10_000 });
+      setActiveController(ctrl); ctrl.start(); MockRec.instances[0].fire('start');
+      const old = MockRec.instances[0];
+      const queue: SpeechSynthesisUtterance[] = [];
+      engine.speak = (u) => { utterances.push(u); queue.push(u); engine.pending = true; };
+      engine.cancel = () => {
+        cancels++;
+        const dropped = queue.splice(0);
+        engine.pending = false; // A's output stays audible: speaking remains true
+        for (const u of dropped) event(u, 'error');
+      };
+      const first = speak('1', { interrupt: false });
+      const second = speak('2', { interrupt: false });
+      const a = queue.shift()!;
+      engine.pending = queue.length > 0; engine.speaking = true; event(a, 'start');
+      if (trigger === 'error') event(a, 'error');
+      await first; await second; // watchdog: A's 2.5s end watchdog cancels the engine
+      expect(cancels).toBe(1);
+      expect(engine.speaking).toBe(true);
+      expect(ctrl.isTtsMuted()).toBe(true);
+      expect(old.aborted).toBe(false); expect(MockRec.instances).toHaveLength(1);
+      old.fireResult('999', true); // echo reaching the old recognizer is filtered by the app mute gate
+      expect(finals).toEqual([{ text: '999', muted: true }]);
+      engine.speaking = false;
+      await waitFor(() => MockRec.instances.length === 2);
+      expect(ctrl.isTtsMuted()).toBe(false); expect(old.aborted).toBe(true);
+      expect(logger.getAll().filter((e) => e.extra?.startsWith('stt_hybrid_swap:'))).toHaveLength(1);
+    });
+  }
+
   test('F6 P1-1: cancel throw keeps mute and old recognizer, bounds polling, then accepts late native end', async () => {
     start(true);
     const old = MockRec.instances[0];

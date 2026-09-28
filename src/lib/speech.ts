@@ -263,7 +263,10 @@ export class SpeechController {
   unmuteForTts() {
     // Only hybrid completion owns this extra hold. Default OFF / half-duplex
     // retain their existing queue and unmute behavior (decision 16).
-    if (this.hybridDue && this.usesHybridTts() &&
+    // r7 P1: a started hybrid output still owns the mute. During its cancel the
+    // engine can synchronously error a queued, never-started utterance whose
+    // done() arrives before this output's edge sets hybridDue.
+    if ((this.hybridDue || this.hybridTts.size > 0) && this.usesHybridTts() &&
         (this.outputPending.size > 0 || !this.engineSilence.check())) {
       this.unmutePendingForSilence = true;
       return;

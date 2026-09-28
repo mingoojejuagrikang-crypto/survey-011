@@ -135,7 +135,9 @@
     신규 `tts_cancel_settled:seq=<n>,reason=native_timeout`을 기록한다(실제 native end로 기록하지 않는다).
     오류 후 cancel 실패는 신규 `tts_error_cancel_failed`로 기록한다. 두 이벤트 모두 `type:app`이다.
     하이브리드 종료 뒤 언뮤트·새 인식기 생성과 준비음은 공통 `EngineSilenceGate`로 엔진
-    `speaking===false && pending===false`를 확인한다. 50ms 간격·2초 상한이며 상한 초과 시
+    `speaking===false && pending===false`를 확인한다. 언뮤트 보류는 교체 의무가 섰을 때뿐 아니라
+    시작된 하이브리드 TTS 출력이 아직 종결되지 않았을 때도 적용된다(취소 중 큐 미시작 발화의 동기
+    오류가 먼저 도착하는 경우 — 리뷰 7회전 P1). 50ms 간격·2초 상한이며 상한 초과 시
     `tts_engine_silence_timeout`(`type:app`)을 한 번 기록하고 교체/준비음을 보류한다.
     새 TTS·stop은 이전 대기를 정리한다. 이후 실제 종료 이벤트는 침묵을 다시 확인할 수 있다.
     말끊기 OFF 준비음은 엔진 speaking/pending이 꺼지고 fresh onstart/출력 경계를 충족할 때 한 번 울리며
