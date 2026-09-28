@@ -667,15 +667,187 @@ test.describe('F5 — native TTS error / missing cancel completion', () => {
     delete (globalThis as any).window;
     delete (globalThis as any).SpeechSynthesisUtterance;
   });
-  function start(bargeIn: boolean) {
+  function start(bargeIn: boolean, hybridOption = true) {
     setBargeInEnabled(bargeIn);
     ctrl = new SpeechController({ onFinal: () => {}, onReadyToListen: (inst) => heard.push(inst) },
-      { hybridOption: true, restartDelayMs: 10, watchdogIntervalMs: 10_000 });
+      { hybridOption, restartDelayMs: 10, watchdogIntervalMs: 10_000 });
     setActiveController(ctrl); ctrl.start(); MockRec.instances[0].fire('start');
   }
   function event(u: SpeechSynthesisUtterance, type: 'start' | 'end' | 'error') {
     (u[`on${type}`] as (() => void) | null)?.();
   }
+
+  for (const [bargeIn, hybridOption] of [[true, false], [false, false], [false, true], [true, true]]) {
+    test(`F6 P1-3: error queue bargeIn=${bargeIn} option=${hybridOption} preserves B outside hybrid`, async () => {
+      start(bargeIn, hybridOption);
+      const queue: SpeechSynthesisUtterance[] = [];
+      const played: string[] = [];
+      engine.speak = (u) => { utterances.push(u); queue.push(u); engine.pending = true; };
+      engine.cancel = () => {
+        cancels++; queue.length = 0; engine.speaking = false; engine.pending = false;
+      };
+      const playNext = () => {
+        const u = queue.shift()!;
+        engine.pending = queue.length > 0; engine.speaking = true;
+        played.push(u.text); event(u, 'start');
+        return u;
+      };
+      let secondDone = false;
+      const first = speak('첫 안내', { interrupt: false });
+      const second = speak('다음 안내', { interrupt: false }).then(() => { secondDone = true; });
+      const a = playNext();
+      expect(queue).toHaveLength(1);
+      event(a, 'error'); await first;
+      if (bargeIn && hybridOption) {
+        await second;
+        expect(cancels).toBe(1); expect(queue).toHaveLength(0);
+        expect(played).toEqual(['첫 안내']);
+      } else {
+        expect(cancels).toBe(0); expect(queue).toHaveLength(1);
+        expect(secondDone).toBe(false);
+        const b = playNext();
+        expect(played).toEqual(['첫 안내', '다음 안내']);
+        expect(secondDone).toBe(false);
+        engine.speaking = false; event(b, 'end'); await second;
+        expect(secondDone).toBe(true); expect(cancels).toBe(0);
+      }
+    });
+  }
+
+  test('F6 P1-1: cancel throw keeps mute and old recognizer, bounds polling, then accepts late native end', async () => {
+    start(true);
+    const old = MockRec.instances[0];
+    engine.cancel = () => { cancels++; throw new Error('native cancel failed'); };
+    const p = speak('1'); const u = utterances[0]; event(u, 'start');
+    event(u, 'error'); await p;
+    expect(cancels).toBe(1);
+    expect(logger.getAll().map((e) => e.extra)).toContain('tts_error_cancel_failed');
+    expect(ctrl.isTtsMuted()).toBe(true);
+    expect(old.aborted).toBe(false); expect(MockRec.instances).toHaveLength(1);
+    // A natural end / foreground kick cannot route around the completion hold.
+    old.fire('end'); ctrl.kick(); await sleep(100);
+    expect(MockRec.instances).toHaveLength(1);
+    let reads = 0;
+    let speaking = true;
+    Object.defineProperty(engine, 'speaking', { configurable: true,
+      get: () => { reads++; return speaking; }, set: (value: boolean) => { speaking = value; } });
+    await waitFor(() => logger.getAll().some((e) => e.extra === 'tts_engine_silence_timeout'), 3000);
+    const readsAtExpiry = reads;
+    await sleep(150);
+    expect(reads).toBe(readsAtExpiry);
+    expect(logger.getAll().filter((e) => e.extra === 'tts_engine_silence_timeout')).toHaveLength(1);
+    expect(ctrl.isTtsMuted()).toBe(true);
+    expect(old.aborted).toBe(false); expect(MockRec.instances).toHaveLength(1);
+    Object.defineProperty(engine, 'speaking', { configurable: true, writable: true, value: false });
+    event(u, 'end');
+    expect(ctrl.isTtsMuted()).toBe(false);
+    expect(old.aborted).toBe(true); expect(MockRec.instances).toHaveLength(2);
+    event(u, 'end'); expect(MockRec.instances).toHaveLength(2);
+  });
+
+  test('F6 P1-1: asynchronous cancel waits for both engine flags without a native end', async () => {
+    start(true);
+    const old = MockRec.instances[0];
+    engine.cancel = () => { cancels++; }; // returns successfully before native output stops
+    const p = speak('1'); event(utterances[0], 'start');
+    event(utterances[0], 'error'); await p;
+    await sleep(350);
+    expect(ctrl.isTtsMuted()).toBe(true);
+    expect(old.aborted).toBe(false); expect(MockRec.instances).toHaveLength(1);
+    engine.pending = true; engine.speaking = false;
+    await sleep(100); expect(MockRec.instances).toHaveLength(1);
+    engine.pending = false;
+    await waitFor(() => MockRec.instances.length === 2);
+    expect(ctrl.isTtsMuted()).toBe(false); expect(old.aborted).toBe(true);
+    await sleep(100); expect(MockRec.instances).toHaveLength(2);
+  });
+
+  test('F6 P1-1: stop cancels a hybrid engine-silence wait', async () => {
+    start(true);
+    engine.cancel = () => { cancels++; };
+    const p = speak('1'); event(utterances[0], 'start'); event(utterances[0], 'error'); await p;
+    ctrl.stop(); engine.speaking = false;
+    await sleep(150);
+    expect(MockRec.instances).toHaveLength(1);
+    expect(logger.getAll().some((e) => e.extra?.startsWith('stt_hybrid_swap:'))).toBe(false);
+  });
+
+  test('F6 P1-1: watchdog also waits for engine silence before a hybrid swap', async () => {
+    start(true);
+    const old = MockRec.instances[0];
+    engine.cancel = () => { cancels++; };
+    await speak('1'); // real start watchdog, cancel returns before the engine is quiet
+    await sleep(350);
+    expect(ctrl.isTtsMuted()).toBe(true);
+    expect(old.aborted).toBe(false); expect(MockRec.instances).toHaveLength(1);
+    engine.speaking = false;
+    await waitFor(() => MockRec.instances.length === 2);
+    expect(ctrl.isTtsMuted()).toBe(false); expect(old.aborted).toBe(true);
+  });
+
+  test('F6 P1-1: late completion cannot release mute owned by a newer output', async () => {
+    start(true);
+    engine.cancel = () => { cancels++; };
+    const first = speak('1'); event(utterances[0], 'start'); event(utterances[0], 'error'); await first;
+    const second = speak('2'); event(utterances[1], 'start');
+    MockRec.instances[0].fire('end'); await sleep(30);
+    engine.speaking = false; // engine flags can fall before the current native callback
+    event(utterances[0], 'end');
+    expect(ctrl.isTtsMuted()).toBe(true); expect(MockRec.instances).toHaveLength(1);
+    event(utterances[1], 'end'); await second;
+    expect(ctrl.isTtsMuted()).toBe(false); expect(MockRec.instances).toHaveLength(2);
+  });
+
+  for (const startBeforeSilence of [true, false]) {
+    test(`F6 P1-2: late engine silence recovers the SAME ready cue, onstart first=${startBeforeSilence}`, async () => {
+      start(false);
+      engine.cancel = () => { cancels++; };
+      const p = speak('1'); MockRec.instances[0].fire('end'); await p;
+      await waitFor(() => MockRec.instances.length === 2);
+      const fresh = MockRec.instances[1];
+      if (startBeforeSilence) fresh.fire('start');
+      await sleep(350); // native end/error never arrives, beyond the 250ms token expiry
+      expect(logger.getAll().map((e) => e.extra)).toContain('tts_cancel_settled:seq=1,reason=native_timeout');
+      expect(heard).toEqual([1]);
+      engine.speaking = false; engine.pending = true;
+      await sleep(100); expect(heard).toEqual([1]);
+      engine.pending = false;
+      if (!startBeforeSilence) {
+        await sleep(100); expect(heard).toEqual([1]);
+        fresh.fire('start');
+      }
+      await waitFor(() => heard.length === 2);
+      expect(heard).toEqual([1, 2]);
+      fresh.fire('start'); await sleep(150);
+      expect(heard).toEqual([1, 2]); expect(MockRec.instances).toHaveLength(2);
+    });
+  }
+
+  test('F6 P1-2: stop cancels a ready-cue engine-silence wait', async () => {
+    start(false);
+    engine.cancel = () => { cancels++; };
+    const p = speak('1'); MockRec.instances[0].fire('end'); await p;
+    await waitFor(() => MockRec.instances.length === 2);
+    MockRec.instances[1].fire('start'); await sleep(350);
+    ctrl.stop(); engine.speaking = false;
+    await sleep(150); expect(heard).toEqual([1]);
+  });
+
+  test('F6 P1-2: a newer announcement invalidates the previous pending cue', async () => {
+    start(false);
+    engine.cancel = () => { cancels++; };
+    const p = speak('1'); MockRec.instances[0].fire('end'); await p;
+    await waitFor(() => MockRec.instances.length === 2);
+    MockRec.instances[1].fire('start'); await sleep(350); // actively polling now
+    const next = speak('2'); event(utterances[1], 'start'); MockRec.instances[1].fire('end');
+    engine.speaking = false; // flags alone cannot bypass the new output/mute boundary
+    await sleep(150); expect(heard).toEqual([1]);
+    event(utterances[1], 'end'); await next;
+    await waitFor(() => MockRec.instances.length === 3);
+    expect(heard).toEqual([1]);
+    MockRec.instances[2].fire('start');
+    expect(heard).toEqual([1, 3]);
+  });
 
   for (const started of [false, true]) {
     test(`F5 P1-1: native error started=${started} cancels before swapping only a played TTS`, async () => {

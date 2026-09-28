@@ -13,6 +13,7 @@
 import { logger } from './logger';
 import { audioOutputEdge, kv, readyBeep, sttInstance, sttRaw, sttHybridSwap, sttHybridPolicy, zombieRestart } from './logEvents';
 import { HYBRID_DEFER_MS, hybridPolicy } from './speechPlatform';
+import { EngineSilenceGate } from './speechEngineSilence';
 
 type SRCtor = new () => SpeechRecognitionLike;
 
@@ -185,6 +186,15 @@ export class SpeechController {
   private readyBeepAt = 0;
   private readyBeepAnchor: 'onstart' | 'output_end' = 'onstart';
   private readyTelemetryInst = 0;
+  private unmutePendingForSilence = false;
+  private readonly engineSilence = new EngineSilenceGate(getEngine, () => {
+    if (!this.active) return;
+    if (this.unmutePendingForSilence) this.unmuteForTts();
+    this.flushHybridSwap();
+    this.maybeReadyBeep();
+  }, () => {
+    logger.log({ type: 'app', extra: 'tts_engine_silence_timeout' });
+  });
 
   constructor(cb: SpeechCallbacks, opts?: { restartDelayMs?: number; watchdogIntervalMs?: number; zombieStaleMs?: number; hybridOption?: boolean; hybridDeferMs?: number; deferInitialReadyBeep?: boolean }) {
     this.cb = cb;
@@ -251,6 +261,14 @@ export class SpeechController {
 
   /** Release the TTS mute owner, then perform any deferred hybrid swap. */
   unmuteForTts() {
+    // Only hybrid completion owns this extra hold. Default OFF / half-duplex
+    // retain their existing queue and unmute behavior (decision 16).
+    if (this.hybridDue && this.usesHybridTts() &&
+        (this.outputPending.size > 0 || !this.engineSilence.check())) {
+      this.unmutePendingForSilence = true;
+      return;
+    }
+    this.unmutePendingForSilence = false;
     const now = Date.now();
     // [STT-18] liveness 이력을 unmute 시점으로 덮지 않고, watchdog이 보지 못한 TTS mute **구간만**
     // stale에서 뺀다. 반복 TTS가 이미 누적된 실제 무응답 시간을 매번 0으로 만들면 좀비 복구를
@@ -278,6 +296,10 @@ export class SpeechController {
     return this.ttsMuted;
   }
 
+  usesHybridTts(): boolean {
+    return this.active && this.hybrid.enabled && _bargeInEnabled;
+  }
+
   /** 계측 H — 현재 인식기 인스턴스가 실제 start 이벤트를 받은 상태인지 읽는다. */
   getRecognitionState(): 'idle' | 'listening' {
     return this.active && this.recRunning ? 'listening' : 'idle';
@@ -296,8 +318,7 @@ export class SpeechController {
         this.readyCandidateInst !== this.instanceId || this.readyPlayedInst === this.instanceId ||
         this.ttsMuted || this.halfDuplexHold || this.restartPendingAfterTts ||
         this.restartingTimer !== null || this.outputPending.size > 0 || this.outputUncertain.size > 0) return;
-    const engine = getEngine();
-    if (engine?.speaking || engine?.pending) return;
+    if (!this.engineSilence.check()) return;
     this.readyBeepArmed = false;
     this.readyPlayedInst = this.instanceId;
     this.readyTelemetryInst = this.instanceId;
@@ -340,6 +361,8 @@ export class SpeechController {
   }
 
   stop() {
+    this.engineSilence.reset();
+    this.unmutePendingForSilence = false;
     this.clearHybridSwap();
     this.hybridTts.clear();
     this.hybridSpeechPending = false;
@@ -538,6 +561,13 @@ export class SpeechController {
    *  (×2, 상한 5000ms)로 **무한** 재예약한다 — 재시도 상한을 두면 사멸 경로가 되살아난다. */
   private attemptStart(cause = 'restart') {
     if (!this.active) return;
+    // Natural end / a queued restart must not bypass a hybrid completion wait.
+    if (this.hybridDue && this.usesHybridTts() &&
+        (this.outputPending.size > 0 || !this.engineSilence.check())) {
+      this.restartPendingAfterTts = true;
+      this.unmutePendingForSilence = true;
+      return;
+    }
     this.clearHybridSwap();
     this.hybridSpeechPending = false;
     try {
@@ -647,7 +677,8 @@ export class SpeechController {
     const due = this.hybridDue;
     if (!due || !this.active) return;
     if (due.inst !== this.instanceId || !_bargeInEnabled) { this.clearHybridSwap(); return; }
-    if (this.ttsMuted || this.hybridTts.size > 0) return;
+    if (this.ttsMuted || this.hybridTts.size > 0 || this.outputPending.size > 0) return;
+    if (!this.engineSilence.check()) return;
     if (reason !== 'defer_timeout' && (this.hybridSpeechPending || this.hybridFinals > 0)) {
       if (this.hybridTimer === null) {
         this.hybridTimer = window.setTimeout(() => {
@@ -671,6 +702,10 @@ export class SpeechController {
   }
 
   beginOutput(kind: 'tts' | 'beep' | 'ready_beep'): number {
+    if (kind === 'tts') {
+      this.engineSilence.reset();
+      this.unmutePendingForSilence = false;
+    }
     if (kind !== 'ready_beep') this.logReadyBeepFollowup('interrupted');
     const seq = ++this.outputSeq;
     this.outputPending.add(seq);
@@ -689,6 +724,10 @@ export class SpeechController {
         this.outputUncertain.delete(seq);
         window.clearTimeout(this.outputCancelTimers.get(seq));
         this.outputCancelTimers.delete(seq);
+      }
+      if (evt === 'end' || evt === 'error') {
+        if (this.unmutePendingForSilence) this.unmuteForTts();
+        this.flushHybridSwap();
         this.maybeReadyBeep();
       }
       return; // late/duplicate native callbacks cannot swap twice
@@ -721,6 +760,8 @@ export class SpeechController {
       this.flushHybridSwap(); // speak.done's unmute retries after the output edge
     }
     if (this.outputPending.size === 0) {
+      if (this.unmutePendingForSilence) this.unmuteForTts();
+      this.flushHybridSwap();
       this.maybeReadyBeep();
       this.cb.onOutputFinished?.(this.outputSeq);
     }
@@ -956,6 +997,7 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     /** 워치독이 실제로 대신 resolve했는가. 늦게 도착한 end/error를 계측할지 판정한다. */
     let watchdogFired = false;
     let watchdogCanceling = false;
+    let hybridErrorCanceled = false;
     let outputToken: ReturnType<typeof beginAudioOutput> = null;
     let outputFinished = false;
     const finishOutput = (evt: 'end' | 'error' | 'watchdog' | 'skip') => {
@@ -1016,8 +1058,8 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
     const finish = (reason: 'end' | 'error') => {
       if (watchdogCanceling) return;
       if (settled) {
+        if (watchdogFired || hybridErrorCanceled) finishAudioOutput(outputToken, reason);
         if (watchdogFired) {
-          finishAudioOutput(outputToken, reason);
           try {
             logger.log({ type: 'app', extra: `tts_late_end:reason=${reason},afterMs=${Date.now() - enqueuedAt},stage=${stage}` });
           } catch { /* 계측은 best-effort */ }
@@ -1027,8 +1069,10 @@ export async function speak(text: string, opts: SpeakOptions = {}): Promise<void
       // A started utterance can error while the engine still reports output.
       // Cancel before releasing mute / owing a hybrid swap; synchronous native
       // callbacks during cancel must not settle this utterance ahead of cancel.
-      const cancelStartedError = reason === 'error' && started;
+      const cancelStartedError = reason === 'error' && started &&
+        outputToken?.controller.usesHybridTts?.() === true;
       if (cancelStartedError) {
+        hybridErrorCanceled = true;
         watchdogCanceling = true;
         try { engine.cancel(); } catch {
           logger.log({ type: 'app', extra: 'tts_error_cancel_failed' });

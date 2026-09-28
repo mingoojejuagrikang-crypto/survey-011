@@ -129,10 +129,15 @@
     TTS 재생 중 인식기는 유지하고 종료 뒤 새 인식기로 교체하되 진행 중 발화는 final 처리 뒤까지
     유예한다(상한 `speechPlatform.ts`의 5초). 워치독은 출력 종료의 물리적 증거가 아니며
     엔진 큐를 cancel하고 앱 발화 대기를 드레인한 뒤 복구한다. `audio_output_edge`의
-    `actual=0` 의미는 그대로다. 재생 시작 후 오류도 cancel 뒤 하이브리드 교체 대상으로 삼는다.
+    `actual=0` 의미는 그대로다. 재생 시작 후 오류의 cancel/drain은 **하이브리드 적용 경로에만**
+    수행한다. 비-iOS 옵션 OFF 및 말끊기 OFF는 오류 뒤 `interrupt:false`의 후속 안내 큐를 보존한다.
     워치독 cancel의 native 종료가 소실되면 `TTS_CANCEL_SETTLE_MS=250` 뒤 해당 seq를 종결하고
     신규 `tts_cancel_settled:seq=<n>,reason=native_timeout`을 기록한다(실제 native end로 기록하지 않는다).
     오류 후 cancel 실패는 신규 `tts_error_cancel_failed`로 기록한다. 두 이벤트 모두 `type:app`이다.
+    하이브리드 종료 뒤 언뮤트·새 인식기 생성과 준비음은 공통 `EngineSilenceGate`로 엔진
+    `speaking===false && pending===false`를 확인한다. 50ms 간격·2초 상한이며 상한 초과 시
+    `tts_engine_silence_timeout`(`type:app`)을 한 번 기록하고 교체/준비음을 보류한다.
+    새 TTS·stop은 이전 대기를 정리한다. 이후 실제 종료 이벤트는 침묵을 다시 확인할 수 있다.
     말끊기 OFF 준비음은 엔진 speaking/pending이 꺼지고 fresh onstart/출력 경계를 충족할 때 한 번 울리며
     정상 침묵에 주기적 재생성을 붙이지 않는다. 준비음은 `beepVolume`을 따른다.
   - 목록에 없는 이벤트는 **바이트 불변**이다. 확장이 필요하면 필드를 늘리지 말고 **새 이벤트
